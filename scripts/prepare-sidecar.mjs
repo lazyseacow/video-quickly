@@ -76,7 +76,7 @@ for(const folder of await readdir(packageStore,{withFileTypes:true})){
   const candidates=entry.name.startsWith('@')?(await readdir(join(modules,entry.name),{withFileTypes:true})).filter(child=>child.isDirectory()&&!child.isSymbolicLink()).map(child=>join(modules,entry.name,child.name)):[join(modules,entry.name)];
   for(const candidate of candidates){
    const json=await readFile(join(candidate,'package.json'),'utf8').then(JSON.parse,()=>undefined);if(!json)continue;
-   const files=(await readdir(candidate)).filter(name=>/^(licen[sc]e|copying|notice)(\.|$)/i.test(name));
+   const files=(await readdir(candidate)).filter(name=>/^(licen[sc]e|copying|notice)(\.|$)/i.test(name)||(['gsap','@gsap/react'].includes(json.name)&&name==='README.md'));
    const label=`${json.name.replaceAll('/','+')}-${json.version}`;
    for(const file of files)if((await stat(join(candidate,file))).isFile())await cp(join(candidate,file),join(notices,`${label}-${file}`));
    manifest.push({name:json.name,version:json.version,license:json.license??'See package license',repository:json.repository,files});

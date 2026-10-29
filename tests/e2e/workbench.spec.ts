@@ -9,6 +9,83 @@ async function openApp(page: Page) {
   await expect(page.getByRole('navigation', { name: '主导航', exact: true })).toBeVisible();
 }
 
+for (const reducedMotion of ['no-preference', 'reduce'] as const) {
+  test(`keeps motion interruptible and restores dialog focus (${reducedMotion})`, async ({ page, request }) => {
+    const errors: string[] = [];
+    page.on('pageerror', error => errors.push(error.message));
+    page.on('console', message => { if (message.type() === 'error') errors.push(message.text()); });
+    await page.emulateMedia({ reducedMotion });
+    const title = `动效交互验收 ${reducedMotion}`;
+    const created = await request.post('/__desktop_rpc', { data: { method: 'project.create', params: { title } } });
+    const project = (await created.json()).result;
+    await request.post('/__desktop_rpc', { data: { method: 'project.saveShot', params: { projectId: project.id, shot: { id: 'motion-shot', title: '动效验收镜头', narration: '', visualPrompt: '', durationUs: 3_000_000 } } } });
+    await openApp(page);
+    await page.getByRole('button', { name: `打开项目：${title}`, exact: true }).click();
+    await page.getByLabel('镜头标题').fill('切换时保留的草稿');
+    for (let index = 0; index < 4; index++) {
+      await page.getByRole('button', { name: '项目设置', exact: true }).click();
+      await page.getByRole('button', { name: '镜头属性', exact: true }).click();
+    }
+    await expect(page.getByRole('button', { name: '镜头属性', exact: true })).toHaveAttribute('aria-pressed', 'true');
+    await expect(page.getByLabel('镜头标题')).toHaveValue('切换时保留的草稿');
+    await page.getByRole('tab', { name: '镜头列表', exact: true }).focus();
+    await page.keyboard.press('End');
+    await expect(page.getByRole('tab', { name: '制作步骤', exact: true })).toBeFocused();
+    await page.keyboard.press('Home');
+    await expect(page.getByRole('tab', { name: '镜头列表', exact: true })).toHaveAttribute('aria-selected', 'true');
+
+    let rejectSave = true;
+    await page.route('**/__desktop_rpc', async route => {
+      if (rejectSave && route.request().postDataJSON().method === 'project.saveShot') {
+        rejectSave = false;
+        await route.fulfill({ status: 400, json: { error: '镜头保存验收提示' } }); return;
+      }
+      await route.continue();
+    });
+    await page.getByRole('button', { name: '保存镜头', exact: true }).click();
+    await expect(page.locator('.toast[role="alert"]')).toHaveText(/镜头保存验收提示/);
+    await page.getByRole('button', { name: '关闭提示', exact: true }).click();
+    await page.getByRole('button', { name: '保存镜头', exact: true }).click();
+    await expect(page.locator('.toast[role="status"]')).toHaveText(/修改已保存/);
+    await expect(page.locator('.toast')).toHaveCount(1);
+    await page.getByRole('button', { name: '关闭提示', exact: true }).click();
+    await expect(page.locator('.toast-anchor')).toHaveCount(0);
+
+    const create = page.getByRole('button', { name: '新建项目', exact: true });
+    const dialog = page.getByRole('dialog', { name: '新建视频项目', exact: true });
+    for (const close of ['Escape', 'button', 'backdrop']) {
+      await create.click();
+      await expect(dialog).toBeVisible();
+      await expect(dialog.getByLabel('项目名称', { exact: true })).toBeFocused();
+      if (close === 'Escape') await page.keyboard.press('Escape');
+      else if (close === 'button') await dialog.getByRole('button', { name: '关闭对话框', exact: true }).click();
+      else await page.mouse.click(8, 8);
+      await expect(dialog).toHaveCount(0);
+      await expect(create).toBeFocused();
+    }
+    // Change the preference in an already-mounted app, then unmount animated surfaces.
+    await page.getByRole('button', { name: '项目设置', exact: true }).click();
+    await page.emulateMedia({ reducedMotion: reducedMotion === 'reduce' ? 'no-preference' : 'reduce' });
+    await page.getByRole('button', { name: '镜头属性', exact: true }).click();
+    await expect(page.getByLabel('镜头标题')).toHaveValue('切换时保留的草稿');
+    await page.getByRole('button', { name: '项目设置', exact: true }).click();
+    await page.setViewportSize({ width: 600, height: 900 });
+    for (const [ratio, expected] of [['9:16', 9 / 16], ['16:9', 16 / 9]] as const) {
+      await page.getByLabel('画面比例', { exact: true }).selectOption(ratio);
+      const frame = await page.locator('.preview-frame').boundingBox();
+      expect(frame).not.toBeNull();
+      if (!frame) throw new Error('预览框不可见');
+      expect(frame.width / frame.height).toBeCloseTo(expected, 2);
+    }
+    await page.setViewportSize({ width: 1536, height: 960 });
+    await page.getByRole('button', { name: '模型连接', exact: true }).click();
+    await expect(page.getByRole('heading', { name: '模型连接', exact: true })).toBeVisible();
+    await page.getByRole('button', { name: '创作工作台', exact: true }).click();
+    await expect(page.getByLabel('镜头标题')).toHaveValue('切换时保留的草稿');
+    expect(errors.filter(message => !message.includes('400 (Bad Request)'))).toEqual([]);
+  });
+}
+
 test('preserves a draft across disconnect and reconnect without retrying a mutation', async ({ page, request }) => {
   const created = await request.post('/__desktop_rpc', { data: { method: 'project.create', params: { title: '执行组件重连验收' } } });
   const project = (await created.json()).result;
@@ -70,6 +147,25 @@ test('scrubs continuously, steps fractional frames and preserves the editing dra
   await expect(page.getByLabel('镜头标题')).toHaveValue('尚未保存的标题');
   await page.mouse.move(bounds.x + bounds.width + 80, bounds.y + 18); await page.mouse.up();
   await expect(ruler).toHaveAttribute('aria-valuenow', '5973');
+  await expect(page.locator('.track-header--video')).toContainText('V1');
+  await expect(page.locator('.track-header--audio')).toContainText('A1');
+  await expect(page.locator('.timeline-clip--video canvas')).toHaveCount(2);
+  const headerBefore = await page.locator('.timeline-track-headers').boundingBox();
+  const playheadBefore = await page.locator('.playhead').boundingBox();
+  await page.getByRole('button', { name: '放大时间轴', exact: true }).click();
+  await page.getByRole('button', { name: '放大时间轴', exact: true }).click();
+  await expect(page.getByLabel('时间轴缩放', { exact: true })).toHaveValue('2');
+  await expect(page.locator('.ruler-marker').nth(1)).toHaveText('00:00.50');
+  expect(await page.locator('.timeline-scroll').evaluate(element => element.scrollLeft)).toBeGreaterThan(0);
+  const headerAfter = await page.locator('.timeline-track-headers').boundingBox();
+  const playheadAfter = await page.locator('.playhead').boundingBox();
+  if (!headerBefore || !headerAfter || !playheadBefore || !playheadAfter) throw new Error('轨道布局不可见');
+  expect(headerAfter.x).toBeCloseTo(headerBefore.x, 1);
+  expect(Math.abs(playheadAfter.x - playheadBefore.x)).toBeLessThan(2);
+  await expect(ruler).toHaveAttribute('aria-valuenow', '5973');
+  await page.getByRole('button', { name: '适配完整时间轴', exact: true }).click();
+  await expect(page.getByLabel('时间轴缩放', { exact: true })).toHaveValue('1');
+  expect(await page.locator('.timeline-scroll').evaluate(element => element.scrollLeft)).toBe(0);
   await ruler.press('Home');
   await page.getByRole('button', { name: '播放预览', exact: true }).click();
   await expect.poll(async () => Number(await ruler.getAttribute('aria-valuenow'))).toBeGreaterThan(100);

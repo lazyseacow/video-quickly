@@ -3,6 +3,7 @@ import { Check, ChevronRight, Film, GitBranch, LockKeyhole, Plus } from 'lucide-
 import type { AssetRecord, ProjectDocument, WorkflowNode } from '@video-quickly/contracts';
 import { Button } from './Primitives';
 import { ScenePreview } from './ScenePreview';
+import TabSurface from './TabSurface';
 
 interface ProjectOutlineProps {
   project: ProjectDocument;
@@ -38,9 +39,9 @@ export default memo(function ProjectOutline({ project, assets, selectedShotId, s
 
   return <>
     <div className="outline-header">
-      <div className="tabs outline-tabs" role="tablist" aria-label="项目大纲内容">
+      <TabSurface value={outlineTab} variant="underline" className="outline-tabs" role="tablist" aria-label="项目大纲内容">
         {tabs.map((tab, index) => <button key={tab.id} ref={element => { tabButtons.current[index] = element; }} type="button" id={`${id}-${tab.id}-tab`} role="tab" aria-label={tab.label} aria-selected={outlineTab === tab.id} aria-controls={`${id}-${tab.id}-panel`} tabIndex={outlineTab === tab.id ? 0 : -1} className={outlineTab === tab.id ? 'active' : ''} onKeyDown={event => navigateTabs(event, index)} onClick={() => setOutlineTab(tab.id)}><tab.icon size={14} aria-hidden="true" />{tab.id === 'shots' ? '镜头' : '步骤'}</button>)}
-      </div>
+      </TabSurface>
       <span className="count">{outlineTab === 'shots' ? project.shots.length : project.workflow.nodes.length}</span>
     </div>
     {outlineTab === 'shots' ? <div className="shot-list outline-list" id={`${id}-shots-panel`} role="tabpanel" aria-labelledby={`${id}-shots-tab`}>

@@ -47,6 +47,7 @@ Windows CI 会执行构建、真实媒体导出与隔离安装检查，并上传
 - `packages/integrations`：模型媒体适配、自定义 HTTP 请求、ComfyUI 映射和远端任务回执。
 - `packages/video`：场景预览、时间轴、字幕和视频输出。
 - `.agents/skills/make-interfaces-feel-better`：本项目采用的前端设计与验收 Skill。
+- `.agents/skills/gsap-*`：GreenSock 官方的动画、React、时间线和性能 Skill，保留固定版本、来源和许可。
 
 ## 制作流程
 
@@ -58,11 +59,15 @@ Windows CI 会执行构建、真实媒体导出与隔离安装检查，并上传
 
 时间尺支持持续拖动，画面随位置更新，编辑中的镜头保持选中。方向键按项目帧率前后移动一帧，按住 Shift 移动十帧，Home / End 定位首尾，Space 播放或暂停。时间轴缩放尽量保持播放头在视口中的位置，适配按钮恢复完整视图。播放到末尾会停止，再次播放从开头开始；切到后台时暂停。
 
+时间轴参考 [Kdenlive 轨道界面](https://docs.kdenlive.org/en/user_interface/timeline.html) 与 [Shotcut 时间轴](https://forum.shotcut.org/t/user-guide-table-of-contents/43285) 的信息层次：固定 V1／A1 轨道头，视频与旁白分轨显示，片段区独立滚动。视频片段显示真实预览缩略图、名称与时长；旁白区区分已关联音频和待配音占位，播放头贯穿刻度与片段区。缩放滑块与加减按钮共用当前位置锚点。
+
 流程画布支持滚动平移、Ctrl + 滚轮缩放、空格 + 拖动平移，以及方向键移动所选步骤。背景任务刷新会保留本地编辑，切换视图或离开工作台前保存流程；发生外部流程版本冲突时，保留编辑并提供明确的重新载入操作。
 
 交互实现参考 [Motion Canvas Player](https://github.com/motion-canvas/motion-canvas/blob/main/packages/core/src/app/Player.ts) 的播放与定位分离、[Excalidraw](https://github.com/excalidraw/excalidraw/blob/master/packages/common/src/utils.ts) 的最新指针位置合并，以及 [React Flow 性能指南](https://reactflow.dev/learn/advanced-use/performance) 的稳定组件与事件引用。播放状态仅由预览和时间尺订阅；图片按素材版本共享缓存，视频定位等待上次解码完成后应用最新位置。
 
 工作区结构参考 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness/tree/f3803c96974ad4a94195fb97e5c637e9c2a3afe3/packages/client/ui-layout)：最近项目位于左侧导航，项目操作集中在一行，镜头与制作步骤使用大纲标签切换，时间轴横跨预览和属性区域。两侧面板可收起；宽窗口支持拖动调宽、方向键微调与双击复位，并保存布局偏好。“专注预览”临时展开画面空间，退出后恢复原面板。窄窗口自动收拢导航并将属性移至下方。
+
+界面动效使用 GSAP 与 `@gsap/react`，用于标签指示条、页面内容、对话框和操作提示。动画限于位移、缩放和透明度；组件卸载会清理动画，系统开启“减少动态效果”时即时呈现状态。时间轴拖动和播放头直接响应输入，播放时钟独立于界面动画。
 
 项目可备份为包含 `project.json` 和素材文件的目录，再通过“我的项目 → 导入项目”恢复为独立副本。素材库支持保留、选择和移除未使用的版本；移除记录会保留磁盘文件。
 
