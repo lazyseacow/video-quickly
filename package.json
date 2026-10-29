@@ -1,0 +1,29 @@
+{
+  "name": "video-quickly",
+  "version": "0.1.0",
+  "private": true,
+  "license": "MIT",
+  "type": "module",
+  "packageManager": "pnpm@10.33.0",
+  "engines": { "node": ">=24 <25" },
+  "scripts": {
+    "dev": "pnpm --filter @video-quickly/desktop dev",
+    "dev:desktop": "node scripts/desktop.mjs dev",
+    "build": "pnpm --filter @video-quickly/runtime build && pnpm --filter @video-quickly/desktop build",
+    "build:desktop": "pnpm build && node scripts/prepare-sidecar.mjs && node scripts/desktop.mjs build",
+    "typecheck": "pnpm -r typecheck",
+    "test": "vitest run",
+    "test:e2e": "playwright test",
+    "check": "pnpm typecheck && pnpm test && pnpm build",
+    "start:runtime": "pnpm --filter @video-quickly/runtime start"
+  },
+  "devDependencies": {
+    "@video-quickly/contracts": "workspace:*",
+    "@playwright/test": "^1.64.1",
+    "@types/node": "^24.0.0",
+    "esbuild": "^0.28.0",
+    "tsx": "^4.20.0",
+    "typescript": "^5.9.3",
+    "vitest": "^5.0.5"
+  }
+}

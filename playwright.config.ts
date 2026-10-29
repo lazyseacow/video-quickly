@@ -1,0 +1,10 @@
+import { defineConfig } from '@playwright/test';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+export default defineConfig({
+  testDir: './tests/e2e', fullyParallel: false,
+  outputDir: join(tmpdir(), 'video-quickly-playwright-results'),
+  use: { baseURL: 'http://127.0.0.1:1421', viewport: { width: 1536, height: 960 }, screenshot: 'only-on-failure', trace: 'retain-on-failure' },
+  webServer: { command: 'pnpm dev', url: 'http://127.0.0.1:1421', reuseExistingServer: false, timeout: 60000,
+    env: { VIDEO_QUICKLY_PORT: '1421', VIDEO_QUICKLY_DATA_DIR: join(tmpdir(), `video-quickly-e2e-${process.pid}`) } },
+});

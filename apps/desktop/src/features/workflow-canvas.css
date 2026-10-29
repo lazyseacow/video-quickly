@@ -1,0 +1,10 @@
+.flow-container { position: relative; }
+.flow-viewport { position: absolute; inset: 0; }
+.flow-gestures { color: var(--text-secondary); font-size: 10px; line-height: 1.8; pointer-events: none; padding: 8px 11px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); }
+.flow-gestures span { display: block; color: var(--text-subtle); }
+.flow-save-state { display: block; color: var(--text-secondary); font-size: 11px; margin-bottom: 10px; }
+.flow-inspector .notice { margin-bottom: 15px; }
+.flow-container .react-flow__handle::after { content: ''; position: absolute; width: 40px; height: 40px; left: 50%; top: 50%; transform: translate(-50%, -50%); }
+.flow-container .react-flow__handle.valid { background: var(--success); }
+.flow-container .react-flow__node:focus-visible .flow-node { outline: 2px solid var(--accent); outline-offset: 3px; }
+@media (max-width: 650px) { .flow-gestures { display: none; } .flow-container .react-flow__controls-button { width: 44px; height: 44px; } .flow-container .react-flow__handle::after { width: 44px; height: 44px; } }
