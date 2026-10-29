@@ -1,6 +1,6 @@
 import { defineConfig, type Plugin } from 'vite';
 import react from '@vitejs/plugin-react';
-import { createReadStream, existsSync, readdirSync, statSync } from 'node:fs';
+import { createReadStream, existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import { resolve, relative, isAbsolute, extname } from 'node:path';
 import { createRuntime } from '../../packages/runtime/src/index.ts';
 import { createActivityExecutor } from '../../packages/integrations/src/index.ts';
@@ -17,7 +17,9 @@ function developmentBridge(): Plugin {
       const dataDirectory = resolve(process.env.VIDEO_QUICKLY_DATA_DIR ?? '../../.data/development');
       const temporarySecrets = new Map<string, string>();
       const toolsDirectory = resolve('../../.tools');
+      const mediaLock = JSON.parse(readFileSync(resolve('../../scripts/media-manifest.json'), 'utf8')) as { directory: string };
       const bundledMedia = existsSync(toolsDirectory) ? readdirSync(toolsDirectory)
+        .toSorted((a, b) => Number(b === mediaLock.directory) - Number(a === mediaLock.directory))
         .map(name => resolve(toolsDirectory, name, 'bin', process.platform === 'win32' ? 'ffmpeg.exe' : 'ffmpeg'))
         .find(path => existsSync(path)) : undefined;
       const ffmpegPath = process.env.VIDEO_QUICKLY_FFMPEG ?? bundledMedia;
@@ -41,7 +43,7 @@ function developmentBridge(): Plugin {
           }
           const parsed: unknown = JSON.parse(body);
           if (!parsed || typeof parsed !== 'object' || !('method' in parsed) || typeof parsed.method !== 'string') throw new Error('请求格式无效');
-          const result = await runtime.dispatch(parsed.method, 'params' in parsed ? parsed.params : {});
+          const result = ['runtime.status', 'runtime.reconnect'].includes(parsed.method) ? { state: 'ready', generation: 0 } : await runtime.dispatch(parsed.method, 'params' in parsed ? parsed.params : {});
           response.end(JSON.stringify({ result }));
         } catch (error) {
           response.statusCode = 400;

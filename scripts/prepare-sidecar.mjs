@@ -28,26 +28,35 @@ await writeFile(join(stage,'package.json'),JSON.stringify({name:'video-quickly-r
 await cp(runtime,join(stage,'runtime.mjs'));
 await cp(process.execPath,join(stage,process.platform==='win32'?'node.exe':'node'));
 const mediaRoot=process.env.VIDEO_QUICKLY_MEDIA_DIR;
-if(mediaRoot){await cp(resolve(mediaRoot),join(stage,'media'),{recursive:true});}
+if(mediaRoot){
+  const mediaSource=resolve(mediaRoot);
+  const hasBin=await stat(join(mediaSource,'bin')).then(value=>value.isDirectory(),()=>false);
+  await cp(hasBin?join(mediaSource,'bin'):mediaSource,join(stage,'media'),{recursive:true});
+  if(hasBin)await cp(join(mediaSource,'LICENSE.txt'),join(stage,'media','LICENSE-FFmpeg.txt'));
+  await cp(join(mediaSource,'provenance.json'),join(stage,'media','provenance.json'));
+}
 else{
   const tools=join(root,'.tools');
   const entries=await readdir(tools,{withFileTypes:true}).catch(()=>[]);
-  const portable=entries.find(entry=>entry.isDirectory()&&entry.name.includes('ffmpeg')&&entry.name.includes('win64'));
+  const mediaLock=JSON.parse(await readFile(join(root,'scripts','media-manifest.json'),'utf8'));
+  const portable=entries.find(entry=>entry.isDirectory()&&entry.name===mediaLock.directory)??entries.find(entry=>entry.isDirectory()&&entry.name.includes('ffmpeg')&&entry.name.includes('win64'));
   if(portable){
     await cp(join(tools,portable.name,'bin'),join(stage,'media'),{recursive:true});
     await cp(join(tools,portable.name,'LICENSE.txt'),join(stage,'media','LICENSE-FFmpeg.txt'));
-    const provenance=join(tools,'ffmpeg-provenance.json');
+    const localProvenance=join(tools,portable.name,'provenance.json');
+    const provenance=await stat(localProvenance).then(()=>localProvenance,()=>join(tools,'ffmpeg-provenance.json'));
     await cp(provenance,join(stage,'media','provenance.json'));
-    await writeFile(join(stage,'media','SOURCE.txt'),[
-      'FFmpeg is a separately licensed executable component.',
-      'The bundled build license is included in LICENSE-FFmpeg.txt.',
-      'Exact build, download location and archive checksum are recorded in provenance.json.',
-      'FFmpeg corresponding source: https://github.com/FFmpeg/FFmpeg/tree/611cec792a',
-      'Build scripts and dependency source recipes: https://github.com/BtbN/FFmpeg-Builds',
-      'Build legal/configuration details: run ffmpeg -version and see the upstream build documentation.',
-    ].join('\n'));
   }
 }
+for(const executable of ['ffmpeg.exe','ffprobe.exe'])await stat(join(stage,'media',executable));
+const mediaProvenance=JSON.parse(await readFile(join(stage,'media','provenance.json'),'utf8'));
+await writeFile(join(stage,'media','SOURCE.txt'),[
+  'FFmpeg is a separately licensed executable component.',
+  'The bundled build license is included in LICENSE-FFmpeg.txt.',
+  `FFmpeg corresponding source: ${mediaProvenance.correspondingSource}`,
+  `Build scripts and dependency source recipes: ${mediaProvenance.source}`,
+  'Exact build, download location and archive checksum are recorded in provenance.json.',
+].join('\n'));
 const nodeLicense=join(dirname(process.execPath),'LICENSE');
 if(await stat(nodeLicense).then(()=>true,()=>false))await cp(nodeLicense,join(stage,'LICENSE-Node.txt'));
 else{

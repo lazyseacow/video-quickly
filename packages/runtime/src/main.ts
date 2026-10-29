@@ -26,7 +26,13 @@ const secretStore: SecretStore = {
   async set(key, value) { await hostCall('host.secret.set', { key, value }); },
   async delete(key) { await hostCall('host.secret.delete', { key }); },
 };
-const runtime = createRuntime({ dataDirectory, mode: 'desktop', secretStore, hostCall, executeActivity: createActivityExecutor({ ffmpegPath: argument('--ffmpeg') ?? process.env.VIDEO_QUICKLY_FFMPEG }) });
+let runtime: ReturnType<typeof createRuntime>;
+try { runtime = createRuntime({ dataDirectory, mode: 'desktop', secretStore, hostCall, executeActivity: createActivityExecutor({ ffmpegPath: argument('--ffmpeg') ?? process.env.VIDEO_QUICKLY_FFMPEG }) }); }
+catch (error) {
+  const failure = { jsonrpc: '2.0', method: 'runtime.failed', params: { message: error instanceof Error ? error.message : '本地工作区无法打开。' } };
+  await new Promise<void>(resolve => process.stdout.write(`${JSON.stringify(failure)}\n`, () => resolve()));
+  process.exit(1);
+}
 runtime.subscribe(event => send({ jsonrpc: '2.0', method: 'runtime.event', params: event }));
 const input = createInterface({ input: process.stdin, crlfDelay: Infinity });
 

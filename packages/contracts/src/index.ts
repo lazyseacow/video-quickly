@@ -156,7 +156,9 @@ export const workspaceSnapshotSchema = z.object({
   runs: z.array(runSchema), assets: z.array(assetSchema), events: z.array(runEventSchema), system: systemSchema,
 });
 export type WorkspaceSnapshot = z.infer<typeof workspaceSnapshotSchema>;
-export type RuntimeEvent = { type: 'workspace.changed' | 'run.event' | 'runtime.ready'; data?: JsonValue };
+export const runtimeConnectionSchema = z.object({ state: z.enum(['ready', 'reconnecting', 'disconnected']), generation: z.number().int().nonnegative(), message: z.string().nullable().optional() });
+export type RuntimeConnection = z.infer<typeof runtimeConnectionSchema>;
+export type RuntimeEvent = { type: 'workspace.changed' | 'run.event' | 'runtime.ready' | 'runtime.connection'; data?: JsonValue };
 export type RpcRequest = { jsonrpc: '2.0'; id: string | number; method: string; params?: unknown };
 export type RpcResponse = { jsonrpc: '2.0'; id: string | number; result?: unknown; error?: { code: number; message: string } };
 

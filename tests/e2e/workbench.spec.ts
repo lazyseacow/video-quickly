@@ -1,6 +1,39 @@
 import { expect, test } from '@playwright/test';
 import { resolve } from 'node:path';
 
+test('preserves a draft across disconnect and reconnect without retrying a mutation', async ({ page, request }) => {
+  const created = await request.post('/__desktop_rpc', { data: { method: 'project.create', params: { title: '执行组件重连验收' } } });
+  const project = (await created.json()).result;
+  await request.post('/__desktop_rpc', { data: { method: 'project.saveShot', params: { projectId: project.id, shot: { id: 'reconnect-shot', title: '重连验证', narration: '', visualPrompt: '', durationUs: 1_000_000 } } } });
+  await page.goto('/');
+  await page.getByRole('button', { name: '打开项目：执行组件重连验收', exact: true }).click();
+  await expect(page.getByLabel('镜头标题')).toBeVisible();
+  await page.getByLabel('镜头标题').fill('重连后保留的编辑草稿');
+  let offline = true; let mutations = 0; let reconnects = 0;
+  await page.route('**/__desktop_rpc', async route => {
+    const body = route.request().postDataJSON();
+    if (body.method === 'project.saveShot') { mutations++; if (offline) { await route.abort('failed'); return; } }
+    if (body.method === 'runtime.reconnect') {
+      reconnects++;
+      if (reconnects === 1) { await route.fulfill({ status: 400, json: { error: '执行组件启动失败，请重试。' } }); return; }
+    }
+    await route.continue();
+  });
+  await page.getByRole('button', { name: '保存镜头', exact: true }).click();
+  await expect(page.getByText('本地执行组件已断开', { exact: true })).toBeVisible();
+  await expect(page.getByLabel('镜头标题')).toHaveValue('重连后保留的编辑草稿');
+  await page.getByRole('button', { name: '重新连接', exact: true }).click();
+  await expect(page.getByText('执行组件启动失败，请重试。', { exact: true })).toBeVisible();
+  offline = false;
+  await page.getByRole('button', { name: '重新连接', exact: true }).click();
+  await expect(page.locator('.runtime-connection-notice')).toHaveCount(0);
+  await expect(page.getByLabel('镜头标题')).toHaveValue('重连后保留的编辑草稿');
+  expect(mutations).toBe(1);
+  await page.getByRole('button', { name: '保存镜头', exact: true }).click();
+  await expect(page.getByRole('button', { name: '保存镜头', exact: true })).toBeDisabled();
+  expect(mutations).toBe(2);
+});
+
 test('scrubs continuously, steps fractional frames and preserves the editing draft', async ({ page, request }) => {
   const rpc = async (method: string, params: unknown = {}) => {
     const response = await request.post('/__desktop_rpc', { data: { method, params } });

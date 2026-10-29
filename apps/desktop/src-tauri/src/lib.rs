@@ -1,35 +1,18 @@
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use std::{
-    collections::HashMap,
-    path::PathBuf,
-    sync::{
-        atomic::{AtomicU64, Ordering},
-        Arc,
-    },
-};
+use std::{collections::HashMap, path::PathBuf};
 use tauri::{
     ipc::{Channel, InvokeBody, Request},
     Manager, State,
 };
 use tokio::{
-    io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
+    io::AsyncWriteExt,
     process::{Child, ChildStdin, Command},
-    sync::{oneshot, Mutex},
+    sync::Mutex,
 };
 
-type Pending = Arc<Mutex<HashMap<u64, oneshot::Sender<Result<Value, String>>>>>;
-type Subscribers = Arc<Mutex<Vec<Channel<Value>>>>;
-
-struct RuntimeBridge {
-    child: Mutex<Child>,
-    stdin: Arc<Mutex<ChildStdin>>,
-    pending: Pending,
-    subscribers: Subscribers,
-    sequence: AtomicU64,
-    #[cfg(windows)]
-    _job: std::os::windows::io::OwnedHandle,
-}
+mod runtime_bridge;
+use runtime_bridge::{ConnectionStatus, RuntimeBridge};
 
 #[cfg(windows)]
 fn contain_runtime(child: &Child) -> Result<std::os::windows::io::OwnedHandle, String> {
@@ -62,144 +45,6 @@ fn contain_runtime(child: &Child) -> Result<std::os::windows::io::OwnedHandle, S
         return Err("无法将本地执行组件加入任务进程组".into());
     }
     Ok(owned)
-}
-
-impl RuntimeBridge {
-    async fn start(app: &tauri::AppHandle) -> Result<Self, String> {
-        let data = app
-            .path()
-            .app_data_dir()
-            .map_err(|error| error.to_string())?;
-        std::fs::create_dir_all(&data).map_err(|error| error.to_string())?;
-        let resource = app
-            .path()
-            .resource_dir()
-            .map_err(|error| error.to_string())?;
-        let development =
-            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../.generated/sidecar");
-        let sidecar = if development.join("runtime.mjs").exists() && cfg!(debug_assertions) {
-            development
-        } else {
-            resource.join("sidecar")
-        };
-        let node = sidecar.join(if cfg!(windows) { "node.exe" } else { "node" });
-        if !node.exists() || !sidecar.join("runtime.mjs").exists() {
-            return Err(
-                "本地执行组件尚未构建，请先运行 pnpm build 与 node scripts/prepare-sidecar.mjs"
-                    .into(),
-            );
-        }
-        let mut command = Command::new(node);
-        command
-            .arg(sidecar.join("runtime.mjs"))
-            .arg("--data-dir")
-            .arg(&data)
-            .env("VIDEO_QUICKLY_MODE", "desktop")
-            .current_dir(&sidecar)
-            .kill_on_drop(true)
-            .stdin(std::process::Stdio::piped())
-            .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::piped());
-        #[cfg(windows)]
-        command.creation_flags(0x08000000);
-        let media = sidecar.join("media");
-        if media.join("ffmpeg.exe").exists() {
-            command
-                .env("VIDEO_QUICKLY_FFMPEG", media.join("ffmpeg.exe"))
-                .env("VIDEO_QUICKLY_FFPROBE", media.join("ffprobe.exe"));
-        }
-        let mut child = command
-            .spawn()
-            .map_err(|error| format!("无法启动本地执行组件：{error}"))?;
-        #[cfg(windows)]
-        let job = match contain_runtime(&child) {
-            Ok(job) => job,
-            Err(error) => {
-                let _ = child.kill().await;
-                return Err(error);
-            }
-        };
-        let stdin = Arc::new(Mutex::new(
-            child.stdin.take().ok_or("本地执行组件缺少输入通道")?,
-        ));
-        let stdout = child.stdout.take().ok_or("本地执行组件缺少输出通道")?;
-        let stderr = child.stderr.take().ok_or("本地执行组件缺少日志通道")?;
-        let pending: Pending = Arc::new(Mutex::new(HashMap::new()));
-        let subscribers: Subscribers = Arc::new(Mutex::new(Vec::new()));
-        let read_pending = pending.clone();
-        let read_subscribers = subscribers.clone();
-        let host_stdin = stdin.clone();
-        tauri::async_runtime::spawn(async move {
-            let mut lines = BufReader::new(stdout).lines();
-            while let Ok(Some(line)) = lines.next_line().await {
-                let Ok(message) = serde_json::from_str::<Value>(&line) else {
-                    continue;
-                };
-                if let Some(method) = message.get("method").and_then(Value::as_str) {
-                    if method.starts_with("host.secret.") {
-                        let result =
-                            secret_operation(method, message.get("params").unwrap_or(&Value::Null));
-                        let response = match result {
-                            Ok(value) => json!({"jsonrpc":"2.0","id":message["id"],"result":value}),
-                            Err(error) => {
-                                json!({"jsonrpc":"2.0","id":message["id"],"error":{"code":-32000,"message":error}})
-                            }
-                        };
-                        let _ = write_message(&host_stdin, &response).await;
-                    } else {
-                        let event = message.get("params").cloned().unwrap_or(message.clone());
-                        read_subscribers
-                            .lock()
-                            .await
-                            .retain(|channel| channel.send(event.clone()).is_ok());
-                    }
-                } else if let Some(id) = message.get("id").and_then(Value::as_u64) {
-                    if let Some(sender) = read_pending.lock().await.remove(&id) {
-                        let result = if let Some(error) = message.get("error") {
-                            Err(error
-                                .get("message")
-                                .and_then(Value::as_str)
-                                .unwrap_or("执行请求失败")
-                                .to_string())
-                        } else {
-                            Ok(message.get("result").cloned().unwrap_or(Value::Null))
-                        };
-                        let _ = sender.send(result);
-                    }
-                }
-            }
-            let mut waiting = read_pending.lock().await;
-            for (_, sender) in waiting.drain() {
-                let _ = sender.send(Err("本地执行组件已退出，重新打开应用后可恢复任务".into()));
-            }
-        });
-        tauri::async_runtime::spawn(async move {
-            let mut lines = BufReader::new(stderr).lines();
-            while let Ok(Some(line)) = lines.next_line().await {
-                eprintln!("[runtime] {line}");
-            }
-        });
-        Ok(Self {
-            child: Mutex::new(child),
-            stdin,
-            pending,
-            subscribers,
-            sequence: AtomicU64::new(1),
-            #[cfg(windows)]
-            _job: job,
-        })
-    }
-}
-
-async fn write_message(stdin: &Arc<Mutex<ChildStdin>>, value: &Value) -> Result<(), String> {
-    let mut bytes = serde_json::to_vec(value).map_err(|error| error.to_string())?;
-    bytes.push(b'\n');
-    let mut writer = stdin.lock().await;
-    writer
-        .write_all(&bytes)
-        .await
-        .map_err(|error| error.to_string())?;
-    writer.flush().await.map_err(|error| error.to_string())
 }
 
 fn secret_operation(method: &str, params: &Value) -> Result<Value, String> {
@@ -239,29 +84,7 @@ async fn runtime_request(
     params: Option<Value>,
     bridge: State<'_, RuntimeBridge>,
 ) -> Result<Value, String> {
-    if method.starts_with("host.") {
-        return Err("该操作由执行组件内部调用".into());
-    }
-    let id = bridge.sequence.fetch_add(1, Ordering::Relaxed);
-    let (sender, receiver) = oneshot::channel();
-    bridge.pending.lock().await.insert(id, sender);
-    if let Err(error) = write_message(
-        &bridge.stdin,
-        &json!({"jsonrpc":"2.0","id":id,"method":method,"params":params.unwrap_or(Value::Null)}),
-    )
-    .await
-    {
-        bridge.pending.lock().await.remove(&id);
-        return Err(error);
-    }
-    match tokio::time::timeout(std::time::Duration::from_secs(180), receiver).await {
-        Ok(Ok(result)) => result,
-        Ok(Err(_)) => Err("执行通道已关闭".into()),
-        Err(_) => {
-            bridge.pending.lock().await.remove(&id);
-            Err("请求等待超时，已提交的后台任务仍可在执行记录中恢复".into())
-        }
-    }
+    bridge.request(method, params).await
 }
 
 #[tauri::command]
@@ -269,11 +92,17 @@ async fn runtime_subscribe(
     channel: Channel<Value>,
     bridge: State<'_, RuntimeBridge>,
 ) -> Result<(), String> {
-    channel
-        .send(json!({"type":"runtime.ready"}))
-        .map_err(|error| error.to_string())?;
-    bridge.subscribers.lock().await.push(channel);
-    Ok(())
+    bridge.subscribe(channel).await
+}
+
+#[tauri::command]
+async fn runtime_status(bridge: State<'_, RuntimeBridge>) -> Result<ConnectionStatus, String> {
+    Ok(bridge.status().await)
+}
+
+#[tauri::command]
+async fn runtime_reconnect(bridge: State<'_, RuntimeBridge>) -> Result<ConnectionStatus, String> {
+    bridge.reconnect().await
 }
 
 #[tauri::command]
@@ -504,6 +333,8 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             runtime_request,
             runtime_subscribe,
+            runtime_status,
+            runtime_reconnect,
             read_secret,
             write_secret,
             delete_secret,
@@ -524,7 +355,7 @@ pub fn run() {
         if let tauri::RunEvent::Exit = event {
             let state = app.state::<RuntimeBridge>();
             tauri::async_runtime::block_on(async {
-                let _ = state.child.lock().await.kill().await;
+                let _ = state.shutdown().await;
             });
         }
     });

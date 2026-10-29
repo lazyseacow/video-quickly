@@ -37,6 +37,8 @@ pnpm test:e2e
 
 首次运行浏览器验证时可执行 `pnpm exec playwright install chromium`。测试应使用临时数据目录，隔离真实模型与用户项目。媒体测试使用真实 FFmpeg；云端调用测试仅替换网络边界。
 
+Windows CI 会执行构建、真实媒体导出与隔离安装检查，并上传安装包和验证清单。固定媒体组件可通过 `pnpm prepare:media` 准备。数据库升级、重连规则及原生人工验收边界见 [Windows 交付与恢复验收](docs/windows-verification.md)。
+
 ## 工程结构
 
 - `apps/desktop`：React 工作台及 Tauri 原生外壳。

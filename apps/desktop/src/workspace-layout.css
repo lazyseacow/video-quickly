@@ -1,4 +1,13 @@
 /* A single project command bar and a center-led editor, using the shared tokens. */
+.runtime-connection-notice { padding: 12px 20px 0; }
+.runtime-connection-notice .notice > span { display: flex; align-items: center; justify-content: space-between; gap: 20px; width: 100%; }
+.runtime-connection-notice .notice > span > span { display: flex; flex-direction: column; gap: 5px; line-height: 1.6; }
+.runtime-connection-notice strong { color: var(--text); font-size: 12px; font-weight: 550; }
+.runtime-connection-notice .button { flex-shrink: 0; }
+.page-body:has(> .runtime-connection-notice) { display: flex; flex-direction: column; }
+.page-body:has(> .runtime-connection-notice) > .workbench { height: auto; flex: 1; min-height: 550px; }
+.welcome-loading .runtime-connection-notice { max-width: 620px; padding: 0; text-align: left; }
+@media (max-width: 650px) { .runtime-connection-notice { padding: 10px 12px 0; } .runtime-connection-notice .notice > span { align-items: flex-start; flex-wrap: wrap; gap: 10px; } }
 .workspace-shell { grid-template-columns: 224px minmax(0, 1fr); }
 .workspace-shell--collapsed { grid-template-columns: 66px minmax(0, 1fr); }
 .workspace-shell [hidden] { display: none !important; }

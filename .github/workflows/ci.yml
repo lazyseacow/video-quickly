@@ -1,0 +1,75 @@
+name: Windows verification
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: windows-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    runs-on: windows-2025
+    timeout-minutes: 45
+    env:
+      CARGO_TARGET_DIR: ${{ github.workspace }}\.generated\cargo-target
+      PLAYWRIGHT_JSON_OUTPUT_NAME: ${{ github.workspace }}\.generated\browser-results.json
+      PLAYWRIGHT_ARTIFACT_DIR: ${{ github.workspace }}\.generated\browser-artifacts
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa # v4
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version-file: .node-version
+          cache: pnpm
+      - name: Install locked dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Install pinned Rust toolchain
+        run: rustup show active-toolchain
+      - name: Prepare verified media components
+        run: node scripts/prepare-media.mjs
+      - name: Check types
+        run: pnpm typecheck
+      - name: Test runtime and contracts
+        run: pnpm exec vitest run --reporter=default --reporter=json --outputFile=.generated/test-results.json
+      - name: Install test browser
+        run: pnpm exec playwright install chromium
+      - name: Test workbench
+        run: pnpm test:e2e
+      - name: Render actual media samples
+        run: pnpm test:media -- --4k
+      - name: Build Windows client
+        run: pnpm build:desktop
+      - name: Test native runtime bridge
+        working-directory: apps/desktop/src-tauri
+        run: cargo test --locked --lib
+      - name: Verify installation and overwrite upgrade in isolated runner
+        shell: pwsh
+        run: |
+          $taskInstallers = @(Get-ChildItem -LiteralPath "$env:CARGO_TARGET_DIR\release\bundle\nsis" -Filter '*-setup.exe')
+          if ($taskInstallers.Count -ne 1) { throw '应恰好有一个安装包' }
+          ./scripts/install-smoke.ps1 -InstallerPath $taskInstallers[0].FullName
+      - name: Collect verified artifacts
+        run: node scripts/collect-artifacts.mjs
+      - name: Upload build and verification results
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: video-quickly-windows-x64-${{ github.sha }}
+          if-no-files-found: error
+          retention-days: 14
+          path: |
+            .generated/release/
+            .generated/test-results.json
+            .generated/browser-results.json
+            .generated/browser-artifacts/
+            .generated/render-smoke/results.json
+            .generated/install-smoke.json
