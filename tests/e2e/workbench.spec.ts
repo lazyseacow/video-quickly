@@ -1,11 +1,19 @@
-import { expect, test } from '@playwright/test';
+import { expect, test, type Page } from '@playwright/test';
 import { resolve } from 'node:path';
+
+async function openApp(page: Page) {
+  // Navigation completes before the workspace request on a cold CI browser.
+  const workspace = page.waitForResponse(response => response.url().endsWith('/__desktop_rpc') && response.status() === 200 && response.request().postDataJSON()?.method === 'workspace.snapshot');
+  await page.goto('/');
+  await workspace;
+  await expect(page.getByRole('navigation', { name: '主导航', exact: true })).toBeVisible();
+}
 
 test('preserves a draft across disconnect and reconnect without retrying a mutation', async ({ page, request }) => {
   const created = await request.post('/__desktop_rpc', { data: { method: 'project.create', params: { title: '执行组件重连验收' } } });
   const project = (await created.json()).result;
   await request.post('/__desktop_rpc', { data: { method: 'project.saveShot', params: { projectId: project.id, shot: { id: 'reconnect-shot', title: '重连验证', narration: '', visualPrompt: '', durationUs: 1_000_000 } } } });
-  await page.goto('/');
+  await openApp(page);
   await page.getByRole('button', { name: '打开项目：执行组件重连验收', exact: true }).click();
   await expect(page.getByLabel('镜头标题')).toBeVisible();
   await page.getByLabel('镜头标题').fill('重连后保留的编辑草稿');
@@ -44,7 +52,7 @@ test('scrubs continuously, steps fractional frames and preserves the editing dra
   const project = await rpc('project.create', { title: '时间轴交互验收', profile: { width: 640, height: 360, frameRate: { numerator: 30000, denominator: 1001 }, fitMode: 'contain', previewScale: .5 } });
   const shots = [0, 1].map(index => ({ id: `scrub-${index}`, title: `拖动镜头 ${index + 1}`, narration: `旁白 ${index + 1}`, visualPrompt: '', durationUs: 3_000_000, claimIds: [], locked: false, animation: { panX: 0, panY: 0, zoom: 1.02, transition: 'cut' } }));
   await rpc('project.update', { projectId: project.id, revision: project.revision, patch: { shots } });
-  await page.goto('/');
+  await openApp(page);
   await page.getByRole('button', { name: '我的项目', exact: true }).click();
   await page.locator('.project-card').filter({ hasText: '时间轴交互验收' }).getByRole('button', { name: /继续创作/ }).click();
   await page.getByLabel('镜头标题').fill('尚未保存的标题');
@@ -78,7 +86,7 @@ test('scrubs continuously, steps fractional frames and preserves the editing dra
 test('edits real project state, output profiles, graph and theme', async ({ page }) => {
   const errors: string[] = [];
   page.on('pageerror', error => errors.push(error.message));
-  await page.goto('/');
+  await openApp(page);
   await expect(page).toHaveTitle(/Video Quickly/);
   await expect(page.getByRole('button', { name: '模型连接', exact: true })).toBeVisible();
   await expect(page.locator('vite-error-overlay')).toHaveCount(0);
@@ -121,7 +129,7 @@ test('edits real project state, output profiles, graph and theme', async ({ page
 test('keeps flow edits through background refresh and saves before switching views', async ({ page, request }) => {
   const response = await request.post('/__desktop_rpc', { data: { method: 'project.create', params: { title: '流程交互验收' } } });
   const project = (await response.json()).result;
-  await page.goto('/');
+  await openApp(page);
   await page.getByRole('button', { name: '我的项目', exact: true }).click();
   await page.locator('.project-card').filter({ hasText: '流程交互验收' }).getByRole('button', { name: /继续创作/ }).click();
   await page.getByRole('button', { name: '流程', exact: true }).click();
@@ -147,7 +155,7 @@ test('resizes and restores editor panels, and saves before opening a recent proj
   const nextProject = (await created.json()).result;
   const snapshot = await request.post('/__desktop_rpc', { data: { method: 'workspace.snapshot' } });
   const original = (await snapshot.json()).result.projects.find((project: { id: string }) => project.id === 'example-history');
-  await page.goto('/');
+  await openApp(page);
   await page.getByRole('button', { name: `打开项目：${original.title}`, exact: true }).click();
   const outline = page.getByRole('separator', { name: '调整镜头导航宽度' });
   await outline.press('ArrowRight'); await expect(outline).toHaveAttribute('aria-valuenow', '240');
@@ -171,7 +179,7 @@ test('resizes and restores editor panels, and saves before opening a recent proj
 });
 
 test('creates a project and connects a model without exposing credentials', async ({ page }) => {
-  await page.goto('/');
+  await openApp(page);
   await page.getByRole('button', { name: '我的项目', exact: true }).click();
   await page.getByRole('button', { name: '新建项目', exact: true }).last().click();
   const dialog = page.getByRole('dialog', { name: '新建视频项目' });
@@ -197,7 +205,7 @@ test('persists a review decision and supports read-only replay', async ({ page, 
   const project = payload.result.projects.find((value: { id: string }) => value.id === 'example-history');
   const started = await request.post('/__desktop_rpc', { data: { method: 'run.start', params: { projectId: project.id, nodeId: 'style' } } });
   const { result: run } = await started.json();
-  await page.goto('/');
+  await openApp(page);
   await page.getByRole('button', { name: '制作记录', exact: true }).click();
   await expect(page.getByText('等待审阅', { exact: true }).first()).toBeVisible();
   await page.reload();
@@ -222,7 +230,7 @@ test('exports an actual local MP4 from the asynchronous export dialog', async ({
   const profile = { width: 320, height: 180, frameRate: { numerator: 30000, denominator: 1001 }, fitMode: 'contain', previewScale: 1 };
   const project = await rpc('project.create', { title: '本地导出验收', brief: '静音示例', profile });
   await rpc('project.saveShot', { projectId: project.id, shot: { id: 'export-shot', title: '本地渲染检查', narration: '这是静音画面小样。', visualPrompt: '示例画面', durationUs: 700000, claimIds: [], locked: false, animation: { panX: 0, panY: 0, zoom: 1.02, transition: 'cut' } } });
-  await page.goto('/');
+  await openApp(page);
   await page.getByRole('button', { name: '我的项目', exact: true }).click();
   const card = page.locator('.project-card').filter({ hasText: '本地导出验收' });
   await card.getByRole('button', { name: /继续创作/ }).click();
@@ -240,7 +248,7 @@ test('exports an actual local MP4 from the asynchronous export dialog', async ({
 });
 
 test('imports and versions a real Skill, and registers tools in disabled state', async ({ page }) => {
-  await page.goto('/');
+  await openApp(page);
   await page.getByRole('button', { name: 'Skill 工作室', exact: true }).click();
   await page.getByRole('button', { name: '导入 Skill', exact: true }).first().click();
   const dialog = page.getByRole('dialog', { name: '导入 Skill' });
