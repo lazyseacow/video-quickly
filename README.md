@@ -84,6 +84,10 @@ Skill 可从本地目录、ZIP 或 GitHub 仓库导入，资源与版本随导�
 
 完整约束见 [持久化执行](docs/durable-execution.md)。
 
+## 后续开发
+
+下一阶段按稳定交付、大项目性能与编辑效率、Agent 编排三阶段推进。具体依赖、实施顺序和验收标准见 [开发与优化计划](docs/development-plan.md)。
+
 ## 来源与许可
 
 原创代码采用 MIT。历史模板参考 [gen-history-video](https://github.com/lazyseacow/gen-history-video) 的制作方法并独立编写；媒体流程研究参考用户的 video-generator 项目。界面使用 [make-interfaces-feel-better](https://github.com/lazyseacow/make-interfaces-feel-better) Skill。
