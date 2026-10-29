@@ -1,0 +1,54 @@
+.dialog.audio-processing-dialog { width: min(1020px, calc(100vw - 32px)); }
+.audio-processing-dialog > .dialog__surface { display: flex; flex-direction: column; overflow: hidden; }
+.audio-processing-dialog .dialog__header, .audio-processing-dialog .dialog__footer { flex-shrink: 0; }
+.audio-processing-dialog .dialog__body { min-height: 0; overflow-y: auto; }
+.audio-processing-dialog__scope { color: var(--text-secondary); font-size: 12px; line-height: 1.7; margin-bottom: 24px; }
+.audio-processing-dialog__workspace { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); align-items: start; gap: 28px; }
+.audio-processing-fields { min-width: 0; padding: 0; border: 0; display: grid; gap: 16px; }
+.audio-processing-fields__row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 12px; }
+.audio-processing-fields .field, .audio-processing-fields__row .field { min-width: 0; }
+.audio-processing-fields .tiny-meta, .audio-processing-audition .tiny-meta { line-height: 1.7; }
+.audio-processing-fields > .button { justify-self: start; }
+.audio-processing-audition { min-width: 0; display: grid; gap: 14px; }
+.audio-processing-audition__heading { display: flex; align-items: center; gap: 8px; color: var(--text-secondary); font-size: 12px; }
+.audio-processing-audition > .button { justify-self: start; }
+.audio-processing-dialog .dialog__body > .notice { margin-top: 16px; }
+.prepared-mix-preview { min-width: 0; display: grid; gap: 14px; }
+.prepared-mix-preview__controls { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+.prepared-mix-preview__controls .button { min-height: 40px; font-size: 11px; white-space: nowrap; }
+.prepared-mix-preview__controls .icon-button { width: 40px; height: 40px; }
+.prepared-mix-preview__controls input { flex: 1; min-width: 90px; min-height: 40px; }
+.prepared-mix-preview__controls > span { font-size: 10px; font-variant-numeric: tabular-nums; color: var(--text-secondary); white-space: nowrap; }
+.prepared-mix-preview__warnings { color: var(--text-secondary); font-size: 11px; line-height: 1.7; padding-left: 16px; }
+.prepared-mix-preview .notice .button { margin-top: 8px; }
+.audio-level-meter { min-width: 0; padding: 14px; border: 1px solid var(--border); border-radius: var(--radius-medium); background: var(--surface); }
+.audio-level-meter__heading { display: flex; align-items: baseline; justify-content: space-between; flex-wrap: wrap; gap: 6px; margin-bottom: 12px; }
+.audio-level-meter__heading strong { font-size: 11px; font-weight: 500; }
+.audio-level-meter__heading > span { font-size: 10px; color: var(--text-subtle); }
+.audio-level-meter__channel { display: grid; grid-template-columns: 12px minmax(24px, 1fr) 100px; align-items: center; gap: 8px; margin-top: 7px; font-size: 10px; font-variant-numeric: tabular-nums; }
+.audio-level-meter__channel > span { color: var(--text-secondary); }
+.audio-level-meter__channel meter { width: 100%; height: 8px; border: 0; border-radius: 3px; background: var(--surface-raised); }
+.audio-level-meter__channel meter::-webkit-meter-bar { height: 8px; border: 0; border-radius: 3px; background: var(--surface-raised); }
+.audio-level-meter__channel meter::-webkit-meter-optimum-value { background: var(--success); }
+.audio-level-meter__channel meter::-webkit-meter-suboptimum-value { background: var(--warning); }
+.audio-level-meter__channel meter::-webkit-meter-even-less-good-value { background: var(--danger); }
+.audio-level-meter__channel output { text-align: right; color: var(--text-secondary); }
+.audio-level-meter__channel .audio-level-meter__over { color: var(--danger); }
+.audio-level-meter__analysis { display: flex; flex-wrap: wrap; gap: 6px 12px; margin-top: 12px; font-size: 10px; line-height: 1.6; color: var(--text-subtle); font-variant-numeric: tabular-nums; }
+.audio-level-meter__analysis output { margin-left: 4px; color: var(--text-secondary); }
+.audio-level-meter__pending { display: block; margin-top: 10px; color: var(--text-subtle); font-size: 10px; }
+.audio-level-meter__error { color: var(--text-secondary); font-size: 11px; line-height: 1.7; }
+.audio-level-meter__error .button { margin-top: 8px; min-height: 40px; }
+.audio-level-meter--compact { padding: 8px 10px; }
+.audio-level-meter--compact .audio-level-meter__heading { margin-bottom: 6px; }
+.preview-audio { flex-shrink: 0; padding: 0 16px; }
+.preview-audio:empty { display: none; }
+.preview-audio .prepared-mix-preview--compact { gap: 6px; padding-bottom: 8px; }
+.preview-audio .audio-level-meter--compact { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 0 18px; padding: 6px 10px; }
+.preview-audio .audio-level-meter__heading, .preview-audio .audio-level-meter__analysis, .preview-audio .audio-level-meter__error, .preview-audio .audio-level-meter__pending { grid-column: 1 / -1; }
+.preview-audio .audio-level-meter__analysis { margin-top: 6px; }
+.preview-audio .audio-level-meter__heading { margin-bottom: 0; }
+.preview-audio .audio-level-meter__channel { grid-template-columns: 10px minmax(18px, 1fr) 82px; gap: 5px; margin-top: 4px; }
+.preview-audio > .tiny-meta { padding: 8px 0; }
+@media (max-width: 800px) { .audio-processing-dialog__workspace { grid-template-columns: minmax(0, 1fr); gap: 26px; } }
+@media (max-width: 480px) { .audio-processing-fields__row { grid-template-columns: minmax(0, 1fr); } .audio-level-meter__channel { grid-template-columns: 12px minmax(24px, 1fr) 90px; } }

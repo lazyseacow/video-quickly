@@ -3,7 +3,9 @@ import react from '@vitejs/plugin-react';
 import { createReadStream, existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import { resolve, relative, isAbsolute, extname } from 'node:path';
 import { createRuntime } from '../../packages/runtime/src/index.ts';
-import { createActivityExecutor } from '../../packages/integrations/src/index.ts';
+import { createActivityExecutor, createWaveformReader, validateMediaActivity } from '../../packages/integrations/src/index.ts';
+import { readRpcRequest } from './dev/read-rpc-request.ts';
+import { audioMixProjectionKey, prepareAudioMix, readAudioLevelWindow, detectAudioSilence } from '../../packages/video/src/audio-mix.ts';
 
 const developmentPort = Number(process.env.VIDEO_QUICKLY_PORT ?? 1420);
 
@@ -23,25 +25,23 @@ function developmentBridge(): Plugin {
         .map(name => resolve(toolsDirectory, name, 'bin', process.platform === 'win32' ? 'ffmpeg.exe' : 'ffmpeg'))
         .find(path => existsSync(path)) : undefined;
       const ffmpegPath = process.env.VIDEO_QUICKLY_FFMPEG ?? bundledMedia;
-      const runtime = await createRuntime({ dataDirectory, mode: 'development', ffmpegPath, executeActivity: createActivityExecutor({ ffmpegPath }), secretStore: {
+      const waveforms = createWaveformReader({ dataDirectory, ffmpegPath });
+      const runtime = await createRuntime({ dataDirectory, mode: 'development', ffmpegPath, readAudioWaveform: asset => waveforms.read(asset),
+        audioMix: { projectionKey: audioMixProjectionKey, prepare: options => prepareAudioMix({ ...options, ffmpegPath }), levels: readAudioLevelWindow, silence: options => detectAudioSilence({ ...options, ffmpegPath }) },
+        preflightActivity: validateMediaActivity, executeActivity: createActivityExecutor({ ffmpegPath }), secretStore: {
         persistent: false,
         async get(key) { return temporarySecrets.get(key); },
         async set(key, value) { temporarySecrets.set(key, value); },
         async delete(key) { temporarySecrets.delete(key); },
       }});
       const unsubscribe = runtime.subscribe(event => server.ws.send({ type: 'custom', event: 'workspace-event', data: event }));
-      server.httpServer?.on('close', () => { unsubscribe(); void runtime.close(); });
+      server.httpServer?.on('close', () => { unsubscribe(); void waveforms.close().then(() => runtime.close()); });
       server.middlewares.use('/__desktop_rpc', async (request, response) => {
         response.setHeader('Content-Type', 'application/json; charset=utf-8');
         if (request.method !== 'POST') { response.statusCode = 405; response.end(JSON.stringify({ error: '只支持 POST' })); return; }
         if (request.headers.origin && request.headers.origin !== `http://127.0.0.1:${developmentPort}`) { response.statusCode = 403; response.end(JSON.stringify({ error: '不允许此来源' })); return; }
         try {
-          let body = '';
-          for await (const chunk of request) {
-            body += chunk.toString();
-            if (body.length > 2_000_000) throw new Error('请求内容过大');
-          }
-          const parsed: unknown = JSON.parse(body);
+          const parsed = await readRpcRequest(request);
           if (!parsed || typeof parsed !== 'object' || !('method' in parsed) || typeof parsed.method !== 'string') throw new Error('请求格式无效');
           const result = ['runtime.status', 'runtime.reconnect'].includes(parsed.method) ? { state: 'ready', generation: 0 } : await runtime.dispatch(parsed.method, 'params' in parsed ? parsed.params : {});
           response.end(JSON.stringify({ result }));

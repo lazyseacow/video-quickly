@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildTimeline, captionPages, createSrt, createTimedSrt, frameCount, frameTimeUs } from '../src/index.js';
+import { buildTimeline, captionPages, createSrt, createTimedSrt, createSubtitleCues, frameCount, frameTimeUs } from '../src/index.js';
 
 describe('video timing',()=>{
   it('preserves complete narration and microsecond clip duration in exported subtitles',()=>{
@@ -21,5 +21,17 @@ describe('video timing',()=>{
     const srt=createTimedSrt([{id:'long',durationUs:4_000_000,narration}],()=>pages);
     expect(srt).toContain('00:00:04,000');
     expect(srt.replaceAll('\n','')).toContain('完整保留。');
+  });
+  it('keeps the original caption timing through splits and crops a trimmed source interval', () => {
+    const original = { id: 'scene', durationUs: 4_000_000, narration: '第一句。第二句。' };
+    const pages = () => [['第一句。'], ['第二句。']];
+    const split = [
+      { ...original, id: 'left', durationUs: 1_500_000, sceneInUs: 0, sceneDurationUs: 4_000_000 },
+      { ...original, id: 'right', durationUs: 2_500_000, sceneInUs: 1_500_000, sceneDurationUs: 4_000_000 },
+    ];
+    expect(createTimedSrt(split, pages)).toBe(createTimedSrt([original], pages));
+    expect(createSrt(split)).toBe(createSrt([original]));
+    expect(createSubtitleCues([{ ...original, durationUs: 1_000_000, sceneInUs: 2_500_000, sceneDurationUs: 4_000_000 }], pages)).toEqual([{ startUs: 0, endUs: 1_000_000, lines: ['第二句。'] }]);
+    expect(createSubtitleCues([{ ...original, durationUs: 1_000_000, sceneInUs: 5_000_000, sceneDurationUs: 4_000_000 }], pages)).toEqual([{ startUs: 0, endUs: 1_000_000, lines: ['第二句。'] }]);
   });
 });

@@ -1,10 +1,13 @@
 import Database from 'better-sqlite3';
+import { createHash } from 'node:crypto';
 import { mkdtemp, readdir, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { afterEach, describe, expect, it } from 'vitest';
-import { INITIAL_SCHEMA, openDatabase, DocumentStore } from '../src/database.js';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { INITIAL_SCHEMA, openDatabase, DocumentStore, WORKSPACE_MIGRATIONS } from '../src/database.js';
 import { DatabaseMigrationError, migrateDatabase } from '../src/migrations.js';
+import { createHistoryWorkflow, DEFAULT_CAPTION_STYLE, DEFAULT_VIDEO_PROFILE, projectSchema, projectSummarySchema } from '@video-quickly/contracts';
+import { createReadModels } from '../src/read-models.js';
 
 const directories: string[] = [];
 afterEach(async () => { for (const directory of directories.splice(0)) await rm(directory, { recursive: true, force: true }); });
@@ -13,8 +16,8 @@ async function directory() { const path = await mkdtemp(join(tmpdir(), 'vq-migra
 describe('workspace database upgrades', () => {
   it('creates a versioned database and does not back up on every reopen', async () => {
     const path = await directory(); const db = openDatabase(path);
-    expect(db.pragma('user_version', { simple: true })).toBe(2);
-    expect(db.prepare('SELECT name FROM schema_migrations ORDER BY version').all()).toEqual([{ name: 'workspace-baseline' }, { name: 'execution-event-index' }]);
+    expect(db.pragma('user_version', { simple: true })).toBe(6);
+    expect(db.prepare('SELECT name FROM schema_migrations ORDER BY version').all()).toEqual([{ name: 'workspace-baseline' }, { name: 'execution-event-index' }, { name: 'workspace-read-models' }, { name: 'audio-asset-references' }, { name: 'project-summary-caption-style' }, { name: 'clip-edit-references-and-first-frame' }]);
     db.close(); openDatabase(path).close();
     expect(await readdir(path)).not.toContain('database-backups');
   });
@@ -56,6 +59,56 @@ describe('workspace database upgrades', () => {
       const recovery = new Database((failure as DatabaseMigrationError).backupPath!, { readonly: true });
       try { expect(new DocumentStore(recovery).get('project', 'p')).toEqual({ title: '保留的项目' }); } finally { recovery.close(); }
     } finally { db.close(); }
+  });
+
+  it('backfills project summaries and asset references when upgrading the previous version', async () => {
+    const path = await directory(); const db = new Database(join(path, 'workspace.sqlite'));
+    db.exec(`${INITIAL_SCHEMA} CREATE INDEX execution_events_run_sequence ON execution_events(run_id, sequence); PRAGMA user_version = 2;`);
+    const project = projectSchema.parse({ id: 'legacy', title: '旧项目', brief: '', revision: 7, profile: DEFAULT_VIDEO_PROFILE, workflow: createHistoryWorkflow(), createdAt: '', updatedAt: '', shots: [{ id: 's', title: '旧镜头', narration: '', visualPrompt: '', durationUs: 2_000_000, assetId: 'used-image', audioAssetId: 'used-audio', captionTrack: { timeBase: 'source', alignment: 'manual', sourceAssetId: 'caption-origin-audio', cues: [] } }], musicClips: [{ id: 'legacy-music', assetId: 'used-music', durationUs: 2_000_000 }] });
+    new DocumentStore(db).put('project', project.id, project); db.close();
+    const upgraded = openDatabase(path);
+    try {
+      expect(new DocumentStore(upgraded).get('project', project.id)).toEqual(project);
+      expect(new DocumentStore(upgraded).get('project-summary', project.id)).toMatchObject({ id: 'legacy', shotCount: 1, durationUs: 2_000_000, revision: 7, archived: false });
+      expect(upgraded.prepare('SELECT asset_id FROM project_asset_references ORDER BY asset_id').all()).toEqual([{ asset_id: 'caption-origin-audio' }, { asset_id: 'used-audio' }, { asset_id: 'used-image' }, { asset_id: 'used-music' }]);
+      expect(upgraded.pragma('user_version', { simple: true })).toBe(6);
+    } finally { upgraded.close(); }
+    expect(await readdir(join(path, 'database-backups'))).toHaveLength(1);
+  });
+
+  it('upgrades actual v4 summaries without changing projects, assets, audio references or review checkpoints', async () => {
+    const path = await directory(), previous = new Database(join(path, 'workspace.sqlite'));
+    migrateDatabase(previous, path, WORKSPACE_MIGRATIONS.filter(migration => migration.version <= 4));
+    const oldStore = new DocumentStore(previous), content = '资料正文不得进入后台摘要。'.repeat(2_000);
+    const project = projectSchema.parse({ id: 'styled-v4', title: '旧版样式项目', brief: '', revision: 7, profile: DEFAULT_VIDEO_PROFILE, captionStyle: { ...DEFAULT_CAPTION_STYLE, fontId: 'serif', position: 'top' }, workflow: createHistoryWorkflow(), createdAt: '', updatedAt: '', researchSources: [{ id: 'source', title: '资料标题', kind: 'text', content, sha256: createHash('sha256').update(content).digest('hex'), capturedAt: '2026-10-30T00:00:00.000Z' }], claims: [{ id: 'claim', text: '主张全文不得出现在摘要中', source: '资料标题', status: 'pending' }], shots: [{ id: 'shot', title: '旧镜头', narration: '', visualPrompt: '', durationUs: 2_000_000, assetId: 'used-image', audioAssetId: 'used-audio', claimIds: ['claim'], captionTrack: { timeBase: 'source', alignment: 'manual', sourceAssetId: 'caption-origin-audio', cues: [] } }], musicClips: [{ id: 'music', assetId: 'used-music', durationUs: 2_000_000 }] });
+    oldStore.put('project', project.id, project);
+    const assets = ['used-image', 'used-audio', 'used-music', 'caption-origin-audio'].map(id => ({ id, name: id, projectId: project.id, kind: id === 'used-image' ? 'image' : 'audio', path: `/fixture/${id}`, mimeType: 'application/octet-stream', size: 1, sha256: createHash('sha256').update(id).digest('hex'), version: 1, createdAt: '', provenance: 'migration fixture', retained: false, active: true }));
+    for (const asset of assets) oldStore.put('asset', asset.id, asset);
+    const run = { id: 'review-run', projectId: project.id, status: 'waiting_review', projectRevision: 7, workflowVersion: 1, snapshotDigest: 'frozen-digest', createdAt: '', updatedAt: '', events: [], activities: [] };
+    oldStore.put('run', run.id, run);
+    previous.exec("CREATE TABLE checkpoints (thread_id TEXT PRIMARY KEY, checkpoint BLOB); INSERT INTO checkpoints VALUES ('review-run', X'010203');");
+    expect(oldStore.get('project-summary', project.id)).not.toHaveProperty('captionStyle');
+    const rowid = previous.prepare("SELECT rowid FROM documents WHERE kind = 'project-summary' AND id = ?").get(project.id), originalReferences = previous.prepare('SELECT asset_id FROM project_asset_references ORDER BY asset_id').all();
+    previous.close();
+    const upgraded = openDatabase(path), store = new DocumentStore(upgraded);
+    try {
+      expect(upgraded.pragma('user_version', { simple: true })).toBe(6); expect(store.get('project', project.id)).toEqual(project); expect(store.get('run', run.id)).toEqual(run); expect(store.list('asset')).toEqual(assets);
+      expect(upgraded.prepare('SELECT hex(checkpoint) AS data FROM checkpoints').get()).toEqual({ data: '010203' });
+      expect(upgraded.prepare('SELECT asset_id FROM project_asset_references ORDER BY asset_id').all()).toEqual(originalReferences); expect(originalReferences).toEqual([{ asset_id: 'caption-origin-audio' }, { asset_id: 'used-audio' }, { asset_id: 'used-image' }, { asset_id: 'used-music' }]);
+      expect(upgraded.prepare("SELECT rowid FROM documents WHERE kind = 'project-summary' AND id = ?").get(project.id)).toEqual(rowid);
+      const read = vi.spyOn(store, 'get'), summary = projectSummarySchema.parse(createReadModels(upgraded, store).projects()[0]); expect(summary.captionStyle).toEqual(project.captionStyle); expect(read).not.toHaveBeenCalledWith('project', project.id);
+      expect(summary).not.toHaveProperty('researchSources'); expect(summary).not.toHaveProperty('claims'); expect(JSON.stringify(summary)).not.toContain(content); expect(JSON.stringify(summary)).not.toContain(project.claims[0].text); expect(JSON.stringify(summary).length).toBeLessThan(2_000);
+      const nextStyle = { ...DEFAULT_CAPTION_STYLE, textColor: '#123456' }, changed = { ...project, revision: 8, captionStyle: nextStyle, shots: project.shots.map(shot => ({ ...shot, audioAssetId: 'next-audio', captionTrack: { ...shot.captionTrack!, sourceAssetId: 'next-caption' } })), musicClips: [{ ...project.musicClips![0], assetId: 'next-music' }] };
+      store.put('project', project.id, changed); expect(store.get('project-summary', project.id)).toMatchObject({ revision: 8, captionStyle: nextStyle });
+      expect(upgraded.prepare('SELECT asset_id FROM project_asset_references ORDER BY asset_id').all()).toEqual([{ asset_id: 'next-audio' }, { asset_id: 'next-caption' }, { asset_id: 'next-music' }, { asset_id: 'used-image' }]);
+      store.put('project', 'inserted', { ...project, id: 'inserted', captionStyle: nextStyle, shots: [], musicClips: [] }); expect(store.get('project-summary', 'inserted')).toMatchObject({ captionStyle: nextStyle, shotCount: 0 });
+      store.put('project', project.id, { ...changed, captionStyle: null }); expect(store.get('project-summary', project.id)).toHaveProperty('captionStyle', null);
+      store.delete('project', project.id); expect(store.get('project-summary', project.id)).toBeUndefined(); expect(upgraded.prepare('SELECT 1 FROM project_asset_references WHERE project_id = ?').get(project.id)).toBeUndefined();
+    } finally { upgraded.close(); }
+    const backups = await readdir(join(path, 'database-backups')); expect(backups).toHaveLength(1);
+    const backup = new Database(join(path, 'database-backups', backups[0]), { readonly: true });
+    try { expect(backup.pragma('user_version', { simple: true })).toBe(4); expect(new DocumentStore(backup).get('project', project.id)).toEqual(project); expect(new DocumentStore(backup).get('project-summary', project.id)).not.toHaveProperty('captionStyle'); } finally { backup.close(); }
+    openDatabase(path).close(); expect(await readdir(join(path, 'database-backups'))).toHaveLength(1);
   });
 
   it('rejects newer databases without changing their data or version', async () => {

@@ -35,5 +35,5 @@ export default function ToastNotice({ toast, onDismiss }: { toast?: ToastMessage
     animate.current?.(Boolean(toast));
   }, [toast, rendered]);
   if (!rendered) return null;
-  return <div className="toast-anchor"><div ref={root} className={`toast ${rendered.error ? 'toast--error' : ''}`} role={rendered.error ? 'alert' : 'status'} inert={!toast || undefined}><span className="toast__icon">{rendered.error ? <CircleAlert size={18} /> : <Check size={18} />}</span><span className="toast__message">{rendered.text}</span><IconButton label="关闭提示" onClick={onDismiss}><X size={16} /></IconButton></div></div>;
+  return <div className="toast-anchor"><div ref={root} className={`toast ${rendered.error ? 'toast--error' : ''}`} role={rendered.error ? 'alert' : 'status'} inert={!toast || undefined}><span className="toast__icon" aria-hidden="true">{rendered.error ? <CircleAlert size={16} /> : <Check size={16} />}</span><span className="toast__message">{rendered.text}</span><IconButton label="关闭提示" onClick={onDismiss}><X size={16} /></IconButton></div></div>;
 }

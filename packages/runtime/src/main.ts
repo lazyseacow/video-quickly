@@ -2,7 +2,8 @@ import { createInterface } from 'node:readline';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { createRuntime, type SecretStore } from './index.js';
-import { createActivityExecutor } from '@video-quickly/integrations';
+import { createActivityExecutor, createWaveformReader, validateMediaActivity } from '@video-quickly/integrations';
+import { audioMixProjectionKey, prepareAudioMix, readAudioLevelWindow, detectAudioSilence } from '@video-quickly/video/audio-mix';
 
 const args = process.argv.slice(2);
 const argument = (name: string) => { const index = args.indexOf(name); return index >= 0 ? args[index + 1] : undefined; };
@@ -27,7 +28,11 @@ const secretStore: SecretStore = {
   async delete(key) { await hostCall('host.secret.delete', { key }); },
 };
 let runtime: ReturnType<typeof createRuntime>;
-try { runtime = createRuntime({ dataDirectory, mode: 'desktop', secretStore, hostCall, executeActivity: createActivityExecutor({ ffmpegPath: argument('--ffmpeg') ?? process.env.VIDEO_QUICKLY_FFMPEG }) }); }
+const ffmpegPath = argument('--ffmpeg') ?? process.env.VIDEO_QUICKLY_FFMPEG;
+const waveforms = createWaveformReader({ dataDirectory, ffmpegPath });
+try { runtime = createRuntime({ dataDirectory, mode: 'desktop', ffmpegPath, secretStore, hostCall, readAudioWaveform: asset => waveforms.read(asset),
+  audioMix: { projectionKey: audioMixProjectionKey, prepare: options => prepareAudioMix({ ...options, ffmpegPath }), levels: readAudioLevelWindow, silence: options => detectAudioSilence({ ...options, ffmpegPath }) },
+  preflightActivity: validateMediaActivity, executeActivity: createActivityExecutor({ ffmpegPath }) }); }
 catch (error) {
   const failure = { jsonrpc: '2.0', method: 'runtime.failed', params: { message: error instanceof Error ? error.message : '本地工作区无法打开。' } };
   await new Promise<void>(resolve => process.stdout.write(`${JSON.stringify(failure)}\n`, () => resolve()));
@@ -61,6 +66,7 @@ async function shutdown() {
   stopping = true;
   for (const pending of hostPending.values()) { clearTimeout(pending.timeout); pending.reject(new Error('运行环境已关闭。')); }
   hostPending.clear();
+  await waveforms.close();
   await runtime.close();
   process.exitCode = 0;
 }

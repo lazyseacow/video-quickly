@@ -3,8 +3,20 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "exports": { ".": "./src/index.ts" },
-  "scripts": { "typecheck": "tsc -p tsconfig.json" },
-  "dependencies": { "@video-quickly/contracts": "workspace:*", "@video-quickly/video": "workspace:*", "zod": "^4.6.7" },
-  "devDependencies": { "@types/node": "^24.0.0" }
+  "exports": {
+    ".": "./src/index.ts",
+    "./research": "./src/research.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json"
+  },
+  "dependencies": {
+    "@video-quickly/contracts": "workspace:*",
+    "@video-quickly/video": "workspace:*",
+    "pdf-parse": "2.4.5",
+    "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0"
+  }
 }

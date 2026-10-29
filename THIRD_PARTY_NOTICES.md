@@ -15,6 +15,8 @@ React, React Flow, Lucide, Zod, LangGraph.js, Deep Agents, Motion Canvas, better
 
 GSAP and `@gsap/react` are distributed under the [GSAP Standard License](https://gsap.com/standard-license/). Their upstream README files, including copyright notices and license links, accompany the desktop distribution. These package licenses are separate from the MIT license of the authoring skills below.
 
+PDF text extraction uses [pdf-parse](https://github.com/mehmet-kozan/pdf-parse) and Mozilla's [PDF.js](https://github.com/mozilla/pdf.js), distributed under the Apache License 2.0. PDF parsing is loaded only in the local runtime. Their package licenses and notices accompany the desktop distribution; the PDF.js worker, fonts and WebAssembly resources retain their upstream notices. Exact versions are recorded in `pnpm-lock.yaml`.
+
 ## GSAP authoring skills
 
 - Source: https://github.com/greensock/gsap-skills

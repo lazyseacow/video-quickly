@@ -8,8 +8,9 @@ import { isAIMessage, isToolMessage, mapStoredMessageToChatMessage, type StoredM
 import { SqliteSaver } from '@langchain/langgraph-checkpoint-sqlite';
 import { z } from 'zod';
 import type Database from 'better-sqlite3';
-import type { ModelProfile, ProjectDocument, SkillPackage } from '@video-quickly/contracts';
-import { ActivityJournal, fingerprint, type ActivityHooks } from './activities.js';
+import { providerUsageSchema, requestModelParameters, type ModelProfile, type ProjectDocument, type SkillPackage } from '@video-quickly/contracts';
+import { ActivityJournal, fingerprint, SimulatedProcessExit, type ActivityHooks } from './activities.js';
+import type { createCostLedger } from './costs.js';
 import { connectMcp, type McpServer } from './mcp.js';
 
 interface AgentContext {
@@ -25,6 +26,7 @@ interface AgentContext {
   mcpServers: Array<McpServer & { secret?: string }>;
   dataDirectory: string;
   failpoint?: ActivityHooks['failpoint'];
+  costs?: ReturnType<typeof createCostLedger>;
 }
 
 function storedMessage(value: unknown): StoredMessage {
@@ -81,7 +83,23 @@ export async function executeDeepAgent(context: AgentContext): Promise<string> {
       const messages = request.messages.map(message => message.toDict());
       const input = { modelId: model.id, messages };
       const id = `${nodeId}:model:${fingerprint(input)}`;
-      const result = await journal.execute(runId, id, input, 'external', async () => (await handler(request)).toDict());
+      const operationId = `${runId}:${id}`;
+      const existing = context.costs?.get(operationId);
+      if (journal.get(runId, id)?.status !== 'completed' || existing) context.costs?.begin({ operationId, runId, nodeId, projectId: project.id, model, capability: 'text', requestMetrics: { source: 'request', requestCount: 1 } });
+      if (journal.get(runId, id)?.status === 'completed' && existing) context.costs?.status(operationId, 'completed');
+      let result: unknown;
+      try {
+        result = await journal.execute(runId, id, input, 'external', async () => {
+          const response = await handler(request);
+          const measured = response.usage_metadata;
+          const usage = measured ? providerUsageSchema.safeParse({ source: 'provider', inputTokens: measured.input_tokens, outputTokens: measured.output_tokens, totalTokens: measured.total_tokens, cachedInputTokens: measured.input_token_details?.cache_read }) : undefined;
+          context.costs?.status(operationId, 'completed', usage?.success ? usage.data : undefined);
+          return response.toDict();
+        });
+      } catch (error) {
+        if (!(error instanceof SimulatedProcessExit)) context.costs?.status(operationId, signal.aborted ? 'canceled' : 'unknown');
+        throw error;
+      }
       const restored = mapStoredMessageToChatMessage(storedMessage(result));
       if (!isAIMessage(restored)) throw new Error('Agent 模型结果类型无效。');
       return restored;
@@ -101,8 +119,9 @@ export async function executeDeepAgent(context: AgentContext): Promise<string> {
     },
   });
   const checkpointer = new SqliteSaver(database);
+  const { temperature, max_tokens: maximumTokens, ...modelKwargs } = requestModelParameters(model, 'text');
   const agent = createDeepAgent({
-    model: new ChatOpenAI({ model: model.model, apiKey: secret ?? 'local-service', maxRetries: 0, timeout: 120_000, configuration: { baseURL: model.baseUrl }, temperature: typeof model.parameters.temperature === 'number' ? model.parameters.temperature : 0.7 }),
+    model: new ChatOpenAI({ model: model.model, apiKey: secret ?? 'local-service', maxRetries: 0, timeout: 120_000, configuration: { baseURL: model.baseUrl }, temperature: typeof temperature === 'number' ? temperature : 0.7, maxTokens: typeof maximumTokens === 'number' ? maximumTokens : undefined, modelKwargs }),
     tools, middleware: [invocationLedger], checkpointer, skills: skills.length ? ['/skills/'] : [],
     permissions: [{ operations: ['write'], paths: ['/skills/**'], mode: 'deny' }],
     systemPrompt: '你是视频制作助手。读取本次项目快照与已选择 Skill，输出供人工审阅的结果。工作区文件为本次运行的虚拟上下文。事实未核验时保留待核验标记。',

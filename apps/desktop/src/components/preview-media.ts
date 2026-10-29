@@ -53,28 +53,60 @@ export function loadPreviewImage(asset: AssetRecord, refresh = false): Promise<H
   return entry.image;
 }
 
-export function createPreviewVideoController(element: HTMLVideoElement, events: { onFrame: () => void; onReady: () => void; onError: (message: string) => void }) {
-  let active = true;
-  let ready = false;
-  let targetTime = 0;
-  let playing = false;
-  let frameDuration = 1 / 30;
-  let frameRequest: number | undefined;
-  let playRequest: Promise<void> | undefined;
-  let playFailed = false;
+export interface PreviewVideoRange { startUs: number; endUs: number }
+
+export function previewFrameInRange(mediaTime: number, range: PreviewVideoRange): boolean {
+  const timeUs = Math.round(mediaTime * 1_000_000);
+  return Number.isFinite(timeUs) && timeUs >= range.startUs && timeUs < range.endUs;
+}
+
+export function createPreviewVideoController(element: HTMLVideoElement, events: { onFrame: () => void; onReady: () => void; onError: (message: string) => void; frameSize?: () => { width: number; height: number } }) {
+  let active = true, ready = false, targetTime = 0, playing = false, frameDuration = 1 / 30;
+  let frameRequest: number | undefined, playRequest: Promise<void> | undefined, discontinuityKey: string | undefined;
+  let playFailed = false, forceSeek = false, boundaryBlocked = false, seekGeneration = 0;
+  let range: PreviewVideoRange | undefined, safeFrame: HTMLCanvasElement | undefined, safeSampleUs: number | undefined;
+  const supportsFrames = typeof element.requestVideoFrameCallback === 'function';
   const listeners = new AbortController();
 
   const stopFrames = () => {
     if (frameRequest !== undefined) element.cancelVideoFrameCallback(frameRequest);
     frameRequest = undefined;
   };
+  const snapshot = (sampleUs: number) => {
+    if (!range || !previewFrameInRange(sampleUs / 1_000_000, range) || element.readyState < 2 || element.seeking) return;
+    const size = events.frameSize?.(), width = element.videoWidth, height = element.videoHeight;
+    if (!width || !height) return;
+    const scale = Math.min(1, Math.min(1280, size?.width ?? 1280) / width, Math.min(1280, size?.height ?? 1280) / height);
+    safeFrame ??= document.createElement('canvas');
+    const targetWidth = Math.max(1, Math.round(width * scale)), targetHeight = Math.max(1, Math.round(height * scale));
+    if (safeFrame.width !== targetWidth) safeFrame.width = targetWidth;
+    if (safeFrame.height !== targetHeight) safeFrame.height = targetHeight;
+    safeFrame.getContext('2d')!.drawImage(element, 0, 0, targetWidth, targetHeight);
+    safeSampleUs = sampleUs; events.onFrame();
+  };
+  const snapshotSeek = () => {
+    if (!range || element.seeking) return;
+    // An accurate seek decodes the frame containing this requested sample. Its PTS may
+    // precede the range start with a different source fps, matching FFmpeg's held frame.
+    const atEnd = Number.isFinite(element.duration) && targetTime >= element.duration && element.currentTime >= element.duration - .005;
+    snapshot(Math.round((atEnd ? targetTime : element.currentTime) * 1_000_000));
+  };
   const watchFrames = () => {
-    if (!active || !playing || document.hidden || !('requestVideoFrameCallback' in element) || frameRequest !== undefined) return;
-    frameRequest = element.requestVideoFrameCallback(() => {
+    if (!active || document.hidden || !supportsFrames || frameRequest !== undefined) return;
+    const generation = seekGeneration;
+    frameRequest = element.requestVideoFrameCallback((_now, metadata) => {
       frameRequest = undefined;
-      if (!active) return;
-      events.onFrame();
-      watchFrames();
+      if (!active || generation !== seekGeneration) return;
+      if (range) {
+        if (!element.seeking) {
+          if (previewFrameInRange(metadata.mediaTime, range)) snapshot(Math.round(metadata.mediaTime * 1_000_000));
+          else if (Math.round(metadata.mediaTime * 1_000_000) >= range.endUs) {
+            // Never let an independently running decoder paint into a removed interval.
+            boundaryBlocked = true; element.pause();
+          }
+        }
+      } else events.onFrame();
+      if (playing && !boundaryBlocked || element.seeking) watchFrames();
     });
   };
   const synchronize = () => {
@@ -82,58 +114,63 @@ export function createPreviewVideoController(element: HTMLVideoElement, events: 
     const shouldPlay = playing && !document.hidden;
     const duration = Number.isFinite(element.duration) ? Math.max(0, element.duration - .001) : Infinity;
     const position = Math.max(0, Math.min(targetTime, duration));
-    // Finish a pending decoder seek before applying the latest scrub position.
-    // Native playback advances itself; only correct material editor-clock drift.
-    if (element.readyState >= 1 && !element.seeking && Math.abs(element.currentTime - position) > (shouldPlay ? Math.max(.12, frameDuration * 2) : Math.min(.005, frameDuration / 3))) {
-      element.currentTime = position;
+    if (range && boundaryBlocked && !forceSeek) { element.pause(); stopFrames(); return; }
+    if (element.readyState >= 1 && !element.seeking) {
+      const controlled = Boolean(range && !supportsFrames);
+      const tolerance = forceSeek ? range ? .0000005 : .001 : shouldPlay && !controlled ? Math.max(.12, frameDuration * 2) : Math.min(.005, frameDuration / 3);
+      if (Math.abs(element.currentTime - position) > tolerance) {
+        stopFrames(); seekGeneration++; element.currentTime = position; watchFrames();
+      }
+      forceSeek = false;
     }
-    if (!shouldPlay) {
+    // Browsers without decoded-frame callbacks use accurate EDL seeks, while legacy
+    // videos retain their normal native playback path in both cases.
+    const nativePlay = shouldPlay && !(range && !supportsFrames);
+    if (!nativePlay) {
       element.pause();
-      stopFrames();
+      if (range) watchFrames(); else stopFrames();
       return;
     }
     if (element.paused && !element.ended && !playRequest && !playFailed && element.readyState >= 2) {
       playRequest = element.play().catch(error => {
         if (!active || !playing || document.hidden || (error instanceof DOMException && error.name === 'AbortError')) return;
-        playFailed = true;
-        events.onError('视频无法播放，请重新读取或检查文件格式');
+        playFailed = true; events.onError('视频无法播放，请重新读取或检查文件格式');
       }).finally(() => { playRequest = undefined; });
     }
     watchFrames();
   };
   element.addEventListener('loadedmetadata', () => {
-    // Metadata preload can report dimensions without a drawable first frame.
-    // A single seek requests that frame without playing thumbnail videos.
     if (element.preload === 'metadata' && targetTime === 0) element.currentTime = 0;
     synchronize();
   }, { signal: listeners.signal });
   element.addEventListener('loadeddata', () => {
     if (!ready) { ready = true; events.onReady(); }
-    synchronize();
-    events.onFrame();
+    synchronize(); if (range) snapshotSeek(); else events.onFrame();
   }, { signal: listeners.signal });
   element.addEventListener('seeked', () => {
-    synchronize();
-    events.onFrame();
+    if (range) snapshotSeek();
+    synchronize(); events.onFrame();
   }, { signal: listeners.signal });
   element.addEventListener('error', () => events.onError('视频素材无法读取或解码'), { signal: listeners.signal });
   document.addEventListener('visibilitychange', synchronize, { signal: listeners.signal });
 
   return {
-    synchronize(timeUs: number, nextPlaying: boolean, fps: number) {
+    synchronize(timeUs: number, nextPlaying: boolean, fps: number, nextDiscontinuityKey?: string, nextRange?: PreviewVideoRange) {
       if (playing !== nextPlaying) playFailed = false;
-      targetTime = Math.max(0, timeUs / 1_000_000);
-      playing = nextPlaying;
-      frameDuration = 1 / fps;
-      synchronize();
+      const changed = nextDiscontinuityKey !== discontinuityKey || range?.startUs !== nextRange?.startUs || range?.endUs !== nextRange?.endUs;
+      if (changed || timeUs / 1_000_000 < targetTime - .001) { boundaryBlocked = false; forceSeek = true; }
+      discontinuityKey = nextDiscontinuityKey; range = nextRange;
+      if (!range && safeFrame) { safeFrame.width = safeFrame.height = 0; safeFrame = undefined; safeSampleUs = undefined; }
+      targetTime = Math.max(0, timeUs / 1_000_000); playing = nextPlaying; frameDuration = 1 / fps; synchronize();
+    },
+    frameForPaint(expectedRange?: PreviewVideoRange): CanvasImageSource | undefined {
+      if (!expectedRange) return element;
+      return safeFrame && safeSampleUs !== undefined && previewFrameInRange(safeSampleUs / 1_000_000, expectedRange) ? safeFrame : undefined;
     },
     dispose() {
-      active = false;
-      listeners.abort();
-      stopFrames();
-      element.pause();
-      element.removeAttribute('src');
-      element.load();
+      active = false; listeners.abort(); stopFrames(); element.pause(); element.removeAttribute('src'); element.load();
+      if (safeFrame) safeFrame.width = safeFrame.height = 0;
+      safeFrame = undefined;
     },
   };
 }

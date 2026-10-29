@@ -1,12 +1,13 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { drawSceneFrame } from '@video-quickly/video';
-import type { AssetRecord, ProjectDocument, Shot } from '@video-quickly/contracts';
+import { citationOverlayForShot, createCitationManifest, drawSceneFrame } from '@video-quickly/video';
+import { resolveShotSpans, resolveShotTime } from '@video-quickly/video/clip-edits';
+import { effectiveCaptionStyle, type AssetRecord, type ProjectDocument, type Shot } from '@video-quickly/contracts';
 import { getAssetUrl } from '../lib/client';
 import { CircleAlert, LoaderCircle, RefreshCw, Upload } from 'lucide-react';
 import { createPreviewVideoController, loadPreviewImage, previewAssetKey } from './preview-media';
 
 interface ScenePreviewProps {
-  project: ProjectDocument;
+  project: Pick<ProjectDocument, 'profile'> & Partial<Pick<ProjectDocument, 'claims' | 'researchSources' | 'referenceDisplay' | 'shots' | 'captionStyle' | 'clipEditSources' | 'clipEditPlans'>>;
   shot: Shot;
   shotIndex: number;
   timeUs?: number;
@@ -29,20 +30,37 @@ export const ScenePreview = memo(function ScenePreview({ project, shot, shotInde
   const [video, setVideo] = useState<{ key: string; element: HTMLVideoElement }>();
   const [mediaError, setMediaError] = useState<{ key: string; message: string }>();
   const [retry, setRetry] = useState(0);
-  const imageAsset = useMemo(() => !shot.videoAssetId ? assets.find(asset => asset.id === shot.assetId) : undefined, [assets, shot.assetId, shot.videoAssetId]);
-  const videoAsset = useMemo(() => assets.find(asset => asset.id === shot.videoAssetId), [assets, shot.videoAssetId]);
+  const templateActive = Boolean(shot.sceneTemplate);
+  const hasVideo = !templateActive && Boolean(shot.videoAssetId);
+  const hasImage = !templateActive && !hasVideo && Boolean(shot.assetId);
+  const imageAsset = useMemo(() => hasImage ? assets.find(asset => asset.id === shot.assetId) : undefined, [assets, shot.assetId, hasImage]);
+  const videoAsset = useMemo(() => hasVideo ? assets.find(asset => asset.id === shot.videoAssetId) : undefined, [assets, shot.videoAssetId, hasVideo]);
   const imageKey = imageAsset ? previewAssetKey(imageAsset) : `missing:${shot.assetId ?? ''}`;
   const videoKey = videoAsset ? previewAssetKey(videoAsset) : `missing:${shot.videoAssetId ?? ''}`;
-  const mediaKey = `${shot.videoAssetId ? videoKey : imageKey}:${retry}`;
-  const activeImage = !shot.videoAssetId && image?.key === mediaKey ? image.element : undefined;
-  const activeVideo = video?.key === mediaKey ? video.element : undefined;
-  const error = mediaError?.key === mediaKey ? mediaError.message : '';
-  const loading = !error && (shot.videoAssetId ? !activeVideo : shot.assetId ? !activeImage : false);
+  const mediaKey = `${templateActive ? 'template' : hasVideo ? videoKey : imageKey}:${retry}`;
+  const activeImage = hasImage && image?.key === mediaKey ? image.element : undefined;
+  const activeVideo = hasVideo && video?.key === mediaKey ? video.element : undefined;
   const fps = project.profile.frameRate.numerator / project.profile.frameRate.denominator;
+  let resolutionError = '', resolvedTime = { videoUs: 0, discontinuityKey: 'invalid', spanIndex: 0 };
+  try { resolvedTime = resolveShotTime(shot, project, timeUs); }
+  catch (failure) { resolutionError = failure instanceof Error ? failure.message : String(failure); }
+  const error = resolutionError || (!templateActive && mediaError?.key === mediaKey ? mediaError.message : '');
+  const loading = !error && (hasVideo ? !activeVideo : hasImage ? !activeImage : false);
+  const discontinuityKey = JSON.stringify([shot.id, shot.sourceInUs, shot.videoInUs, resolvedTime.discontinuityKey]);
+  const videoSpans = useMemo(() => {
+    if (!shot.clipEdit) return [];
+    try { return resolveShotSpans(shot, project); } catch { return []; }
+  }, [shot.clipEdit, shot.durationUs, project.clipEditSources, project.clipEditPlans]);
+  const videoSpan = videoSpans.find(span => span.spanIndex === resolvedTime.spanIndex);
+  const videoRange = videoSpan ? { startUs: videoSpan.videoInUs, endUs: videoSpan.videoInUs + videoSpan.durationUs } : undefined;
+  const citation = useMemo(() => project.referenceDisplay === 'numbers' ? citationOverlayForShot(createCitationManifest({ claims: project.claims ?? [], researchSources: project.researchSources, referenceDisplay: project.referenceDisplay, shots: [shot] }), shot.id) : undefined, [project.claims, project.researchSources, project.referenceDisplay, shot.id, shot.claimIds]);
+  const referenceFooter = project.referenceDisplay === 'numbers' && (project.shots ?? [shot]).some(shot => shot.claimIds.length > 0);
+  const captionStyle = effectiveCaptionStyle(project, shot);
   const profile = useMemo(() => {
     const scale = Math.min(project.profile.previewScale, (thumbnail ? 420 : 1280) / project.profile.width);
     return { ...project.profile, width: Math.max(64, Math.round(project.profile.width * scale)), height: Math.max(64, Math.round(project.profile.height * scale)) };
   }, [project.profile.width, project.profile.height, project.profile.previewScale, project.profile.fitMode, project.profile.frameRate.numerator, project.profile.frameRate.denominator, thumbnail]);
+  const frameSize = useRef({ width: profile.width, height: profile.height }); frameSize.current = profile;
 
   const requestRender = useCallback(() => {
     if (pendingFrame.current !== undefined || document.hidden) return;
@@ -53,7 +71,7 @@ export const ScenePreview = memo(function ScenePreview({ project, shot, shotInde
   }, []);
 
   useEffect(() => {
-    if (!shot.assetId || shot.videoAssetId) return;
+    if (!hasImage) return;
     if (!imageAsset) { setMediaError({ key: mediaKey, message: '未找到镜头图片素材' }); return; }
     let active = true;
     setMediaError(undefined);
@@ -65,10 +83,10 @@ export const ScenePreview = memo(function ScenePreview({ project, shot, shotInde
       if (active) setMediaError({ key: mediaKey, message: '图片素材无法读取或解码' });
     });
     return () => { active = false; };
-  }, [imageKey, shot.assetId, shot.videoAssetId, retry]);
+  }, [imageKey, shot.assetId, hasImage, retry]);
 
   useEffect(() => {
-    if (!shot.videoAssetId) return;
+    if (!hasVideo) return;
     if (!videoAsset) { setMediaError({ key: mediaKey, message: '未找到镜头视频素材' }); return; }
     let active = true;
     setMediaError(undefined);
@@ -80,6 +98,7 @@ export const ScenePreview = memo(function ScenePreview({ project, shot, shotInde
       onReady: () => { if (active) setVideo({ key: mediaKey, element }); },
       onFrame: requestRender,
       onError: message => { if (active) setMediaError({ key: mediaKey, message }); },
+      frameSize: () => frameSize.current,
     });
     videoController.current = controller;
     void getAssetUrl(videoAsset.path).then(url => {
@@ -90,23 +109,25 @@ export const ScenePreview = memo(function ScenePreview({ project, shot, shotInde
       controller.dispose();
       if (videoController.current === controller) videoController.current = undefined;
     };
-  }, [videoKey, shot.videoAssetId, retry, thumbnail, requestRender]);
+  }, [videoKey, shot.videoAssetId, hasVideo, retry, thumbnail, requestRender]);
 
   useEffect(() => {
-    videoController.current?.synchronize(timeUs, playing && !thumbnail, fps);
-  }, [videoKey, video, timeUs, playing, thumbnail, fps]);
+    videoController.current?.synchronize(resolvedTime.videoUs, playing && !thumbnail && !resolutionError, fps, discontinuityKey, videoRange);
+  }, [videoKey, video, resolvedTime.videoUs, discontinuityKey, videoRange?.startUs, videoRange?.endUs, resolutionError, playing, thumbnail, fps]);
 
   useEffect(() => {
     draw.current = () => {
       const target = canvas.current;
       if (!target || error || loading) return;
-      if (shot.videoAssetId && (!activeVideo || activeVideo.readyState < 2 || activeVideo.seeking)) return;
+      if (hasVideo && (!activeVideo || activeVideo.readyState < 2 || activeVideo.seeking)) return;
+      const videoFrame = activeVideo ? videoController.current?.frameForPaint(videoRange) : undefined;
+      if (hasVideo && !videoFrame) return;
       if (target.width !== profile.width) target.width = profile.width;
       if (target.height !== profile.height) target.height = profile.height;
-      drawSceneFrame(target, { title: shot.title, narration: shot.narration, shotIndex, profile, durationUs: shot.durationUs, animation: shot.animation, image: activeVideo && activeVideo.readyState >= 2 ? activeVideo : activeImage }, timeUs);
+      drawSceneFrame(target, { title: shot.title, narration: shot.narration, sceneTemplate: shot.sceneTemplate, captionTrack: shot.captionTrack, clipEdit: shot.clipEdit, clipEditContext: project, sourceInUs: shot.sourceInUs, audioInUs: shot.audioInUs, videoInUs: shot.videoInUs, shotIndex, sceneIndex: shot.sceneIndex, profile, durationUs: shot.durationUs, sceneInUs: shot.sceneInUs, sceneDurationUs: shot.sceneDurationUs, animation: shot.animation, image: videoFrame ?? activeImage, citation, referenceFooter, captionStyle }, timeUs);
     };
     requestRender();
-  }, [profile, shot.title, shot.narration, shot.durationUs, shot.videoAssetId, shot.animation, shotIndex, timeUs, activeImage, activeVideo, error, loading, requestRender]);
+  }, [profile, shot.title, shot.narration, shot.sceneTemplate, shot.captionTrack, shot.clipEdit, project.clipEditSources, project.clipEditPlans, shot.sourceInUs, shot.audioInUs, shot.videoInUs, shot.durationUs, shot.sceneInUs, shot.sceneDurationUs, hasVideo, shot.animation, shotIndex, shot.sceneIndex, timeUs, activeImage, activeVideo, videoRange?.startUs, videoRange?.endUs, error, loading, citation, referenceFooter, captionStyle, requestRender]);
 
   useEffect(() => {
     document.addEventListener('visibilitychange', requestRender);

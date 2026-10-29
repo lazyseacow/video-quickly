@@ -10,7 +10,7 @@ await build({
   platform: 'node',
   format: 'esm',
   target: 'node24',
-  external: ['better-sqlite3', '@napi-rs/canvas'],
+  external: ['better-sqlite3', '@napi-rs/canvas', 'pdf-parse'],
   banner: { js: "import { createRequire as __createRequire } from 'node:module'; const require = __createRequire(import.meta.url);" },
   sourcemap: true,
   plugins: [{

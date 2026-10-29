@@ -1,0 +1,34 @@
+/* Quiet, nearly opaque glass for application chrome. Media and form contents stay crisp. */
+@supports ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  .workspace-shell .sidebar,
+  .workspace-shell .project-heading,
+  .workspace-shell .inspector,
+  .workspace-shell .timeline-toolbar {
+    background: linear-gradient(180deg, var(--glass-sheen), transparent 80px), var(--glass-fill);
+    -webkit-backdrop-filter: var(--glass-filter);
+    backdrop-filter: var(--glass-filter);
+    box-shadow: inset 0 1px 0 var(--glass-edge);
+  }
+
+  .dialog__surface,
+  .toast {
+    background: linear-gradient(180deg, var(--glass-sheen), transparent 80px), var(--glass-raised);
+    -webkit-backdrop-filter: var(--glass-filter);
+    backdrop-filter: var(--glass-filter);
+    border: 0;
+    box-shadow: inset 0 0 0 1px var(--glass-edge), var(--floating-shadow);
+  }
+}
+
+@media (prefers-reduced-transparency: reduce) {
+  .workspace-shell .sidebar,
+  .workspace-shell .project-heading,
+  .workspace-shell .inspector,
+  .workspace-shell .timeline-toolbar,
+  .dialog__surface,
+  .toast {
+    background: var(--surface);
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+  }
+}

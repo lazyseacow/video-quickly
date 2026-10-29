@@ -14,6 +14,7 @@
     "typecheck": "pnpm -r typecheck",
     "test": "vitest run",
     "test:e2e": "playwright test",
+    "benchmark:workspace": "node --expose-gc --import tsx scripts/benchmark-workspace.ts",
     "test:media": "node scripts/render-smoke.mjs",
     "prepare:media": "node scripts/prepare-media.mjs",
     "check": "pnpm typecheck && pnpm test && pnpm build",

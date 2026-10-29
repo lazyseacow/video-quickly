@@ -76,6 +76,10 @@ describe('Deep Agents integration', () => {
     expect(calls).toBe(2);
     expect(sawToolResult).toBe(true);
     expect(completed.activities.filter(activity => activity.id.startsWith('agent:model:'))).toHaveLength(2);
+    const costs = await runtime.dispatch('cost.list', { runId: run.id }) as { items: Array<{ operationId: string; providerUsage?: { inputTokens?: number; outputTokens?: number }; actualAmount?: number }> };
+    expect(costs.items).toHaveLength(2);
+    expect(costs.items.every(record => record.operationId.startsWith(`${run.id}:agent:model:`))).toBe(true);
+    expect(costs.items.every(record => record.providerUsage?.inputTokens === 1 && record.providerUsage.outputTokens === 1 && record.actualAmount === undefined)).toBe(true);
     const replay = await runtime.dispatch('run.replay', { runId: run.id }) as { externalCalls: number };
     expect(replay.externalCalls).toBe(0);
     expect(calls).toBe(2);

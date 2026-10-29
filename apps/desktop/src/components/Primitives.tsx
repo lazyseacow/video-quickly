@@ -7,7 +7,7 @@ export function Button({ children, variant = 'default', className = '', busy = f
 }
 
 export function IconButton({ label, children, className = '', ...props }: ButtonHTMLAttributes<HTMLButtonElement> & { label: string }) {
-  return <button type="button" {...props} title={label} aria-label={label} className={`icon-button ${className}`}>{children}</button>;
+  return <button type="button" {...props} title={props.title ?? label} aria-label={label} className={`icon-button ${className}`}>{children}</button>;
 }
 
 export function Field({ label, hint, children, className = '' }: { label: string; hint?: string; children: ReactNode; className?: string }) {
@@ -54,7 +54,7 @@ export function Dialog({ title, children, onClose, className = '' }: { title: st
 
 export function Notice({ kind = 'info', children }: { kind?: 'info' | 'error' | 'success'; children: ReactNode }) {
   const Icon = kind === 'success' ? Check : kind === 'error' ? CircleAlert : Info;
-  return <div role={kind === 'error' ? 'alert' : 'status'} className={`notice notice--${kind}`}><Icon size={18} aria-hidden="true" /><span>{children}</span></div>;
+  return <div role={kind === 'error' ? 'alert' : 'status'} className={`notice notice--${kind}`}><Icon className="notice__icon" size={16} strokeWidth={1.75} aria-hidden="true" /><span className="notice__content">{children}</span></div>;
 }
 
 export function EmptyState({ icon, title, description, children }: { icon: ReactNode; title: string; description: string; children?: ReactNode }) {

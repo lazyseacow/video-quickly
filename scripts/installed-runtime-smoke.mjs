@@ -14,7 +14,7 @@ if (mode === 'inspect') {
   const require = createRequire(join(sidecar, 'package.json'));
   const Database = require('better-sqlite3');
   const db = new Database(join(dataDirectory, 'workspace.sqlite'), { readonly: true });
-  try { assert.equal(db.pragma('user_version', { simple: true }), 2); assert.equal(db.pragma('quick_check', { simple: true }), 'ok'); } finally { db.close(); }
+  try { assert.equal(db.pragma('user_version', { simple: true }), 6); assert.equal(db.pragma('quick_check', { simple: true }), 'ok'); } finally { db.close(); }
   console.log('原生客户端已完成数据库迁移');
   process.exit(0);
 }
@@ -79,6 +79,12 @@ if (mode === 'prepare') {
   const Database = require('better-sqlite3');
   const db = new Database(join(dataDirectory, 'workspace.sqlite'));
   // Recreate the shipped unversioned baseline while keeping an actual graph checkpoint.
-  try { db.exec('DROP INDEX execution_events_run_sequence; DROP TABLE schema_migrations; PRAGMA user_version = 0;'); } finally { db.close(); }
+  try { db.exec(`
+    DROP TRIGGER project_summary_insert; DROP TRIGGER project_summary_update; DROP TRIGGER project_summary_delete;
+    DROP TRIGGER asset_version_insert; DROP TRIGGER asset_version_update; DROP TRIGGER asset_version_delete;
+    DROP INDEX documents_project; DROP TABLE project_asset_references;
+    DELETE FROM documents WHERE kind = 'project-summary'; DELETE FROM runtime_metadata WHERE key = 'assets-version';
+    DROP INDEX execution_events_run_sequence; DROP TABLE schema_migrations; PRAGMA user_version = 0;
+  `); } finally { db.close(); }
 }
 console.log(`安装后的执行组件验收通过：${mode}`);

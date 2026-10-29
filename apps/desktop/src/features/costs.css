@@ -1,0 +1,16 @@
+.cost-filter { max-width: 360px; }
+.cost-summary { margin-block: 16px; }
+.cost-summary table { width: 100%; border-collapse: collapse; margin-bottom: 12px; text-align: left; font-size: 12px; font-variant-numeric: tabular-nums; }
+.cost-summary th, .cost-summary td { padding: 10px 8px; border-bottom: 1px solid var(--border); }
+.cost-summary thead { color: var(--text-secondary); }
+.cost-summary .tiny-meta { margin-top: 8px; }
+.cost-record { align-items: flex-start; }
+.cost-record__heading { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.cost-record__heading h3 { margin: 0; }
+.cost-record__amounts { display: flex; gap: 10px 24px; flex-wrap: wrap; margin-top: 10px; color: var(--text); font-size: 12px; font-variant-numeric: tabular-nums; }
+.cost-record__note { white-space: pre-wrap; overflow-wrap: anywhere; }
+.cost-evidence { margin-top: 12px; font-size: 11px; line-height: 1.7; }
+.cost-evidence dt { color: var(--text-subtle); margin-top: 8px; }
+.cost-evidence dd { margin-left: 0; overflow-wrap: anywhere; }
+.cost-evidence pre { white-space: pre-wrap; }
+@media (max-width: 600px) { .cost-record { flex-wrap: wrap; } .cost-record .list-card__body { min-width: 0; flex-basis: calc(100% - 58px); } .cost-record .list-card__actions { margin-left: auto; } }

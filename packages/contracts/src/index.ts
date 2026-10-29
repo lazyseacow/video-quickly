@@ -1,4 +1,18 @@
 import { z } from 'zod';
+import { sceneTemplateSchema } from './scene-templates.js';
+import { claimSchema, researchSourceSchema } from './research.js';
+import { captionStyleSchema, scenePresetSchema } from './caption-style.js';
+import { audioMixSettingsSchema, audioProcessingSchema } from './audio-processing.js';
+export { audioProcessingSchema, audioMixSettingsSchema, DEFAULT_AUDIO_PROCESSING, DEFAULT_AUDIO_MIX_SETTINGS, preparedAudioMixSchema, audioMixJobSchema, audioMixPrepareResultSchema, audioLevelWindowSchema, silenceDetectionSchema, type AudioProcessing, type AudioMixSettings, type PreparedAudioMix, type AudioMixJob, type AudioMixPrepareResult, type AudioLevelWindow, type SilenceDetection } from './audio-processing.js';
+export { captionStyleSchema, DEFAULT_CAPTION_STYLE, effectiveCaptionStyle, scenePresetSchema, seriesSettingsSchema, seriesTemplateSchema, type CaptionStyle, type ScenePreset, type SeriesSettings, type SeriesTemplate } from './caption-style.js';
+export { claimSchema, claimEvidenceSchema, researchSourceSchema, researchResultSchema, researchSearchResultSchema, validateResearchContent, applyResearchClaims, type Claim, type ClaimEvidence, type ResearchSource, type ResearchResult, type ResearchSearchResult, type ShotClaims, type ResearchContent } from './research.js';
+export { sceneTemplateSchema, processSceneTemplateSchema, comparisonSceneTemplateSchema, barChartSceneTemplateSchema, createSceneTemplate, type SceneTemplate, type SceneTemplateKind } from './scene-templates.js';
+export { clipSourceAssetIds, validateClipEditContent, validateClipEditHistory, type ClipEditContent } from './clip-editing.js';
+
+// A fixed application message is safe to retain across the external-activity boundary.
+export class TranscriptionTimestampError extends Error {
+  constructor() { super('模型没有返回语音时间戳。请选择支持分段时间戳的模型，不能用纯文字结果进行语音对齐。'); }
+}
 
 export type JsonValue = string | number | boolean | null | JsonValue[] | { [key: string]: JsonValue };
 export const jsonValueSchema: z.ZodType<JsonValue> = z.lazy(() => z.union([
@@ -16,6 +30,23 @@ export const videoProfileSchema = z.object({
 });
 export type FrameRate = z.infer<typeof frameRateSchema>;
 export type VideoProfile = z.infer<typeof videoProfileSchema>;
+export const exportTargetSchema = z.object({
+  id: z.string().min(1).max(64), label: z.string().min(1).max(100), profile: videoProfileSchema,
+});
+export type ExportTarget = z.infer<typeof exportTargetSchema>;
+export const exportBatchTargetSchema = exportTargetSchema.extend({
+  status: z.enum(['queued', 'running', 'succeeded', 'failed', 'canceled', 'interrupted']),
+  runId: z.string().optional(), progress: z.number().min(0).max(1).default(0), error: z.string().optional(),
+  videoPath: z.string().optional(), coverPath: z.string().optional(), subtitlePath: z.string().optional(), timelinePath: z.string().optional(),
+});
+export type ExportBatchTarget = z.infer<typeof exportBatchTargetSchema>;
+export const exportBatchSchema = z.object({
+  id: z.string().min(1), projectId: z.string().min(1), projectRevision: z.number().int().positive(), revision: z.number().int().positive(),
+  status: z.enum(['queued', 'running', 'interrupted', 'succeeded', 'partial', 'failed', 'canceled']),
+  targets: z.array(exportBatchTargetSchema).min(1).max(8), destinationDirectory: z.string().optional(), error: z.string().optional(),
+  createdAt: z.string(), updatedAt: z.string(),
+}).refine(value => new Set(value.targets.map(target => target.id)).size === value.targets.length, '批量导出目标编号不能重复');
+export type ExportBatch = z.infer<typeof exportBatchSchema>;
 export const DEFAULT_VIDEO_PROFILE: VideoProfile = { width: 1920, height: 1080, frameRate: { numerator: 30, denominator: 1 }, fitMode: 'contain', previewScale: 0.5 };
 export const FRAME_RATE_PRESETS = [
   { label: '23.976', numerator: 24000, denominator: 1001 },
@@ -42,16 +73,116 @@ export function frameAtTime(timeUs: number, rate: FrameRate): number {
 export function timeAtFrame(frame: number, rate: FrameRate): number {
   return Math.round(frame * 1_000_000 * rate.denominator / rate.numerator);
 }
+/** Use the persisted microsecond frame grid at half-open caption and edit boundaries. */
+export function firstFrameAtUs(timeUs: number, rate: FrameRate): number {
+  if (!Number.isFinite(timeUs)) throw new RangeError('时间须为有限数值。');
+  let frame = Math.max(0, frameAtTime(timeUs, rate));
+  while (timeAtFrame(frame, rate) < timeUs) frame++;
+  while (frame > 0 && timeAtFrame(frame - 1, rate) >= timeUs) frame--;
+  return frame;
+}
+
+export const captionCueSchema = z.object({
+  id: z.string().min(1), startUs: z.number().int().nonnegative(), endUs: z.number().int().positive(),
+  text: z.string().max(10000).refine(value => value.trim().length > 0, '字幕内容不能为空'),
+}).refine(value => value.endUs > value.startUs, { message: '字幕结束时间须晚于开始时间', path: ['endUs'] });
+export type CaptionCue = z.infer<typeof captionCueSchema>;
+// Persist authored or source-media time; timeline positions are derived from each clip's offsets.
+export const captionTrackSchema = z.object({
+  timeBase: z.enum(['source', 'scene', 'clip']), cues: z.array(captionCueSchema).max(10000),
+  alignment: z.enum(['manual', 'estimated', 'speech']), granularity: z.enum(['segment', 'word']).optional(),
+  sourceAssetId: z.string().min(1).optional(), sourceSha256: z.string().min(1).optional(), modelId: z.string().min(1).optional(),
+}).superRefine((value, context) => {
+  const ids = new Set<string>();
+  value.cues.forEach((cue, index) => {
+    if (ids.has(cue.id)) context.addIssue({ code: 'custom', message: '字幕编号不能重复', path: ['cues', index, 'id'] });
+    ids.add(cue.id);
+    if (index > 0 && cue.startUs < value.cues[index - 1].endUs) context.addIssue({ code: 'custom', message: '字幕须按时间排序且不能重叠', path: ['cues', index, 'startUs'] });
+  });
+  if (value.alignment === 'speech') {
+    if (value.timeBase !== 'source') context.addIssue({ code: 'custom', message: '语音对齐字幕须使用素材时间', path: ['timeBase'] });
+    if (!value.sourceAssetId) context.addIssue({ code: 'custom', message: '语音对齐字幕需要原始音频素材', path: ['sourceAssetId'] });
+    if (!value.sourceSha256) context.addIssue({ code: 'custom', message: '语音对齐字幕需要原始音频哈希', path: ['sourceSha256'] });
+  }
+});
+export type CaptionTrack = z.infer<typeof captionTrackSchema>;
+// BGM startUs is project time, independent of shot order; sourceInUs belongs to the audio asset.
+export const musicClipSchema = z.object({
+  id: z.string().min(1), assetId: z.string().min(1), startUs: z.number().int().nonnegative().default(0),
+  sourceInUs: z.number().int().nonnegative().default(0), durationUs: z.number().int().positive(),
+  gainDb: z.number().min(-60).max(0).default(-18), fadeInUs: z.number().int().nonnegative().default(0),
+  fadeOutUs: z.number().int().nonnegative().default(0), loop: z.boolean().default(false),
+}).superRefine((value, context) => {
+  for (const field of ['fadeInUs', 'fadeOutUs'] as const) {
+    if (value[field] > value.durationUs) context.addIssue({ code: 'custom', message: '淡入淡出时长不能超过音乐片段时长', path: [field] });
+  }
+});
+export type MusicClip = z.infer<typeof musicClipSchema>;
+// Derived source-local peaks, one absolute amplitude per 10ms window including a partial tail.
+export const audioWaveformSchema = z.object({
+  version: z.literal(1), assetId: z.string().min(1), sha256: z.string().min(1), durationUs: z.number().int().positive(),
+  peaksPerSecond: z.literal(100), peaks: z.array(z.number().min(0).max(1)),
+}).refine(value => value.peaks.length === Math.ceil(value.durationUs / 10_000), { message: '波形峰值数量须与音频时长一致', path: ['peaks'] });
+export type AudioWaveform = z.infer<typeof audioWaveformSchema>;
+
+export const characterProfileSchema = z.object({
+  id: z.string().min(1), name: z.string().trim().min(1).max(120), description: z.string().max(10000),
+  referenceAssetIds: z.array(z.string().min(1)).max(4).refine(value => new Set(value).size === value.length, '角色参考图不能重复'),
+  revision: z.number().int().positive(), createdAt: z.string(), updatedAt: z.string(), archived: z.boolean().default(false),
+});
+export type CharacterProfile = z.infer<typeof characterProfileSchema>;
+
+export const clipEditReferenceSchema = z.object({
+  planId: z.string().min(1), inUs: z.number().int().nonnegative(),
+  restoreInUs: z.number().int().nonnegative(), restoreDurationUs: z.number().int().positive(),
+});
 
 export const shotSchema = z.object({
   id: z.string().min(1), title: z.string().min(1).max(160), narration: z.string().max(10000), visualPrompt: z.string().max(20000),
   durationUs: z.number().int().min(500000).max(600000000),
+  sourceInUs: z.number().int().nonnegative().optional(),
+  // Independent replacements start at their own source origin; absent overrides retain legacy shared trims.
+  audioInUs: z.number().int().nonnegative().optional(), videoInUs: z.number().int().nonnegative().optional(),
+  // Preserve authored animation, caption timing and sample identity across clip edits.
+  sceneInUs: z.number().int().nonnegative().optional(), sceneDurationUs: z.number().int().positive().optional(),
+  sceneIndex: z.number().int().nonnegative().optional(),
+  captionTrack: captionTrackSchema.optional(),
+  captionStyle: captionStyleSchema.nullable().optional(),
+  clipEdit: clipEditReferenceSchema.optional(), audioProcessing: audioProcessingSchema.optional(),
+  characterIds: z.array(z.string().min(1)).max(8).refine(value => new Set(value).size === value.length, '镜头角色不能重复').optional(),
+  sceneTemplate: sceneTemplateSchema.optional(),
   assetId: z.string().optional(), audioAssetId: z.string().optional(), videoAssetId: z.string().optional(),
   claimIds: z.array(z.string()).default([]), locked: z.boolean().default(false),
   animation: z.object({ panX: z.number().default(0), panY: z.number().default(0), zoom: z.number().min(0.1).max(5).default(1.05), transition: z.enum(['cut', 'fade', 'wipe']).default('fade') })
     .default({ panX: 0, panY: 0, zoom: 1.05, transition: 'fade' }),
 });
 export type Shot = z.infer<typeof shotSchema>;
+export const clipEditSourceSchema = z.object({
+  id: z.string().min(1),
+  original: shotSchema.pick({ durationUs: true, sourceInUs: true, audioInUs: true, videoInUs: true, sceneInUs: true, sceneDurationUs: true, sceneIndex: true, captionTrack: true, assetId: true, audioAssetId: true, videoAssetId: true }),
+  assetHashes: z.array(z.object({ assetId: z.string().min(1), sha256: z.string().regex(/^[a-f0-9]{64}$/) })).max(4),
+});
+export type ClipEditSource = z.infer<typeof clipEditSourceSchema>;
+export const clipEditSpanSchema = z.object({
+  id: z.string().min(1), durationUs: z.number().int().positive(), originInUs: z.number().int().nonnegative(),
+  sourceInUs: z.number().int().nonnegative(), audioInUs: z.number().int().nonnegative(), videoInUs: z.number().int().nonnegative(), sceneInUs: z.number().int().nonnegative(),
+});
+export type ClipEditSpan = z.infer<typeof clipEditSpanSchema>;
+export const clipEditPlanSchema = z.object({ id: z.string().min(1), sourceId: z.string().min(1), spans: z.array(clipEditSpanSchema).min(1).max(2000) });
+export type ClipEditPlan = z.infer<typeof clipEditPlanSchema>;
+export const shotCandidateKindSchema = z.enum(['script', 'image', 'audio', 'video']);
+export type ShotCandidateKind = z.infer<typeof shotCandidateKindSchema>;
+export const shotCandidateFieldSchema = z.enum(['title', 'narration', 'visualPrompt', 'durationUs']);
+export type ShotCandidateField = z.infer<typeof shotCandidateFieldSchema>;
+export const shotCandidateSchema = z.object({
+  id: z.string().min(1), projectId: z.string().min(1), shotId: z.string().min(1),
+  kind: shotCandidateKindSchema, runId: z.string().min(1), nodeId: z.string().min(1), createdAt: z.string(),
+  baseline: shotSchema, shot: shotSchema, assetIds: z.array(z.string().min(1)), characters: z.array(characterProfileSchema).optional(),
+  modelId: z.string().optional(), instruction: z.string().max(20000).optional(),
+}).refine(value => value.baseline.id === value.shotId && value.shot.id === value.shotId, '候选与原始镜头编号须一致');
+export type ShotCandidate = z.infer<typeof shotCandidateSchema>;
+export { applyShotCandidate } from './shot-candidates.js';
+export { getModelParameterFields, modelParameterValue, withModelParameter, validateModelParameters, requestModelParameters, type ModelParameterField, type ModelParameterOperation } from './model-parameters.js';
 export const nodeKindSchema = z.enum(['brief', 'research', 'style', 'script', 'assets', 'voice', 'animation', 'review', 'export', 'agent', 'condition', 'join']);
 export type NodeKind = z.infer<typeof nodeKindSchema>;
 export const workflowNodeSchema = z.object({
@@ -67,11 +198,13 @@ export const workflowSchema = z.object({
 });
 export type WorkflowNode = z.infer<typeof workflowNodeSchema>;
 export type WorkflowDefinition = z.infer<typeof workflowSchema>;
-export const claimSchema = z.object({ id: z.string(), text: z.string(), source: z.string(), locator: z.string().default(''), status: z.enum(['pending', 'verified', 'disputed']).default('pending') });
-export type Claim = z.infer<typeof claimSchema>;
 export const projectSchema = z.object({
   id: z.string(), title: z.string().min(1).max(160), brief: z.string().max(30000), templateId: z.string().default('history-handdrawn'),
   revision: z.number().int().positive(), profile: videoProfileSchema, shots: z.array(shotSchema), workflow: workflowSchema,
+  musicClips: z.array(musicClipSchema).optional(),
+  researchSources: z.array(researchSourceSchema).max(20).optional(), referenceDisplay: z.enum(['hidden', 'numbers']).optional(),
+  captionStyle: captionStyleSchema.nullable().optional(), scenePreset: scenePresetSchema.nullable().optional(),
+  audioMix: audioMixSettingsSchema.nullable().optional(), clipEditSources: z.array(clipEditSourceSchema).max(2000).optional(), clipEditPlans: z.array(clipEditPlanSchema).max(5000).optional(),
   claims: z.array(claimSchema).default([]), style: z.string().default('手绘墨线、淡彩纸纹、固定人物和场景锚点'),
   createdAt: z.string(), updatedAt: z.string(), archived: z.boolean().default(false),
 });
@@ -80,6 +213,27 @@ export type Project = ProjectDocument;
 
 export const modelCapabilitySchema = z.enum(['text', 'image', 'video', 'tts', 'asr', 'vision', 'tools', 'structured-output']);
 export type ModelCapability = z.infer<typeof modelCapabilitySchema>;
+export const currencySchema = z.enum(['USD', 'CNY']);
+export const modelPricingSchema = z.object({
+  currency: currencySchema,
+  inputPerMillionTokens: z.number().nonnegative().optional(), outputPerMillionTokens: z.number().nonnegative().optional(),
+  perImage: z.number().nonnegative().optional(), perVideoSecond: z.number().nonnegative().optional(),
+  perThousandCharacters: z.number().nonnegative().optional(), perAudioMinute: z.number().nonnegative().optional(),
+});
+export type ModelPricing = z.infer<typeof modelPricingSchema>;
+export const costRequestMetricsSchema = z.object({
+  source: z.literal('request'), requestCount: z.number().int().nonnegative().optional(),
+  images: z.number().int().nonnegative().optional(), videoSeconds: z.number().nonnegative().optional(),
+  characters: z.number().int().nonnegative().optional(), audioSeconds: z.number().nonnegative().optional(),
+});
+export type CostRequestMetrics = z.infer<typeof costRequestMetricsSchema>;
+export const providerUsageSchema = z.object({
+  source: z.literal('provider'), inputTokens: z.number().int().nonnegative().optional(), outputTokens: z.number().int().nonnegative().optional(),
+  totalTokens: z.number().int().nonnegative().optional(), cachedInputTokens: z.number().int().nonnegative().optional(),
+  images: z.number().int().nonnegative().optional(), videoSeconds: z.number().nonnegative().optional(),
+  characters: z.number().int().nonnegative().optional(), audioSeconds: z.number().nonnegative().optional(),
+});
+export type ProviderUsage = z.infer<typeof providerUsageSchema>;
 export const modelSchema = z.object({
   id: z.string(), name: z.string().min(1).max(120),
   provider: z.enum(['openai-compatible', 'ollama', 'comfyui', 'seedream', 'seedance', 'qwen-tts', 'custom-http']),
@@ -89,10 +243,21 @@ export const modelSchema = z.object({
       return ['http:', 'https:'].includes(url.protocol) && !url.username && !url.password && !url.search && !url.hash;
     } catch { return false; }
   }, '服务地址须为不含凭据、查询参数和片段的 HTTP(S) 地址'), model: z.string().min(1).max(200), capabilities: z.array(modelCapabilitySchema).min(1),
-  parameters: z.record(z.string(), jsonValueSchema).default({}), enabled: z.boolean().default(true),
+  parameters: z.record(z.string(), jsonValueSchema).default({}), pricing: modelPricingSchema.nullable().optional(), enabled: z.boolean().default(true),
   credentialRef: z.string().optional(), hasSecret: z.boolean().default(false), createdAt: z.string(), updatedAt: z.string(),
 });
 export type ModelProfile = z.infer<typeof modelSchema>;
+export const usageRecordSchema = z.object({
+  id: z.string().min(1), revision: z.number().int().positive(), operationId: z.string().min(1),
+  runId: z.string().min(1), nodeId: z.string().min(1), shotId: z.string().optional(), projectId: z.string().min(1),
+  modelId: z.string().min(1), modelName: z.string(), provider: modelSchema.shape.provider, model: z.string(), capability: modelCapabilitySchema,
+  status: z.enum(['submitted', 'completed', 'unknown', 'failed', 'canceled']), requestMetrics: costRequestMetricsSchema,
+  providerUsage: providerUsageSchema.optional(), pricing: modelPricingSchema.nullable().optional(),
+  estimatedAmount: z.number().nonnegative().optional(), estimateBasis: z.enum(['provider', 'request', 'mixed']).optional(),
+  actualAmount: z.number().nonnegative().optional(), actualCurrency: currencySchema.optional(), note: z.string().max(10000).default(''),
+  createdAt: z.string(), updatedAt: z.string(),
+}).refine(value => (value.actualAmount === undefined) === (value.actualCurrency === undefined), '实际金额与币种须同时填写');
+export type UsageRecord = z.infer<typeof usageRecordSchema>;
 export const skillSchema = z.object({
   id: z.string(), name: z.string(), description: z.string(), source: z.string(), version: z.string(),
   enabled: z.boolean(), instructions: z.string().default(''), resources: z.array(z.string()).default([]),
@@ -156,6 +321,29 @@ export const workspaceSnapshotSchema = z.object({
   runs: z.array(runSchema), assets: z.array(assetSchema), events: z.array(runEventSchema), system: systemSchema,
 });
 export type WorkspaceSnapshot = z.infer<typeof workspaceSnapshotSchema>;
+// Summaries deliberately exclude shot collections, activity results and event history.
+export const projectSummarySchema = projectSchema.pick({ id: true, title: true, brief: true, templateId: true, revision: true, profile: true, captionStyle: true, createdAt: true, updatedAt: true, archived: true }).extend({
+  shotCount: z.number().int().nonnegative(), durationUs: z.number().nonnegative(), workflowNodeCount: z.number().int().nonnegative(),
+  thumbnailShot: shotSchema.nullable(), thumbnailAsset: assetSchema.optional(),
+});
+export type ProjectSummary = z.infer<typeof projectSummarySchema>;
+export const runSummarySchema = runSchema.omit({ events: true, activities: true }).extend({ completedNodeIds: z.array(z.string()) });
+export type RunSummary = z.infer<typeof runSummarySchema>;
+export const workspaceSummarySchema = z.object({
+  projects: z.array(projectSummarySchema), models: z.array(modelSchema), skills: z.array(skillSchema), system: systemSchema,
+  version: z.number().int().nonnegative(), assetsVersion: z.number().int().nonnegative(),
+});
+export type WorkspaceSummary = z.infer<typeof workspaceSummarySchema>;
+export const projectDetailSchema = z.object({
+  id: z.string(), revision: z.number().int().positive(), assetsVersion: z.number().int().nonnegative(),
+  project: projectSchema.optional(), assets: z.array(assetSchema).optional(), latestRun: runSummarySchema.optional(),
+});
+export type ProjectDetail = z.infer<typeof projectDetailSchema>;
+export const pageInputSchema = z.object({ before: z.number().int().positive().optional(), limit: z.number().int().min(1).max(100).default(100) });
+export const assetListItemSchema = assetSchema.extend({ inUse: z.boolean() });
+export type AssetListItem = z.infer<typeof assetListItemSchema>;
+export const recordPageSchema = <T extends z.ZodType>(item: T) => z.object({ items: z.array(item), nextCursor: z.number().int().positive().nullable() });
+export type RecordPage<T> = { items: T[]; nextCursor: number | null };
 export const runtimeConnectionSchema = z.object({ state: z.enum(['ready', 'reconnecting', 'disconnected']), generation: z.number().int().nonnegative(), message: z.string().nullable().optional() });
 export type RuntimeConnection = z.infer<typeof runtimeConnectionSchema>;
 export type RuntimeEvent = { type: 'workspace.changed' | 'run.event' | 'runtime.ready' | 'runtime.connection'; data?: JsonValue };

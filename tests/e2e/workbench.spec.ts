@@ -3,11 +3,87 @@ import { resolve } from 'node:path';
 
 async function openApp(page: Page) {
   // Navigation completes before the workspace request on a cold CI browser.
-  const workspace = page.waitForResponse(response => response.url().endsWith('/__desktop_rpc') && response.status() === 200 && response.request().postDataJSON()?.method === 'workspace.snapshot');
+  const workspace = page.waitForResponse(response => response.url().endsWith('/__desktop_rpc') && response.status() === 200 && response.request().postDataJSON()?.method === 'workspace.summary');
   await page.goto('/');
   await workspace;
   await expect(page.getByRole('navigation', { name: '主导航', exact: true })).toBeVisible();
 }
+
+test('shows pure run notifications for two seconds without replaying on refresh', async ({ page, request }) => {
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  const initial = await request.post('/__desktop_rpc', { data: { method: 'workspace.snapshot' } });
+  const project = (await initial.json()).result.projects.find((value: { id: string }) => value.id === 'example-history');
+  await openApp(page);
+  await expect(page.getByLabel('项目名称')).toHaveValue(project.title);
+  const started = await request.post('/__desktop_rpc', { data: { method: 'run.start', params: { projectId: project.id, nodeId: 'style' } } });
+  const run = (await started.json()).result;
+  try {
+    await expect.poll(async () => {
+      const response = await request.post('/__desktop_rpc', { data: { method: 'run.get', params: { runId: run.id } } });
+      return (await response.json()).result.status;
+    }).toBe('waiting_review');
+    const toast = page.locator('.toast[role="status"]');
+    await expect(toast).toHaveText(/等待你的审阅/);
+    await expect(page.getByRole('button', { name: '查看制作记录', exact: true })).toHaveCount(0);
+    await expect(toast.getByRole('link')).toHaveCount(0);
+    await expect(page.locator('.toast-anchor')).toHaveCount(0, { timeout: 2500 });
+
+    const refreshed = page.waitForResponse(response => response.url().endsWith('/__desktop_rpc') && response.request().postDataJSON()?.method === 'project.get');
+    const updated = await request.post('/__desktop_rpc', { data: { method: 'project.update', params: { projectId: project.id, revision: project.revision, patch: { title: project.title } } } });
+    const saved = (await updated.json()).result;
+    await refreshed;
+    await expect(page.locator('.project-heading')).toContainText(`修订 ${saved.revision}`);
+    await page.waitForTimeout(250);
+    await expect(page.locator('.toast-anchor')).toHaveCount(0);
+  } finally {
+    await request.post('/__desktop_rpc', { data: { method: 'run.cancel', params: { runId: run.id } } });
+  }
+});
+
+test('dismisses success and error notifications after two seconds and restarts for a new message', async ({ page, request }) => {
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  const time = new Date('2026-01-01T00:00:00Z');
+  await page.clock.install({ time });
+  const created = await request.post('/__desktop_rpc', { data: { method: 'project.create', params: { title: '两秒提示验收' } } });
+  const project = (await created.json()).result;
+  await request.post('/__desktop_rpc', { data: { method: 'project.saveShot', params: { projectId: project.id, shot: { id: 'timed-toast-shot', title: '计时验收镜头', narration: '', visualPrompt: '', durationUs: 1_000_000 } } } });
+  await openApp(page);
+  await page.getByRole('button', { name: `打开项目：${project.title}`, exact: true }).click();
+  await expect(page.getByLabel('镜头标题')).toHaveValue('计时验收镜头');
+  await page.clock.pauseAt(new Date(time.getTime() + 60_000));
+  let failNextSave = true;
+  await page.route('**/__desktop_rpc', async route => {
+    if (failNextSave && route.request().postDataJSON().method === 'project.update') {
+      failNextSave = false;
+      await route.fulfill({ status: 400, json: { error: '两秒错误提示' } }); return;
+    }
+    await route.continue();
+  });
+  await page.getByLabel('镜头标题').fill('首次修改');
+  await page.getByRole('button', { name: '保存镜头', exact: true }).click();
+  const error = page.locator('.toast[role="alert"]');
+  const success = page.locator('.toast[role="status"]');
+  await expect(error).toHaveText(/两秒错误提示/);
+  await page.clock.runFor(1500);
+  await expect(error).toBeVisible();
+  await page.getByRole('button', { name: '保存镜头', exact: true }).click();
+  await expect(success).toHaveText(/修改已保存/);
+  await page.clock.runFor(500);
+  await expect(success).toBeVisible();
+  await page.clock.runFor(1499);
+  await expect(success).toBeVisible();
+  await page.clock.runFor(1);
+  await expect(page.locator('.toast-anchor')).toHaveCount(0);
+
+  failNextSave = true;
+  await page.getByLabel('镜头标题').fill('再次修改');
+  await page.getByRole('button', { name: '保存镜头', exact: true }).click();
+  await expect(error).toHaveText(/两秒错误提示/);
+  await page.clock.runFor(1999);
+  await expect(error).toBeVisible();
+  await page.clock.runFor(1);
+  await expect(page.locator('.toast-anchor')).toHaveCount(0);
+});
 
 for (const reducedMotion of ['no-preference', 'reduce'] as const) {
   test(`keeps motion interruptible and restores dialog focus (${reducedMotion})`, async ({ page, request }) => {
@@ -36,7 +112,7 @@ for (const reducedMotion of ['no-preference', 'reduce'] as const) {
 
     let rejectSave = true;
     await page.route('**/__desktop_rpc', async route => {
-      if (rejectSave && route.request().postDataJSON().method === 'project.saveShot') {
+      if (rejectSave && route.request().postDataJSON().method === 'project.update') {
         rejectSave = false;
         await route.fulfill({ status: 400, json: { error: '镜头保存验收提示' } }); return;
       }
@@ -97,7 +173,7 @@ test('preserves a draft across disconnect and reconnect without retrying a mutat
   let offline = true; let mutations = 0; let reconnects = 0;
   await page.route('**/__desktop_rpc', async route => {
     const body = route.request().postDataJSON();
-    if (body.method === 'project.saveShot') { mutations++; if (offline) { await route.abort('failed'); return; } }
+    if (body.method === 'project.update') { mutations++; if (offline) { await route.abort('failed'); return; } }
     if (body.method === 'runtime.reconnect') {
       reconnects++;
       if (reconnects === 1) { await route.fulfill({ status: 400, json: { error: '执行组件启动失败，请重试。' } }); return; }

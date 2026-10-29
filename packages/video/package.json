@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "exports": { ".": "./src/index.ts", "./motion": "./src/motion.ts", "./node": "./src/node.ts" },
+  "exports": { ".": "./src/index.ts", "./audio": "./src/audio.ts", "./audio-mix": "./src/audio-mix.ts", "./audio-projection": "./src/audio-projection.ts", "./caption-layout": "./src/caption-layout.ts", "./citations": "./src/citations.ts", "./clip-edits": "./src/clip-edits.ts", "./editing": "./src/editing.ts", "./motion": "./src/motion.ts", "./node": "./src/node.ts" },
   "scripts": { "typecheck": "tsc -p tsconfig.json" },
   "dependencies": { "@video-quickly/contracts": "workspace:*", "@motion-canvas/core": "3.17.2", "@motion-canvas/2d": "3.17.2", "@napi-rs/canvas": "^0.1.80" },
   "devDependencies": { "@types/node": "^24.0.0", "typescript": "^5.9.3", "vitest": "^5.0.5" }

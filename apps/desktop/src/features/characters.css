@@ -1,0 +1,20 @@
+.character-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 16px; margin-block: 16px; }
+.character-card { overflow: hidden; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-medium); }
+.character-card__thumbnail { display: grid; place-items: center; aspect-ratio: 16/9; background: var(--surface-raised); color: var(--text-subtle); position: relative; }
+.character-card__thumbnail img { width: 100%; height: 100%; object-fit: contain; position: absolute; outline: 1px solid var(--image-outline); outline-offset: -1px; }
+.character-card__thumbnail .field-error { position: absolute; bottom: 8px; padding: 4px 8px; background: var(--surface); }
+.character-card__body { padding: 16px; }
+.character-card__body h3 { font-size: 14px; font-weight: 600; margin-bottom: 8px; }
+.character-card__body > p { color: var(--text-secondary); line-height: 1.7; font-size: 12px; margin-bottom: 12px; white-space: pre-wrap; overflow-wrap: anywhere; max-height: 82px; overflow: auto; }
+.character-card__actions { display: flex; justify-content: space-between; align-items: center; gap: 8px; margin-top: 16px; }
+.character-editor { width: min(700px, calc(100vw - 32px)); }
+.character-editor form { display: flex; flex-direction: column; min-height: 0; }
+.character-editor > .dialog__surface { display: flex; flex-direction: column; overflow: hidden; }
+.character-editor .dialog__header, .character-editor .dialog__footer { flex-shrink: 0; }
+.character-editor .dialog__body { min-height: 0; overflow-y: auto; }
+.character-image-picker { display: grid; grid-template-columns: repeat(auto-fill, minmax(125px, 1fr)); gap: 10px; margin-bottom: 12px; max-height: 250px; overflow-y: auto; }
+.character-image-picker label { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; padding: 8px; border: 1px solid var(--border); border-radius: 6px; min-width: 0; font-size: 11px; }
+.character-image-picker label:has(:checked) { border-color: var(--accent); }
+.character-image-picker img { width: 100%; height: 80px; object-fit: contain; outline: 1px solid var(--image-outline); outline-offset: -1px; }
+.character-image-picker label > span { overflow-wrap: anywhere; }
+.character-shot-picker > .field-inline { margin-block: 8px; }

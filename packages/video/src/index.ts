@@ -1,7 +1,19 @@
-import type { FrameRate, Shot, VideoProfile } from '@video-quickly/contracts';
+import type { CaptionStyle, FrameRate, Shot, VideoProfile } from '@video-quickly/contracts';
+import { captionAtTime, projectCaptionCues, type CaptionClip, type CaptionPages } from './captions.js';
+import { mediaSourceInUs } from './audio.js';
+import { clipEditSource, resolveShotTime, sourceCaptionTrack, type ClipEditContext } from './clip-edits.js';
+import { drawSceneTemplate } from './scene-templates.js';
+import { drawCitationOverlay, type CitationOverlay } from './citations.js';
+import { captionBox, resolveCaptionLayout, safeCaptionStyle } from './caption-layout.js';
+export { captionAtTime, createEstimatedCaptionTrack, projectCaptionCues, replaceVisibleCaptionCues, splitCaptionText, type CaptionClip, type CaptionPages } from './captions.js';
+export { commonSourceOutUs, mediaSourceInUs, musicPlaybackAtTime, type MediaSourceOffsets, type MusicPlayback, type SourceDurations } from './audio.js';
+export { captureClipEditSource, clipEditPlan, clipEditSource, clipEditTotalUs, clipSourceOutUs, deleteShotRanges, replaceShotMedia, resolveShotAtTime, resolveShotSpans, resolveShotTime, restoreShotRanges, sliceClipPlan, sourceCaptionTrack, type ClipEditContext, type ClipEditDocument, type ClipEditIdFactory, type ClipRange, type ClipTimingShot, type ResolvedClipSpan, type ResolvedShotTime } from './clip-edits.js';
+export { drawSceneTemplate } from './scene-templates.js';
+export { createCitationManifest, citationOverlayForShot, citationFooterTop, drawCitationOverlay, type CitationManifest, type CitationReference, type CitationEvidence, type CitationOverlay } from './citations.js';
+export { CAPTION_FONT_CATALOG, captionFontFamily, selectCaptionFont, safeCaptionStyle, captionGeometry, resolveCaptionLayout, captionBox, type CaptionLayout } from './caption-layout.js';
 
 export interface TimelineClip { shotId: string; index: number; startUs: number; durationUs: number; endUs: number }
-export interface SceneFrame { title: string; narration: string; shotIndex: number; profile: VideoProfile; durationUs?: number; animation?: Shot['animation']; image?: CanvasImageSource; label?: string; sample?: boolean }
+export interface SceneFrame { title: string; narration: string; shotIndex: number; sceneIndex?: number; sceneTemplate?: Shot['sceneTemplate']; captionStyle?: CaptionStyle | null; citation?: CitationOverlay; referenceFooter?: boolean; profile: VideoProfile; durationUs?: number; sourceInUs?: number; audioInUs?: number; videoInUs?: number; sceneInUs?: number; sceneDurationUs?: number; captionTrack?: Shot['captionTrack']; clipEdit?: Shot['clipEdit']; clipEditContext?: ClipEditContext; animation?: Shot['animation']; image?: CanvasImageSource; label?: string; sample?: boolean }
 
 export function buildTimeline(shots: ReadonlyArray<Pick<Shot, 'id' | 'durationUs'>>): TimelineClip[] {
   let cursor = 0;
@@ -25,17 +37,49 @@ function timestamp(timeUs: number): string {
   return `${Math.floor(ms / 3_600_000).toString().padStart(2, '0')}:${Math.floor(ms / 60_000 % 60).toString().padStart(2, '0')}:${Math.floor(ms / 1000 % 60).toString().padStart(2, '0')},${(ms % 1000).toString().padStart(3, '0')}`;
 }
 
-export function createSrt(shots: ReadonlyArray<Pick<Shot, 'id' | 'durationUs' | 'narration'>>): string {
-  const clips = buildTimeline(shots);
-  return clips.flatMap((clip, index) => {
-    const text = shots[index].narration.trim();
-    return text ? [`${index + 1}\n${timestamp(clip.startUs)} --> ${timestamp(clip.endUs)}\n${text}\n`] : [];
-  }).join('\n');
+type NarrationClip = CaptionClip & Pick<Shot, 'id'> & Partial<Pick<Shot, 'sceneTemplate' | 'captionStyle'>>;
+export interface SubtitleCue { startUs: number; endUs: number; lines: string[] }
+export type SubtitlePages = (text: string, shot: NarrationClip) => string[][];
+
+export function createSubtitleCues(shots: ReadonlyArray<NarrationClip>, pages: SubtitlePages, context: ClipEditContext = {}): SubtitleCue[] {
+  const cues: SubtitleCue[] = [];
+  let startUs = 0;
+  let previousCueId: string | undefined;
+  shots.forEach((shot, index) => {
+    const previous = shots[index - 1];
+    const track = sourceCaptionTrack(shot, context);
+    const offset = (value: CaptionClip) => track?.timeBase === 'source' ? mediaSourceInUs(value, 'audio', context) : track?.timeBase === 'clip' ? value.clipEdit?.inUs ?? 0 : value.clipEdit ? resolveShotTime(value, context, 0).sceneUs : value.sceneInUs ?? 0;
+    const sameTrack = track ? JSON.stringify(previous && sourceCaptionTrack(previous, context)) === JSON.stringify(track) : !previous?.captionTrack && shot.sceneDurationUs !== undefined && previous?.sceneDurationUs === shot.sceneDurationUs && previous.narration === shot.narration;
+    const sameStyle = JSON.stringify(safeCaptionStyle(previous?.captionStyle)) === JSON.stringify(safeCaptionStyle(shot.captionStyle));
+    const previousEnd = previous?.clipEdit ? resolveShotTime(previous, context, previous.durationUs) : undefined;
+    const previousEndUs = previousEnd && track?.timeBase !== 'clip' ? track?.timeBase === 'source' ? previousEnd.audioUs : previousEnd.sceneUs : previous ? offset(previous) + previous.durationUs : 0;
+    const continuation = previous && sameTrack && sameStyle && Math.abs(previousEndUs - offset(shot)) <= 1;
+    let firstVisible = true;
+    projectCaptionCues(shot, startUs, text => pages(text, shot), context).forEach(projected => {
+      const lines = projected.text.split('\n');
+      const cue = { startUs: projected.startUs, endUs: projected.endUs, lines };
+      const last = cues.at(-1);
+      if (continuation && firstVisible && previousCueId === projected.id && last && Math.abs(last.endUs - cue.startUs) <= 1 && JSON.stringify(last.lines) === JSON.stringify(lines)) last.endUs = cue.endUs;
+      else cues.push(cue);
+      previousCueId = projected.id;
+      firstVisible = false;
+    });
+    startUs += shot.durationUs;
+  });
+  return cues;
+}
+
+function subtitleText(cues: SubtitleCue[]): string {
+  return cues.map((cue, index) => `${index + 1}\n${timestamp(cue.startUs)} --> ${timestamp(cue.endUs)}\n${cue.lines.join('\n')}\n`).join('\n');
+}
+
+export function createSrt(shots: ReadonlyArray<NarrationClip>, context: ClipEditContext = {}): string {
+  return subtitleText(createSubtitleCues(shots, text => text.trim() ? [[text.trim()]] : [], context));
 }
 
 export function captionPages(text:string,measure:(text:string)=>number,width:number,maxLines:number):string[][]{
   const lines:string[]=[];let current='';
-  for(const character of text.trim()){
+  for(const character of text.trim().replace(/\r\n?/g,'\n')){
     if(character==='\n'){if(current)lines.push(current);current='';continue;}
     if(current&&measure(current+character)>width){lines.push(current);current=character;}else current+=character;
   }
@@ -43,12 +87,8 @@ export function captionPages(text:string,measure:(text:string)=>number,width:num
   return Array.from({length:Math.ceil(lines.length/maxLines)},(_,index)=>lines.slice(index*maxLines,(index+1)*maxLines));
 }
 
-export function createTimedSrt(shots:ReadonlyArray<Pick<Shot,'id'|'durationUs'|'narration'>>,pages:(text:string)=>string[][]):string{
-  const clips=buildTimeline(shots);let sequence=0;
-  return clips.flatMap((clip,index)=>{
-    const blocks=pages(shots[index].narration);
-    return blocks.map((lines,page)=>`${++sequence}\n${timestamp(clip.startUs+Math.round(clip.durationUs*page/blocks.length))} --> ${timestamp(clip.startUs+Math.round(clip.durationUs*(page+1)/blocks.length))}\n${lines.join('\n')}\n`);
-  }).join('\n');
+export function createTimedSrt(shots: ReadonlyArray<NarrationClip>, pages: SubtitlePages, context: ClipEditContext = {}): string {
+  return subtitleText(createSubtitleCues(shots, pages, context));
 }
 
 function polygon(ctx: CanvasRenderingContext2D, points: number[][], fill: string, stroke?: string) {
@@ -87,11 +127,41 @@ function scholar(ctx: CanvasRenderingContext2D, x: number, y: number, scale: num
   ctx.restore();
 }
 
-/** Deterministic authored sample art shared by interactive preview and exported frames. */
+function drawCaptions(ctx: CanvasRenderingContext2D, scene: SceneFrame, width: number, height: number, timeUs: number) {
+  if (!sourceCaptionTrack(scene, scene.clipEditContext) && !scene.narration.trim()) return;
+  ctx.save(); ctx.textAlign='center'; ctx.textBaseline='alphabetic';
+  const layout=resolveCaptionLayout(width,height,scene.captionStyle,{referenceFooter:scene.referenceFooter??Boolean(scene.citation),template:Boolean(scene.sceneTemplate)});
+  ctx.font=layout.font;
+  const pages:CaptionPages=text=>captionPages(text,value=>ctx.measureText(value).width,layout.textWidth,layout.maxLines);
+  const durationUs=scene.durationUs??8_000_000;
+  const localTimeUs=scene.captionTrack||scene.clipEdit?timeUs:Math.max(0,timeUs);
+  const captionDurationUs=scene.captionTrack||scene.clipEdit?durationUs:Math.max(durationUs,localTimeUs+1);
+  const cue=captionAtTime({...scene,durationUs:captionDurationUs,sceneDurationUs:scene.sceneDurationUs??durationUs},localTimeUs,pages,scene.clipEditContext);
+  const visible=cue?cue.text.split('\n'):[];
+  if(visible.length){
+    const box=captionBox(layout,visible.length);
+    ctx.fillStyle=layout.backgroundColor;ctx.globalAlpha=layout.backgroundOpacity;ctx.beginPath();ctx.roundRect(box.x,box.y,box.width,box.height,Math.max(3,layout.fontSize*.3));ctx.fill();ctx.globalAlpha=1;
+    ctx.fillStyle=layout.textColor;
+    if(layout.legacy)visible.forEach((lineText,index)=>ctx.fillText(lineText,width/2,box.y+layout.fontSize*1.1+index*layout.lineHeight,width*.8));
+    else{ctx.textBaseline='middle';visible.forEach((lineText,index)=>ctx.fillText(lineText,width/2,box.y+layout.paddingY+(index+.5)*layout.lineHeight,layout.textWidth));}
+  }
+  ctx.restore();
+}
+
+/** Deterministic authored art and diagrams shared by interactive preview and exported frames. */
 export function drawSceneFrame(canvas: HTMLCanvasElement, scene: SceneFrame, timeUs = 0): void {
   const ctx = canvas.getContext('2d');
   if (!ctx) throw new Error('当前环境无法创建视频画布');
   const width = canvas.width, height = canvas.height;
+  const source=clipEditSource(scene,scene.clipEditContext);
+  const sceneUs=scene.clipEdit?resolveShotTime({...scene,durationUs:scene.durationUs??8_000_000},scene.clipEditContext,timeUs).sceneUs:timeUs+(scene.sceneInUs??0);
+  const progress=Math.min(1,Math.max(0,sceneUs/(scene.sceneDurationUs??source?.original.sceneDurationUs??source?.original.durationUs??scene.durationUs??8_000_000)));
+  if(scene.sceneTemplate){
+    const layout=resolveCaptionLayout(width,height,scene.captionStyle,{referenceFooter:scene.referenceFooter??Boolean(scene.citation),template:true});
+    drawSceneTemplate(canvas,scene.sceneTemplate,progress,{fontSize:layout.fontSize,lines:layout.maxLines,bottom:layout.bottom,diagramTop:layout.diagramTop,diagramBottom:layout.diagramBottom});
+    drawCaptions(ctx,scene,width,height,timeUs);drawCitationOverlay(canvas,scene.citation);return;
+  }
+  const shotIndex = scene.sceneIndex ?? source?.original.sceneIndex ?? scene.shotIndex;
   const vertical = height > width;
   ctx.save(); ctx.clearRect(0, 0, width, height);
   const scale = Math.max(width / 960, height / 540);
@@ -101,7 +171,6 @@ export function drawSceneFrame(canvas: HTMLCanvasElement, scene: SceneFrame, tim
   // Fixed arithmetic texture avoids random flicker and makes frames reproducible.
   ctx.fillStyle='#7867440a';
   for(let i=0;i<420;i++){ const x=(i*137.51)%960,y=(i*89.23)%540;ctx.fillRect(x,y,1+(i%3),1); }
-  const progress=Math.min(1,Math.max(0,timeUs/(scene.durationUs??8_000_000)));
   const eased=progress*progress*(3-2*progress);
   const animation=scene.animation;
   const zoom=1+((animation?.zoom??1.04)-1)*eased;
@@ -112,7 +181,7 @@ export function drawSceneFrame(canvas: HTMLCanvasElement, scene: SceneFrame, tim
   ctx.globalAlpha=1;
   polygon(ctx,[[0,399],[167,353],[342,385],[519,347],[674,383],[854,354],[960,394],[960,540],[0,540]],'#b7bd98');
   polygon(ctx,[[0,447],[176,411],[317,445],[493,399],[692,443],[880,415],[960,444],[960,540],[0,540]],'#cad0ac');
-  const ox=scene.shotIndex%2===0?0:-45;
+  const ox=shotIndex%2===0?0:-45;
   ctx.save();ctx.translate(ox,0);
   polygon(ctx,[[350,373],[350,259],[594,259],[594,373]],'#d7c39a','#6f6750');
   polygon(ctx,[[331,275],[369,232],[573,232],[613,275]],'#5f7365','#495d50');
@@ -125,7 +194,7 @@ export function drawSceneFrame(canvas: HTMLCanvasElement, scene: SceneFrame, tim
   polygon(ctx,[[398,540],[476,390],[521,390],[564,540]],'#e0d0aa');
   line(ctx,[[396,536],[474,393]],'#b6a47c',1.5);line(ctx,[[565,536],[520,393]],'#b6a47c',1.5);
   tree(ctx,186,424,.98);tree(ctx,787,421,1.2);tree(ctx,855,419,.7);
-  scholar(ctx,442+Math.sin(scene.shotIndex)*32,451,vertical?.7:.82);
+  scholar(ctx,442+Math.sin(shotIndex)*32,451,vertical?.7:.82);
   scholar(ctx,570,426,.58);
   ctx.restore();
   ctx.save();
@@ -146,18 +215,9 @@ export function drawSceneFrame(canvas: HTMLCanvasElement, scene: SceneFrame, tim
   ctx.fillText(title,width/2,height*.12,width*.82);
   ctx.font=`${Math.max(10,titleSize*.42)}px "Microsoft YaHei", sans-serif`;ctx.fillStyle='#66745b';
   if(scene.label)ctx.fillText(scene.label,width/2,height*.17,width*.85);
-  const caption=scene.narration.trim();
-  if(caption){
-    const fontSize=Math.max(12,Math.min(width*.027,height*.047));
-    ctx.font=`500 ${fontSize}px "Microsoft YaHei", sans-serif`;
-    const groupSize=vertical?3:2;
-    const chunks=captionPages(caption,text=>ctx.measureText(text).width,width*.78,groupSize);
-    const visible=chunks[Math.min(chunks.length-1,Math.floor(progress*chunks.length))]??[],lineHeight=fontSize*1.55;
-    const bottom=height*.9,boxHeight=visible.length*lineHeight+fontSize;
-    ctx.fillStyle='#20382ee6';ctx.beginPath();ctx.roundRect(width*.07,bottom-boxHeight,width*.86,boxHeight,Math.max(3,fontSize*.3));ctx.fill();
-    ctx.fillStyle='#fbf4e1';visible.forEach((lineText,index)=>ctx.fillText(lineText,width/2,bottom-boxHeight+fontSize*1.1+index*lineHeight,width*.8));
-  }
+  drawCaptions(ctx,scene,width,height,timeUs);
   ctx.restore();
+  drawCitationOverlay(canvas,scene.citation);
 }
 
 export interface FrameSink {

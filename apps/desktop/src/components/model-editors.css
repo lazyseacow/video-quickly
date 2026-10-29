@@ -1,0 +1,12 @@
+.model-parameters fieldset, .model-pricing { min-width: 0; margin: 16px 0; padding: 14px 0 0; border: 0; border-top: 1px solid var(--border); }
+.model-parameters legend, .model-pricing legend { padding: 0 8px 0 0; color: var(--text); font-size: 12px; font-weight: 600; }
+.model-editor__grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; margin-bottom: 12px; }
+.model-editor__grid > .field { margin-bottom: 0; }
+.model-parameters .tiny-meta, .model-pricing .tiny-meta { margin: 10px 0 14px; line-height: 1.6; }
+.model-pricing > .field { max-width: 150px; }
+.model-pricing input[type="number"], .model-parameters input[type="number"] { font-variant-numeric: tabular-nums; }
+.model-connection-dialog > .dialog__surface { display: flex; flex-direction: column; overflow: hidden; }
+.model-connection-dialog .dialog__header, .model-connection-dialog .dialog__footer { flex-shrink: 0; }
+.model-connection-dialog form { display: flex; flex-direction: column; min-height: 0; }
+.model-connection-dialog .dialog__body { min-height: 0; overflow-y: auto; }
+@media (max-width: 480px) { .model-editor__grid { grid-template-columns: minmax(0, 1fr); } }

@@ -1,0 +1,11 @@
+.scene-template-editor { margin-top: 18px; padding-top: 16px; border-top: 1px solid var(--border); }
+.scene-template-editor__example { margin: -2px 0 14px; color: var(--text-secondary); font-size: 11px; line-height: 1.65; }
+.scene-template-editor__items { display: grid; gap: 12px; margin-bottom: 14px; }
+.scene-template-editor__items fieldset { min-width: 0; margin: 0; padding: 12px; border: 1px solid var(--border); border-radius: 10px; }
+.scene-template-editor__items legend { padding: 0 5px; color: var(--text-subtle); font-size: 11px; }
+.scene-template-editor__items .field:last-child { margin-bottom: 0; }
+.scene-template-editor__items textarea { min-height: 58px; }
+.scene-template-editor__point { display: flex; align-items: flex-end; gap: 8px; }
+.scene-template-editor__point > .field { flex: 1; min-width: 0; }
+.scene-template-editor__point > .icon-button { flex-shrink: 0; margin-bottom: 14px; }
+.scene-template-editor input[type="number"] { font-variant-numeric: tabular-nums; }

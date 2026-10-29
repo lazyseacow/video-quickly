@@ -13,8 +13,19 @@ await stat(runtime);
 await mkdir(stage,{recursive:true});
 const fromRuntime=createRequire(join(root,'packages/runtime/package.json'));
 const fromVideo=createRequire(join(root,'packages/video/package.json'));
+const fromIntegrations=createRequire(join(root,'packages/integrations/package.json'));
 async function copyModule(name,from){
-  const source=dirname(await realpath(from.resolve(`${name}/package.json`)));
+  let source;
+  try{source=dirname(await realpath(from.resolve(`${name}/package.json`)));}
+  catch(error){
+    if(error?.code!=='ERR_PACKAGE_PATH_NOT_EXPORTED')throw error;
+    let candidate=dirname(await realpath(from.resolve(name)));
+    for(;;){
+      const metadata=await readFile(join(candidate,'package.json'),'utf8').then(JSON.parse,()=>undefined);
+      if(metadata?.name===name){source=candidate;break;}
+      const parent=dirname(candidate);if(parent===candidate)throw new Error(`无法定位依赖包 ${name}`);candidate=parent;
+    }
+  }
   await cp(source,join(stage,'node_modules',name),{recursive:true,dereference:true,filter:path=>!path.includes(`${source}\\node_modules`)&&!path.includes(`${source}/node_modules`)});
   return createRequire(join(source,'package.json'));
 }
@@ -24,6 +35,9 @@ await copyModule('file-uri-to-path',fromBindings);
 const fromCanvas=await copyModule('@napi-rs/canvas',fromVideo);
 const canvasBinary=process.platform==='win32'?`@napi-rs/canvas-win32-${process.arch}-msvc`:process.platform==='darwin'?`@napi-rs/canvas-darwin-${process.arch}`:`@napi-rs/canvas-linux-${process.arch}-gnu`;
 await copyModule(canvasBinary,fromCanvas);
+// Keep PDF.js workers, standard fonts and wasm beside the external parser package.
+const fromPdf=await copyModule('pdf-parse',fromIntegrations);
+await copyModule('pdfjs-dist',fromPdf);
 await writeFile(join(stage,'package.json'),JSON.stringify({name:'video-quickly-runtime',version:'0.1.0',private:true,type:'module'}));
 await cp(runtime,join(stage,'runtime.mjs'));
 await cp(process.execPath,join(stage,process.platform==='win32'?'node.exe':'node'));
