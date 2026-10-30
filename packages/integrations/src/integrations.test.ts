@@ -1,8 +1,8 @@
 import { createServer, type RequestListener, type Server } from 'node:http';
-import { mkdtemp, readdir, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { basename, join, relative } from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createHistoryWorkflow, DEFAULT_VIDEO_PROFILE, type ModelProfile, type ProjectDocument } from '@video-quickly/contracts';
 import { createActivityExecutor, type MediaActivityContext } from './index';
 
@@ -81,6 +81,60 @@ describe('media generation request receipts', () => {
     await expect(createActivityExecutor()(context)).rejects.toThrow();
     await expect(createActivityExecutor()(context)).rejects.toThrow('提交结果不明确');
     expect(submits).toBe(1);
+  });
+
+  it('renews an expired submitted query window without replacing the task or submitting again', async () => {
+    let submits = 0, queries = 0, downloads = 0, baseUrl = '';
+    baseUrl = await listen((request, response) => {
+      response.setHeader('Content-Type', 'application/json');
+      if (request.method === 'POST') { submits++; request.resume(); response.end(JSON.stringify({ id: 'original-task' })); }
+      else if (request.url === '/tasks/original-task') {
+        queries++;
+        if (queries === 1) response.writeHead(503).end();
+        else response.end(JSON.stringify({ status: 'completed', url: `${baseUrl}/image.png` }));
+      } else { downloads++; response.end('recovered-image'); }
+    });
+    const context = await contextFor(baseUrl);
+    context.model = { ...context.model!, provider: 'custom-http', parameters: { requestPath: 'generate', requestTemplate: { prompt: '{{prompt}}' }, taskIdPath: 'id', pollPath: 'tasks/{{taskId}}', statusPath: 'status', resultUrlPath: 'url', pollTimeoutSeconds: 30 } };
+    await expect(createActivityExecutor()(context)).rejects.toThrow('HTTP 503');
+    const activities = join(context.dataDirectory, 'projects', context.project.id, 'activities');
+    const [activity] = await readdir(activities), activityPath = join(activities, activity);
+    const receiptPath = join(activityPath, (await readdir(activityPath)).find(name => name.endsWith('.receipt.json'))!);
+    const receipt = JSON.parse(await readFile(receiptPath, 'utf8'));
+    expect(receipt).toMatchObject({ state: 'submitted', taskId: 'original-task' });
+    receipt.pollDeadlineAt = Date.now() - 1;
+    await writeFile(receiptPath, JSON.stringify(receipt));
+    context.signal = AbortSignal.abort(new Error('query canceled'));
+    await expect(createActivityExecutor()(context)).rejects.toThrow('query canceled');
+    expect(queries).toBe(1);
+    context.signal = new AbortController().signal;
+    const result = await createActivityExecutor()(context);
+    expect(result).toMatchObject({ assets: [{ kind: 'image', shotId: 'shot-1' }] });
+    expect({ submits, queries, downloads }).toEqual({ submits: 1, queries: 2, downloads: 1 });
+    expect(JSON.parse(await readFile(receiptPath, 'utf8'))).toMatchObject({ state: 'completed', taskId: 'original-task' });
+  });
+
+  it('keeps each query window bounded and starts a fresh budget only on a later invocation', async () => {
+    let submits = 0, queries = 0, ready = false, now = Date.now(), baseUrl = '';
+    baseUrl = await listen((request, response) => {
+      response.setHeader('Content-Type', 'application/json');
+      if (request.method === 'POST') { submits++; request.resume(); response.end(JSON.stringify({ id: 'slow-task' })); }
+      else if (request.url === '/tasks/slow-task') {
+        queries++;
+        if (ready) response.end(JSON.stringify({ status: 'completed', url: `${baseUrl}/image.png` }));
+        else { now += 31_000; response.end(JSON.stringify({ status: 'running' })); }
+      } else response.end('recovered-image');
+    });
+    const context = await contextFor(baseUrl);
+    context.model = { ...context.model!, provider: 'custom-http', parameters: { requestPath: 'generate', requestTemplate: { prompt: '{{prompt}}' }, taskIdPath: 'id', pollPath: 'tasks/{{taskId}}', statusPath: 'status', resultUrlPath: 'url', pollTimeoutSeconds: 30 } };
+    const clock = vi.spyOn(Date, 'now').mockImplementation(() => now);
+    try {
+      await expect(createActivityExecutor()(context)).rejects.toThrow('已超过本次查询时限');
+      expect({ submits, queries }).toEqual({ submits: 1, queries: 1 });
+      ready = true;
+      await expect(createActivityExecutor()(context)).resolves.toMatchObject({ assets: [{ kind: 'image', shotId: 'shot-1' }] });
+      expect({ submits, queries }).toEqual({ submits: 1, queries: 2 });
+    } finally { clock.mockRestore(); }
   });
 
   it('hashes untrusted shot identities before constructing file paths', async () => {

@@ -44,6 +44,8 @@ jobs:
         run: pnpm exec playwright install chromium
       - name: Test workbench
         run: pnpm test:e2e
+      - name: Test local HTTP CLI recovery
+        run: pnpm exec tsx scripts/check-real-service-cli.ts .generated/real-service-cli-regression
       - name: Render actual media samples
         run: pnpm test:media -- --4k
       - name: Build Windows client
@@ -71,5 +73,7 @@ jobs:
             .generated/test-results.json
             .generated/browser-results.json
             .generated/browser-artifacts/
+            .generated/real-service-cli-regression/fixture-check.json
+            .generated/real-service-cli-regression/run/evidence.json
             .generated/render-smoke/results.json
             .generated/install-smoke.json

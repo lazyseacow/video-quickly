@@ -360,7 +360,6 @@ async function generateMedia(context: MediaActivityContext, directory: string, s
         receipt = { state: 'submitted', taskId, providerUsage: providerReportedUsage(result) };
         context.persistRemoteTask(taskId);
       } else throw new Error('该服务协议尚不支持此素材类型');
-      if (receipt.state === 'submitted') receipt.pollDeadlineAt = Date.now() + Math.max(30, Math.min(86400, Number(model.parameters.pollTimeoutSeconds) || 1800)) * 1000;
       await atomicJson(receiptPath, receipt);
       if (!receipt.taskId) context.persistRemoteTask(`receipt:${context.operationId}:${shot.id}`);
     } catch (error) {
@@ -370,6 +369,11 @@ async function generateMedia(context: MediaActivityContext, directory: string, s
   }
 
   if (receipt.state === 'submitted') {
+    context.signal.throwIfAborted();
+    // The deadline bounds this query attempt, not the remote task's lifetime.
+    // Explicit recovery can query the same task again without another POST.
+    receipt.pollDeadlineAt = Date.now() + Math.max(30, Math.min(86400, Number(model.parameters.pollTimeoutSeconds) || 1800)) * 1000;
+    await atomicJson(receiptPath, receipt);
     while (!context.signal.aborted) {
       if (receipt.pollDeadlineAt && Date.now() >= receipt.pollDeadlineAt) throw new Error('等待生成结果已超过本次查询时限，请在服务端核对原任务');
       let completed: string | undefined;
