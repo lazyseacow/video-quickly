@@ -24,10 +24,10 @@ const sensitiveKey = /^(?:authorization|(?:x[-_]?)?api[-_]?key|(?:x[-_]?)?token|
 const json = (value: unknown): JsonValue => jsonValueSchema.parse(JSON.parse(JSON.stringify(value)));
 
 interface Snapshot {
-  project: ProjectDocument; nodes: WorkflowNode[]; models: ModelProfile[]; skills: SkillPackage[]; handlerVersion: number;
+  project: ProjectDocument; nodes: WorkflowNode[]; inspectionNodes?: WorkflowNode[]; inspectionThreads?: Record<string, string>; models: ModelProfile[]; skills: SkillPackage[]; handlerVersion: number;
   regeneration?: JsonValue; research?: JsonValue; exportBatch?: JsonValue;
 }
-interface SnapshotRow { title: string; nodes: string; models: string; skills: string; edges: string; handlerVersion: number }
+interface SnapshotRow { title: string; nodes: string; models: string; skills: string; edges: string; handlerVersion: number; inspectionThreads: string | null }
 interface ActivitySummaryRow {
   node_id: string; count: number; unknown_count: number; started_at: string; completed_at: string | null; error: string | null;
 }
@@ -60,9 +60,9 @@ export function createRunInspector(options: {
 }) {
   const { database, store } = options, reads = createReadModels(database, store);
   function metadata(runId: string) {
-    const row = database.prepare("SELECT json_extract(body, '$.project.title') AS title, json_extract(body, '$.nodes') AS nodes, json_extract(body, '$.models') AS models, json_extract(body, '$.skills') AS skills, json_extract(body, '$.project.workflow.edges') AS edges, json_extract(body, '$.handlerVersion') AS handlerVersion FROM documents WHERE kind = 'run-snapshot' AND id = ?").get(runId) as SnapshotRow | undefined;
+    const row = database.prepare("SELECT json_extract(body, '$.project.title') AS title, coalesce(json_extract(body, '$.inspectionNodes'), json_extract(body, '$.nodes')) AS nodes, json_extract(body, '$.models') AS models, json_extract(body, '$.skills') AS skills, coalesce(json_extract(body, '$.inspectionEdges'), json_extract(body, '$.project.workflow.edges')) AS edges, json_extract(body, '$.handlerVersion') AS handlerVersion, json_extract(body, '$.inspectionThreads') AS inspectionThreads FROM documents WHERE kind = 'run-snapshot' AND id = ?").get(runId) as SnapshotRow | undefined;
     if (!row) return undefined;
-    return { title: row.title, nodes: z.array(workflowNodeSchema).parse(JSON.parse(row.nodes)), models: z.array(modelSchema).parse(JSON.parse(row.models)), skills: z.array(skillSchema).parse(JSON.parse(row.skills)), edges: z.array(z.object({ source: z.string(), target: z.string() })).parse(JSON.parse(row.edges)), handlerVersion: row.handlerVersion };
+    return { title: row.title, nodes: z.array(workflowNodeSchema).parse(JSON.parse(row.nodes)), models: z.array(modelSchema).parse(JSON.parse(row.models)), skills: z.array(skillSchema).parse(JSON.parse(row.skills)), edges: z.array(z.object({ source: z.string(), target: z.string() })).parse(JSON.parse(row.edges)), handlerVersion: row.handlerVersion, inspectionThreads: row.inspectionThreads ? z.record(z.string(), z.string()).parse(JSON.parse(row.inspectionThreads)) : {} };
   }
   async function nativeState(runId: string) {
     const tuple = await new SqliteSaver(database).getTuple({ configurable: { thread_id: runId } });
@@ -74,6 +74,8 @@ export function createRunInspector(options: {
   }
   async function inspect(runId: string, nodeId?: string): Promise<RunInspection> {
     const run = options.run(runId), saved = metadata(runId), state = await nativeState(runId);
+    const states = new Map([[runId, state]]);
+    for (const thread of new Set(Object.values(saved?.inspectionThreads ?? {}))) if (!states.has(thread)) states.set(thread, await nativeState(thread));
     if (nodeId && !saved?.nodes.some(node => node.id === nodeId)) throw new Error('该运行的冻结流程中没有这个步骤。');
     const nodes = saved?.nodes ?? [], ids = nodes.map(node => node.id), redact = await redactor(saved?.models ?? []);
     const rows = database.prepare(`WITH receipts AS (
@@ -91,9 +93,19 @@ export function createRunInspector(options: {
     const resume = ['failed', 'needs_attention', 'waiting_external', 'retry_scheduled', 'queued'].includes(run.status) && !unknown;
     const steps: RunStepSummary[] = nodes.map(node => {
       const receipt = byNode.get(node.id), current = run.currentNodeId === node.id;
-      let status: RunStepSummary['status'] = state.values.completed.includes(node.id) ? 'succeeded' : state.values.skipped.includes(node.id) ? 'skipped' : 'pending';
-      if (current && !['succeeded', 'skipped'].includes(status)) status = run.status === 'succeeded' ? 'not_recorded' : run.status === 'queued' ? 'pending' : run.status;
-      else if (!state.available && !['queued', 'running'].includes(run.status)) status = 'not_recorded';
+      const nodeThread = saved?.inspectionThreads[node.id] ?? runId;
+      const nodeState = states.get(nodeThread) ?? state;
+      let ancestorThread = nodeThread, inheritedSkip = false;
+      while (ancestorThread !== runId && ancestorThread.startsWith(`${runId}:subflow:`)) {
+        const parentId = ancestorThread.slice(`${runId}:subflow:`.length), parentThread = saved?.inspectionThreads[parentId] ?? runId;
+        if (states.get(parentThread)?.values.skipped.includes(parentId)) { inheritedSkip = true; break; }
+        ancestorThread = parentThread;
+      }
+      let status: RunStepSummary['status'] = nodeState.values.completed.includes(node.id) ? 'succeeded' : nodeState.values.skipped.includes(node.id) ? 'skipped' : 'pending';
+      if (inheritedSkip) status = 'skipped';
+      else if (!nodeState.available && nodeThread !== runId && run.status === 'canceled') status = 'canceled';
+      else if (current && !['succeeded', 'skipped'].includes(status)) status = run.status === 'succeeded' ? 'not_recorded' : run.status === 'queued' ? 'pending' : run.status;
+      else if (!nodeState.available && !['queued', 'running'].includes(run.status)) status = 'not_recorded';
       else if (run.status === 'canceled' && status === 'pending') status = 'canceled';
       const error = current && run.error ? run.error : receipt?.error ? String(redact(receipt.error)) : undefined;
       const reason = status === 'waiting_review' ? '等待审阅这个步骤的产物。'
@@ -112,7 +124,7 @@ export function createRunInspector(options: {
         inputAvailable: has('node-project', node.id), outputAvailable: has('node-result', node.id), activityCount: receipt?.count ?? 0,
         unknownSubmission: unknown && Boolean(receipt?.unknown_count), startedAt: receipt?.started_at, completedAt: status === 'succeeded' ? receipt?.completed_at ?? undefined : undefined, error };
     });
-    const selectedNode = saved?.nodes.find(node => node.id === nodeId), model = selectedNode?.modelId ? saved?.models.find(value => value.id === selectedNode.modelId) : undefined;
+    const selectedNode = nodeId ? store.get<WorkflowNode>('node-definition', `${runId}:${nodeId}`) ?? saved?.nodes.find(node => node.id === nodeId) : undefined, model = selectedNode?.modelId ? saved?.models.find(value => value.id === selectedNode.modelId) : undefined;
     return runInspectionSchema.parse({ run: reads.runSummary(run), projectTitle: saved?.title ?? '历史制作', snapshotAvailable: !!saved, checkpointAvailable: state.available, steps,
       recovery: { review: run.status === 'waiting_review', resume, cancel: ['running', 'queued', 'waiting_external', 'retry_scheduled', 'needs_attention'].includes(run.status), restart: run.status === 'canceled', reason: unknown ? '存在结果未确认的外部提交，请先核对原任务。' : '' },
       selected: selectedNode && saved ? { node: redact(json(selectedNode)), dependencies: saved.edges.filter(edge => edge.target === nodeId).map(edge => edge.source),
@@ -121,7 +133,7 @@ export function createRunInspector(options: {
     });
   }
   function readPayload(runId: string, nodeId: string, kind: 'input' | 'output', saved: Snapshot, redact: (value: JsonValue) => JsonValue) {
-    const node = saved.nodes.find(value => value.id === nodeId);
+    const node = store.get<WorkflowNode>('node-definition', `${runId}:${nodeId}`) ?? (saved.inspectionNodes ?? saved.nodes).find(value => value.id === nodeId);
     if (!node) throw new Error('该运行的冻结流程中没有这个步骤。');
     const captured = store.get<CapturedInput>('node-inspection-input', `${runId}:${nodeId}`);
     const project = kind === 'input' ? store.get<ProjectDocument>('node-project', `${runId}:${nodeId}`) : undefined;
@@ -144,7 +156,7 @@ export function createRunInspector(options: {
     if (!node) throw new Error('该运行的冻结流程中没有这个步骤。');
     const rows = database.prepare(`SELECT r.rowid AS cursor, r.id, json_extract(r.body, '$.createdAt') AS createdAt, json_extract(r.body, '$.status') AS status,
       json_extract(r.body, '$.projectRevision') AS projectRevision, json_extract(r.body, '$.workflowVersion') AS workflowVersion, json_extract(n.value, '$.label') AS label
-      FROM documents r JOIN documents s ON s.kind = 'run-snapshot' AND s.id = r.id, json_each(s.body, '$.nodes') n
+      FROM documents r JOIN documents s ON s.kind = 'run-snapshot' AND s.id = r.id, json_each(coalesce(json_extract(s.body, '$.inspectionNodes'), json_extract(s.body, '$.nodes'))) n
       WHERE r.kind = 'run' AND json_extract(r.body, '$.projectId') = @projectId AND (@before IS NULL OR r.rowid < @before)
       AND json_extract(n.value, '$.id') = @nodeId AND json_extract(n.value, '$.kind') = @kind
       AND EXISTS (SELECT 1 FROM documents result WHERE result.kind = 'node-result' AND result.id = r.id || ':' || @nodeId)
@@ -177,7 +189,7 @@ export function createRunInspector(options: {
         const row = database.prepare('SELECT rowid AS cursor, activity_id, input_hash, safety, status, remote_id, error, started_at, completed_at, result FROM activities WHERE run_id = ? AND rowid > ? AND rowid <= ? ORDER BY rowid LIMIT 1').get(runId, cursor, activityEnd) as { cursor: number; activity_id: string; result: string | null } | undefined;
         if (!row) break;
         if (!first) yield ','; first = false; cursor = row.cursor;
-        yield JSON.stringify(redact(json({ ...row, nodeId: activityNodeId(row.activity_id, saved?.nodes.map(node => node.id) ?? []), result: row.result ? JSON.parse(row.result) : null })));
+        yield JSON.stringify(redact(json({ ...row, nodeId: activityNodeId(row.activity_id, (saved?.inspectionNodes ?? saved?.nodes)?.map(node => node.id) ?? []), result: row.result ? JSON.parse(row.result) : null })));
       }
       yield `],"captureCompletedAt":${JSON.stringify(new Date().toISOString())}}`;
     }

@@ -20,7 +20,9 @@ export interface GraphCallbacks {
 
 function conditionMatches(condition: string | undefined, output: JsonValue | undefined): boolean {
   if (!condition) return true;
-  const matched = output && typeof output === 'object' && !Array.isArray(output) ? output.matched : undefined;
+  const values = output && typeof output === 'object' && !Array.isArray(output) ? output : undefined;
+  const declared = values?.outputs && typeof values.outputs === 'object' && !Array.isArray(values.outputs) ? values.outputs : undefined;
+  const matched = values?.matched ?? declared?.matched;
   if (['true', 'yes', 'matched'].includes(condition)) return matched === true;
   if (['false', 'no', 'unmatched'].includes(condition)) return matched === false;
   return false;

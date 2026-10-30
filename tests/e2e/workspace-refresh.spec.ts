@@ -111,3 +111,35 @@ test('shows a failed selected-project read and recovers only after an explicit n
   await expect(page.getByLabel('镜头标题', { exact: true })).toHaveValue('读取恢复的镜头'); expect(reads).toBe(2);
   await expect(page.locator('vite-error-overlay')).toHaveCount(0);
 });
+
+test('keeps a failed project read paused through actual workspace notifications until explicit retry', async ({ page, request }) => {
+  expectedHttpErrors = 1;
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  const target = await targetProject(request, '通知后仍需显式恢复的镜头');
+  const unrelated = await targetProject(request, '失败期间的通知来源');
+  let notifications = 0, reads = 0;
+  const network = await page.context().newCDPSession(page); await network.send('Network.enable');
+  network.on('Network.eventSourceMessageReceived', event => { if (event.data.includes('workspace.changed')) notifications++; });
+  await page.goto('/'); await expect(page.getByLabel('镜头标题', { exact: true })).toBeVisible();
+  await page.clock.install();
+  await page.route('**/__desktop_rpc', async route => {
+    const input = route.request().postDataJSON();
+    if (input?.method !== 'project.get' || input.params?.projectId !== target.id) { await route.continue(); return; }
+    reads++;
+    if (reads === 1) { await route.fulfill({ status: 500, json: { error: '通知不能自动重试的项目读取失败' } }); return; }
+    await route.continue();
+  });
+  try {
+    await page.getByRole('button', { name: `打开项目：${target.title}`, exact: true }).click();
+    await expect(page.getByRole('alert')).toContainText('通知不能自动重试的项目读取失败');
+    const before = notifications;
+    await rpc(request, 'project.update', { projectId: unrelated.id, revision: unrelated.revision, patch: { title: '实际通知已发出' } });
+    await expect.poll(() => notifications).toBeGreaterThan(before);
+    await page.clock.runFor(300);
+    await expect(page.getByRole('alert')).toContainText('通知不能自动重试的项目读取失败');
+    expect(reads).toBe(1);
+    await page.getByRole('button', { name: '重试项目', exact: true }).click();
+    await expect(page.getByLabel('镜头标题', { exact: true })).toHaveValue('通知后仍需显式恢复的镜头');
+    expect(reads).toBe(2);
+  } finally { await page.clock.resume(); }
+});

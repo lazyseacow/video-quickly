@@ -25,8 +25,14 @@ export async function settingControl(dialog: Locator, role: Parameters<Locator['
 }
 
 export async function showSettingsPreview(dialog: Locator) {
+  await expect(dialog).toBeVisible();
   const toggle = dialog.getByRole('button', { name: '实时预览', exact: true });
-  if (await toggle.isVisible() && await toggle.getAttribute('aria-expanded') === 'false') await toggle.click();
+  if (await dialog.page().evaluate(() => matchMedia('(max-width: 800px)').matches)) {
+    await expect(toggle).toBeVisible();
+    if (await toggle.getAttribute('aria-expanded') === 'false') await toggle.click();
+    await expect(toggle).toHaveAttribute('aria-expanded', 'true');
+  }
+  await expect(dialog.locator('.settings-sections__preview-body')).toBeVisible();
 }
 
 export async function projectSettingField(page: Page, name: string, options?: Parameters<Locator['getByLabel']>[1]) {

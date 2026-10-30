@@ -155,6 +155,9 @@ export const WORKSPACE_MIGRATIONS: readonly DatabaseMigration[] = [
   { version: 4, name: 'audio-asset-references', sql: AUDIO_REFERENCE_SCHEMA },
   { version: 5, name: 'project-summary-caption-style', sql: CAPTION_SUMMARY_SCHEMA },
   { version: 6, name: 'clip-edit-references-and-first-frame', sql: CLIP_EDIT_SCHEMA },
+  // Older clients strip unknown project fields. Advance the workspace version
+  // before storing these capabilities so opening it with such a client fails.
+  { version: 7, name: 'workflow-composition-and-keyframe-capabilities', sql: `INSERT INTO runtime_metadata(key, value) VALUES ('document-capabilities', '["keyframes-v1","workflow-composition-v1","media-concurrency-v1"]') ON CONFLICT(key) DO UPDATE SET value = excluded.value;` },
 ];
 
 export function openDatabase(directory: string) {

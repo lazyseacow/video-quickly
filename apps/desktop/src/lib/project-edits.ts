@@ -16,6 +16,7 @@ export type EditContent = z.infer<typeof editContentSchema>;
 const shotPatchSchema = z.object({ put: z.array(draftShotSchema), remove: z.array(z.string()), order: z.array(z.string()).optional() });
 const workflowPatchSchema = z.object({
   id: z.string().optional(), name: z.string().optional(),
+  subflows: workflowSchema.shape.subflows.unwrap().nullable().optional(), execution: workflowSchema.shape.execution.unwrap().nullable().optional(),
   nodes: z.object({ put: z.array(draftWorkflowSchema.shape.nodes.element), remove: z.array(z.string()), order: z.array(z.string()).optional() }).optional(),
   edges: z.object({ put: z.array(workflowSchema.shape.edges.element), remove: z.array(z.string()), order: z.array(z.string()).optional() }).optional(),
 });
@@ -77,7 +78,7 @@ function diff(from: EditContent, to: EditContent): EditPatch {
   if (sources) patch.clipEditSources = sources;
   if (plans) patch.clipEditPlans = plans;
   const nodes = diffRecords(from.workflow.nodes, to.workflow.nodes), edges = diffRecords(from.workflow.edges, to.workflow.edges);
-  if (!sameWorkflow(from.workflow, to.workflow)) patch.workflow = { ...(from.workflow.id !== to.workflow.id ? { id: to.workflow.id } : {}), ...(from.workflow.name !== to.workflow.name ? { name: to.workflow.name } : {}), ...(nodes ? { nodes } : {}), ...(edges ? { edges } : {}) };
+  if (!sameWorkflow(from.workflow, to.workflow)) patch.workflow = { ...(from.workflow.id !== to.workflow.id ? { id: to.workflow.id } : {}), ...(from.workflow.name !== to.workflow.name ? { name: to.workflow.name } : {}), ...(!sameContent(from.workflow.subflows, to.workflow.subflows) ? { subflows: to.workflow.subflows ?? null } : {}), ...(!sameContent(from.workflow.execution, to.workflow.execution) ? { execution: to.workflow.execution ?? null } : {}), ...(nodes ? { nodes } : {}), ...(edges ? { edges } : {}) };
   return patch;
 }
 
@@ -97,7 +98,7 @@ function applyRecords<T extends { id: string }>(current: T[], patch?: { put: T[]
 
 function apply(content: EditContent, patch: EditPatch): EditContent {
   const { shots: changes, workflow: graph, clipEditSources: sources, clipEditPlans: plans, ...settings } = patch;
-  const workflow = graph ? { ...content.workflow, ...(graph.id !== undefined ? { id: graph.id } : {}), ...(graph.name !== undefined ? { name: graph.name } : {}), nodes: applyRecords(content.workflow.nodes, graph.nodes), edges: applyRecords(content.workflow.edges, graph.edges) } : content.workflow;
+  const workflow = graph ? { ...content.workflow, ...(graph.id !== undefined ? { id: graph.id } : {}), ...(graph.name !== undefined ? { name: graph.name } : {}), ...(Object.hasOwn(graph, 'subflows') ? { subflows: graph.subflows ?? undefined } : {}), ...(Object.hasOwn(graph, 'execution') ? { execution: graph.execution ?? undefined } : {}), nodes: applyRecords(content.workflow.nodes, graph.nodes), edges: applyRecords(content.workflow.edges, graph.edges) } : content.workflow;
   const collections = { workflow, clipEditSources: applyRecords(content.clipEditSources, sources), clipEditPlans: applyRecords(content.clipEditPlans, plans) };
   if (!changes) return { ...content, ...settings, ...collections };
   const shots = new Map(content.shots.map(shot => [shot.id, shot]));

@@ -5,6 +5,8 @@ import { clipEditSource, resolveShotTime, sourceCaptionTrack, type ClipEditConte
 import { drawSceneTemplate } from './scene-templates.js';
 import { drawCitationOverlay, type CitationOverlay } from './citations.js';
 import { captionBox, resolveCaptionLayout, safeCaptionStyle } from './caption-layout.js';
+import { sampleMotion } from './keyframes.js';
+export { sampleMotion, motionSceneTimeUs, motionLocalTimeUs, type MotionPose } from './keyframes.js';
 export { captionAtTime, createEstimatedCaptionTrack, projectCaptionCues, replaceVisibleCaptionCues, splitCaptionText, type CaptionClip, type CaptionPages } from './captions.js';
 export { commonSourceOutUs, mediaSourceInUs, musicPlaybackAtTime, type MediaSourceOffsets, type MusicPlayback, type SourceDurations } from './audio.js';
 export { captureClipEditSource, clipEditPlan, clipEditSource, clipEditTotalUs, clipSourceOutUs, deleteShotRanges, replaceShotMedia, resolveShotAtTime, resolveShotSpans, resolveShotTime, restoreShotRanges, sliceClipPlan, sourceCaptionTrack, type ClipEditContext, type ClipEditDocument, type ClipEditIdFactory, type ClipRange, type ClipTimingShot, type ResolvedClipSpan, type ResolvedShotTime } from './clip-edits.js';
@@ -156,9 +158,10 @@ export function drawSceneFrame(canvas: HTMLCanvasElement, scene: SceneFrame, tim
   const source=clipEditSource(scene,scene.clipEditContext);
   const sceneUs=scene.clipEdit?resolveShotTime({...scene,durationUs:scene.durationUs??8_000_000},scene.clipEditContext,timeUs).sceneUs:timeUs+(scene.sceneInUs??0);
   const progress=Math.min(1,Math.max(0,sceneUs/(scene.sceneDurationUs??source?.original.sceneDurationUs??source?.original.durationUs??scene.durationUs??8_000_000)));
+  const pose = sampleMotion(scene.animation, sceneUs, scene.sceneDurationUs ?? source?.original.sceneDurationUs ?? source?.original.durationUs ?? scene.durationUs ?? 8_000_000);
   if(scene.sceneTemplate){
     const layout=resolveCaptionLayout(width,height,scene.captionStyle,{referenceFooter:scene.referenceFooter??Boolean(scene.citation),template:true});
-    drawSceneTemplate(canvas,scene.sceneTemplate,progress,{fontSize:layout.fontSize,lines:layout.maxLines,bottom:layout.bottom,diagramTop:layout.diagramTop,diagramBottom:layout.diagramBottom});
+    drawSceneTemplate(canvas,scene.sceneTemplate,progress,{fontSize:layout.fontSize,lines:layout.maxLines,bottom:layout.bottom,diagramTop:layout.diagramTop,diagramBottom:layout.diagramBottom},scene.animation?.keyframes?.length ? pose : undefined);
     drawCaptions(ctx,scene,width,height,timeUs);drawCitationOverlay(canvas,scene.citation);return;
   }
   const shotIndex = scene.sceneIndex ?? source?.original.sceneIndex ?? scene.shotIndex;
@@ -173,8 +176,9 @@ export function drawSceneFrame(canvas: HTMLCanvasElement, scene: SceneFrame, tim
   for(let i=0;i<420;i++){ const x=(i*137.51)%960,y=(i*89.23)%540;ctx.fillRect(x,y,1+(i%3),1); }
   const eased=progress*progress*(3-2*progress);
   const animation=scene.animation;
-  const zoom=1+((animation?.zoom??1.04)-1)*eased;
-  ctx.translate(480,270);ctx.scale(zoom,zoom);ctx.translate(-480+(animation?.panX??0)*960*eased,-270+(animation?.panY??0)*540*eased);
+  const zoom=pose.zoom;
+  if (animation?.keyframes?.length) { ctx.translate(480+pose.panX*960,270+pose.panY*540);ctx.scale(zoom,zoom);ctx.translate(-480,-270); }
+  else { ctx.translate(480,270);ctx.scale(zoom,zoom);ctx.translate(-480+(animation?.panX??0)*960*eased,-270+(animation?.panY??0)*540*eased); }
   ctx.globalAlpha=.55;
   polygon(ctx,[[0,285],[93,175],[163,235],[267,124],[375,245],[458,162],[563,250],[654,135],[774,240],[875,172],[960,263],[960,420],[0,420]],'#aab6a2');
   polygon(ctx,[[0,325],[109,246],[194,281],[297,205],[430,306],[527,219],[678,312],[796,223],[960,308],[960,440],[0,440]],'#899d8b');
@@ -203,11 +207,15 @@ export function drawSceneFrame(canvas: HTMLCanvasElement, scene: SceneFrame, tim
     const sourceWidth='naturalWidth' in image?image.naturalWidth:'videoWidth' in image?image.videoWidth:'displayWidth' in image?image.displayWidth:'width' in image&&typeof image.width==='number'?image.width:width;
     const sourceHeight='naturalHeight' in image?image.naturalHeight:'videoHeight' in image?image.videoHeight:'displayHeight' in image?image.displayHeight:'height' in image&&typeof image.height==='number'?image.height:height;
     const fit=scene.profile.fitMode==='cover'?Math.max(width/sourceWidth,height/sourceHeight):Math.min(width/sourceWidth,height/sourceHeight);
-    const zoom=1+((scene.animation?.zoom??1)-1)*eased;
-    const w=sourceWidth*fit*zoom,h=sourceHeight*fit*zoom;
+    const mediaPose=sampleMotion(scene.animation,sceneUs,scene.sceneDurationUs??source?.original.sceneDurationUs??source?.original.durationUs??scene.durationUs??8_000_000,1);
+    const zoom=mediaPose.zoom;
+    const keyframed=Boolean(scene.animation?.keyframes?.length);
+    const w=sourceWidth*fit*(keyframed?1:zoom),h=sourceHeight*fit*(keyframed?1:zoom);
     ctx.fillStyle='#1d2724';ctx.fillRect(0,0,width,height);
+    if(keyframed){ctx.save();ctx.translate(width/2+mediaPose.panX*width,height/2+mediaPose.panY*height);ctx.scale(zoom,zoom);ctx.translate(-width/2,-height/2);ctx.beginPath();ctx.rect(0,0,width,height);ctx.clip();}
     if(scene.profile.fitMode==='blur'){ctx.save();ctx.filter=`blur(${Math.max(8,width*.02)}px)`;const cover=Math.max(width/sourceWidth,height/sourceHeight);ctx.drawImage(image,(width-sourceWidth*cover)/2,(height-sourceHeight*cover)/2,sourceWidth*cover,sourceHeight*cover);ctx.restore();}
-    ctx.drawImage(image,(width-w)/2+(scene.animation?.panX??0)*width*eased,(height-h)/2+(scene.animation?.panY??0)*height*eased,w,h);
+    ctx.drawImage(image,(width-w)/2+(keyframed?0:mediaPose.panX*width),(height-h)/2+(keyframed?0:mediaPose.panY*height),w,h);
+    if(keyframed)ctx.restore();
   }
   const titleSize=Math.max(15,Math.min(width*.035,height*.064));
   ctx.textAlign='center';ctx.fillStyle='#374c43';ctx.font=`600 ${titleSize}px "Microsoft YaHei", sans-serif`;

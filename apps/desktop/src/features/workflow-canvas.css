@@ -8,3 +8,5 @@
 .flow-container .react-flow__handle.valid { background: var(--success); }
 .flow-container .react-flow__node:focus-visible .flow-node { outline: 2px solid var(--accent); outline-offset: 3px; }
 @media (max-width: 650px) { .flow-container { --flow-hit-size: 44px; } .flow-gestures { display: none; } .flow-container .react-flow__controls-button { width: var(--flow-hit-size); height: var(--flow-hit-size); } }
+
+.workflow-composition-controls { display: grid; gap: var(--space-3); padding-block: var(--space-4); border-bottom: 1px solid var(--border); margin-bottom: var(--space-4); }

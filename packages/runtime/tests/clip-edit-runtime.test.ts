@@ -75,7 +75,7 @@ it('upgrades a real v5 database atomically, backfills original references, and p
   previous.exec("CREATE TABLE checkpoints (thread_id TEXT PRIMARY KEY, checkpoint BLOB); INSERT INTO checkpoints VALUES ('review', X'0102');"); previous.close();
   const upgraded = openDatabase(migrationDirectory), store = new DocumentStore(upgraded);
   try {
-    expect(upgraded.pragma('user_version', { simple: true })).toBe(6); expect(store.get('project', project.id)).toEqual(project); expect(store.get('run', run.id)).toEqual(run);
+    expect(upgraded.pragma('user_version', { simple: true })).toBe(7); expect(store.get('project', project.id)).toEqual(project); expect(store.get('run', run.id)).toEqual(run);
     expect(upgraded.prepare('SELECT hex(checkpoint) AS value FROM checkpoints').get()).toEqual({ value: '0102' });
     const summary = store.get<ProjectSummary>('project-summary', project.id)!;
     expect(summary.thumbnailShot).toMatchObject({ videoInUs: 2_000_000, sceneInUs: 2_000_000, captionTrack: { cues: [expect.objectContaining({ text: '词2' })] } });

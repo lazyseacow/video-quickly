@@ -230,7 +230,7 @@ test('persists branch, model and review settings and supports keyboard edge hist
   await expect(page.getByRole('button', { name: '重做', exact: true })).toBeEnabled();
   await node(page, 'a').focus(); await page.keyboard.press('Control+Shift+z');
   await expect.poll(async () => (await current(request, project.id)).workflow.edges[0].condition).toBe('true');
-  const description = page.getByLabel('步骤说明', { exact: true }); await description.fill(''); await description.pressSequentially('native input'); await description.press('Control+z');
+  const description = page.getByLabel('步骤说明', { exact: true }); await description.fill(''); await description.pressSequentially('native input'); await description.press('ControlOrMeta+z');
   await expect(description).not.toHaveValue('native input');
   expect((await current(request, project.id)).workflow.edges[0].condition).toBe('true');
   const position = await page.locator('.react-flow__edge[data-id="ab"] .react-flow__edge-interaction').evaluate((path: SVGPathElement) => {

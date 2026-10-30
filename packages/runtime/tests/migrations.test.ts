@@ -4,7 +4,7 @@ import { mkdtemp, readdir, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { INITIAL_SCHEMA, openDatabase, DocumentStore, WORKSPACE_MIGRATIONS } from '../src/database.js';
+import { INITIAL_SCHEMA, openDatabase, DocumentStore, WORKSPACE_MIGRATIONS, thumbnailShot } from '../src/database.js';
 import { DatabaseMigrationError, migrateDatabase } from '../src/migrations.js';
 import { createHistoryWorkflow, DEFAULT_CAPTION_STYLE, DEFAULT_VIDEO_PROFILE, projectSchema, projectSummarySchema } from '@video-quickly/contracts';
 import { createReadModels } from '../src/read-models.js';
@@ -14,10 +14,36 @@ afterEach(async () => { for (const directory of directories.splice(0)) await rm(
 async function directory() { const path = await mkdtemp(join(tmpdir(), 'vq-migration-')); directories.push(path); return path; }
 
 describe('workspace database upgrades', () => {
+  it('upgrades the actual v6 schema and prevents older clients from dropping new document capabilities', async () => {
+    const path = await directory(), previous = new Database(join(path, 'workspace.sqlite'));
+    previous.function('vq_thumbnail', { deterministic: true }, body => {
+      if (typeof body !== 'string') throw new Error('Expected a project document');
+      return JSON.stringify(thumbnailShot(JSON.parse(body)));
+    });
+    migrateDatabase(previous, path, WORKSPACE_MIGRATIONS.filter(migration => migration.version <= 6));
+    const project = projectSchema.parse({ id: 'v6-project', title: '升级前的项目', brief: '', revision: 3, profile: DEFAULT_VIDEO_PROFILE, workflow: createHistoryWorkflow(), shots: [], createdAt: '', updatedAt: '' });
+    const store = new DocumentStore(previous); store.put('project', project.id, project);
+    store.put('model', 'connection', { id: 'connection', credentialRef: 'opaque-reference' });
+    previous.exec("CREATE TABLE checkpoints (thread_id TEXT PRIMARY KEY, checkpoint BLOB); INSERT INTO checkpoints VALUES ('original-run', X'010203');");
+    previous.close();
+    const upgraded = openDatabase(path);
+    try {
+      expect(upgraded.pragma('user_version', { simple: true })).toBe(7);
+      expect(new DocumentStore(upgraded).get('project', project.id)).toEqual(project);
+      expect(new DocumentStore(upgraded).get('model', 'connection')).toEqual({ id: 'connection', credentialRef: 'opaque-reference' });
+      expect(upgraded.prepare('SELECT hex(checkpoint) AS value FROM checkpoints').get()).toEqual({ value: '010203' });
+      expect(() => migrateDatabase(upgraded, path, WORKSPACE_MIGRATIONS.filter(migration => migration.version <= 6))).toThrow('高于此客户端支持的版本');
+      expect(upgraded.pragma('user_version', { simple: true })).toBe(7);
+    } finally { upgraded.close(); }
+    const backups = await readdir(join(path, 'database-backups')); expect(backups).toHaveLength(1);
+    const backup = new Database(join(path, 'database-backups', backups[0]), { readonly: true });
+    try { expect(backup.pragma('user_version', { simple: true })).toBe(6); expect(new DocumentStore(backup).get('project', project.id)).toEqual(project); } finally { backup.close(); }
+  });
+
   it('creates a versioned database and does not back up on every reopen', async () => {
     const path = await directory(); const db = openDatabase(path);
-    expect(db.pragma('user_version', { simple: true })).toBe(6);
-    expect(db.prepare('SELECT name FROM schema_migrations ORDER BY version').all()).toEqual([{ name: 'workspace-baseline' }, { name: 'execution-event-index' }, { name: 'workspace-read-models' }, { name: 'audio-asset-references' }, { name: 'project-summary-caption-style' }, { name: 'clip-edit-references-and-first-frame' }]);
+    expect(db.pragma('user_version', { simple: true })).toBe(7);
+    expect(db.prepare('SELECT name FROM schema_migrations ORDER BY version').all()).toEqual([{ name: 'workspace-baseline' }, { name: 'execution-event-index' }, { name: 'workspace-read-models' }, { name: 'audio-asset-references' }, { name: 'project-summary-caption-style' }, { name: 'clip-edit-references-and-first-frame' }, { name: 'workflow-composition-and-keyframe-capabilities' }]);
     db.close(); openDatabase(path).close();
     expect(await readdir(path)).not.toContain('database-backups');
   });
@@ -71,7 +97,7 @@ describe('workspace database upgrades', () => {
       expect(new DocumentStore(upgraded).get('project', project.id)).toEqual(project);
       expect(new DocumentStore(upgraded).get('project-summary', project.id)).toMatchObject({ id: 'legacy', shotCount: 1, durationUs: 2_000_000, revision: 7, archived: false });
       expect(upgraded.prepare('SELECT asset_id FROM project_asset_references ORDER BY asset_id').all()).toEqual([{ asset_id: 'caption-origin-audio' }, { asset_id: 'used-audio' }, { asset_id: 'used-image' }, { asset_id: 'used-music' }]);
-      expect(upgraded.pragma('user_version', { simple: true })).toBe(6);
+      expect(upgraded.pragma('user_version', { simple: true })).toBe(7);
     } finally { upgraded.close(); }
     expect(await readdir(join(path, 'database-backups'))).toHaveLength(1);
   });
@@ -92,7 +118,7 @@ describe('workspace database upgrades', () => {
     previous.close();
     const upgraded = openDatabase(path), store = new DocumentStore(upgraded);
     try {
-      expect(upgraded.pragma('user_version', { simple: true })).toBe(6); expect(store.get('project', project.id)).toEqual(project); expect(store.get('run', run.id)).toEqual(run); expect(store.list('asset')).toEqual(assets);
+      expect(upgraded.pragma('user_version', { simple: true })).toBe(7); expect(store.get('project', project.id)).toEqual(project); expect(store.get('run', run.id)).toEqual(run); expect(store.list('asset')).toEqual(assets);
       expect(upgraded.prepare('SELECT hex(checkpoint) AS data FROM checkpoints').get()).toEqual({ data: '010203' });
       expect(upgraded.prepare('SELECT asset_id FROM project_asset_references ORDER BY asset_id').all()).toEqual(originalReferences); expect(originalReferences).toEqual([{ asset_id: 'caption-origin-audio' }, { asset_id: 'used-audio' }, { asset_id: 'used-image' }, { asset_id: 'used-music' }]);
       expect(upgraded.prepare("SELECT rowid FROM documents WHERE kind = 'project-summary' AND id = ?").get(project.id)).toEqual(rowid);

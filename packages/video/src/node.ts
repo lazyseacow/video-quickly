@@ -13,6 +13,7 @@ import { citationOverlayForShot, createCitationManifest, drawCitationOverlay, ty
 import { resolveCaptionLayout, selectCaptionFont } from './caption-layout.js';
 import { createCaptionAss } from './caption-ass.js';
 import { hashMediaFile, probeMedia, runMedia } from './media-process.js';
+import { keyframeVideoFrames } from './keyframe-video.js';
 export { probeMedia, runMedia } from './media-process.js';
 
 export interface RenderOptions {
@@ -34,7 +35,7 @@ function subtitleStyle(width:number,height: number, referenceFooter=false): stri
   return `${coordinates}FontName=Microsoft YaHei,FontSize=${Math.round(geometry.fontSize)},PrimaryColour=&H00F1F6FB,OutlineColour=&H00304028,BorderStyle=3,Outline=2,Shadow=0,MarginV=${Math.round(referenceFooter?height-geometry.bottom+2:height*.075)},Alignment=2`;
 }
 
-async function encodeCanvasShot(scene: SceneFrame & {durationUs:number}, path: string, ffmpeg: string, schedule: RenderClipSchedule, options: RenderOptions): Promise<void> {
+async function encodeCanvasShot(scene: SceneFrame & {durationUs:number}, path: string, ffmpeg: string, schedule: RenderClipSchedule, options: RenderOptions, readImage?: () => Promise<CanvasImageSource>): Promise<void> {
   const {width,height,frameRate}=scene.profile;
   const canvas=createCanvas(width,height);
   const context=canvas.getContext('2d');
@@ -48,16 +49,20 @@ async function encodeCanvasShot(scene: SceneFrame & {durationUs:number}, path: s
   const completed=new Promise<void>((resolve,reject)=>{child.once('error',reject);child.once('close',code=>code===0?resolve():reject(new Error(`镜头编码失败：${errors.slice(-2000)}`)));});
   // Attach rejection immediately, including an encoder failing before all frames arrive.
   completed.catch(()=>undefined);
+  let inputError: Error | undefined;
+  child.stdin.on('error', error => { inputError = error; });
   const count=schedule.frameCount;
   try{
     for(let frame=0;frame<count;frame++){
       if(options.signal?.aborted)throw new DOMException('导出已取消','AbortError');
-      drawSceneFrame(browserSurface,scene,frameTimeUs(schedule.firstFrame+frame,frameRate)-schedule.startUs);
+      if(inputError)throw inputError;
+      const current = readImage ? { ...scene, image: await readImage() } : scene;
+      drawSceneFrame(browserSurface,current,frameTimeUs(schedule.firstFrame+frame,frameRate)-schedule.startUs);
       const pixels=context.getImageData(0,0,width,height).data;
       if(!child.stdin.write(pixels))await once(child.stdin,'drain');
       options.onProgress?.((frame+1)/count);
     }
-    child.stdin.end();await completed;
+    child.stdin.end();await completed;if(inputError)throw inputError;
   }catch(error){child.stdin.destroy();child.kill();await completed.catch(()=>undefined);throw error;}
 }
 
@@ -138,7 +143,7 @@ export async function renderProject(options: RenderOptions): Promise<RenderResul
     const original = clipEditSource(shot, project)?.original, frozenVideo = clipEditSource(shot, project)?.assetHashes.find(value => value.assetId === videoAsset?.id);
     if (frozenVideo && frozenVideo.sha256 !== videoAsset?.sha256) throw new Error('剪辑来源视频已变化，请恢复原素材或重新建立剪辑。');
     const sceneIdentity = { durationUs: shot.sceneDurationUs ?? original?.sceneDurationUs ?? original?.durationUs ?? shot.durationUs, index: shot.sceneIndex ?? original?.sceneIndex ?? index };
-    const fingerprint=createHash('sha256').update(JSON.stringify({shot:visualShot,profile,image:imageAsset?.sha256,video:videoAsset?.sha256,citation,referenceFooter:referenceFooter||undefined,captionLayout:shot.captionStyle?captionLayoutFor(shot):undefined,visualSpans,sceneIdentity,timing:{count:timing.frameCount,phase:timing.phaseUs},renderer:'canvas-v5-global-edl'})).digest('hex').slice(0,24);
+    const fingerprint=createHash('sha256').update(JSON.stringify({shot:visualShot,profile,image:imageAsset?.sha256,video:videoAsset?.sha256,citation,referenceFooter:referenceFooter||undefined,captionLayout:shot.captionStyle?captionLayoutFor(shot):undefined,visualSpans,sceneIdentity,timing:{count:timing.frameCount,phase:timing.phaseUs},renderer:shot.animation.keyframes?.length?'canvas-v6-keyframes':'canvas-v5-global-edl'})).digest('hex').slice(0,24);
     const segment=join(options.outputDirectory,`segment-${fingerprint}.mp4`);
     const manifestPath=segment+'.json';
     const exists=await stat(segment).then(()=>true,()=>false);
@@ -155,7 +160,14 @@ export async function renderProject(options: RenderOptions): Promise<RenderResul
     }
     const temporary=join(options.outputDirectory,`segment-${fingerprint}.partial.mp4`);
     const progress=(value:number)=>options.onProgress?.((index+value)/shots.length);
-    if(videoAsset){
+    if(videoAsset && shot.animation.keyframes?.length){
+      const frames = keyframeVideoFrames(shot, project, videoAsset, timing, ffmpeg, ffprobe, options.signal);
+      const scene: SceneFrame & { durationUs: number } = { ...shot, narration: '', captionTrack: { timeBase: 'scene', alignment: 'manual', cues: [] }, shotIndex: index, citation, referenceFooter, profile: { ...profile, fitMode: 'contain' }, clipEditContext: project };
+      try {
+        await encodeCanvasShot(scene, temporary, ffmpeg, timing, { ...options, onProgress: progress }, async () => { const frame = await frames.next(); if (frame.done) throw new Error('关键帧视频缺少画面帧。'); return frame.value; });
+        if (!(await frames.next()).done) throw new Error('关键帧视频解码返回额外画面帧。');
+      } finally { await frames.return(undefined); }
+    }else if(videoAsset){
       await encodeVideoShot(shot, project, videoAsset, citation, timing, temporary, ffmpeg, ffprobe, options);
       progress(1);
     }else{

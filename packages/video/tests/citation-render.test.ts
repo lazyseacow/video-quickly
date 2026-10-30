@@ -8,7 +8,7 @@ import { createCanvas } from '@napi-rs/canvas';
 import { createHistoryWorkflow, createSceneTemplate, DEFAULT_VIDEO_PROFILE, projectSchema, type AssetRecord } from '@video-quickly/contracts';
 import { probeMedia, renderProject, runMedia } from '../src/node.js';
 import { captionGeometry, captionPages, citationFooterTop, createTimedSrt } from '../src/index.js';
-import { SCENE_TEMPLATE_FONT_FAMILY } from '../src/scene-templates.js';
+import { captionFontFamily } from '../src/caption-layout.js';
 
 const ffmpeg = process.env.VIDEO_QUICKLY_FFMPEG ?? 'ffmpeg';
 const ffprobe = process.env.VIDEO_QUICKLY_FFPROBE ?? join(dirname(ffmpeg), process.platform === 'win32' ? 'ffprobe.exe' : 'ffprobe');
@@ -61,7 +61,7 @@ it.skipIf(!mediaAvailable)('burns the same reference footer over real video, tem
     expect(output.warnings.join('\n')).toContain('无证据摘录'); expect(output.warnings.join('\n')).toContain('待核验');
     const srt = await readFile(output.subtitlePath, 'utf8'); expect(srt).toContain('Voice caption'); expect(srt).not.toContain('资料'); expect(srt).not.toContain(quote);
     const measure = createCanvas(width, height).getContext('2d'), geometry = captionGeometry(width, height, true);
-    const expected = createTimedSrt(project.shots, (text, shot) => { measure.font = `500 ${geometry.fontSize}px ${shot.sceneTemplate ? SCENE_TEMPLATE_FONT_FAMILY : '"Microsoft YaHei", sans-serif'}`; return captionPages(text, line => measure.measureText(line).width, width * .78, geometry.lines); });
+    const expected = createTimedSrt(project.shots, text => { measure.font = `500 ${geometry.fontSize}px ${captionFontFamily('sans')}`; return captionPages(text, line => measure.measureText(line).width, width * .78, geometry.lines); });
     expect(srt).toBe(expected);
     const uncited = await pixels(output.videoPath, '3.3', `${fitMode}-uncited`); let lastCaptionRow = -1;
     for (let pixel = 0; pixel < width * height; pixel++) if (uncited[pixel * 3] < 160 && uncited[pixel * 3 + 1] < 160 && uncited[pixel * 3 + 2] < 160) lastCaptionRow = Math.floor(pixel / width);

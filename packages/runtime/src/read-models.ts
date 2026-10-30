@@ -27,7 +27,8 @@ export function createReadModels(database: Database.Database, store: DocumentSto
   function runSummary(value: RunRecord): RunSummary {
     const { events: _events, activities: _activities, ...record } = value;
     const completed = database.prepare("SELECT activity_id FROM activities WHERE run_id = ? AND status = 'completed'").all(value.id) as { activity_id: string }[];
-    return { ...record, completedNodeIds: [...new Set(completed.map(row => row.activity_id.split(':')[0]))] };
+    const ids = nodeIds(value.id);
+    return { ...record, completedNodeIds: [...new Set(completed.map(row => activityNodeId(row.activity_id, ids)))] };
   }
   function projectDetail(id: string, revision?: number, knownAssetsVersion?: number): ProjectDetail {
     const summary = store.get<ProjectSummary>('project-summary', id);
@@ -42,8 +43,8 @@ export function createReadModels(database: Database.Database, store: DocumentSto
     return page(rows, limit, row => runSummary(JSON.parse(row.body)));
   }
   function nodeIds(runId: string) {
-    const row = database.prepare("SELECT json_extract(body, '$.nodes') AS nodes FROM documents WHERE kind = 'run-snapshot' AND id = ?").get(runId) as { nodes: string | null } | undefined;
-    return row?.nodes ? (JSON.parse(row.nodes) as { id: string }[]).map(node => node.id) : [];
+    const row = database.prepare("SELECT json_group_array(json_extract(node.value, '$.id')) AS nodes FROM documents snapshot, json_each(coalesce(json_extract(snapshot.body, '$.inspectionNodes'), json_extract(snapshot.body, '$.nodes'))) node WHERE snapshot.kind = 'run-snapshot' AND snapshot.id = ?").get(runId) as { nodes: string };
+    return JSON.parse(row.nodes) as string[];
   }
   function events(run: RunRecord, before: number | undefined, limit: number, nodeId?: string): RecordPage<RunEvent> {
     const ids = nodeIds(run.id);
@@ -68,7 +69,7 @@ export function createReadModels(database: Database.Database, store: DocumentSto
     });
   }
   function assetInUse(id: string) { return !!database.prepare('SELECT 1 FROM project_asset_references WHERE asset_id = ? LIMIT 1').get(id); }
-  return { assetsVersion, projects, projectDetail, runSummary, runs, events, activities, assets, assetInUse };
+  return { assetsVersion, projects, projectDetail, runSummary, runs, events, activities, assets, assetInUse, nodeIds };
 }
 
 function page<T extends { cursor: number }, R>(rows: T[], limit: number, map: (row: T) => R): RecordPage<R> {

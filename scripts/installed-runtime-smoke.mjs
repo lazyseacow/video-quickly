@@ -14,7 +14,7 @@ if (mode === 'inspect') {
   const require = createRequire(join(sidecar, 'package.json'));
   const Database = require('better-sqlite3');
   const db = new Database(join(dataDirectory, 'workspace.sqlite'), { readonly: true });
-  try { assert.equal(db.pragma('user_version', { simple: true }), 6); assert.equal(db.pragma('quick_check', { simple: true }), 'ok'); } finally { db.close(); }
+  try { assert.equal(db.pragma('user_version', { simple: true }), 7); assert.equal(db.pragma('quick_check', { simple: true }), 'ok'); } finally { db.close(); }
   console.log('原生客户端已完成数据库迁移');
   process.exit(0);
 }

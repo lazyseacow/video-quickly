@@ -4,11 +4,12 @@ import { BookOpen, Check, GitBranch, Image, Layers, Mic, Plus, Sparkles, Trash2,
 import { nodeKindSchema, type ModelProfile, type WorkflowDefinition, type WorkflowNode } from '@video-quickly/contracts';
 import { Button, Field, IconButton, Notice, Select } from '../components/Primitives';
 import ToolBindings from '../components/ToolBindings';
+import WorkflowComposition, { SubflowInputBindings } from '../components/WorkflowComposition';
 import { sameWorkflow } from '../lib/project-edits';
 import './workflow-canvas.css';
 
 type FlowNode = Node<{ node: WorkflowNode }, 'activity'>;
-const typeLabels: Record<string, string> = { brief: '创意简报', research: '资料与史实', style: '风格与角色', script: '旁白与分镜', assets: '画面素材', voice: '配音与字幕', animation: '动画与运镜', review: '人工审阅', export: '导出成片', agent: 'Agent 步骤', condition: '条件分支', join: '汇合' };
+const typeLabels: Record<string, string> = { brief: '创意简报', research: '资料与史实', style: '风格与角色', script: '旁白与分镜', assets: '画面素材', voice: '配音与字幕', animation: '动画与运镜', review: '人工审阅', export: '导出成片', agent: 'Agent 步骤', condition: '条件分支', join: '汇合', subflow: '子流程' };
 const ActivityNode = memo(function ActivityNode({ data, selected }: NodeProps<FlowNode>) {
   const Icon = data.node.kind === 'assets' ? Image : data.node.kind === 'voice' ? Mic : data.node.kind === 'condition' ? GitBranch : data.node.kind === 'review' ? Check : data.node.kind === 'research' ? BookOpen : data.node.kind === 'animation' ? Layers : Sparkles;
   return <div className={`flow-node ${selected ? 'selected' : ''}`}><Handle type="target" position={Position.Left} /><div className="flow-node__type">{typeLabels[data.node.kind]}</div><div className="flow-node__title"><Icon size={17} />{data.node.label}</div><div className="flow-node__footer">{data.node.requiresReview ? '完成后等待审阅' : data.node.modelId ? '已指定模型' : '使用步骤配置'}</div><Handle type="source" position={Position.Right} /></div>;
@@ -160,12 +161,14 @@ export default function WorkflowCanvas({ workflow, models, dirty, saving, confli
     <aside className="flow-inspector">
       <div className="section-heading"><h3>流程编排</h3><IconButton label="添加编排步骤" disabled={nodes.length >= 100} onClick={addNode}><Plus size={17} /></IconButton></div>
       {error && <Notice kind="error">{error}</Notice>}
+      <WorkflowComposition workflow={workflow} models={models} onChange={onChange} />
       {selected ? <>
         <Field label="步骤名称"><input value={selected.label} onChange={event => updateSelected({ label: event.target.value })} /></Field>
         <Field label="步骤类型"><Select value={selected.kind} onChange={event => updateSelected({ kind: nodeKindSchema.parse(event.target.value) })}>{Object.entries(typeLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</Select></Field>
         <Field label="步骤说明"><textarea value={selected.description} onChange={event => updateSelected({ description: event.target.value })} /></Field>
         <Field label="提示词"><textarea value={selected.prompt} onChange={event => updateSelected({ prompt: event.target.value })} placeholder="补充这个步骤的具体要求" /></Field>
         <Field label="使用模型"><Select value={selected.modelId ?? ''} onChange={event => updateSelected({ modelId: event.target.value || undefined })}><option value="">本地素材 / 手动制作</option>{models.filter(model => model.enabled).map(model => <option key={model.id} value={model.id}>{model.name}</option>)}</Select></Field>
+        {selected.kind === 'subflow' && <SubflowInputBindings node={selected} onChange={value => updateSelected(value)} />}
         {selected.kind === 'agent' && <ToolBindings node={selected} onChange={value => updateSelected(value)} />}
         {selected.kind === 'condition' && <Field label="条件结果"><Select aria-label="条件分支结果" value={selected.config.value === true ? 'true' : 'false'} onChange={event => updateSelected({ config: { ...selected.config, value: event.target.value === 'true' } })}><option value="true">成立</option><option value="false">不成立</option></Select></Field>}
         {edges.some(edge => edge.source === selected.id) && <div className="edge-conditions"><h3>后续连接</h3>{edges.filter(edge => edge.source === selected.id).map(edge => <Field key={edge.id} label={nodes.find(node => node.id === edge.target)?.data.node.label ?? edge.target}><Select value={typeof edge.data?.condition === 'string' ? edge.data.condition : ''} onChange={event => {

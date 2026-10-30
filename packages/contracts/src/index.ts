@@ -3,6 +3,8 @@ import { sceneTemplateSchema } from './scene-templates.js';
 import { claimSchema, researchSourceSchema } from './research.js';
 import { captionStyleSchema, scenePresetSchema } from './caption-style.js';
 import { audioMixSettingsSchema, audioProcessingSchema } from './audio-processing.js';
+import { motionKeyframesSchema } from './keyframes.js';
+export { motionKeyframeSchema, motionKeyframesSchema, motionEasingSchema, type MotionKeyframe, type MotionEasing } from './keyframes.js';
 export { modelPlatforms, getModelPlatform, platformForConnection, type ModelPlatformPreset } from './model-platforms.js';
 export { textProtocols, mediaAdapters, getMediaAdapters } from './model-protocols.js';
 export { modelConnectionTypes, getModelConnectionType, getModelCapabilities, validateModelConnection } from './model-connections.js';
@@ -160,7 +162,7 @@ export const shotSchema = z.object({
   sceneTemplate: sceneTemplateSchema.optional(),
   assetId: z.string().optional(), audioAssetId: z.string().optional(), videoAssetId: z.string().optional(),
   claimIds: z.array(z.string()).default([]), locked: z.boolean().default(false),
-  animation: z.object({ panX: z.number().default(0), panY: z.number().default(0), zoom: z.number().min(0.1).max(5).default(1.05), transition: z.enum(['cut', 'fade', 'wipe']).default('fade') })
+  animation: z.object({ panX: z.number().default(0), panY: z.number().default(0), zoom: z.number().min(0.1).max(5).default(1.05), transition: z.enum(['cut', 'fade', 'wipe']).default('fade'), keyframes: motionKeyframesSchema.optional() })
     .default({ panX: 0, panY: 0, zoom: 1.05, transition: 'fade' }),
 });
 export type Shot = z.infer<typeof shotSchema>;
@@ -190,21 +192,46 @@ export const shotCandidateSchema = z.object({
 export type ShotCandidate = z.infer<typeof shotCandidateSchema>;
 export { applyShotCandidate } from './shot-candidates.js';
 export { getModelParameterFields, modelParameterValue, withModelParameter, validateModelParameters, requestModelParameters, type ModelParameterField, type ModelParameterOperation } from './model-parameters.js';
-export const nodeKindSchema = z.enum(['brief', 'research', 'style', 'script', 'assets', 'voice', 'animation', 'review', 'export', 'agent', 'condition', 'join']);
+export const nodeKindSchema = z.enum(['brief', 'research', 'style', 'script', 'assets', 'voice', 'animation', 'review', 'export', 'agent', 'condition', 'join', 'subflow']);
 export type NodeKind = z.infer<typeof nodeKindSchema>;
+export const workflowValueBindingSchema = z.union([
+  z.object({ literal: jsonValueSchema }),
+  z.object({ nodeId: z.string().min(1), path: z.array(z.string().min(1)).max(20).default([]) }),
+]);
+export const subflowReferenceSchema = z.object({ id: z.string().min(1), version: z.number().int().positive(), inputs: z.record(z.string(), workflowValueBindingSchema).default({}) });
 export const workflowNodeSchema = z.object({
   id: z.string().min(1), kind: nodeKindSchema, label: z.string().min(1), description: z.string().default(''),
   prompt: z.string().default(''), modelId: z.string().optional(), skillIds: z.array(z.string()).default([]),
   config: z.record(z.string(), jsonValueSchema).default({}),
   position: z.object({ x: z.number(), y: z.number() }).default({ x: 0, y: 0 }), requiresReview: z.boolean().default(false),
+  subflow: subflowReferenceSchema.optional(),
 });
+const workflowEdgesSchema = z.array(z.object({ id: z.string(), source: z.string(), target: z.string(), condition: z.string().optional() }));
+export const subflowInputSchema = z.object({ name: z.string().regex(/^[A-Za-z][A-Za-z0-9_]{0,63}$/), type: z.enum(['string', 'number', 'boolean', 'json']), required: z.boolean().default(true), default: jsonValueSchema.optional() }).superRefine((value, context) => { if (value.default !== undefined && value.type !== 'json' && typeof value.default !== value.type) context.addIssue({ code: 'custom', message: '输入默认值与声明类型不一致。', path: ['default'] }); });
+export const subflowOutputSchema = z.object({ type: z.enum(['string', 'number', 'boolean', 'json']).default('json'), name: z.string().regex(/^[A-Za-z][A-Za-z0-9_]{0,63}$/), nodeId: z.string().min(1), path: z.array(z.string().min(1)).max(20).default([]) });
+export const subflowDefinitionSchema = z.object({
+  id: z.string().min(1), version: z.number().int().positive(), name: z.string().trim().min(1).max(120), description: z.string().max(10000).default(''),
+  inputs: z.array(subflowInputSchema).max(40).default([]), outputs: z.array(subflowOutputSchema).max(40).default([]),
+  nodes: z.array(workflowNodeSchema).min(1).max(100), edges: workflowEdgesSchema,
+});
+export const workflowExecutionSchema = z.object({ maxConcurrentShots: z.number().int().min(1).max(8).default(1), modelLimits: z.record(z.string(), z.number().int().min(1).max(8)).default({}) });
 export const workflowSchema = z.object({
   id: z.string(), version: z.number().int().positive(), name: z.string(),
   nodes: z.array(workflowNodeSchema).min(1).max(100),
-  edges: z.array(z.object({ id: z.string(), source: z.string(), target: z.string(), condition: z.string().optional() })),
+  edges: workflowEdgesSchema,
+  subflows: z.array(subflowDefinitionSchema).max(100).optional(), execution: workflowExecutionSchema.optional(),
 });
 export type WorkflowNode = z.infer<typeof workflowNodeSchema>;
 export type WorkflowDefinition = z.infer<typeof workflowSchema>;
+export type SubflowDefinition = z.infer<typeof subflowDefinitionSchema>;
+export type SubflowReference = z.infer<typeof subflowReferenceSchema>;
+export type WorkflowValueBinding = z.infer<typeof workflowValueBindingSchema>;
+export const workflowTemplateSchema = z.object({
+  id: z.string().min(1), revision: z.number().int().positive(), definition: subflowDefinitionSchema, dependencies: z.array(subflowDefinitionSchema).max(100),
+  archived: z.boolean(), createdAt: z.string(), updatedAt: z.string(),
+});
+export type WorkflowTemplate = z.infer<typeof workflowTemplateSchema>;
+export { validateWorkflowComposition, workflowNodesWithSubflows, workflowEdgesWithSubflows, resolveSubflowInputs, substituteSubflowInputs, subflowNodeId, subflowThreadId, subflowValueAt } from './workflow-composition.js';
 export const projectSchema = z.object({
   id: z.string(), title: z.string().min(1).max(160), brief: z.string().max(30000), templateId: z.string().default('history-handdrawn'),
   revision: z.number().int().positive(), profile: videoProfileSchema, shots: z.array(shotSchema), workflow: workflowSchema,
@@ -397,7 +424,7 @@ export type RunStepSummary = z.infer<typeof runStepSummarySchema>;
 export const runRecoverySchema = z.object({ review: z.boolean(), resume: z.boolean(), cancel: z.boolean(), restart: z.boolean(), reason: z.string() });
 export const runInspectionSchema = z.object({
   run: runSummarySchema, projectTitle: z.string(), snapshotAvailable: z.boolean(), checkpointAvailable: z.boolean(),
-  steps: z.array(runStepSummarySchema).max(100), recovery: runRecoverySchema,
+  steps: z.array(runStepSummarySchema).max(1000), recovery: runRecoverySchema,
   selected: z.object({
     node: workflowNodeSchema, dependencies: z.array(z.string()),
     model: z.object({ id: z.string(), name: z.string(), provider: modelSchema.shape.provider, model: z.string() }).optional(),

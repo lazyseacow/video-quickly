@@ -120,11 +120,12 @@ function bars(ctx: CanvasRenderingContext2D, template: Extract<SceneTemplate, { 
 }
 
 /** Deterministic diagrams use the authored scene clock in both browser and node Canvas. */
-export function drawSceneTemplate(canvas: HTMLCanvasElement, template: SceneTemplate, authoredProgress: number, captionArea?: { fontSize: number; lines: number; bottom: number; diagramTop?: number; diagramBottom?: number }): void {
+export function drawSceneTemplate(canvas: HTMLCanvasElement, template: SceneTemplate, authoredProgress: number, captionArea?: { fontSize: number; lines: number; bottom: number; diagramTop?: number; diagramBottom?: number }, pose?: { panX: number; panY: number; zoom: number }): void {
   const ctx = canvas.getContext('2d'); if (!ctx) throw new Error('当前环境无法创建模板画布');
   const width = canvas.width, height = canvas.height, side = Math.min(width, height), colors = palettes[template.palette] ?? palettes.sage;
   const progress = template.motion === 'none' ? 1 : clamp(authoredProgress);
   ctx.save(); ctx.clearRect(0, 0, width, height); ctx.fillStyle = colors.background; ctx.fillRect(0, 0, width, height);
+  if (pose) { ctx.translate(width / 2 + pose.panX * width, height / 2 + pose.panY * height); ctx.scale(pose.zoom, pose.zoom); ctx.translate(-width / 2, -height / 2); }
   const x = width * .065, innerWidth = width - x * 2;
   const kind = template.kind === 'process' ? '流程与步骤' : template.kind === 'comparison' ? '并列比较' : '数据观察';
   text(ctx, template, kind, x, height * .055, innerWidth, height * .04, side * .021, colors.accent, 600);

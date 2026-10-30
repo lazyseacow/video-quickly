@@ -1,0 +1,5 @@
+{
+  "extends": "../tsconfig.base.json",
+  "compilerOptions": { "types": ["node"] },
+  "include": ["real-service-config.ts", "real-service-smoke.ts", "real-service-progress.ts", "check-real-service-cli.ts"]
+}

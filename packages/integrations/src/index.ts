@@ -8,6 +8,7 @@ import { renderProject } from '@video-quickly/video/node';
 import { providerReportedUsage, sumProviderUsage, requestModelParameters, validateModelParameters, type ProviderUsage, type AssetRecord, type CharacterProfile, type JsonValue, type ModelProfile, type PreparedAudioMix, type ProjectDocument, type Shot, type WorkflowNode } from '@video-quickly/contracts';
 import { synthesizeVolcengineSpeech, volcengineSpeechHeaders } from './volcengine-speech.js';
 import { transcribeAudio } from './transcription.js';
+import { MediaRequestQueue, mapMediaShots } from './media-concurrency.js';
 import { resolveCharacterReferences, type ResolvedCharacterReferences } from './character-references.js';
 
 export { createWaveformReader } from './waveform.js';
@@ -19,6 +20,8 @@ export interface MediaActivityContext {
   runId: string;
   operationId: string;
   signal: AbortSignal;
+  queueSignal?: AbortSignal;
+  onFailure?: (error: unknown) => void;
   dataDirectory: string;
   assets: AssetRecord[];
   characters?: CharacterProfile[];
@@ -417,6 +420,7 @@ async function generateMedia(context: MediaActivityContext, directory: string, s
 }
 
 export function createActivityExecutor(options: { ffmpegPath?: string } = {}) {
+  const requests = new MediaRequestQueue();
   return async (context: MediaActivityContext): Promise<JsonValue> => {
     await validateMediaActivity(context);
     if (context.node.config.operation === 'transcribe') return transcribeAudio(context);
@@ -464,20 +468,22 @@ export function createActivityExecutor(options: { ffmpegPath?: string } = {}) {
       for (const asset of assets) if (asset && !(await validAsset(asset))) throw new Error('已引用素材缺失或损坏，请重新导入');
       return { assets: assets as unknown as JsonValue, source: 'imported' };
     }
-    const assets: AssetRecord[] = [];
     const usages: Array<ProviderUsage | undefined> = [];
     const regenerating = context.node.config.operation === 'regenerate';
     if (regenerating && (context.project.shots.length !== 1 || context.project.shots[0].id !== context.node.config.shotId || context.project.shots[0].locked)) throw new Error('重新生成须仅包含一个未锁定的目标镜头。');
-    for (const shot of context.project.shots) {
-      context.signal.throwIfAborted();
+    const execution = context.project.workflow.execution;
+    const concurrency = execution?.maxConcurrentShots ?? 1;
+    const modelLimit = execution?.modelLimits[context.model.id] ?? concurrency;
+    const assets = await mapMediaShots(context.project.shots, concurrency, context.signal, async (shot, _index, queueSignal, fail) => {
       const existing = context.assets.find(asset => asset.projectId === context.project.id && asset.shotId === shot.id && asset.kind === kind && asset.active);
-      if (!regenerating && shot.locked && existing && await validAsset(existing)) assets.push(existing);
-      else {
-        const instruction = regenerating && typeof context.node.config.instruction === 'string' ? context.node.config.instruction : '';
-        const generationShot = kind !== 'audio' && instruction ? { ...shot, visualPrompt: `${shot.visualPrompt}\n\n本次调整要求：${instruction}` } : shot;
-        assets.push(await generateMedia(context, directory, generationShot, kind, usage => usages.push(usage)));
-      }
-    }
+      if (!regenerating && shot.locked && existing && await validAsset(existing)) return existing;
+      const instruction = regenerating && typeof context.node.config.instruction === 'string' ? context.node.config.instruction : '';
+      const generationShot = kind !== 'audio' && instruction ? { ...shot, visualPrompt: `${shot.visualPrompt}\n\n本次调整要求：${instruction}` } : shot;
+      return requests.run(context.model!.id, modelLimit, context.queueSignal ? AbortSignal.any([queueSignal, context.queueSignal]) : queueSignal, async () => {
+        try { return await generateMedia(context, directory, generationShot, kind, usage => usages.push(usage)); }
+        catch (error) { context.onFailure?.(error); fail(error); throw error; }
+      });
+    });
     const usage = sumProviderUsage(usages);
     return { assets: assets as unknown as JsonValue, source: 'model', modelId: context.model.id, ...(usage ? { providerUsage: usage as unknown as JsonValue } : {}) };
   };
