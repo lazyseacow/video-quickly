@@ -159,7 +159,7 @@ test('recovers background generation, offers explicit resume, and retains the di
     expect(service.requests).toHaveLength(2);
     expect((await rpc<{ total: number }>(request, 'shot.candidates', { projectId: project.id, shotId: 'target-1' })).total).toBe(1);
     const remote = await rpc<ProjectDocument>(request, 'project.update', { projectId: project.id, revision: project.revision, patch: { shots: project.shots.map((shot, index) => index ? shot : { ...shot, narration: '另一视图的人工旁白' }) } });
-    await expect(page.locator('.project-heading-copy')).toContainText(`修订 ${remote.revision}`);
+    await expect(page.locator('.project-heading-copy')).toHaveAttribute('data-revision', String(remote.revision));
     await dialog.getByRole('button', { name: '应用所选候选', exact: true }).click();
     await expect(dialog.getByRole('alert')).toContainText('已修改'); expect(await savedProject(request, project.id)).toEqual(remote);
     service.fail(false); service.hold();
@@ -249,9 +249,9 @@ test('paginates durable candidate history without mounting every historical medi
     }
     await openProject(page, project.title); const dialog = await openCandidates(page);
     await expect(dialog.locator('.shot-regeneration__history-item')).toHaveCount(8);
-    await dialog.getByRole('button', { name: '加载更早候选', exact: true }).click();
+    await dialog.getByRole('button', { name: '加载更多候选', exact: true }).click();
     await expect(dialog.locator('.shot-regeneration__history-item')).toHaveCount(9);
-    await expect(dialog.getByRole('button', { name: '加载更早候选', exact: true })).toHaveCount(0);
+    await expect(dialog.getByRole('button', { name: '加载更多候选', exact: true })).toHaveCount(0);
     await dialog.locator('.shot-regeneration__history-item').last().click();
     await expect(dialog.locator('.shot-regeneration__comparison')).toContainText('候选旁白 1');
     expect(await dialog.locator('audio,video,img').count()).toBe(0);

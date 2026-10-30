@@ -14,7 +14,7 @@ async function fixture() {
   const database = openDatabase(directory), store = new DocumentStore(database), ledger = createCostLedger({ database, store });
   function charge(runId: string, nodeId: string, projectId = 'project', selected = model, images?: number) {
     const first = ledger.begin({ runId, projectId, nodeId, shotId: 'shot', operationId: `${runId}:${nodeId}`, model: selected, capability: 'image', requestMetrics: { source: 'request', images } });
-    return ledger.status(first.operationId, 'completed')!;
+    return ledger.status(first.operationId, 'completed', images === undefined ? undefined : { source: 'provider', inputTokens: images * 100, outputTokens: images * 10, cachedInputTokens: 0, cachedOutputTokens: 0 })!;
   }
   return { database, store, ledger, charge };
 }
@@ -31,7 +31,7 @@ it('paginates whole task archives with stable cursors even when old tasks receiv
     charge('newest', 'first', 'other-project', model, 1);
     charge('old', 'third', 'project', model, 4);
     const older = pageSchema.parse(ledger.dispatch('cost.tasks', { limit: 1, before: first.nextCursor }));
-    expect(older.items).toHaveLength(1); expect(older.items[0]).toMatchObject({ id: 'old', summary: { total: 3, currencies: [{ currency: 'USD', estimatedAmount: .9, estimatedRecords: 3 }] } });
+    expect(older.items).toHaveLength(1); expect(older.items[0]).toMatchObject({ id: 'old', summary: { total: 3, tokens: { inputTokens: 900, outputTokens: 90, cachedInputTokens: 0, cachedOutputTokens: 0 }, currencies: [] } });
     expect(older.nextCursor).toBeNull();
     expect(pageSchema.parse(ledger.dispatch('cost.tasks', { projectId: 'other-project' })).items.map(task => task.id)).toEqual(['newest']);
     expect(pageSchema.parse(ledger.dispatch('cost.tasks', { projectId: 'missing' })).items).toEqual([]);
@@ -40,16 +40,17 @@ it('paginates whole task archives with stable cursors even when old tasks receiv
 });
 
 it('keeps currency totals and unknown measurements separate, retaining confirmed zeroes', async () => {
-  const { database, ledger, charge } = await fixture();
+  const { database, ledger, store, charge } = await fixture();
   try {
     const dollar = charge('task', 'usd', 'project', model, 2);
-    charge('task', 'cny', 'project', { ...model, pricing: { currency: 'CNY', perImage: 3 } }, 1);
+    const yuan = charge('task', 'cny', 'project', { ...model, pricing: { currency: 'CNY', perImage: 3 } }, 1);
     charge('task', 'unknown');
     const zero = charge('task', 'zero', 'project', { ...model, pricing: { currency: 'USD', perImage: 0 } }, 4);
+    for (const [record, pricing, estimatedAmount] of [[dollar, model.pricing, .2], [yuan, { currency: 'CNY', perImage: 3 }, 3], [zero, { currency: 'USD', perImage: 0 }, 0]] as const) store.put('usage-record', record.id, { ...record, pricing, estimatedAmount });
     ledger.dispatch('cost.update', { id: dollar.id, revision: dollar.revision, actualAmount: 5, actualCurrency: 'CNY' });
     ledger.dispatch('cost.update', { id: zero.id, revision: zero.revision, actualAmount: 0, actualCurrency: 'USD' });
     const task = costTaskDetailSchema.parse(ledger.dispatch('cost.task.get', { runId: 'task' }));
-    expect(task.summary).toEqual({ total: 4, unknownEstimated: 1, unknownActual: 2, unknownSubmissions: 0, currencies: [
+    expect(task.summary).toMatchObject({ total: 4, unknownEstimated: 1, unknownActual: 2, unknownSubmissions: 0, currencies: [
       { currency: 'USD', estimatedAmount: .2, estimatedRecords: 2, actualAmount: 0, actualRecords: 1 },
       { currency: 'CNY', estimatedAmount: 3, estimatedRecords: 1, actualAmount: 5, actualRecords: 1 },
     ] });

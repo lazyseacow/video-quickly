@@ -50,6 +50,34 @@ function track(output: unknown): CaptionTrack {
   return output.captionTrack as CaptionTrack;
 }
 
+it.each([false, true])('uses native Doubao recognition with real source audio and provider word timestamps (legacy auth: %s)', async legacy => {
+  let calls = 0, received: Record<string, unknown> = {};
+  const baseUrl = await listen(async (request, response) => {
+    calls++; expect(request.url).toBe('/v1/auc/bigmodel/recognize/flash');
+    expect(request.headers['x-api-resource-id']).toBe('volc.bigasr.auc_turbo'); expect(request.headers['x-api-sequence']).toBe('-1');
+    if (legacy) { expect(request.headers['x-api-app-key']).toBe('fixture-app'); expect(request.headers['x-api-access-key']).toBe('fixture-auth'); }
+    else expect(request.headers['x-api-key']).toBe('fixture-auth');
+    let body = ''; for await (const chunk of request) body += chunk.toString(); received = JSON.parse(body);
+    response.setHeader('X-Api-Status-Code', '20000000');
+    response.end(JSON.stringify({ audio_info: { duration: 900 }, result: { utterances: [{ start_time: 100, end_time: 800, text: '真实语音', words: [{ start_time: 100, end_time: 300, text: '真实' }, { start_time: 400, end_time: 800, text: '语音' }] }] } }));
+  });
+  const context = await fixture(baseUrl); context.model = { ...context.model!, provider: 'volcengine-asr', connectionType: 'audio', model: 'volc.bigasr.auc_turbo', parameters: { timestampGranularity: 'word', ...(legacy ? { appId: 'fixture-app' } : {}) } };
+  const output = await transcribeAudio(context);
+  expect(Buffer.from((received.audio as { data: string }).data, 'base64')).toEqual(await readFile(context.assets[0].path));
+  expect(received.request).toEqual({ model_name: 'bigmodel', show_utterances: true });
+  expect(track(output)).toMatchObject({ sourceAssetId: context.assets[0].id, granularity: 'word', cues: [{ startUs: 100_000, endUs: 300_000, text: '真实' }, { startUs: 400_000, endUs: 800_000, text: '语音' }] });
+  expect(output).toMatchObject({ providerUsage: { source: 'provider', audioSeconds: .9 } });
+  expect(await transcribeAudio(context)).toEqual(output); expect(calls).toBe(1);
+});
+
+it('rejects native recognition failure even with HTTP 200 and does not resubmit an ambiguous operation', async () => {
+  let calls = 0;
+  const baseUrl = await listen(async (request, response) => { request.resume(); calls++; response.setHeader('X-Api-Status-Code', '45000001'); response.end('{}'); });
+  const context = await fixture(baseUrl); context.model = { ...context.model!, provider: 'volcengine-asr', model: 'volc.bigasr.auc_turbo', parameters: {} };
+  await expect(transcribeAudio(context)).rejects.toThrow('45000001');
+  await expect(transcribeAudio(context)).rejects.toThrow('结果尚未确认'); expect(calls).toBe(1);
+});
+
 it('posts actual multipart audio and preserves provider segment timestamps with a completed receipt', async () => {
   let calls = 0, form: FormData | undefined, authorization: string | undefined, operation: string | undefined;
   const baseUrl = await listen(async (request, response) => {

@@ -1,0 +1,39 @@
+.dialog.settings-dialog { width: min(1040px, calc(100vw - 32px)); }
+.settings-dialog > .dialog__surface { height: min(760px, calc(100dvh - 48px)); }
+.settings-dialog .dialog__surface > form { flex: 1; min-height: 0; }
+.dialog.settings-dialog .dialog__body { flex: 1; min-height: 0; padding: 0; overflow: hidden; }
+.settings-sections { display: grid; grid-template-columns: 156px minmax(0, 1fr); min-width: 0; height: 100%; min-height: 0; }
+.settings-sections--preview { grid-template-columns: 144px minmax(0, 1fr) minmax(250px, .85fr); }
+.settings-sections__nav { display: flex; flex-direction: column; align-items: stretch; gap: var(--space-1); padding: var(--space-4) var(--space-3); border-right: 1px solid var(--border); overflow-y: auto; }
+.settings-sections__nav > button { display: flex; align-items: center; gap: var(--space-2); width: 100%; min-height: var(--control-height); padding: var(--space-2) var(--space-3); border: 0; border-radius: var(--radius-small); background: transparent; color: var(--text-secondary); text-align: left; font-size: var(--text-size-label); font-weight: var(--font-weight-regular); }
+.settings-sections__nav > button > svg { flex-shrink: 0; }
+.settings-sections__nav > button:hover { background: var(--surface-hover); color: var(--text); }
+.settings-sections__nav > button[aria-selected="true"] { background: var(--surface-selected); color: var(--text); }
+.settings-sections__content { min-width: 0; min-height: 0; padding: var(--space-6); overflow-y: auto; overscroll-behavior: contain; }
+.settings-sections [role="tabpanel"][hidden] { display: none; }
+.settings-sections [role="tabpanel"] > h3 { margin-bottom: var(--space-5); font-size: var(--text-size-body); font-weight: var(--font-weight-semibold); }
+.settings-sections__notice { margin-top: var(--space-4); }
+.settings-sections__notice:empty { display: none; }
+.settings-sections__notice .notice:last-child { margin-bottom: 0; }
+.settings-sections__preview { min-width: 0; min-height: 0; padding: var(--space-6); border-left: 1px solid var(--border); overflow-y: auto; }
+.settings-sections__preview > h3 { margin: 0 0 var(--space-4); font-size: var(--text-size-label); font-weight: var(--font-weight-medium); }
+.settings-sections__preview-toggle { display: none; }
+.settings-sections .series-settings-editor__group { margin: 0; padding: 0; border: 0; }
+.settings-sections .series-settings-editor__group > legend { margin-bottom: var(--space-5); }
+.settings-sections .model-parameters fieldset:first-child { margin-top: 0; padding-top: 0; border: 0; }
+.settings-sections .model-parameters legend { margin-bottom: var(--space-5); }
+.character-reference-preview { display: grid; gap: var(--space-3); }
+.character-reference-preview > img { display: block; width: 100%; max-height: 220px; object-fit: contain; border-radius: var(--radius-small); outline: 1px solid var(--image-outline); outline-offset: -1px; }
+.character-reference-preview .empty-state { padding: var(--space-8) var(--space-3); }
+@media (max-width: 800px) {
+  .settings-sections, .settings-sections--preview { display: flex; flex-direction: column; }
+  .settings-sections__nav { flex: 0 0 auto; flex-direction: row; padding: var(--space-2) var(--space-4); border: 0; border-bottom: 1px solid var(--border); overflow-x: auto; }
+  .settings-sections__nav > button { flex: 0 0 auto; width: auto; white-space: nowrap; }
+  .settings-sections__content { flex: 1; padding: var(--space-4); }
+  .settings-sections__preview { flex: 0 0 auto; padding: 0 var(--space-4); border: 0; border-top: 1px solid var(--border); max-height: 230px; }
+  .settings-sections__preview > h3 { display: none; }
+  .settings-sections__preview-toggle { display: flex; align-items: center; justify-content: space-between; width: 100%; min-height: var(--control-height); padding: 0; color: var(--text-secondary); background: transparent; border: 0; font-size: var(--text-size-label); }
+  .settings-sections__preview:not(.settings-sections__preview--open) .settings-sections__preview-body { display: none; }
+  .settings-sections__preview--open .settings-sections__preview-toggle > svg { transform: rotate(180deg); }
+  .settings-sections__preview-body { max-width: 320px; margin: 0 auto var(--space-4); }
+}

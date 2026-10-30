@@ -43,6 +43,7 @@ async function expectHealthy(page: Page, errors: string[]) {
 async function downloadSrt(page: Page) {
   await page.getByRole('button', { name: '导出', exact: true }).click();
   const dialog = page.getByRole('dialog', { name: '导出视频', exact: true });
+  await dialog.getByRole('tab', { name: '其他导出', exact: true }).click();
   const pending = page.waitForEvent('download');
   await dialog.getByRole('button', { name: '导出字幕', exact: true }).click();
   const download = await pending; const path = await download.path();
@@ -106,7 +107,7 @@ test('adds, sorts, splits and deletes caption cues locally before applying one e
   await openProject(page, project.title);
   const dialog = await editor(page);
   await expect(dialog.locator('.caption-editor__cue')).toHaveCount(0);
-  await expect(dialog.getByRole('button', { name: '识别音频并对齐', exact: true })).toBeDisabled();
+  await expect(dialog.getByRole('button', { name: '识别并对齐', exact: true })).toBeDisabled();
   await dialog.getByRole('button', { name: '添加字幕', exact: true }).click();
   await expect(dialog.getByRole('button', { name: '应用字幕', exact: true })).toBeDisabled();
   await dialog.getByLabel('字幕 1 文字', { exact: true }).fill('新增字幕');
@@ -175,7 +176,7 @@ test('projects split captions, preserves hidden source cues during local edits, 
   await page.getByRole('button', { name: '撤销', exact: true }).click();
   await expect.poll(async () => (await savedProject(request, project.id)).shots[1].sourceInUs).toBe(1_000_000);
   dialog = await editor(page);
-  await dialog.getByRole('button', { name: '关闭此镜头字幕', exact: true }).click();
+  await dialog.getByRole('button', { name: '关闭字幕', exact: true }).click();
   await dialog.getByRole('button', { name: '应用字幕', exact: true }).click();
   await expect.poll(async () => (await savedProject(request, project.id)).shots[1].captionTrack?.cues).toEqual([]);
   expect(await downloadSrt(page)).not.toContain('后半句');
@@ -215,10 +216,10 @@ test('uses actual timestamped ASR candidates without auto-applying them and reje
     await openProject(page, project.title);
     let dialog = await editor(page);
     await dialog.getByLabel('语音识别模型', { exact: true }).selectOption(model.id);
-    await dialog.getByRole('button', { name: '识别音频并对齐', exact: true }).click();
-    await expect(dialog.getByRole('button', { name: '使用识别候选', exact: true })).toBeVisible();
+    await dialog.getByRole('button', { name: '识别并对齐', exact: true }).click();
+    await expect(dialog.getByRole('button', { name: '使用候选', exact: true })).toBeVisible();
     expect((await savedProject(request, project.id)).shots[0].captionTrack).toBeUndefined();
-    await dialog.getByRole('button', { name: '使用识别候选', exact: true }).click();
+    await dialog.getByRole('button', { name: '使用候选', exact: true }).click();
     await expect(dialog.getByLabel('字幕 1 入点（秒）', { exact: true })).toHaveValue('0.2');
     await expect(dialog.getByLabel('字幕 2 文字', { exact: true })).toHaveValue('识别的第二句。');
     await dialog.getByRole('button', { name: '应用字幕', exact: true }).click();
@@ -230,9 +231,9 @@ test('uses actual timestamped ASR candidates without auto-applying them and reje
     await page.getByRole('button', { name: '重做', exact: true }).click();
     await expect.poll(async () => (await savedProject(request, project.id)).shots[0].captionTrack).toEqual(saved.shots[0].captionTrack);
     textOnly = true; dialog = await editor(page);
-    await dialog.getByRole('button', { name: '识别音频并对齐', exact: true }).click();
+    await dialog.getByRole('button', { name: '识别并对齐', exact: true }).click();
     await expect(dialog.getByRole('alert')).toContainText('没有返回语音时间戳');
-    await expect(dialog.getByRole('button', { name: '使用识别候选', exact: true })).toHaveCount(0);
+    await expect(dialog.getByRole('button', { name: '使用候选', exact: true })).toHaveCount(0);
     expect((await savedProject(request, project.id)).shots[0].captionTrack).toEqual(saved.shots[0].captionTrack);
     expect(requests).toHaveLength(2);
     expect(requests[0].path).toBe('/v1/audio/transcriptions');

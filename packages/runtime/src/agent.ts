@@ -4,14 +4,16 @@ import { extname, join, resolve, relative } from 'node:path';
 import { createDeepAgent, type FileData } from 'deepagents';
 import { createMiddleware, tool } from 'langchain';
 import { ChatOpenAI } from '@langchain/openai';
+import { ChatAnthropic } from '@langchain/anthropic';
 import { isAIMessage, isToolMessage, mapStoredMessageToChatMessage, type StoredMessage } from '@langchain/core/messages';
 import { SqliteSaver } from '@langchain/langgraph-checkpoint-sqlite';
 import { z } from 'zod';
 import type Database from 'better-sqlite3';
-import { providerUsageSchema, requestModelParameters, type ModelProfile, type ProjectDocument, type SkillPackage } from '@video-quickly/contracts';
+import { type ModelProfile, type ProjectDocument, type ProviderUsage, type SkillPackage } from '@video-quickly/contracts';
 import { ActivityJournal, fingerprint, SimulatedProcessExit, type ActivityHooks } from './activities.js';
 import type { createCostLedger } from './costs.js';
 import { connectMcp, type McpServer } from './mcp.js';
+import { modelEndpoint, readModelResponse, textProviderUsage, textRequestParameters } from './providers.js';
 
 interface AgentContext {
   database: Database.Database;
@@ -42,6 +44,7 @@ export async function executeDeepAgent(context: AgentContext): Promise<string> {
   const connections: Awaited<ReturnType<typeof connectMcp>>[] = [];
   const externalTools = new Set<string>();
   const timestamp = project.updatedAt;
+  let responseUsage: ProviderUsage | undefined;
   const files: Record<string, FileData> = {};
   try {
   for (const skill of skills) {
@@ -90,10 +93,10 @@ export async function executeDeepAgent(context: AgentContext): Promise<string> {
       let result: unknown;
       try {
         result = await journal.execute(runId, id, input, 'external', async () => {
+          responseUsage = undefined;
           const response = await handler(request);
-          const measured = response.usage_metadata;
-          const usage = measured ? providerUsageSchema.safeParse({ source: 'provider', inputTokens: measured.input_tokens, outputTokens: measured.output_tokens, totalTokens: measured.total_tokens, cachedInputTokens: measured.input_token_details?.cache_read }) : undefined;
-          context.costs?.status(operationId, 'completed', usage?.success ? usage.data : undefined);
+          const usage = model.textProtocol === 'responses' ? responseUsage : textProviderUsage(response.response_metadata, false);
+          context.costs?.status(operationId, 'completed', usage);
           return response.toDict();
         });
       } catch (error) {
@@ -119,9 +122,29 @@ export async function executeDeepAgent(context: AgentContext): Promise<string> {
     },
   });
   const checkpointer = new SqliteSaver(database);
-  const { temperature, max_tokens: maximumTokens, ...modelKwargs } = requestModelParameters(model, 'text');
+  const { temperature, max_tokens: maximumTokens, max_output_tokens: responseMaximum, ...modelKwargs } = textRequestParameters(model);
+  const nativeModel = model.textProtocol === 'messages'
+    ? new ChatAnthropic({ model: model.model, apiKey: secret ?? 'local-service', maxRetries: 0, maxTokens: typeof maximumTokens === 'number' ? maximumTokens : 4096, temperature: typeof temperature === 'number' ? temperature : undefined, invocationKwargs: modelKwargs, clientOptions: {
+        baseURL: new URL(model.baseUrl).origin, timeout: 120_000,
+        // The saved service address already includes its API prefix, including proxies.
+        fetch: (input, init) => {
+          const request = input instanceof Request ? input : undefined;
+          const url = new URL(request ? request.url : input.toString());
+          const target = modelEndpoint(model.baseUrl, url.pathname.replace(/^\/v1\//, ''));
+          return fetch(request ? new Request(target, request) : target, init);
+        },
+      } })
+    : new ChatOpenAI({ model: model.model, apiKey: secret ?? 'local-service', maxRetries: 0, timeout: 120_000, configuration: { baseURL: model.baseUrl, ...(model.textProtocol === 'responses' ? { fetch: async (input: RequestInfo | URL, init?: RequestInit) => {
+        const response = await fetch(input, init);
+        if (response.ok) {
+          // Preserve raw counters: SDK-normalized usage fills missing counters with zero.
+          const data = await readModelResponse(response.clone());
+          if (data && typeof data === 'object' && !Array.isArray(data)) responseUsage = textProviderUsage(data as Record<string, unknown>);
+        }
+        return response;
+      } } : {}) }, useResponsesApi: model.textProtocol === 'responses', temperature: typeof temperature === 'number' ? temperature : undefined, maxTokens: typeof (maximumTokens ?? responseMaximum) === 'number' ? Number(maximumTokens ?? responseMaximum) : undefined, modelKwargs: { ...(model.textProtocol === 'responses' ? { store: false } : {}), ...modelKwargs } });
   const agent = createDeepAgent({
-    model: new ChatOpenAI({ model: model.model, apiKey: secret ?? 'local-service', maxRetries: 0, timeout: 120_000, configuration: { baseURL: model.baseUrl }, temperature: typeof temperature === 'number' ? temperature : 0.7, maxTokens: typeof maximumTokens === 'number' ? maximumTokens : undefined, modelKwargs }),
+    model: nativeModel,
     tools, middleware: [invocationLedger], checkpointer, skills: skills.length ? ['/skills/'] : [],
     permissions: [{ operations: ['write'], paths: ['/skills/**'], mode: 'deny' }],
     systemPrompt: '你是视频制作助手。读取本次项目快照与已选择 Skill，输出供人工审阅的结果。工作区文件为本次运行的虚拟上下文。事实未核验时保留待核验标记。',
@@ -130,8 +153,10 @@ export async function executeDeepAgent(context: AgentContext): Promise<string> {
   const previous = await checkpointer.getTuple(config);
   const result = await agent.invoke(previous ? null : { messages: [{ role: 'user', content: context.prompt }], files }, config);
   const message = result.messages.at(-1);
-  if (!message || typeof message.content !== 'string') throw new Error('Agent 没有返回可用文本。');
-  return message.content;
+  if (!message) throw new Error('Agent 没有返回可用文本。');
+  const text = typeof message.content === 'string' ? message.content : message.content.flatMap(block => block.type === 'text' && typeof block.text === 'string' ? [block.text] : []).join('\n');
+  if (!text.trim()) throw new Error('Agent 没有返回可用文本。');
+  return text;
   } finally { await Promise.allSettled(connections.map(connection => connection.close())); }
 }
 

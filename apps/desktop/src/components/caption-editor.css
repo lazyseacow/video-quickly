@@ -3,7 +3,7 @@
 .caption-editor__summary > span { color: var(--text-secondary); font-size: 11px; font-variant-numeric: tabular-nums; }
 .caption-editor__actions { display: flex; flex-wrap: wrap; gap: 8px; margin: 14px 0; }
 .caption-editor__cues { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; margin-bottom: 12px; }
-.caption-editor__cue { min-width: 0; padding: 12px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface); }
+.caption-editor__cue { min-width: 0; padding: 12px; border: 1px solid var(--border); border-radius: var(--radius-small); background: var(--surface); }
 .caption-editor__cue-heading { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: -6px -6px 6px 0; }
 .caption-editor__cue-heading > span { color: var(--text-subtle); font-size: 11px; font-variant-numeric: tabular-nums; }
 .caption-editor__cue-heading > div { display: flex; gap: 2px; }
@@ -17,7 +17,7 @@
 .caption-editor__recognition-controls > .field { flex: 1; min-width: 180px; margin-bottom: 0; }
 .caption-editor__recognition-controls > .button { flex-shrink: 0; }
 .caption-editor__recognition > .tiny-meta { margin-top: 10px; }
-.caption-editor__candidate { margin-top: 12px; padding: 12px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface-raised); }
+.caption-editor__candidate { margin-top: 12px; padding: 12px; border: 1px solid var(--border); border-radius: var(--radius-small); background: var(--surface-raised); }
 .caption-editor__candidate > p { margin: 0 0 8px; font-size: 12px; line-height: 1.5; overflow-wrap: anywhere; }
 .caption-editor__candidate > p + p { color: var(--text-secondary); }
 .caption-editor .dialog__body > .notice:last-child { margin-top: 14px; }

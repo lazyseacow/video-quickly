@@ -49,7 +49,7 @@ it('uses only the selected shot character, keeps the candidate snapshot and reje
   expect(requests[0].body.prompt).toContain(profiles[0].description); expect(requests[0].body.prompt).not.toContain(profiles[1].description); expect(requests[0].body.images).toEqual([{ image_url: `data:image/png;base64,${png.toString('base64')}` }]);
   const [candidate] = await candidates(runtime, project); expect(candidate.characters).toEqual([profiles[0]]);
   const costs = await runtime.dispatch('cost.list', { runId: run.id }) as { items: UsageRecord[] };
-  expect(costs.items[0]).toMatchObject({ status: 'completed', requestMetrics: { source: 'request', images: 1 }, estimatedAmount: .4, estimateBasis: 'request' }); expect(costs.items[0].actualAmount).toBeUndefined();
+  expect(costs.items[0]).toMatchObject({ status: 'completed', requestMetrics: { source: 'request', images: 1 } }); expect(costs.items[0].actualAmount).toBeUndefined(); expect(costs.items[0].estimatedAmount).toBeUndefined();
   await runtime.dispatch('character.save', { character: { ...profiles[0], description: '更新过的角色设定' } });
   await expect(runtime.dispatch('shot.candidate.apply', { projectId: project.id, candidateId: candidate.id, revision: project.revision })).rejects.toThrow('角色设定');
   await expect(runtime.dispatch('asset.delete', { assetId: assets[0].id })).rejects.toThrow('正在使用');

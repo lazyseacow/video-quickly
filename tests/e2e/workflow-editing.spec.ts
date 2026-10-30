@@ -31,6 +31,45 @@ async function connect(page: Page, from: string, to: string) {
   await page.mouse.move(start.x, start.y); await page.mouse.down(); await page.mouse.move(end.x, end.y, { steps: 8 }); await page.mouse.up();
 }
 
+for (const width of [1536, 600]) test(`pans from blank canvas with the left button while preserving Shift selection and zoom at ${width}px`, async ({ page, request }) => {
+  await page.setViewportSize({ width: 1536, height: 960 });
+  const errors: string[] = []; page.on('pageerror', error => errors.push(error.message));
+  const project = await fixture(request, '画布空白拖动验收'); await open(page, project.title);
+  await page.setViewportSize({ width, height: 960 });
+  await page.locator('.react-flow__pane').scrollIntoViewIfNeeded();
+  await expect(node(page, 'b')).toBeVisible();
+  const viewport = () => page.locator('.react-flow__viewport').evaluate(element => { const matrix = new DOMMatrixReadOnly(getComputedStyle(element).transform); return { x: matrix.e, y: matrix.f, zoom: matrix.a }; });
+  if (width === 600) { await page.getByRole('button', { name: '适应全部步骤', exact: true }).click(); await expect.poll(async () => (await viewport()).zoom).toBeLessThan(1); }
+  const pane = await page.locator('.react-flow__pane').boundingBox(); if (!pane) throw new Error('流程画布不可见');
+  const start = { x: pane.x + pane.width / 2, y: pane.y + 100 };
+  const before = await viewport();
+  await page.mouse.move(start.x, start.y); await page.mouse.down();
+  await page.mouse.move(start.x + 90, start.y + 60, { steps: 8 }); await page.mouse.up();
+  await expect.poll(async () => Math.round((await viewport()).x - before.x)).toBe(90);
+  await expect.poll(async () => Math.round((await viewport()).y - before.y)).toBe(60);
+  expect((await viewport()).zoom).toBeCloseTo(before.zoom, 5);
+  await expect(page.locator('.react-flow__selection')).toHaveCount(0);
+  await expect(page.getByRole('button', { name: '保存流程', exact: true })).toBeDisabled();
+  await page.screenshot({ path: test.info().outputPath('blank-canvas-panned.png') });
+
+  const first = await node(page, 'a').boundingBox(), second = await node(page, 'b').boundingBox();
+  if (!first || !second) throw new Error('流程步骤不可见');
+  const selectionStart = { x: Math.min(first.x + first.width / 2, second.x + second.width / 2), y: Math.min(first.y, second.y) - 12 };
+  const selectionEnd = { x: Math.max(first.x + first.width / 2, second.x + second.width / 2), y: Math.max(first.y + first.height, second.y + second.height) + 12 };
+  const beforeSelection = await viewport();
+  await page.keyboard.down('Shift'); await page.mouse.move(selectionStart.x, selectionStart.y); await page.mouse.down();
+  await page.mouse.move(selectionEnd.x, selectionEnd.y, { steps: 8 }); await page.mouse.up(); await page.keyboard.up('Shift');
+  await expect(page.locator('.react-flow__node.selected')).toHaveCount(2);
+  expect((await viewport()).zoom).toBeCloseTo(beforeSelection.zoom, 5);
+  await expect(page.getByRole('button', { name: '保存流程', exact: true })).toBeDisabled();
+  expect((await current(request, project.id)).workflow).toEqual(project.workflow);
+
+  await page.mouse.move(start.x, start.y); await page.keyboard.down('Control'); await page.mouse.wheel(0, 120); await page.keyboard.up('Control');
+  await expect.poll(async () => (await viewport()).zoom).toBeLessThan(before.zoom);
+  await expect(page.locator('vite-error-overlay')).toHaveCount(0);
+  expect(errors).toEqual([]);
+});
+
 test('recovers unfinished graph input without saving or starting an agent, then commits the corrected graph', async ({ page, request }) => {
   const errors: string[] = []; page.on('pageerror', error => errors.push(error.message));
   const project = await fixture(request, '流程未完成草稿恢复'); await open(page, project.title);
@@ -131,7 +170,7 @@ test('shares step-setting history with the graph and preserves input when the sa
   const project = await fixture(request, '步骤设置统一历史'); await open(page, project.title, false);
   await page.getByRole('tab', { name: '制作步骤', exact: true }).click(); await page.locator('.step-list').getByRole('button').filter({ hasText: '简报 A' }).click();
   const dialog = page.getByRole('dialog', { name: '简报 A', exact: true });
-  await dialog.getByLabel('提示词与补充要求').fill('人工设置的提示词'); await dialog.getByRole('button', { name: '保存设置', exact: true }).click();
+  await dialog.getByLabel('提示词与补充要求').fill('人工设置的提示词'); await dialog.getByRole('button', { name: '保存', exact: true }).click();
   await expect(dialog).toHaveCount(0); await history(page, '撤销');
   await expect.poll(async () => (await current(request, project.id)).workflow.nodes[0].prompt).toBe('');
   await history(page, '重做');
@@ -139,8 +178,8 @@ test('shares step-setting history with the graph and preserves input when the sa
   await page.locator('.step-list').getByRole('button').filter({ hasText: '简报 A' }).click(); await dialog.getByLabel('提示词与补充要求').fill('尚未应用的输入');
   const saved = await current(request, project.id);
   const remote = await rpc<ProjectDocument>(request, 'project.update', { projectId: project.id, revision: saved.revision, patch: { workflow: { ...saved.workflow, nodes: saved.workflow.nodes.map(node => node.id === 'a' ? { ...node, prompt: '另一视图的提示词' } : node) } } });
-  await expect(page.getByText(`修订 ${remote.revision}`, { exact: true })).toBeVisible();
-  await dialog.getByRole('button', { name: '保存设置', exact: true }).click();
+  await expect(page.locator('.project-heading-copy')).toHaveAttribute('data-revision', String(remote.revision));
+  await dialog.getByRole('button', { name: '保存', exact: true }).click();
   await expect(dialog.getByRole('alert')).toContainText('步骤已在其他视图更新');
   await expect(dialog.getByLabel('提示词与补充要求')).toHaveValue('尚未应用的输入');
   expect((await current(request, project.id)).workflow.nodes[0].prompt).toBe('另一视图的提示词');
@@ -161,13 +200,13 @@ test('keeps newer step input after a committed save and requires confirmation be
     } else await route.continue();
   });
   try {
-    await dialog.getByRole('button', { name: '执行这一步', exact: true }).click(); await committed;
+    await dialog.getByRole('button', { name: '执行', exact: true }).click(); await committed;
     await prompt.fill('等待保存期间补充的新要求'); release();
     await expect(dialog.getByRole('alert')).toContainText('保存期间有新修改');
     await expect(prompt).toHaveValue('等待保存期间补充的新要求');
     expect((await current(request, project.id)).workflow.nodes[0].prompt).toBe('先提交的步骤要求');
     expect((await rpc<{ items: unknown[] }>(request, 'run.list', { projectId: project.id })).items).toEqual([]);
-    await dialog.getByRole('button', { name: '保存设置', exact: true }).click(); await expect(dialog).toHaveCount(0);
+    await dialog.getByRole('button', { name: '保存', exact: true }).click(); await expect(dialog).toHaveCount(0);
     expect((await current(request, project.id)).workflow.nodes[0].prompt).toBe('等待保存期间补充的新要求');
     await history(page, '撤销'); await expect.poll(async () => (await current(request, project.id)).workflow.nodes[0].prompt).toBe('先提交的步骤要求');
     expect((await rpc<{ items: unknown[] }>(request, 'run.list', { projectId: project.id })).items).toEqual([]);

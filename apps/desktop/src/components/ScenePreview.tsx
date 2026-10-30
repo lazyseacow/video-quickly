@@ -5,6 +5,7 @@ import { effectiveCaptionStyle, type AssetRecord, type ProjectDocument, type Sho
 import { getAssetUrl } from '../lib/client';
 import { CircleAlert, LoaderCircle, RefreshCw, Upload } from 'lucide-react';
 import { createPreviewVideoController, loadPreviewImage, previewAssetKey } from './preview-media';
+import { Button } from './Primitives';
 import { videoThumbnails, type ThumbnailFrame } from './preview-thumbnails';
 import { useThumbnailVisibility } from './thumbnail-visibility';
 
@@ -160,5 +161,5 @@ export const ScenePreview = memo(function ScenePreview({ project, shot, shotInde
     };
   }, [requestRender]);
 
-  return <span ref={container} className={`scene-preview ${thumbnail ? 'scene-preview--thumbnail' : ''}`} aria-busy={loading}><canvas ref={canvas} className={className} role="img" aria-label={`${shot.title} · 镜头预览`} style={error || loading ? { visibility: 'hidden' } : undefined} />{(error || loading) && <span className="scene-preview__state" role={error ? 'alert' : 'status'}>{error ? <CircleAlert size={thumbnail ? 18 : 27} /> : <LoaderCircle className="spin" size={thumbnail ? 18 : 27} />}<strong>{error || '正在读取素材…'}</strong>{error && !thumbnail && <><span>检查源文件，或为这个镜头重新导入素材。</span><span className="scene-preview__actions"><button type="button" onClick={() => setRetry(value => value + 1)}><RefreshCw size={15} />重新读取</button>{onRepair && <button type="button" onClick={onRepair}><Upload size={15} />重新导入</button>}</span></>}</span>}</span>;
+  return <span ref={container} className={`scene-preview ${thumbnail ? 'scene-preview--thumbnail' : ''}`} aria-busy={loading}><canvas ref={canvas} className={className} role="img" aria-label={`${shot.title} · 镜头预览`} style={error || loading ? { visibility: 'hidden' } : undefined} />{(error || loading) && <span className="scene-preview__state" role={error ? 'alert' : 'status'}>{error ? <CircleAlert size={thumbnail ? 18 : 27} /> : <LoaderCircle className="spin" size={thumbnail ? 18 : 27} />}<strong>{error || '正在读取素材…'}</strong>{error && !thumbnail && <><span>检查源文件，或为这个镜头重新导入素材。</span><span className="scene-preview__actions"><Button onClick={() => setRetry(value => value + 1)}><RefreshCw size={14} />重新读取</Button>{onRepair && <Button onClick={onRepair}><Upload size={14} />重新导入</Button>}</span></>}</span>}</span>;
 });

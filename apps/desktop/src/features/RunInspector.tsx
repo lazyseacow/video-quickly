@@ -39,7 +39,7 @@ export default function RunInspector({ runId, version, onClose, onChanged, onOpe
   }
   return <Dialog title="制作步骤详情" onClose={onClose} className="dialog--wide run-inspector">
     <div className="dialog__body run-inspector__body">
-      {inspection.error && <Notice kind="error">{inspection.error}<Button onClick={inspection.refresh}>重试读取详情</Button></Notice>}
+      {inspection.error && <Notice kind="error">{inspection.error}<Button aria-label="重试读取详情" onClick={inspection.refresh}>重试</Button></Notice>}
       {error && <Notice kind="error">{error}</Notice>}
       {!data && !inspection.error && <p role="status">正在读取制作步骤…</p>}
       {data && <>
@@ -51,14 +51,14 @@ export default function RunInspector({ runId, version, onClose, onChanged, onOpe
           {selected && <StepDetail key={`${runId}:${selected.id}`} inspection={data} step={selected} version={version} onOpenOutput={onOpenOutput} />}
         </div> : <RunLog runId={runId} version={version} />}
       </>}
-      {diagnostic && <div className="run-inspector__diagnostic" role="status"><span>诊断已导出 · {diagnostic.bytes.toLocaleString()} 字节</span><code>{diagnostic.path}</code>{nativeDesktop ? <Button onClick={() => void revealFile(diagnostic.path).catch(error => setError(String(error)))}><FolderOpen size={16} />打开所在文件夹</Button> : <a className="button" href={diagnostic.url} download>下载诊断文件</a>}</div>}
+      {diagnostic && <div className="run-inspector__diagnostic" role="status"><span>诊断已导出 · {diagnostic.bytes.toLocaleString()} 字节</span><code>{diagnostic.path}</code>{nativeDesktop ? <Button aria-label="打开文件夹" onClick={() => void revealFile(diagnostic.path).catch(error => setError(String(error)))}><FolderOpen size={16} />打开文件夹</Button> : <a className="button" href={diagnostic.url} download>下载诊断文件</a>}</div>}
     </div>
     <div className="dialog__footer run-inspector__footer">
       <Button busy={pending === 'run.diagnostics'} disabled={Boolean(pending) || !data} onClick={() => void perform('run.diagnostics')}><Download size={16} />导出诊断</Button>
-      <Button busy={inspection.busy} disabled={Boolean(pending)} onClick={inspection.refresh}><RefreshCw size={16} />刷新详情</Button>
+      <Button aria-label="刷新详情" busy={inspection.busy} disabled={Boolean(pending)} onClick={inspection.refresh}><RefreshCw size={16} />刷新</Button>
       {data?.recovery.review && <><Button disabled={Boolean(pending)} onClick={() => void perform('run.review', { approved: false })}>停止并修改</Button><Button variant="primary" busy={pending === 'run.review'} disabled={Boolean(pending)} onClick={() => void perform('run.review', { approved: true })}>通过审阅并继续</Button></>}
-      {data?.recovery.resume && <Button variant="primary" busy={pending === 'run.resume'} disabled={Boolean(pending)} onClick={() => void perform('run.resume')}>继续执行</Button>}
-      {data?.recovery.cancel && <Button disabled={Boolean(pending)} onClick={() => void perform('run.cancel')}>停止制作</Button>}
+      {data?.recovery.resume && <Button aria-label="继续执行" variant="primary" busy={pending === 'run.resume'} disabled={Boolean(pending)} onClick={() => void perform('run.resume')}>继续</Button>}
+      {data?.recovery.cancel && <Button aria-label="停止制作" disabled={Boolean(pending)} onClick={() => void perform('run.cancel')}>停止</Button>}
       {data?.recovery.restart && <Button disabled={Boolean(pending)} onClick={() => { if (data.run.selection) onRestart(data.run); else void perform('run.start', { projectId: data.run.projectId, parentRunId: runId }); }}>重新制作</Button>}
       <Button onClick={onClose}>关闭</Button>
     </div>
@@ -83,7 +83,7 @@ function StepDetail({ inspection, step, version, onOpenOutput }: { inspection: R
       event.preventDefault(); setTab(tabs[next].id); event.currentTarget.parentElement?.querySelectorAll<HTMLButtonElement>('[role="tab"]')[next]?.focus();
     }}>{item.label}</button>)}</div>
     <div id="step-detail-panel" role="tabpanel" aria-labelledby={`step-tab-${tab}`} className="run-inspector__panel">
-      {tab === 'status' && <><p className="run-inspector__reason" role={step.error ? 'alert' : 'status'}>{step.reason}</p>{selected.error && <Notice kind="error">{selected.error}<Button onClick={selected.refresh}>重试读取配置</Button></Notice>}
+      {tab === 'status' && <><p className="run-inspector__reason" role={step.error ? 'alert' : 'status'}>{step.reason}</p>{selected.error && <Notice kind="error">{selected.error}<Button aria-label="重试读取配置" onClick={selected.refresh}>重试</Button></Notice>}
         <dl className="run-inspector__facts"><div><dt>步骤 ID</dt><dd>{step.id}</dd></div><div><dt>实际活动</dt><dd>{step.activityCount} 条</dd></div><div><dt>执行输入</dt><dd>{step.inputAvailable ? '已保存' : '尚未记录'}</dd></div><div><dt>步骤产物</dt><dd>{step.outputAvailable ? '已保存' : '尚未保存'}</dd></div>{step.startedAt && <div><dt>开始时间</dt><dd>{date(step.startedAt)}</dd></div>}{step.completedAt && <div><dt>完成时间</dt><dd>{date(step.completedAt)}</dd></div>}
           {detail && <><div><dt>模型快照</dt><dd>{detail.model ? `${detail.model.name} · ${detail.model.model}` : '未绑定模型'}</dd></div><div><dt>上游步骤</dt><dd>{detail.dependencies.map(id => inspection.steps.find(step => step.id === id)?.label ?? id).join('、') || '无'}</dd></div><div><dt>Skill 快照</dt><dd>{detail.skills.map(skill => `${skill.name} v${skill.version}${skill.enabled ? '' : '（停用）'}`).join('、') || '无'}</dd></div><div><dt>人工审阅</dt><dd>{detail.node.requiresReview ? '需要' : '无需'}</dd></div></>}
         </dl>{detail && <details className="run-inspector__raw"><summary>冻结步骤配置</summary><pre>{JSON.stringify(detail.node, null, 2)}</pre></details>}</>}
@@ -96,7 +96,7 @@ function StepDetail({ inspection, step, version, onOpenOutput }: { inspection: R
 
 function StepInput({ runId, nodeId, version }: { runId: string; nodeId: string; version: number }) {
   const input = useRuntimeRead('run.step.payload', { runId, nodeId, kind: 'input' }, version, runStepPayloadSchema);
-  return <>{input.error && <Notice kind="error">{input.error}<Button onClick={input.refresh}>重试读取输入</Button></Notice>}{!input.data && !input.error && <p role="status">正在读取执行输入…</p>}{input.data && <>{!input.data.available ? <p>这个步骤尚未记录执行输入。</p> : <><p className="run-inspector__muted">这里保存步骤开始时的项目、模型与 Skill 上下文。{input.data.resolvedPromptRecorded ? '包含执行时记录的提示词。' : '这次记录没有保存最终提示词。'}</p>{input.data.inputHash && <p className="run-inspector__hash">输入摘要 <code>{input.data.inputHash}</code></p>}<pre className="run-inspector__json">{text(input.data.value)}</pre></>}</>}</>;
+  return <>{input.error && <Notice kind="error">{input.error}<Button aria-label="重试读取输入" onClick={input.refresh}>重试</Button></Notice>}{!input.data && !input.error && <p role="status">正在读取执行输入…</p>}{input.data && <>{!input.data.available ? <p>这个步骤尚未记录执行输入。</p> : <><p className="run-inspector__muted">此步骤执行时的项目、模型与 Skill 配置。{input.data.resolvedPromptRecorded ? '包含执行时记录的提示词。' : '这次记录没有保存最终提示词。'}</p>{input.data.inputHash && <p className="run-inspector__hash">输入摘要 <code>{input.data.inputHash}</code></p>}<pre className="run-inspector__json">{text(input.data.value)}</pre></>}</>}</>;
 }
 
 function StepOutputs({ inspection, step, version, onOpenOutput }: { inspection: RunInspection; step: RunStepSummary; version: number; onOpenOutput: (selection: StepOutputSelection) => void }) {
@@ -105,8 +105,8 @@ function StepOutputs({ inspection, step, version, onOpenOutput }: { inspection: 
   const output = useRuntimeRead('run.step.payload', { runId: inspection.run.id, nodeId: step.id, kind: 'output' }, version, runStepPayloadSchema);
   const applicable = ['script', 'style', 'assets', 'voice', 'animation', 'research'].includes(step.kind);
   const open = (runId: string) => onOpenOutput({ projectId: inspection.run.projectId, runId, nodeId: step.id, kind: step.kind });
-  return <>{output.error && <Notice kind="error">{output.error}<Button onClick={output.refresh}>重试读取产物</Button></Notice>}
-    <div className="run-inspector__output-actions"><Button aria-expanded={historyOpen} onClick={() => setHistoryOpen(value => !value)}><History size={16} />历史产物</Button>{output.data?.available && <Button variant="primary" onClick={() => open(inspection.run.id)}>{applicable ? '在项目中查看与应用' : '在项目中查看'}</Button>}</div>
+  return <>{output.error && <Notice kind="error">{output.error}<Button aria-label="重试读取产物" onClick={output.refresh}>重试</Button></Notice>}
+    <div className="run-inspector__output-actions"><Button aria-expanded={historyOpen} onClick={() => setHistoryOpen(value => !value)}><History size={16} />历史产物</Button>{output.data?.available && <Button aria-label={applicable ? '在项目中查看与应用' : '在项目中查看'} variant="primary" onClick={() => open(inspection.run.id)}>{applicable ? "查看" : "查看"}</Button>}</div>
     {historyOpen && <OutputVersions runId={inspection.run.id} nodeId={step.id} comparisonId={comparisonId} onCompare={setComparisonId} />}
     {!output.data && !output.error && <p role="status">正在读取步骤产物…</p>}
     {output.data && !output.data.available && <p>这个步骤尚未保存产物。</p>}
@@ -119,12 +119,12 @@ function StepOutputs({ inspection, step, version, onOpenOutput }: { inspection: 
 
 function OutputVersions({ runId, nodeId, comparisonId, onCompare }: { runId: string; nodeId: string; comparisonId: string; onCompare: (id: string) => void }) {
   const history = useRecordPage('run.step.versions', { runId, nodeId, limit: 20 }, 0, versionsSchema);
-  return <div className="run-inspector__versions" aria-label="历史产物版本">{history.error && <Notice kind="error">{history.error}<Button onClick={history.refresh}>重试读取版本</Button></Notice>}{history.items.filter(item => item.id !== runId).map(item => <button type="button" key={item.id} aria-pressed={comparisonId === item.id} onClick={() => onCompare(item.id)}><strong>{date(item.createdAt)}</strong><span>修订 {item.projectRevision} · 流程 v{item.workflowVersion} · {item.label}</span><span>来源制作：{statusLabels[item.status] ?? item.status}</span><code>{item.id}</code></button>)}{!history.busy && !history.error && !history.items.some(item => item.id !== runId) && <p>没有其他已保存的产物版本。</p>}{history.nextCursor !== null && <Button busy={history.busy} onClick={() => void history.loadMore()}><ChevronDown size={16} />加载更早版本</Button>}</div>;
+  return <div className="run-inspector__versions" aria-label="历史产物版本">{history.error && <Notice kind="error">{history.error}<Button aria-label="重试读取版本" onClick={history.refresh}>重试</Button></Notice>}{history.items.filter(item => item.id !== runId).map(item => <button type="button" key={item.id} aria-pressed={comparisonId === item.id} onClick={() => onCompare(item.id)}><strong>{date(item.createdAt)}</strong><span>修订 {item.projectRevision} · 流程 v{item.workflowVersion} · {item.label}</span><span>来源制作：{statusLabels[item.status] ?? item.status}</span><code>{item.id}</code></button>)}{!history.busy && !history.error && !history.items.some(item => item.id !== runId) && <p>没有其他已保存的产物版本。</p>}{history.nextCursor !== null && <Button aria-label="加载更多版本" busy={history.busy} onClick={() => void history.loadMore()}><ChevronDown size={16} />加载更多</Button>}</div>;
 }
 
 function HistoricalOutput({ runId, nodeId, applicable, onOpen, onClose }: { runId: string; nodeId: string; applicable: boolean; onOpen: () => void; onClose: () => void }) {
   const output = useRuntimeRead('run.step.payload', { runId, nodeId, kind: 'output' }, 0, runStepPayloadSchema);
-  return <section aria-label="历史产物"><h4>历史产物</h4><code className="run-inspector__muted">{runId}</code>{output.error && <Notice kind="error">{output.error}<Button onClick={output.refresh}>重试读取历史产物</Button></Notice>}{!output.data && !output.error && <p role="status">正在读取历史产物…</p>}{output.data?.available && <><PayloadView value={output.data.value} /><Button onClick={onOpen}>{applicable ? '在项目中查看与应用此版本' : '在项目中查看此版本'}</Button></>}<Button variant="ghost" onClick={onClose}>取消对比</Button></section>;
+  return <section aria-label="历史产物"><h4>历史产物</h4><code className="run-inspector__muted">{runId}</code>{output.error && <Notice kind="error">{output.error}<Button aria-label="重试读取历史产物" onClick={output.refresh}>重试</Button></Notice>}{!output.data && !output.error && <p role="status">正在读取历史产物…</p>}{output.data?.available && <><PayloadView value={output.data.value} /><Button aria-label={applicable ? '在项目中查看与应用此版本' : '在项目中查看此版本'} onClick={onOpen}>{applicable ? "查看" : "查看"}</Button></>}<Button variant="ghost" onClick={onClose}>取消对比</Button></section>;
 }
 
 function PayloadView({ value }: { value: JsonValue }) {
@@ -145,11 +145,11 @@ function RunLog({ runId, nodeId, version }: { runId: string; nodeId?: string; ve
   const params = { runId, ...(nodeId ? { nodeId } : {}) };
   const events = useRecordPage('run.events', params, version, eventsSchema);
   const activities = useRecordPage('run.activities', params, version, activitiesSchema);
-  return <div className="run-inspector__logs">{(events.error || activities.error) && <Notice kind="error">{events.error || activities.error}<Button onClick={() => { events.refresh(); activities.refresh(); }}>重试读取日志</Button></Notice>}
+  return <div className="run-inspector__logs">{(events.error || activities.error) && <Notice kind="error">{events.error || activities.error}<Button aria-label="重试读取日志" onClick={() => { events.refresh(); activities.refresh(); }}>重试</Button></Notice>}
     {activities.items.map(activity => <article className="run-inspector__activity" key={activity.id}><code>{activity.id}</code><Status value={activity.status === 'completed' ? 'succeeded' : activity.status === 'prepared' ? 'queued' : activity.status === 'submitted' ? 'waiting_external' : activity.status === 'unknown' ? 'needs_attention' : activity.status} />{activity.remoteTaskId && <p>远端任务 {activity.remoteTaskId}</p>}{activity.error && <p role="alert">{activity.error}</p>}</article>)}
-    {activities.nextCursor !== null && <Button busy={activities.busy} onClick={() => void activities.loadMore()}>加载更多活动</Button>}
+    {activities.nextCursor !== null && <Button aria-label="加载更多活动" busy={activities.busy} onClick={() => void activities.loadMore()}>加载更多</Button>}
     <pre className="run-inspector__json">{events.items.length ? events.items.toReversed().map(event => `${date(event.createdAt)}  ${event.message}`).join('\n') : events.busy ? '正在读取执行日志…' : '没有记录到执行日志。'}</pre>
-    {events.nextCursor !== null && <Button busy={events.busy} onClick={() => void events.loadMore()}>加载更早日志</Button>}
+    {events.nextCursor !== null && <Button aria-label="加载更多日志" busy={events.busy} onClick={() => void events.loadMore()}>加载更多</Button>}
   </div>;
 }
 

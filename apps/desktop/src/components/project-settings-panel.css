@@ -1,0 +1,18 @@
+.workspace-shell .inspector .inspector-body:has(> .project-settings-panel) { display: flex; flex-direction: column; padding: 0; overflow: hidden; }
+.project-settings-panel { display: flex; flex-direction: column; flex: 1; height: 100%; min-height: 0; }
+.settings-sections--tabs { display: flex; flex-direction: column; flex: 1; }
+.settings-sections--tabs .settings-sections__nav { flex: 0 0 auto; flex-direction: row; gap: var(--space-1); padding: var(--space-2); border: 0; border-bottom: 1px solid var(--border); overflow-x: auto; }
+.settings-sections--tabs .settings-sections__nav > button { flex: 1 0 auto; justify-content: center; width: auto; min-height: 40px; padding: var(--space-2); border-radius: var(--radius-pill); white-space: nowrap; }
+.settings-sections--tabs .settings-sections__content { flex: 1; padding: var(--space-4); }
+.project-settings-panel__footer { flex: 0 0 auto; padding: var(--space-3) var(--space-4); border-top: 1px solid var(--border); background: var(--surface); }
+.project-settings-panel__footer > .button { width: 100%; }
+.project-settings-panel__actions { display: grid; gap: var(--space-1); margin-block: var(--space-3); }
+.project-settings-panel__actions:first-child { margin-top: 0; }
+.project-settings-panel__actions > .button { display: flex; justify-content: flex-start; min-height: 40px; width: 100%; padding: var(--space-2) var(--space-3); border: 0; border-radius: var(--radius-small); color: var(--text-secondary); background: transparent; box-shadow: none; font-weight: var(--font-weight-regular); }
+.project-settings-panel__actions > .button:not(:disabled):hover { color: var(--text); background: var(--surface-hover); }
+.project-settings-panel__actions > .button > span { flex: 1; min-width: 0; text-align: left; }
+.project-settings-panel__actions > .button > svg { flex-shrink: 0; }
+.project-settings-panel .settings-sections [role="tabpanel"] > h3 { margin-bottom: var(--space-4); }
+.project-settings-panel__heading { margin-top: var(--space-4); }
+@media (max-width: 950px) { .project-settings-panel { flex: 0 0 auto; height: 540px; } }
+@media (max-width: 650px) { .settings-sections--tabs .settings-sections__nav > button, .project-settings-panel__actions > .button { min-height: 44px; } }

@@ -1,12 +1,31 @@
-.model-parameters fieldset, .model-pricing { min-width: 0; margin: 16px 0; padding: 14px 0 0; border: 0; border-top: 1px solid var(--border); }
-.model-parameters legend, .model-pricing legend { padding: 0 8px 0 0; color: var(--text); font-size: 12px; font-weight: 600; }
+.model-parameters fieldset { min-width: 0; margin: 16px 0; padding: 14px 0 0; border: 0; border-top: 1px solid var(--border); }
+.model-parameters legend { padding: 0 8px 0 0; color: var(--text); font-size: 12px; font-weight: 600; }
 .model-editor__grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; margin-bottom: 12px; }
 .model-editor__grid > .field { margin-bottom: 0; }
-.model-parameters .tiny-meta, .model-pricing .tiny-meta { margin: 10px 0 14px; line-height: 1.6; }
-.model-pricing > .field { max-width: 150px; }
-.model-pricing input[type="number"], .model-parameters input[type="number"] { font-variant-numeric: tabular-nums; }
+.model-parameters .tiny-meta { margin: 10px 0 14px; line-height: 1.6; }
+.model-parameters input[type="number"] { font-variant-numeric: tabular-nums; }
+.model-size-field { display: grid; align-content: start; gap: var(--space-2); min-width: 0; }
+.model-size-field > .field { margin: 0; }
+.voice-picker { grid-column: 1 / -1; margin: 0; }
+.voice-picker__controls { display: flex; align-items: center; gap: var(--space-2); min-width: 0; }
+.voice-picker__controls > input, .voice-picker__controls > select { flex: 1; min-width: 0; }
+.voice-picker__controls > .voice-picker__search { flex: 0 1 32%; min-width: 140px; }
+.voice-picker__controls > .icon-button { flex-shrink: 0; }
+.voice-picker__switch { align-self: flex-start; min-height: 32px; padding: var(--space-1) var(--space-3); font-size: var(--text-size-caption); }
+.voice-picker .field__hint a { display: inline-block; color: inherit; text-underline-offset: 3px; white-space: nowrap; }
+@media (max-width: 480px) { .voice-picker__controls { flex-wrap: wrap; } .voice-picker__controls > .voice-picker__search { flex-basis: 100%; } }
+.platform-option { display: inline-flex; align-items: center; gap: var(--space-3); min-width: 0; max-width: 100%; }
+.platform-option > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.platform-icon { flex-shrink: 0; display: inline-block; width: 24px; height: 24px; object-fit: contain; vertical-align: middle; }
+[data-theme="dark"] .platform-icon--mono { filter: invert(1); }
+.select-value__text .platform-option { display: flex; }
 .model-connection-dialog > .dialog__surface { display: flex; flex-direction: column; overflow: hidden; }
 .model-connection-dialog .dialog__header, .model-connection-dialog .dialog__footer { flex-shrink: 0; }
 .model-connection-dialog form { display: flex; flex-direction: column; min-height: 0; }
 .model-connection-dialog .dialog__body { min-height: 0; overflow-y: auto; }
+.model-secret-input { position: relative; --secret-toggle-size: var(--control-hit-size); }
+.model-secret-input input { padding-right: calc(var(--secret-toggle-size) + var(--space-3)); }
+.model-secret-input input::-ms-reveal { display: none; }
+.model-secret-input .icon-button { position: absolute; right: var(--space-1); top: 50%; transform: translateY(-50%); width: var(--secret-toggle-size); height: var(--secret-toggle-size); }
+@media (max-width: 650px) { .model-secret-input { --secret-toggle-size: var(--control-height); } }
 @media (max-width: 480px) { .model-editor__grid { grid-template-columns: minmax(0, 1fr); } }

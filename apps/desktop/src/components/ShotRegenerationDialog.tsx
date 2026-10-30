@@ -1,9 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { ChevronDown, Pause, Play, RefreshCw, Sparkles, Square } from 'lucide-react';
-import { usesVideoAudio, type AssetRecord, type ModelProfile, type ProjectDocument, type RunSummary, type Shot, type ShotCandidate, type ShotCandidateField, type ShotCandidateKind } from '@video-quickly/contracts';
+import { Sparkles, Square, RefreshCw, ChevronDown, Pause, Play } from 'lucide-react';
+import { type AssetRecord, type ModelProfile, type ProjectDocument, type RunSummary, type Shot, type ShotCandidate, type ShotCandidateField, type ShotCandidateKind, usesVideoAudio } from '@video-quickly/contracts';
 import { candidateKindLabels, candidateRunActive, readCandidateAssets, readShotCandidate, readShotCandidates, watchCandidateRun } from '../lib/shot-candidates';
 import { getAssetUrl, rpc } from '../lib/client';
-import { Button, Dialog, Field, Notice, Status } from './Primitives';
+import { Button, Dialog, Field, Notice, Status, Select } from './Primitives';
 import { ScenePreview } from './ScenePreview';
 import { sourceCaptionTrack } from '@video-quickly/video/clip-edits';
 import { candidatePreviewProject } from '../lib/clip-preview';
@@ -148,19 +148,19 @@ export default function ShotRegenerationDialog({ project, shot, models, assets, 
   return <Dialog title="镜头候选" onClose={onClose} className="shot-regeneration-dialog">
     <div className="dialog__body">
       <p className="shot-regeneration__target">{shot.title}</p>
-      <div className="shot-regeneration__form"><Field label="生成内容"><select value={kind} disabled={generating || applying || running} onChange={event => setKind(event.target.value as ShotCandidateKind)}>{Object.entries(candidateKindLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></Field><Field label="生成模型"><select value={selectedModelId} disabled={generating || applying || running} onChange={event => setModelId(event.target.value)}><option value="" disabled>选择模型</option>{availableModels.map(model => <option key={model.id} value={model.id}>{model.name}</option>)}</select></Field></div>
+      <div className="shot-regeneration__form"><Field label="生成内容"><Select value={kind} disabled={generating || applying || running} onChange={event => setKind(event.target.value as ShotCandidateKind)}>{Object.entries(candidateKindLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</Select></Field><Field label="生成模型"><Select value={selectedModelId} disabled={generating || applying || running} onChange={event => setModelId(event.target.value)}><option value="" disabled>选择模型</option>{availableModels.map(model => <option key={model.id} value={model.id}>{model.name}</option>)}</Select></Field></div>
       <Field label="本次调整要求"><textarea value={instruction} maxLength={10000} disabled={generating || applying || running} onChange={event => setInstruction(event.target.value)} placeholder="说明这个镜头希望如何修改…" /></Field>
       {!availableModels.length && <p className="tiny-meta">请先在模型连接中添加具备{candidateKindLabels[kind]}能力的模型。</p>}
       {shot.locked && <Notice>请先解锁当前镜头，再生成或应用候选。</Notice>}
       <div className="shot-regeneration__generate"><Button variant="primary" busy={generating} disabled={applying || running || !selectedModelId || shot.locked} onClick={() => void generate()}><Sparkles size={14} />生成候选</Button><span className="tiny-meta">生成结果会先保留为候选，应用前不会替换当前镜头。</span></div>
-      {runId && <div className="shot-regeneration__run" role="status"><Status value={run?.status ?? 'queued'} /><span>{resumable ? run?.error : running ? '生成在后台继续；关闭后可重新打开或查看制作记录。' : run?.status === 'succeeded' ? '候选已保存，可比较后选择应用。' : run?.status === 'canceled' ? '已请求停止，已提交的远端任务请在制作记录中核对。' : run?.error}</span>{resumable && <Button busy={resuming} disabled={canceling} onClick={() => void resume()}>继续生成</Button>}{running && <Button busy={canceling} disabled={resuming} onClick={() => void cancel()}><Square size={13} />停止生成</Button>}</div>}
-      {progressError && <Notice kind="error">{progressError}<Button onClick={() => setProgressRefresh(value => value + 1)}>重新读取生成进度</Button></Notice>}
+      {runId && <div className="shot-regeneration__run" role="status"><Status value={run?.status ?? 'queued'} /><span>{resumable ? run?.error : running ? '生成在后台继续；关闭后可重新打开或查看制作记录。' : run?.status === 'succeeded' ? '候选已保存，可比较后选择应用。' : run?.status === 'canceled' ? '已请求停止，已提交的远端任务请在制作记录中核对。' : run?.error}</span>{resumable && <Button aria-label="继续生成" busy={resuming} disabled={canceling} onClick={() => void resume()}>继续</Button>}{running && <Button aria-label="停止生成" busy={canceling} disabled={resuming} onClick={() => void cancel()}><Square size={13} />停止</Button>}</div>}
+      {progressError && <Notice kind="error">{progressError}<Button aria-label="重试生成进度" onClick={() => setProgressRefresh(value => value + 1)}>重试</Button></Notice>}
       <div className="shot-regeneration__workspace">
-        <aside className="shot-regeneration__history" aria-label="候选历史"><div className="shot-regeneration__history-heading"><h3>候选历史 <span>{total}</span></h3><Button variant="ghost" disabled={loading || applying} onClick={() => void load()}><RefreshCw size={13} />刷新候选</Button></div>
+        <aside className="shot-regeneration__history" aria-label="候选历史"><div className="shot-regeneration__history-heading"><h3>候选历史 <span>{total}</span></h3><Button aria-label="刷新候选" variant="ghost" disabled={loading || applying} onClick={() => void load()}><RefreshCw size={13} />刷新</Button></div>
           {listError && <Notice kind="error">{listError}</Notice>}
           {items.map((item, index) => <button type="button" className={`shot-regeneration__history-item ${item.id === selectedId ? 'is-selected' : ''}`} aria-pressed={item.id === selectedId} aria-label={`选择候选 ${index + 1}：${candidateKindLabels[item.kind]}`} key={item.id} disabled={applying} onClick={() => setSelectedId(item.id)}><strong>{candidateKindLabels[item.kind]}</strong><time dateTime={item.createdAt}>{new Date(item.createdAt).toLocaleString('zh-CN')}</time></button>)}
           {!items.length && <p className="tiny-meta">{loading ? '正在读取候选…' : '还没有生成候选。'}</p>}
-          {nextOffset < total && <Button busy={loading} disabled={applying} onClick={() => void load(nextOffset)}><ChevronDown size={14} />加载更早候选</Button>}
+          {nextOffset < total && <Button aria-label="加载更多候选" busy={loading} disabled={applying} onClick={() => void load(nextOffset)}><ChevronDown size={14} />加载更多</Button>}
         </aside>
         <section className="shot-regeneration__comparison" aria-label="当前与候选对比">
           {reading ? <p className="tiny-meta" role="status">正在读取候选内容…</p> : candidate?.kind === 'script' ? <div className="shot-regeneration__fields">{scriptFields.map(field => <section className="shot-regeneration__field" key={field}><label><input type="checkbox" checked={fields.includes(field)} disabled={applying || candidate.shot[field] === shot[field]} aria-label={`应用候选${fieldLabels[field]}`} onChange={event => setFields(current => event.target.checked ? [...current, field] : current.filter(value => value !== field))} />{fieldLabels[field]}</label><div><section><span>当前</span><p>{field === 'durationUs' ? `${shot[field] / 1e6} 秒` : shot[field] || '（空）'}</p></section><section><span>候选</span><p>{field === 'durationUs' ? `${candidate.shot[field] / 1e6} 秒` : candidate.shot[field] || '（空）'}</p></section></div></section>)}</div> : candidate ? <>
@@ -171,7 +171,7 @@ export default function ShotRegenerationDialog({ project, shot, models, assets, 
       </div>
       {error && <Notice kind="error">{error}</Notice>}
     </div>
-    <div className="dialog__footer"><Button onClick={onClose}>关闭</Button><Button variant="primary" busy={applying} disabled={!candidate || reading || generating || running || shot.locked || candidate.kind === 'script' && !fields.length} onClick={() => void apply()}>应用所选候选</Button></div>
+    <div className="dialog__footer"><Button onClick={onClose}>关闭</Button><Button aria-label="应用所选候选" variant="primary" busy={applying} disabled={!candidate || reading || generating || running || shot.locked || candidate.kind === 'script' && !fields.length} onClick={() => void apply()}>应用</Button></div>
   </Dialog>;
 }
 
@@ -187,7 +187,7 @@ function CandidateClipPreview({ label, project, shot, assets, audioOnly }: { lab
   return <figure aria-label={`${label}剪后片段`}><figcaption>{label}</figcaption>{!audioOnly && <span className="shot-regeneration__scene" style={{ aspectRatio: `${project.profile.width}/${project.profile.height}` }}><ScenePreview project={solo} shot={shot} shotIndex={Math.max(0, project.shots.findIndex(value => value.id === shot.id))} assets={assets} timeUs={timeUs} playing={playing} /></span>}
     {hasAudio && mix.status === 'pending' && <p className="tiny-meta" role="status">正在准备{label}剪后试听…</p>}
     {mix.mix && <PreparedMixPreview mix={mix.mix} onLevels={readAudioLevels} playing={playing} timeUs={timeUs} controls={false} onReadyChange={setAudioReady} onError={message => { clock.pause(); setFailure(message); }} />}
-    {(failure || mix.error) && <Notice kind="error">{failure || mix.error}<Button onClick={() => { setFailure(''); mix.retry(); }}>重试片段试听</Button></Notice>}
+    {(failure || mix.error) && <Notice kind="error">{failure || mix.error}<Button aria-label="重试片段试听" onClick={() => { setFailure(''); mix.retry(); }}>重试</Button></Notice>}
     <Button disabled={audioOnly && !hasAudio || hasAudio && (mix.status !== 'ready' || !audioReady)} onClick={clock.toggle}>{playing ? <Pause size={13} /> : <Play size={13} />}{playing ? `暂停${label}片段` : `播放${label}片段`}</Button>
     <input type="range" aria-label={`${label}剪后播放位置`} min={0} max={shot.durationUs / 1000} value={Math.round(timeUs / 1000)} step={1} onChange={event => clock.seek(Number(event.target.value) * 1000)} />
     <p className="tiny-meta">剪后 {(shot.durationUs / 1e6).toFixed(3)} 秒 · 保留各源区间</p>

@@ -2,18 +2,22 @@ import { createHash } from 'node:crypto';
 import { createServer, type Server } from 'node:http';
 import { mkdir, mkdtemp, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { basename, dirname, join, resolve } from 'node:path';
 import { afterEach, expect, it, vi } from 'vitest';
-import { assetSchema, DEFAULT_VIDEO_PROFILE, exportBatchSchema, projectSchema, runSchema, type AssetRecord, type ModelProfile, type ProjectDocument, type ShotCandidate, type UsageRecord } from '@video-quickly/contracts';
+import { assetSchema, DEFAULT_VIDEO_PROFILE, exportBatchSchema, projectSchema, runInspectionSchema, runSchema, type AssetRecord, type ModelProfile, type ProjectDocument, type ShotCandidate, type UsageRecord, type WorkflowNode } from '@video-quickly/contracts';
 import { createActivityExecutor } from '../packages/integrations/src';
 import { createRuntime, type ActivityExecutionContext, type RuntimeOptions } from '../packages/runtime/src';
+import { openDatabase } from '../packages/runtime/src/database';
 
 const directories: string[] = [], servers: Server[] = [];
 const runtimes = new Set<ReturnType<typeof createRuntime>>();
 afterEach(async () => {
   await Promise.all([...runtimes].map(runtime => runtime.close())); runtimes.clear();
   await Promise.all(servers.splice(0).map(server => new Promise<void>((resolve, reject) => { server.closeAllConnections(); server.close(error => error ? reject(error) : resolve()); })));
-  await Promise.all(directories.splice(0).map(directory => rm(directory, { recursive: true, force: true })));
+  await Promise.all(directories.splice(0).map(directory => {
+    if (dirname(resolve(directory)) !== resolve(tmpdir()) || !basename(directory).startsWith('video-quickly-run-restart-')) throw new Error('Unexpected restart-test cleanup path');
+    return rm(directory, { recursive: true, force: true });
+  }));
 });
 
 async function setup(options: Partial<RuntimeOptions> = {}) {
@@ -24,6 +28,15 @@ async function setup(options: Partial<RuntimeOptions> = {}) {
   return { directory, runtime, project };
 }
 async function current(runtime: ReturnType<typeof createRuntime>, projectId: string) { return (await runtime.dispatch('project.get', { projectId }) as { project: ProjectDocument }).project; }
+async function reopenLegacyRun(runtime: ReturnType<typeof createRuntime>, directory: string, runId: string, options: Partial<RuntimeOptions> = {}) {
+  await runtime.close(); runtimes.delete(runtime);
+  const database = openDatabase(directory);
+  try {
+    database.prepare("UPDATE documents SET body = json_remove(body, '$.selection', '$.stepCount') WHERE kind = 'run' AND id = ?").run(runId);
+    database.prepare("UPDATE documents SET body = json_remove(body, '$.selection') WHERE kind = 'run-snapshot' AND id = ?").run(runId);
+  } finally { database.close(); }
+  const restored = createRuntime({ dataDirectory: directory, seed: false, ffmpegPath: '/unused-by-restart-tests', executeActivity: createActivityExecutor(), ...options }); runtimes.add(restored); return restored;
+}
 async function serverFixture() {
   const requests: Array<{ path: string; body: string }> = [];
   const server = createServer((request, response) => { void (async () => {
@@ -90,6 +103,61 @@ async function localArtifacts(context: ActivityExecutionContext) {
   }
   return { ...output, assets } as unknown as Awaited<ReturnType<NonNullable<RuntimeOptions['executeActivity']>>>;
 }
+
+it('restarts an older single-step task without executing the rest of the current workflow', async () => {
+  const { runtime, directory, project } = await setup();
+  const parent = runSchema.parse(await runtime.dispatch('run.start', { projectId: project.id, nodeId: 'style' })); await runtime.waitForIdle();
+  expect(await runtime.dispatch('run.get', { runId: parent.id })).toMatchObject({ status: 'waiting_review' });
+  await runtime.dispatch('run.cancel', { runId: parent.id }); await runtime.waitForIdle();
+  const restored = await reopenLegacyRun(runtime, directory, parent.id);
+  const edited = projectSchema.parse(await restored.dispatch('project.update', { projectId: project.id, revision: project.revision, patch: { title: '旧任务之后的新标题', workflow: { ...project.workflow, nodes: [...project.workflow.nodes, { ...project.workflow.nodes[0], id: 'new-unrelated', label: '新增独立步骤' }] } } }));
+  await expect(restored.dispatch('run.start', { projectId: project.id, parentRunId: parent.id, nodeId: 'assets' })).rejects.toThrow('原单步骤范围');
+  const restarted = runSchema.parse(await restored.dispatch('run.start', { projectId: project.id, parentRunId: parent.id })); await restored.waitForIdle();
+  const detail = runInspectionSchema.parse(await restored.dispatch('run.inspect', { runId: restarted.id }));
+  expect(detail.steps.map(step => step.id)).toEqual(['style']); expect(restarted.id).not.toBe(parent.id); expect(await current(restored, project.id)).toEqual(edited);
+});
+
+it('keeps a standalone export scope, exact fractional profile and destination after cancellation and project edits', async () => {
+  let hold = true, entered = false; const calls: Array<{ node: WorkflowNode; profile: ProjectDocument['profile']; title: string }> = [];
+  const executeActivity: NonNullable<RuntimeOptions['executeActivity']> = async context => {
+    calls.push({ node: context.node, profile: context.project.profile, title: context.project.title });
+    if (hold) { entered = true; await new Promise<void>((_resolve, reject) => context.signal.addEventListener('abort', () => reject(new Error('canceled export')), { once: true })); }
+    return localArtifacts(context);
+  };
+  const { runtime, directory, project } = await setup({ executeActivity });
+  const profile = { ...project.profile, width: 320, height: 180, frameRate: { numerator: 30000, denominator: 1001 } }, destination = join(directory, 'chosen-output.mp4');
+  const parent = runSchema.parse(await runtime.dispatch('run.start', { projectId: project.id, nodeId: 'export', profile, destination }));
+  await vi.waitFor(() => expect(entered).toBe(true)); await runtime.dispatch('run.cancel', { runId: parent.id }); await runtime.waitForIdle(); hold = false;
+  const edited = projectSchema.parse(await runtime.dispatch('project.update', { projectId: project.id, revision: project.revision, patch: { title: '重新导出的当前标题', profile: { ...project.profile, width: 640, height: 360 }, workflow: { ...project.workflow, nodes: project.workflow.nodes.map(node => node.id === 'export' ? { ...node, kind: 'agent', config: { destination: join(directory, 'changed-output.mp4') } } : node) } } }));
+  await expect(runtime.dispatch('run.start', { projectId: project.id, parentRunId: parent.id, profile: edited.profile })).rejects.toThrow('保留原规格和路径');
+  const restarted = runSchema.parse(await runtime.dispatch('run.start', { projectId: project.id, parentRunId: parent.id })); await runtime.waitForIdle();
+  expect(runInspectionSchema.parse(await runtime.dispatch('run.inspect', { runId: restarted.id })).steps.map(step => step.id)).toEqual(['export']);
+  expect(await runtime.dispatch('run.get', { runId: restarted.id })).toMatchObject({ status: 'succeeded', projectRevision: edited.revision });
+  expect(calls).toHaveLength(2); expect(calls[1]).toMatchObject({ node: { id: 'export', kind: 'export', config: { destination } }, profile, title: edited.title });
+  expect(await current(runtime, project.id)).toEqual(edited);
+  expect(await runtime.dispatch('cost.summary', { projectId: project.id })).toMatchObject({ total: 0 });
+});
+
+it.each(['removed', 'kind'] as const)('rejects an older single-step restart when the selected node was %s without creating a broader task', async change => {
+  const { runtime, directory, project } = await setup();
+  const parent = runSchema.parse(await runtime.dispatch('run.start', { projectId: project.id, nodeId: 'style' })); await runtime.waitForIdle(); await runtime.dispatch('run.cancel', { runId: parent.id });
+  const restored = await reopenLegacyRun(runtime, directory, parent.id);
+  const workflow = change === 'removed'
+    ? { ...project.workflow, nodes: project.workflow.nodes.filter(node => node.id !== 'style'), edges: project.workflow.edges.filter(edge => edge.source !== 'style' && edge.target !== 'style') }
+    : { ...project.workflow, nodes: project.workflow.nodes.map(node => node.id === 'style' ? { ...node, kind: 'agent' } : node) };
+  const edited = projectSchema.parse(await restored.dispatch('project.update', { projectId: project.id, revision: project.revision, patch: { workflow } }));
+  await expect(restored.dispatch('run.start', { projectId: project.id, parentRunId: parent.id })).rejects.toThrow('已删除或变更类型');
+  expect((await restored.dispatch('run.list', { projectId: project.id }) as { items: unknown[] }).items).toHaveLength(1); expect(await current(restored, project.id)).toEqual(edited);
+});
+
+it('keeps a full one-node workflow distinct from an older partial single-step task', async () => {
+  const { runtime, project } = await setup();
+  const single = projectSchema.parse(await runtime.dispatch('workflow.save', { projectId: project.id, revision: project.revision, workflow: { id: 'one', name: '原完整流程', version: 1, nodes: [{ id: 'one', kind: 'brief', label: '原步骤', requiresReview: true }], edges: [] } }));
+  const parent = runSchema.parse(await runtime.dispatch('run.start', { projectId: project.id })); await runtime.waitForIdle(); await runtime.dispatch('run.cancel', { runId: parent.id });
+  await runtime.dispatch('workflow.save', { projectId: project.id, revision: single.revision, workflow: { ...single.workflow, nodes: [{ ...single.workflow.nodes[0], requiresReview: false }, { id: 'two', kind: 'brief', label: '新步骤' }] } });
+  const restarted = runSchema.parse(await runtime.dispatch('run.start', { projectId: project.id, parentRunId: parent.id })); await runtime.waitForIdle();
+  expect(runInspectionSchema.parse(await runtime.dispatch('run.inspect', { runId: restarted.id })).steps.map(step => step.id)).toEqual(['one', 'two']);
+});
 
 it('routes a canceled batch child restart back to the same frozen batch and never invokes models or charges', async () => {
   let hold = true, entered = false; const calls: Array<{ width: number; title: string }> = [], provider = vi.fn(async () => 'must not call a text model');

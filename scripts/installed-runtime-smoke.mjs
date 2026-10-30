@@ -50,6 +50,9 @@ async function runAt(id, status) {
   throw new Error(`安装验收运行未达到 ${status}`);
 }
 try {
+  const summary = await rpc('workspace.summary');
+  assert.equal(summary.system.mode, 'desktop');
+  assert.ok(summary.projects.every(project => Number.isInteger(project.shotCount) && !('shots' in project)));
   const snapshot = await rpc('workspace.snapshot');
   assert.equal(snapshot.system.ffmpegAvailable, true);
   if (mode === 'prepare') {

@@ -1,8 +1,8 @@
 import { memo, useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { Background, Controls, Handle, Panel, Position, ReactFlow, SelectionMode, addEdge, applyEdgeChanges, applyNodeChanges, type AriaLabelConfig, type Connection, type Edge, type IsValidConnection, type Node, type NodeProps, type NodeTypes, type OnEdgesChange, type OnInit, type OnNodesChange, type OnSelectionChangeFunc, type ReactFlowInstance } from '@xyflow/react';
-import { BookOpen, Check, GitBranch, Image, Layers, Mic, Plus, Save, Sparkles, Trash2 } from 'lucide-react';
+import { BookOpen, Check, GitBranch, Image, Layers, Mic, Plus, Sparkles, Trash2, Save } from 'lucide-react';
 import { nodeKindSchema, type ModelProfile, type WorkflowDefinition, type WorkflowNode } from '@video-quickly/contracts';
-import { Button, Field, IconButton, Notice } from '../components/Primitives';
+import { Button, Field, IconButton, Notice, Select } from '../components/Primitives';
 import ToolBindings from '../components/ToolBindings';
 import { sameWorkflow } from '../lib/project-edits';
 import './workflow-canvas.css';
@@ -15,7 +15,7 @@ const ActivityNode = memo(function ActivityNode({ data, selected }: NodeProps<Fl
 });
 const nodeTypes: NodeTypes = { activity: ActivityNode };
 const fitViewOptions = { padding: .2 };
-const panButtons = [1, 2];
+const panButtons = [0, 1, 2];
 const deleteKeys = ['Backspace', 'Delete'];
 const ariaLabels: Partial<AriaLabelConfig> = {
   'node.a11yDescription.default': '按 Enter 或空格选择步骤，用方向键移动，按 Delete 移除，按 Escape 取消选择。',
@@ -152,9 +152,9 @@ export default function WorkflowCanvas({ workflow, models, dirty, saving, confli
     }
   }}>
     <div className="flow-container" ref={container}><div className="flow-viewport">
-      <ReactFlow<FlowNode> nodes={nodes} edges={edges} nodeTypes={nodeTypes} onInit={initializeCanvas} onNodeDoubleClick={focusNode} onNodeDragStart={onEndGroup} onNodeDragStop={onEndGroup} zoomOnDoubleClick={false} onNodesChange={changeNodes} onEdgesChange={changeEdges} onConnect={connect} onSelectionChange={changeSelection} onBeforeDelete={beforeDelete} isValidConnection={validConnection} fitView fitViewOptions={fitViewOptions} minZoom={.2} maxZoom={1.5} deleteKeyCode={deleteKeys} ariaLabelConfig={ariaLabels} panOnScroll selectionOnDrag selectionMode={SelectionMode.Partial} panOnDrag={panButtons} zoomOnScroll={false} connectionRadius={24} nodeDragThreshold={3}>
+      <ReactFlow<FlowNode> nodes={nodes} edges={edges} nodeTypes={nodeTypes} onInit={initializeCanvas} onNodeDoubleClick={focusNode} onNodeDragStart={onEndGroup} onNodeDragStop={onEndGroup} zoomOnDoubleClick={false} onNodesChange={changeNodes} onEdgesChange={changeEdges} onConnect={connect} onSelectionChange={changeSelection} onBeforeDelete={beforeDelete} isValidConnection={validConnection} fitView fitViewOptions={fitViewOptions} minZoom={.2} maxZoom={1.5} deleteKeyCode={deleteKeys} ariaLabelConfig={ariaLabels} panOnScroll selectionMode={SelectionMode.Partial} panOnDrag={panButtons} zoomOnScroll={false} connectionRadius={24} nodeDragThreshold={3}>
         <Background gap={22} size={1} color="var(--border)" /><Controls showInteractive={false} />
-        <Panel position="top-left" className="flow-gestures">滚动平移 · Ctrl + 滚轮缩放<span>空格 + 拖动平移 · 双击步骤聚焦</span></Panel>
+        <Panel position="top-left" className="flow-gestures">拖动空白处平移 · Ctrl + 滚轮缩放<span>Shift + 拖动框选 · 双击步骤聚焦</span></Panel>
       </ReactFlow>
     </div></div>
     <aside className="flow-inspector">
@@ -162,20 +162,20 @@ export default function WorkflowCanvas({ workflow, models, dirty, saving, confli
       {error && <Notice kind="error">{error}</Notice>}
       {selected ? <>
         <Field label="步骤名称"><input value={selected.label} onChange={event => updateSelected({ label: event.target.value })} /></Field>
-        <Field label="步骤类型"><select value={selected.kind} onChange={event => updateSelected({ kind: nodeKindSchema.parse(event.target.value) })}>{Object.entries(typeLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></Field>
+        <Field label="步骤类型"><Select value={selected.kind} onChange={event => updateSelected({ kind: nodeKindSchema.parse(event.target.value) })}>{Object.entries(typeLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</Select></Field>
         <Field label="步骤说明"><textarea value={selected.description} onChange={event => updateSelected({ description: event.target.value })} /></Field>
         <Field label="提示词"><textarea value={selected.prompt} onChange={event => updateSelected({ prompt: event.target.value })} placeholder="补充这个步骤的具体要求" /></Field>
-        <Field label="使用模型"><select value={selected.modelId ?? ''} onChange={event => updateSelected({ modelId: event.target.value || undefined })}><option value="">本地素材 / 手动制作</option>{models.filter(model => model.enabled).map(model => <option key={model.id} value={model.id}>{model.name}</option>)}</select></Field>
+        <Field label="使用模型"><Select value={selected.modelId ?? ''} onChange={event => updateSelected({ modelId: event.target.value || undefined })}><option value="">本地素材 / 手动制作</option>{models.filter(model => model.enabled).map(model => <option key={model.id} value={model.id}>{model.name}</option>)}</Select></Field>
         {selected.kind === 'agent' && <ToolBindings node={selected} onChange={value => updateSelected(value)} />}
-        {selected.kind === 'condition' && <Field label="条件结果"><select aria-label="条件分支结果" value={selected.config.value === true ? 'true' : 'false'} onChange={event => updateSelected({ config: { ...selected.config, value: event.target.value === 'true' } })}><option value="true">成立</option><option value="false">不成立</option></select></Field>}
-        {edges.some(edge => edge.source === selected.id) && <div className="edge-conditions"><h3>后续连接</h3>{edges.filter(edge => edge.source === selected.id).map(edge => <Field key={edge.id} label={nodes.find(node => node.id === edge.target)?.data.node.label ?? edge.target}><select value={typeof edge.data?.condition === 'string' ? edge.data.condition : ''} onChange={event => {
+        {selected.kind === 'condition' && <Field label="条件结果"><Select aria-label="条件分支结果" value={selected.config.value === true ? 'true' : 'false'} onChange={event => updateSelected({ config: { ...selected.config, value: event.target.value === 'true' } })}><option value="true">成立</option><option value="false">不成立</option></Select></Field>}
+        {edges.some(edge => edge.source === selected.id) && <div className="edge-conditions"><h3>后续连接</h3>{edges.filter(edge => edge.source === selected.id).map(edge => <Field key={edge.id} label={nodes.find(node => node.id === edge.target)?.data.node.label ?? edge.target}><Select value={typeof edge.data?.condition === 'string' ? edge.data.condition : ''} onChange={event => {
           const condition = event.target.value;
           commit(nodesRef.current, edgesRef.current.map(item => item.id === edge.id ? { ...item, data: { ...item.data, condition }, label: conditionLabel(condition) } : item), '修改分支条件');
-        }}><option value="">始终执行</option><option value="true">条件成立时</option><option value="false">条件不成立时</option></select></Field>)}</div>}
+        }}><option value="">始终执行</option><option value="true">条件成立时</option><option value="false">条件不成立时</option></Select></Field>)}</div>}
         <label className="field-inline"><input type="checkbox" checked={selected.requiresReview} onChange={event => updateSelected({ requiresReview: event.target.checked })} />完成后人工审阅</label>
-        <Button variant="danger" className="button-full" disabled={nodes.length <= 1} onClick={() => removeNode(selected.id)}><Trash2 size={15} />移除步骤</Button>
-      </> : <p className="list-help">选择步骤修改提示词、模型和审阅要求。拖动连接点设置步骤依赖。</p>}
-      <div className="flow-save"><span className="flow-save-state" role="status">{saving ? '正在保存…' : conflicted ? '请先处理修订冲突' : dirty ? '有未保存修改' : '修改已保存'}</span><Button variant="primary" className="button-full" disabled={!dirty || conflicted} busy={saving} onClick={() => void save()}><Save size={15} />保存流程</Button><p className="tiny-meta">保存前检查依赖关系。已启动的制作使用其固定版本。</p></div>
+        <Button aria-label="移除步骤" variant="danger" className="button-full" disabled={nodes.length <= 1} onClick={() => removeNode(selected.id)}><Trash2 size={15} />移除</Button>
+      </> : <p className="list-help">选择步骤编辑设置，拖动连接点设置依赖。</p>}
+      <div className="flow-save"><span className="flow-save-state" role="status">{saving ? '正在保存…' : conflicted ? '请先处理修订冲突' : dirty ? '有未保存修改' : '修改已保存'}</span><Button aria-label="保存流程" variant="primary" className="button-full" disabled={!dirty || conflicted} busy={saving} onClick={() => void save()}><Save size={15} />保存</Button><p className="tiny-meta">保存前检查依赖关系。已启动的制作使用其固定版本。</p></div>
     </aside>
   </div>;
 }

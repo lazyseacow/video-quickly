@@ -36,12 +36,27 @@ async function listen(handler: RequestListener): Promise<string> {
 }
 
 describe('media generation request receipts', () => {
+  it('routes native Doubao speech through durable media receipts and restores completed audio without resubmission', async () => {
+    let calls = 0;
+    const baseUrl = await listen((request, response) => {
+      calls++; expect(request.url).toBe('/tts/unidirectional'); request.resume();
+      response.end(`${JSON.stringify({ code: 0, data: Buffer.from('fixture-audio').toString('base64') })}\n${JSON.stringify({ code: 20000000, usage: { text_words: 4 } })}`);
+    });
+    const context = await contextFor(baseUrl); context.node = context.project.workflow.nodes.find(node => node.kind === 'voice')!;
+    context.model = { ...context.model!, provider: 'volcengine-tts', connectionType: 'audio', model: 'seed-tts-2.0', capabilities: ['tts'], parameters: { voice: 'fixture-speaker' } };
+    const executor = createActivityExecutor();
+    await expect(executor(context)).rejects.toThrow('API Key'); expect(calls).toBe(0);
+    context.apiKey = 'fixture-key'; const result = await executor(context);
+    expect(result).toMatchObject({ source: 'model', assets: [{ kind: 'audio', shotId: 'shot-1' }], providerUsage: { source: 'provider', characters: 4 } });
+    context.apiKey = undefined; expect(await executor(context)).toEqual(result); expect(calls).toBe(1);
+  });
+
   it('restores only the download after a generation request has completed', async () => {
     let submits = 0, downloads = 0;
     let baseUrl = '';
     baseUrl = await listen((request, response) => {
       if (request.url === '/images/generations') {
-        submits++; response.setHeader('Content-Type', 'application/json'); response.end(JSON.stringify({ data: [{ url: `${baseUrl}/image.png` }] }));
+        submits++; response.setHeader('Content-Type', 'application/json'); response.end(JSON.stringify({ data: [{ url: `${baseUrl}/image.png` }], usage: { input_tokens: 90, output_tokens: 12, input_tokens_details: { cached_tokens: 40 }, output_tokens_details: { cached_tokens: 3 } } }));
       } else {
         downloads++;
         if (downloads === 1) { response.writeHead(503); response.end(); }
@@ -53,8 +68,8 @@ describe('media generation request receipts', () => {
     const result = await createActivityExecutor()(context);
     expect(submits).toBe(1);
     expect(downloads).toBe(2);
-    expect(result).toMatchObject({ source: 'model', assets: [{ shotId: 'shot-1', kind: 'image' }] });
-    await createActivityExecutor()(context);
+    expect(result).toMatchObject({ source: 'model', assets: [{ shotId: 'shot-1', kind: 'image' }], providerUsage: { inputTokens: 90, outputTokens: 12, cachedInputTokens: 40, cachedOutputTokens: 3 } });
+    expect(await createActivityExecutor()(context)).toEqual(result);
     expect(submits).toBe(1);
     expect(downloads).toBe(2);
   });

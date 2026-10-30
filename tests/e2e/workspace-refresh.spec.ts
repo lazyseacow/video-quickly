@@ -107,7 +107,7 @@ test('shows a failed selected-project read and recovers only after an explicit n
   });
   await page.getByRole('button', { name: `打开项目：${target.title}`, exact: true }).click();
   await expect(page.getByRole('alert')).toContainText('隔离的项目读取失败'); expect(reads).toBe(1);
-  await page.getByRole('button', { name: '重新读取项目', exact: true }).click();
+  await page.getByRole('button', { name: '重试项目', exact: true }).click();
   await expect(page.getByLabel('镜头标题', { exact: true })).toHaveValue('读取恢复的镜头'); expect(reads).toBe(2);
   await expect(page.locator('vite-error-overlay')).toHaveCount(0);
 });

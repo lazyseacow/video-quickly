@@ -5,7 +5,8 @@ import { extname, join, resolve } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { z } from 'zod';
 import { renderProject } from '@video-quickly/video/node';
-import { requestModelParameters, validateModelParameters, type AssetRecord, type CharacterProfile, type JsonValue, type ModelProfile, type PreparedAudioMix, type ProjectDocument, type Shot, type WorkflowNode } from '@video-quickly/contracts';
+import { providerReportedUsage, sumProviderUsage, requestModelParameters, validateModelParameters, type ProviderUsage, type AssetRecord, type CharacterProfile, type JsonValue, type ModelProfile, type PreparedAudioMix, type ProjectDocument, type Shot, type WorkflowNode } from '@video-quickly/contracts';
+import { synthesizeVolcengineSpeech, volcengineSpeechHeaders } from './volcengine-speech.js';
 import { transcribeAudio } from './transcription.js';
 import { resolveCharacterReferences, type ResolvedCharacterReferences } from './character-references.js';
 
@@ -38,6 +39,7 @@ interface Receipt {
   error?: string;
   pollDeadlineAt?: number;
   authenticatedContent?: boolean;
+  providerUsage?: ProviderUsage;
 }
 
 const objectSchema = z.record(z.string(), z.unknown());
@@ -162,9 +164,9 @@ export async function validateMediaActivity(context: MediaPreflightContext): Pro
   if (context.node.config.operation === 'transcribe') return;
   const capability = context.node.kind === 'assets' ? 'image' : context.node.kind === 'voice' ? 'tts' : context.node.kind === 'animation' ? 'video' : undefined;
   if (capability && !model.capabilities.includes(capability)) throw new Error(`所选模型不具备${capability === 'image' ? '图片' : capability === 'tts' ? '配音' : '视频'}生成能力`);
-  const protocols: Record<string, string[]> = { assets: ['openai-compatible', 'seedream', 'comfyui', 'custom-http'], voice: ['openai-compatible', 'qwen-tts', 'custom-http'], animation: ['openai-compatible', 'seedance', 'comfyui', 'custom-http'] };
+  const protocols: Record<string, string[]> = { assets: ['openai-compatible', 'seedream', 'comfyui', 'custom-http'], voice: ['openai-compatible', 'qwen-tts', 'volcengine-tts', 'custom-http'], animation: ['openai-compatible', 'seedance', 'comfyui', 'custom-http'] };
   if (protocols[context.node.kind] && !protocols[context.node.kind].includes(model.provider)) throw new Error('所选模型的服务协议不适用于此制作步骤');
-  if (context.node.kind === 'voice' && model.provider === 'qwen-tts' && context.node.config.operation === 'regenerate' && typeof context.node.config.instruction === 'string' && context.node.config.instruction.trim()) throw new Error('当前 Qwen-TTS 接口不支持单镜头调整要求，请留空或改用支持语音指令的模型。');
+  if (context.node.kind === 'voice' && ['qwen-tts', 'volcengine-tts'].includes(model.provider) && context.node.config.operation === 'regenerate' && typeof context.node.config.instruction === 'string' && context.node.config.instruction.trim()) throw new Error('当前配音接口不支持单镜头调整要求，请留空或改用支持语音指令的模型。');
   if (!['assets', 'animation'].includes(context.node.kind)) return;
   for (const shot of context.project.shots) {
     const kind = context.node.kind === 'assets' ? 'image' : 'video';
@@ -254,11 +256,11 @@ async function downloadReceipt(path: string, receiptPath: string, receipt: Recei
   await writeFile(temporary, bytes);
   await rename(temporary, path);
   const asset = await assetFor(path, context, kind, shot);
-  await atomicJson(receiptPath, { state: 'completed', taskId: receipt.taskId, asset });
+  await atomicJson(receiptPath, { state: 'completed', taskId: receipt.taskId, asset, providerUsage: receipt.providerUsage });
   return asset;
 }
 
-async function generateMedia(context: MediaActivityContext, directory: string, shot: Shot, kind: 'image' | 'video' | 'audio'): Promise<AssetRecord> {
+async function generateMedia(context: MediaActivityContext, directory: string, shot: Shot, kind: 'image' | 'video' | 'audio', onUsage: (usage?: ProviderUsage) => void): Promise<AssetRecord> {
   const model = context.model;
   if (!model) throw new Error('请为此步骤选择相应的生成模型，或先导入素材');
   const parameters = requestModelParameters(model, kind === 'audio' ? 'tts' : kind);
@@ -266,20 +268,21 @@ async function generateMedia(context: MediaActivityContext, directory: string, s
   validateReferenceProtocol(context, shot, references);
   const prompt = [context.project.style, shot.visualPrompt, references.prompt].filter(Boolean).join('\n');
   const instruction = context.node.config.operation === 'regenerate' && typeof context.node.config.instruction === 'string' ? context.node.config.instruction : '';
-  if (kind === 'audio' && model.provider === 'qwen-tts' && instruction.trim()) throw new Error('当前 Qwen-TTS 接口不支持单镜头调整要求，请留空或改用支持语音指令的模型。');
+  if (kind === 'audio' && ['qwen-tts', 'volcengine-tts'].includes(model.provider) && instruction.trim()) throw new Error('当前配音接口不支持单镜头调整要求，请留空或改用支持语音指令的模型。');
   const extension = kind === 'image' ? '.png' : kind === 'video' ? '.mp4' : '.mp3';
   const fileId = createHash('sha256').update(shot.id).digest('hex').slice(0, 24);
   const destination = join(directory, `${fileId}${extension}`);
   const receiptPath = join(directory, `${fileId}.receipt.json`);
   let receipt = await readReceipt(receiptPath);
   if (receipt?.state === 'completed' && receipt.asset) {
-    if (await validAsset(receipt.asset)) return receipt.asset;
+    if (await validAsset(receipt.asset)) { onUsage(receipt.providerUsage); return receipt.asset; }
     throw new Error('已完成素材缺失或损坏，请显式重新生成此镜头');
   }
-  if (receipt?.state === 'download') return downloadReceipt(destination, receiptPath, receipt, context, kind, shot);
+  if (receipt?.state === 'download') { const asset = await downloadReceipt(destination, receiptPath, receipt, context, kind, shot); onUsage(receipt.providerUsage); return asset; }
   if (receipt?.state === 'unknown' || receipt?.state === 'prepared') throw new Error('该镜头上次提交结果不明确，请核对服务端任务后再重新生成');
 
   if (!receipt) {
+    if (kind === 'audio' && model.provider === 'volcengine-tts') volcengineSpeechHeaders(model, context.apiKey);
     receipt = { state: 'prepared' };
     await atomicJson(receiptPath, receipt);
     try {
@@ -293,6 +296,7 @@ async function generateMedia(context: MediaActivityContext, directory: string, s
         });
         const taskId = stringOrUndefined(atPath(result, model.parameters.taskIdPath));
         receipt = taskId ? { state: 'submitted', taskId } : { state: 'download', downloadUrl: stringOrUndefined(atPath(result, model.parameters.resultUrlPath)), base64: stringOrUndefined(atPath(result, model.parameters.resultBase64Path)) };
+        receipt.providerUsage = providerReportedUsage(result);
       } else if (kind === 'image' && model.provider !== 'comfyui') {
         const imageParameters = { ...parameters, model: model.model, prompt, n: 1, size: parameters.size ?? `${context.project.profile.width}x${context.project.profile.height}` };
         const editing = references.images.length > 0 && model.provider === 'openai-compatible';
@@ -302,12 +306,15 @@ async function generateMedia(context: MediaActivityContext, directory: string, s
           headers: { 'Idempotency-Key': `${context.operationId}:${shot.id}` },
         });
         const first = Array.isArray(result.data) ? objectSchema.parse(result.data[0]) : undefined;
-        receipt = { state: 'download', downloadUrl: stringOrUndefined(first?.url), base64: stringOrUndefined(first?.b64_json) };
+        receipt = { state: 'download', downloadUrl: stringOrUndefined(first?.url), base64: stringOrUndefined(first?.b64_json), providerUsage: providerReportedUsage(result) };
+      } else if (kind === 'audio' && model.provider === 'volcengine-tts') {
+        const result = await synthesizeVolcengineSpeech(model, context.apiKey, shot.narration, context.signal);
+        receipt = { state: 'download', ...result };
       } else if (kind === 'audio' && model.provider === 'qwen-tts') {
         const result = await requestJson(endpoint(model.baseUrl, 'services/aigc/multimodal-generation/generation'), context, {
           method: 'POST', body: JSON.stringify({ model: model.model, input: { ...parameters, text: shot.narration, voice: parameters.voice ?? 'Cherry', language_type: parameters.language_type ?? 'Chinese' } }),
         });
-        receipt = { state: 'download', downloadUrl: stringOrUndefined(nested(result, 'output', 'audio', 'url')) };
+        receipt = { state: 'download', downloadUrl: stringOrUndefined(nested(result, 'output', 'audio', 'url')), providerUsage: providerReportedUsage(result) };
       } else if (kind === 'audio') {
         const response = await fetch(endpoint(model.baseUrl, 'audio/speech'), {
           method: 'POST', headers: { 'Content-Type': 'application/json', ...(context.apiKey ? { Authorization: `Bearer ${context.apiKey}` } : {}), 'Idempotency-Key': `${context.operationId}:${shot.id}` },
@@ -320,7 +327,7 @@ async function generateMedia(context: MediaActivityContext, directory: string, s
         const workflow = comfyPrompt(context, shot, references);
         const result = await requestJson(endpoint(model.baseUrl, 'prompt'), context, { method: 'POST', body: JSON.stringify({ prompt: workflow, client_id: `${context.operationId}:${shot.id}` }) });
         const taskId = z.string().parse(result.prompt_id);
-        receipt = { state: 'submitted', taskId };
+        receipt = { state: 'submitted', taskId, providerUsage: providerReportedUsage(result) };
         context.persistRemoteTask(taskId);
       } else if (kind === 'video') {
         const image = currentVideoImage(context, shot);
@@ -347,7 +354,7 @@ async function generateMedia(context: MediaActivityContext, directory: string, s
           body,
         });
         const taskId = z.string().parse(result.id ?? result.task_id);
-        receipt = { state: 'submitted', taskId };
+        receipt = { state: 'submitted', taskId, providerUsage: providerReportedUsage(result) };
         context.persistRemoteTask(taskId);
       } else throw new Error('该服务协议尚不支持此素材类型');
       if (receipt.state === 'submitted') receipt.pollDeadlineAt = Date.now() + Math.max(30, Math.min(86400, Number(model.parameters.pollTimeoutSeconds) || 1800)) * 1000;
@@ -366,6 +373,7 @@ async function generateMedia(context: MediaActivityContext, directory: string, s
       if (model.provider === 'custom-http') {
         const pollPath = z.string().min(1).parse(model.parameters.pollPath).replaceAll('{{taskId}}', encodeURIComponent(receipt.taskId!));
         const result = await requestJson(endpoint(model.baseUrl, pollPath), context);
+        receipt.providerUsage = providerReportedUsage(result) ?? receipt.providerUsage;
         const status = atPath(result, model.parameters.statusPath);
         if (['failed', 'canceled', 'cancelled', 'expired', 'error'].includes(String(status))) throw new Error('模型任务失败，请核对服务端任务记录');
         completed = stringOrUndefined(atPath(result, model.parameters.resultUrlPath));
@@ -387,6 +395,7 @@ async function generateMedia(context: MediaActivityContext, directory: string, s
         }
       } else {
         const result = await requestJson(endpoint(model.baseUrl, `${model.provider === 'seedance' ? 'contents/generations/tasks' : 'videos'}/${encodeURIComponent(receipt.taskId!)}`), context);
+        receipt.providerUsage = providerReportedUsage(result) ?? receipt.providerUsage;
         const status = result.status;
         if (['failed', 'canceled', 'cancelled', 'expired'].includes(String(status))) throw new Error('视频任务未完成，请检查服务端任务状态');
         completed = stringOrUndefined(nested(result, 'content', 'video_url')) ?? stringOrUndefined(result.url) ?? stringOrUndefined(nested(result, 'output', 'url'));
@@ -402,7 +411,9 @@ async function generateMedia(context: MediaActivityContext, directory: string, s
     }
     context.signal.throwIfAborted();
   }
-  return downloadReceipt(destination, receiptPath, receipt, context, kind, shot);
+  const asset = await downloadReceipt(destination, receiptPath, receipt, context, kind, shot);
+  onUsage(receipt.providerUsage);
+  return asset;
 }
 
 export function createActivityExecutor(options: { ffmpegPath?: string } = {}) {
@@ -412,7 +423,7 @@ export function createActivityExecutor(options: { ffmpegPath?: string } = {}) {
     if (context.model) {
       const capability = context.node.kind === 'assets' ? 'image' : context.node.kind === 'voice' ? 'tts' : context.node.kind === 'animation' ? 'video' : undefined;
       if (capability && !context.model.capabilities.includes(capability)) throw new Error(`所选模型不具备${capability === 'image' ? '图片' : capability === 'tts' ? '配音' : '视频'}生成能力`);
-      const protocols: Record<string, string[]> = { assets: ['openai-compatible', 'seedream', 'comfyui', 'custom-http'], voice: ['openai-compatible', 'qwen-tts', 'custom-http'], animation: ['openai-compatible', 'seedance', 'comfyui', 'custom-http'] };
+      const protocols: Record<string, string[]> = { assets: ['openai-compatible', 'seedream', 'comfyui', 'custom-http'], voice: ['openai-compatible', 'qwen-tts', 'volcengine-tts', 'custom-http'], animation: ['openai-compatible', 'seedance', 'comfyui', 'custom-http'] };
       if (protocols[context.node.kind] && !protocols[context.node.kind].includes(context.model.provider)) throw new Error('所选模型的服务协议不适用于此制作步骤');
     }
     // Per-shot receipts own ambiguous submit recovery; allow the parent graph
@@ -454,6 +465,7 @@ export function createActivityExecutor(options: { ffmpegPath?: string } = {}) {
       return { assets: assets as unknown as JsonValue, source: 'imported' };
     }
     const assets: AssetRecord[] = [];
+    const usages: Array<ProviderUsage | undefined> = [];
     const regenerating = context.node.config.operation === 'regenerate';
     if (regenerating && (context.project.shots.length !== 1 || context.project.shots[0].id !== context.node.config.shotId || context.project.shots[0].locked)) throw new Error('重新生成须仅包含一个未锁定的目标镜头。');
     for (const shot of context.project.shots) {
@@ -463,9 +475,10 @@ export function createActivityExecutor(options: { ffmpegPath?: string } = {}) {
       else {
         const instruction = regenerating && typeof context.node.config.instruction === 'string' ? context.node.config.instruction : '';
         const generationShot = kind !== 'audio' && instruction ? { ...shot, visualPrompt: `${shot.visualPrompt}\n\n本次调整要求：${instruction}` } : shot;
-        assets.push(await generateMedia(context, directory, generationShot, kind));
+        assets.push(await generateMedia(context, directory, generationShot, kind, usage => usages.push(usage)));
       }
     }
-    return { assets: assets as unknown as JsonValue, source: 'model', modelId: context.model.id };
+    const usage = sumProviderUsage(usages);
+    return { assets: assets as unknown as JsonValue, source: 'model', modelId: context.model.id, ...(usage ? { providerUsage: usage as unknown as JsonValue } : {}) };
   };
 }

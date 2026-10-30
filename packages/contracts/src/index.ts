@@ -3,6 +3,10 @@ import { sceneTemplateSchema } from './scene-templates.js';
 import { claimSchema, researchSourceSchema } from './research.js';
 import { captionStyleSchema, scenePresetSchema } from './caption-style.js';
 import { audioMixSettingsSchema, audioProcessingSchema } from './audio-processing.js';
+export { modelPlatforms, getModelPlatform, platformForConnection, type ModelPlatformPreset } from './model-platforms.js';
+export { textProtocols, mediaAdapters, getMediaAdapters } from './model-protocols.js';
+export { modelConnectionTypes, getModelConnectionType, getModelCapabilities, validateModelConnection } from './model-connections.js';
+export { providerReportedUsage, sumProviderUsage } from './provider-usage.js';
 export { audioProcessingSchema, audioMixSettingsSchema, videoAudioSettingsSchema, usesVideoAudio, DEFAULT_AUDIO_PROCESSING, DEFAULT_VIDEO_AUDIO, DEFAULT_AUDIO_MIX_SETTINGS, preparedAudioMixSchema, audioMixJobSchema, audioMixPrepareResultSchema, audioLevelWindowSchema, silenceDetectionSchema, type AudioProcessing, type VideoAudioSettings, type AudioMixSettings, type PreparedAudioMix, type AudioMixJob, type AudioMixPrepareResult, type AudioLevelWindow, type SilenceDetection } from './audio-processing.js';
 export { captionStyleSchema, DEFAULT_CAPTION_STYLE, effectiveCaptionStyle, scenePresetSchema, seriesSettingsSchema, seriesTemplateSchema, type CaptionStyle, type ScenePreset, type SeriesSettings, type SeriesTemplate } from './caption-style.js';
 export { claimSchema, claimEvidenceSchema, researchSourceSchema, researchResultSchema, researchSearchResultSchema, validateResearchContent, applyResearchClaims, type Claim, type ClaimEvidence, type ResearchSource, type ResearchResult, type ResearchSearchResult, type ShotClaims, type ResearchContent } from './research.js';
@@ -232,14 +236,28 @@ export const costRequestMetricsSchema = z.object({
 export type CostRequestMetrics = z.infer<typeof costRequestMetricsSchema>;
 export const providerUsageSchema = z.object({
   source: z.literal('provider'), inputTokens: z.number().int().nonnegative().optional(), outputTokens: z.number().int().nonnegative().optional(),
-  totalTokens: z.number().int().nonnegative().optional(), cachedInputTokens: z.number().int().nonnegative().optional(),
+  totalTokens: z.number().int().nonnegative().optional(), cachedInputTokens: z.number().int().nonnegative().optional(), cachedOutputTokens: z.number().int().nonnegative().optional(),
   images: z.number().int().nonnegative().optional(), videoSeconds: z.number().nonnegative().optional(),
   characters: z.number().int().nonnegative().optional(), audioSeconds: z.number().nonnegative().optional(),
 });
 export type ProviderUsage = z.infer<typeof providerUsageSchema>;
+export const modelPlatformSchema = z.enum(['openai', 'anthropic', 'google', 'deepseek', 'qwen', 'volcengine', 'moonshot', 'zhipu', 'siliconflow', 'openrouter', 'ollama', 'comfyui', 'seedream', 'seedance', 'qwen-tts', 'custom']);
+export type ModelPlatform = z.infer<typeof modelPlatformSchema>;
+export const textProtocolSchema = z.enum(['chat-completions', 'responses', 'messages']);
+export type TextProtocol = z.infer<typeof textProtocolSchema>;
+export const modelConnectionTypeSchema = z.enum(['text', 'image', 'video', 'audio']);
+export type ModelConnectionType = z.infer<typeof modelConnectionTypeSchema>;
+export const modelDiscoverySchema = z.object({ source: z.enum(['remote', 'preset', 'workflow']), items: z.array(z.object({ id: z.string(), label: z.string() })), message: z.string().optional() });
+export type ModelDiscovery = z.infer<typeof modelDiscoverySchema>;
+export const voiceDiscoverySchema = modelDiscoverySchema.omit({ source: true }).extend({ source: z.enum(['preset', 'remote', 'mixed']), sourceUrl: z.string().url().optional() });
+export type VoiceDiscovery = z.infer<typeof voiceDiscoverySchema>;
+export { getModelVoiceCatalog, supportsAccountVoices } from './model-voices.js';
 export const modelSchema = z.object({
   id: z.string(), name: z.string().min(1).max(120),
-  provider: z.enum(['openai-compatible', 'ollama', 'comfyui', 'seedream', 'seedance', 'qwen-tts', 'custom-http']),
+  provider: z.enum(['openai-compatible', 'ollama', 'comfyui', 'seedream', 'seedance', 'qwen-tts', 'volcengine-tts', 'volcengine-asr', 'custom-http']),
+  platform: modelPlatformSchema.optional(),
+  textProtocol: textProtocolSchema.optional(),
+  connectionType: modelConnectionTypeSchema.optional(),
   baseUrl: z.string().url().refine(value => {
     try {
       const url = new URL(value);
@@ -254,6 +272,7 @@ export const usageRecordSchema = z.object({
   id: z.string().min(1), revision: z.number().int().positive(), operationId: z.string().min(1),
   runId: z.string().min(1), nodeId: z.string().min(1), shotId: z.string().optional(), projectId: z.string().min(1),
   modelId: z.string().min(1), modelName: z.string(), provider: modelSchema.shape.provider, model: z.string(), capability: modelCapabilitySchema,
+  platform: modelPlatformSchema.optional(),
   status: z.enum(['submitted', 'completed', 'unknown', 'failed', 'canceled']), requestMetrics: costRequestMetricsSchema,
   providerUsage: providerUsageSchema.optional(), pricing: modelPricingSchema.nullable().optional(),
   estimatedAmount: z.number().nonnegative().optional(), estimateBasis: z.enum(['provider', 'request', 'mixed']).optional(),
@@ -261,7 +280,15 @@ export const usageRecordSchema = z.object({
   createdAt: z.string(), updatedAt: z.string(),
 }).refine(value => (value.actualAmount === undefined) === (value.actualCurrency === undefined), '实际金额与币种须同时填写');
 export type UsageRecord = z.infer<typeof usageRecordSchema>;
+export const tokenMetrics = ['inputTokens', 'outputTokens', 'cachedInputTokens', 'cachedOutputTokens'] as const;
+export type TokenMetric = typeof tokenMetrics[number];
+export const tokenSummarySchema = z.object({
+  inputTokens: z.number().int().nonnegative().optional(), outputTokens: z.number().int().nonnegative().optional(),
+  cachedInputTokens: z.number().int().nonnegative().optional(), cachedOutputTokens: z.number().int().nonnegative().optional(),
+});
 export const costSummarySchema = z.object({
+  tokens: tokenSummarySchema.default({}),
+  tokenRecords: z.object({ inputTokens: z.number().int().nonnegative().default(0), outputTokens: z.number().int().nonnegative().default(0), cachedInputTokens: z.number().int().nonnegative().default(0), cachedOutputTokens: z.number().int().nonnegative().default(0) }).default({ inputTokens: 0, outputTokens: 0, cachedInputTokens: 0, cachedOutputTokens: 0 }),
   currencies: z.array(z.object({ currency: currencySchema, estimatedAmount: z.number().nonnegative().optional(), actualAmount: z.number().nonnegative().optional(), estimatedRecords: z.number().int().nonnegative(), actualRecords: z.number().int().nonnegative() })),
   total: z.number().int().nonnegative(), unknownEstimated: z.number().int().nonnegative(), unknownActual: z.number().int().nonnegative(), unknownSubmissions: z.number().int().nonnegative(),
 });

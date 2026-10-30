@@ -126,8 +126,8 @@ it.each(['after-dispatch', 'after-result', 'after-commit'] as const)('keeps one 
     expect(records.items[0]).toMatchObject({ status: 'unknown' });
     expect(records.items[0].estimatedAmount).toBeUndefined(); expect(records.items[0].providerUsage).toBeUndefined();
   } else {
-    expect(records.items[0]).toMatchObject({ status: 'completed', estimateBasis: 'provider', providerUsage: { source: 'provider', inputTokens: 100, outputTokens: 20 } });
-    expect(records.items[0].estimatedAmount).toBeCloseTo(.00036);
+    expect(records.items[0]).toMatchObject({ status: 'completed', providerUsage: { source: 'provider', inputTokens: 100, outputTokens: 20 } });
+    expect(records.items[0].estimatedAmount).toBeUndefined();
   }
   await second.dispatch('run.replay', { runId: run.id });
   expect((await second.dispatch('cost.list', { runId: run.id }) as { items: UsageRecord[] }).items).toEqual(records.items);

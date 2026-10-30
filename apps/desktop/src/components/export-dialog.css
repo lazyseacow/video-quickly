@@ -1,0 +1,7 @@
+.export-dialog__preview { margin: 0; min-width: 0; }
+.export-dialog__frame { width: min(100%, calc(340px * var(--export-aspect))); aspect-ratio: var(--export-aspect); margin-inline: auto; overflow: hidden; border-radius: var(--radius-media); background: var(--surface-raised); outline: 1px solid var(--image-outline); outline-offset: -1px; }
+.export-dialog__frame .scene-preview, .export-dialog__frame canvas { display: block; width: 100%; height: 100%; }
+.export-dialog__preview figcaption { margin-top: var(--space-3); color: var(--text-subtle); font-size: var(--text-size-caption); line-height: var(--line-height-body); }
+.export-dialog .export-secondary { flex-direction: column; gap: var(--space-3); margin-top: 0; }
+.export-dialog .export-secondary > .button { justify-content: flex-start; }
+@media (max-width: 800px) { .export-dialog__frame { width: min(100%, calc(136px * var(--export-aspect))); } }

@@ -3,7 +3,7 @@ import { effectiveCaptionStyle, type AssetRecord, type CaptionStyle, type Projec
 import { applyBulkShotEdit, type BulkShotChanges } from '../lib/bulk-shot-edits';
 import { editContent, type EditContent } from '../lib/project-edits';
 import { useBulkSourceDurations } from '../lib/source-duration';
-import { Button, Dialog, Field, Notice } from './Primitives';
+import { Button, Dialog, Field, Notice, Select } from './Primitives';
 import CaptionStyleEditor from './CaptionStyleEditor';
 import { ScenePreview } from './ScenePreview';
 import './bulk-shot-dialog.css';
@@ -61,9 +61,9 @@ export default function BulkShotDialog({ project, ids, primaryId, assets, disabl
         </fieldset>
         <fieldset className="bulk-shot-group" disabled={frozen}><legend>样式</legend>
           <label className="field-inline"><input type="checkbox" checked={copyEnabled} onChange={event => setCopyEnabled(event.target.checked)} />从镜头复制样式</label>
-          {copyEnabled ? <><Field label="复制样式来源镜头"><select value={copyFromId} onChange={event => setCopyFromId(event.target.value)}>{baseline.shots.map((shot, index) => <option value={shot.id} key={shot.id}>{index + 1}. {shot.title}</option>)}</select></Field><p className="tiny-meta">复制运镜、当前有效字幕样式及已有画面模板的配色与动效；各镜头的内容和素材保留。</p></> : <>
+          {copyEnabled ? <><Field label="复制样式来源镜头"><Select value={copyFromId} onChange={event => setCopyFromId(event.target.value)}>{baseline.shots.map((shot, index) => <option value={shot.id} key={shot.id}>{index + 1}. {shot.title}</option>)}</Select></Field><p className="tiny-meta">复制运镜、当前有效字幕样式及已有画面模板的配色与动效；各镜头的内容和素材保留。</p></> : <>
             <label className="field-inline"><input type="checkbox" checked={animationEnabled} onChange={event => setAnimationEnabled(event.target.checked)} />批量修改运镜</label>
-            {animationEnabled && <div className="bulk-shot-fields">{([{ key: 'panX', label: '批量水平移动', min: -1, max: 1 }, { key: 'panY', label: '批量垂直移动', min: -1, max: 1 }, { key: 'zoom', label: '批量缩放', min: .1, max: 5 }] as const).map(field => <Field key={field.key} label={field.label}><input type="number" min={field.min} max={field.max} step={.01} value={Number.isFinite(animation[field.key]) ? animation[field.key] : ''} onChange={event => setAnimation({ ...animation, [field.key]: event.target.valueAsNumber })} /></Field>)}<Field label="批量转场"><select value={animation.transition} onChange={event => setAnimation({ ...animation, transition: event.target.value as typeof animation.transition })}><option value="cut">直接切换</option><option value="fade">柔和叠化</option><option value="wipe">擦除切换</option></select></Field></div>}
+            {animationEnabled && <div className="bulk-shot-fields">{([{ key: 'panX', label: '批量水平移动', min: -1, max: 1 }, { key: 'panY', label: '批量垂直移动', min: -1, max: 1 }, { key: 'zoom', label: '批量缩放', min: .1, max: 5 }] as const).map(field => <Field key={field.key} label={field.label}><input type="number" min={field.min} max={field.max} step={.01} value={Number.isFinite(animation[field.key]) ? animation[field.key] : ''} onChange={event => setAnimation({ ...animation, [field.key]: event.target.valueAsNumber })} /></Field>)}<Field label="批量转场"><Select value={animation.transition} onChange={event => setAnimation({ ...animation, transition: event.target.value as typeof animation.transition })}><option value="cut">直接切换</option><option value="fade">柔和叠化</option><option value="wipe">擦除切换</option></Select></Field></div>}
             <label className="field-inline"><input type="checkbox" checked={captionEnabled} onChange={event => setCaptionEnabled(event.target.checked)} />批量修改字幕样式</label>
             {captionEnabled && <CaptionStyleEditor value={captionStyle} inheritedStyle={baseline.captionStyle} onChange={setCaptionStyle} disabled={frozen} inheritLabel="恢复各镜头的项目默认" />}
           </>}
@@ -73,6 +73,6 @@ export default function BulkShotDialog({ project, ids, primaryId, assets, disabl
         return <article key={shot.id}><div><strong>{shot.title}</strong><span>{shot.locked ? '已锁定' : `${(before.durationUs / 1_000_000).toFixed(3)} → ${(shot.durationUs / 1_000_000).toFixed(3)} 秒`}</span></div></article>;
       })}</div>{first && <div className="bulk-shot-preview__canvas"><ScenePreview project={{ ...baseline, ...(preview ?? {}) }} shot={shown.find(shot => shot.id === first.id) ?? first} shotIndex={baseline.shots.findIndex(shot => shot.id === first.id)} assets={assets} /></div>}</div></div>
       {validation && !applied && <Notice kind="error">{validation}</Notice>}{failure && <Notice kind="error">{failure}</Notice>}
-    </div><div className="dialog__footer"><Button onClick={onClose}>{busy ? '关闭并继续保存' : applied ? '关闭并保留草稿' : '取消'}</Button><Button variant="primary" busy={busy} disabled={disabled || !applied && (!preview || Boolean(validation) || source.status === 'loading' || source.status === 'error')} onClick={() => void submit()}>{applied ? '重试保存批量修改' : '应用批量修改'}</Button></div>
+    </div><div className="dialog__footer"><Button onClick={onClose}>{busy ? '关闭并继续保存' : applied ? '关闭并保留草稿' : '取消'}</Button><Button aria-label={applied ? '重试保存批量修改' : '应用批量修改'} variant="primary" busy={busy} disabled={disabled || !applied && (!preview || Boolean(validation) || source.status === 'loading' || source.status === 'error')} onClick={() => void submit()}>{applied ? "重试保存" : "应用"}</Button></div>
   </Dialog>;
 }

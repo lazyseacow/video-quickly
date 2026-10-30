@@ -4,7 +4,7 @@
 .research-dialog .dialog__body { flex: 1 1 auto; min-height: 0; overflow-y: auto; }
 .research-view, .research-analysis__actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; margin-bottom: 16px; }
 .research-summary { margin: 12px 0; font-size: 12px; color: var(--text-secondary); font-variant-numeric: tabular-nums; }
-.research-invalid-references { margin: 16px 0; padding: 14px; border: 1px solid var(--border); border-radius: 10px; }
+.research-invalid-references { margin: 16px 0; padding: 14px; border: 1px solid var(--border); border-radius: var(--radius-small); }
 .research-invalid-references h3 { font-size: 13px; font-weight: 600; }
 .research-invalid-references > p { margin: 10px 0; line-height: 1.7; }
 .research-invalid-references article { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 0; border-top: 1px solid var(--border); }
@@ -15,7 +15,7 @@
 .research-toolbar > .field { flex: 1; min-width: 140px; margin-bottom: 0; }
 .research-workspace { display: grid; grid-template-columns: 230px minmax(0, 1fr); gap: 20px; }
 .research-list { min-width: 0; max-height: 590px; overflow-y: auto; padding-right: 3px; }
-.research-list__claim, .research-candidate { width: 100%; margin: 0 0 8px; padding: 12px; text-align: left; border: 1px solid var(--border); border-radius: 9px; background: var(--surface); }
+.research-list__claim, .research-candidate { width: 100%; margin: 0 0 8px; padding: 12px; text-align: left; border: 1px solid var(--border); border-radius: var(--radius-small); background: var(--surface); }
 .research-list__claim.is-active, .research-candidate.is-active, .research-source-list__item.is-active { border-color: var(--accent); background: var(--surface-raised); }
 .research-list strong, .research-list small { display: block; overflow-wrap: anywhere; }
 .research-list strong { font-size: 12px; font-weight: 500; line-height: 1.6; }
@@ -35,10 +35,10 @@
 .research-source-checks { display: grid; gap: 10px; margin-bottom: 16px; }
 .research-source-checks label { overflow-wrap: anywhere; line-height: 1.5; }
 .research-analysis__actions .tiny-meta { line-height: 1.6; }
-.research-source-preview { padding: 16px; margin-top: 16px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface-raised); }
+.research-source-preview { padding: 16px; margin-top: 16px; border: 1px solid var(--border); border-radius: var(--radius-small); background: var(--surface-raised); }
 .research-source-preview > .tiny-meta { margin: 8px 0 12px; }
 .research-source-list { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; margin: 14px 0; }
-.research-source-list__item { display: flex; align-items: center; gap: 8px; padding: 10px; border: 1px solid var(--border); border-radius: 8px; }
+.research-source-list__item { display: flex; align-items: center; gap: 8px; padding: 10px; border: 1px solid var(--border); border-radius: var(--radius-small); }
 .research-source-list__item > button:first-child { flex: 1; min-width: 0; padding: 0; border: 0; background: transparent; text-align: left; }
 .research-source-list__item strong, .research-source-list__item small { display: block; overflow-wrap: anywhere; }
 .research-source-list__item strong { font-size: 12px; font-weight: 500; }
@@ -57,7 +57,7 @@
 .research-suggestions p { color: var(--text-secondary); font-size: 11px; line-height: 1.7; margin: 8px 0; }
 .claim-evidence { margin: 18px 0; padding: 16px 0; border-top: 1px solid var(--border); border-bottom: 1px solid var(--border); }
 .claim-evidence h3 > span, .research-sources h3 > span { color: var(--text-subtle); font-size: 11px; font-weight: 400; margin-left: 6px; }
-.claim-evidence__item { margin-top: 12px; padding: 12px; border: 1px solid var(--border); border-radius: 8px; }
+.claim-evidence__item { margin-top: 12px; padding: 12px; border: 1px solid var(--border); border-radius: var(--radius-small); }
 .claim-evidence__item > div:first-child { display: flex; flex-wrap: wrap; gap: 6px 12px; }
 .claim-evidence__item strong { font-size: 11px; font-weight: 500; }
 .claim-evidence__item blockquote { margin: 10px 0; padding-left: 10px; border-left: 2px solid var(--border); color: var(--text-secondary); font-size: 12px; line-height: 1.8; white-space: pre-wrap; overflow-wrap: anywhere; }

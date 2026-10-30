@@ -4,6 +4,7 @@ import { basename, join } from 'node:path';
 import { z } from 'zod';
 import { captionTrackSchema, providerUsageSchema, requestModelParameters, TranscriptionTimestampError, type CaptionTrack, type JsonValue, type ProviderUsage } from '@video-quickly/contracts';
 import type { MediaActivityContext } from './index.js';
+import { normalizeVolcengineTranscript, volcengineRecognitionRequest } from './volcengine-speech.js';
 
 const timedSegmentSchema = z.object({ start: z.number().finite().nonnegative(), end: z.number().finite().positive(), text: z.string() });
 const responseSchema = z.object({
@@ -38,7 +39,7 @@ export async function transcribeAudio(context: MediaActivityContext): Promise<Js
   const audio = context.assets.find(asset => asset.id === shot?.audioAssetId && asset.active && asset.kind === 'audio');
   const model = context.model;
   if (!shot || !audio) throw new Error('请先为当前镜头关联旁白音频。');
-  if (!model?.enabled || !model.capabilities.includes('asr') || model.provider !== 'openai-compatible') throw new Error('字幕识别需要支持时间戳的 OpenAI 兼容 ASR 模型。');
+  if (!model?.enabled || !model.capabilities.includes('asr') || !['openai-compatible', 'volcengine-asr'].includes(model.provider)) throw new Error('字幕识别需要支持时间戳的语音识别模型。');
   const info = await stat(audio.path);
   if (!info.isFile() || info.size > 25 * 1024 * 1024) throw new Error('当前字幕识别支持不超过 25 MB 的音频文件，请先裁出需要识别的音频。');
   const bytes = await readFile(audio.path);
@@ -67,6 +68,7 @@ export async function transcribeAudio(context: MediaActivityContext): Promise<Js
   if (!['http:', 'https:'].includes(base.protocol) || base.username || base.password) throw new Error('字幕模型服务地址无效。');
   const url = `${base.toString().replace(/\/$/, '')}/audio/transcriptions`;
   const parameters = requestModelParameters(model, 'asr');
+  const nativeRequest = model.provider === 'volcengine-asr' ? volcengineRecognitionRequest(model, context.apiKey, bytes, context.signal) : undefined;
   const granularity = parameters.timestampGranularity === 'word' ? 'word' : 'segment';
   const format = parameters.asrResponseFormat === 'diarized_json' ? 'diarized_json' : 'verbose_json';
   const body = new FormData();
@@ -90,14 +92,16 @@ export async function transcribeAudio(context: MediaActivityContext): Promise<Js
   }
   // This local receipt permits recovery to inspect an existing result, never an automatic resubmission.
   context.persistRemoteTask(`transcription:${key}`);
-  const response = await fetch(url, {
+  const response = nativeRequest ? await fetch(nativeRequest.url, nativeRequest.init) : await fetch(url, {
     method: 'POST', body,
     headers: { ...(context.apiKey ? { Authorization: `Bearer ${context.apiKey}` } : {}), 'Idempotency-Key': context.operationId },
     signal: AbortSignal.any([context.signal, AbortSignal.timeout(120_000)]),
   });
   if (!response.ok) { await response.body?.cancel(); throw new Error(`字幕识别失败（HTTP ${response.status}），请检查服务配置。`); }
+  if (nativeRequest && response.headers.get('X-Api-Status-Code') !== '20000000') { await response.body?.cancel(); throw new Error(`豆包语音识别未成功（${response.headers.get('X-Api-Status-Code') ?? '未返回状态码'}），请核对资源与权限。`); }
   const text = await responseText(response);
-  const parsed = responseSchema.parse(JSON.parse(text));
+  const data: unknown = JSON.parse(text);
+  const parsed = responseSchema.parse(nativeRequest ? normalizeVolcengineTranscript(data) : data);
   const rawUsage = parsed.usage && typeof parsed.usage === 'object' ? parsed.usage as Record<string, unknown> : {};
   const number = (value: unknown, integer = false) => typeof value === 'number' && Number.isFinite(value) && value >= 0 && (!integer || Number.isSafeInteger(value)) ? value : undefined;
   const measured = { inputTokens: number(rawUsage.input_tokens, true), outputTokens: number(rawUsage.output_tokens, true), totalTokens: number(rawUsage.total_tokens, true), audioSeconds: number(rawUsage.seconds) ?? number(parsed.duration) };

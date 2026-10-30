@@ -40,9 +40,9 @@ export default function ResearchReview({ project, result, onClose, onApply }: Re
         <section className="research-detail" aria-label="候选内容">{active && <><ClaimFields key={active.id} claim={active} sources={sources} review={false} disabled={busy} onChange={next => { setClaims(values => values.map(claim => claim.id === next.id ? { ...next, status: 'pending' } : claim)); setFailure(''); }} />
           <fieldset className="research-bindings"><legend>加入后引用到镜头</legend>{!selected.includes(active.id) && <p className="tiny-meta">先勾选此候选，再选择引用镜头。</p>}{project.shots.map((shot, index) => <label className="field-inline" key={shot.id}><input type="checkbox" aria-label={`候选引用到镜头 ${index + 1}：${shot.title}`} checked={bindings.find(binding => binding.shotId === shot.id)?.claimIds.includes(active.id) ?? false} disabled={busy || !selected.includes(active.id) || shot.locked} onChange={event => bind(shot.id, active.id, event.target.checked)} /><span>{index + 1}. {shot.title}{shot.locked ? '（已锁定）' : ''}</span></label>)}</fieldset>
           {result.shotSuggestions.some(suggestion => suggestion.claimIds.includes(active.id)) && <details className="research-suggestions"><summary>查看模型的镜头引用建议</summary>{result.shotSuggestions.filter(suggestion => suggestion.claimIds.includes(active.id)).map(suggestion => <p key={suggestion.shotId}>{project.shots.find(shot => shot.id === suggestion.shotId)?.title ?? '镜头已移除'}：{suggestion.reason || '模型建议引用此主张，仍需人工选择。'}</p>)}</details>}
-        </>}</section></div> : <p className="research-empty">这次整理没有返回可加入的主张。可以返回资料表继续手工整理。</p>}
+        </>}</section></div> : <p className="research-empty">暂无可加入的主张，可返回资料表手动整理。</p>}
       {result.text && <details className="research-warnings"><summary>查看整理原文</summary><pre className="research-raw">{result.text}</pre></details>}
       {(error || failure) && <Notice kind="error">{error || failure}</Notice>}
-    </div><div className="dialog__footer"><Button onClick={onClose}>返回</Button><Button variant="primary" busy={busy} disabled={!chosen.length || Boolean(error)} onClick={() => void apply()}>加入所选主张与引用</Button></div>
+    </div><div className="dialog__footer"><Button onClick={onClose}>返回</Button><Button aria-label="加入所选主张与引用" variant="primary" busy={busy} disabled={!chosen.length || Boolean(error)} onClick={() => void apply()}>加入所选</Button></div>
   </Dialog>;
 }

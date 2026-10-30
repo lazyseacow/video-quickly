@@ -1,6 +1,6 @@
 import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type PointerEvent } from 'react';
-import { ArrowLeft, ArrowRight, Copy, Film, ListChecks, Magnet, Mic, Music2, ScanLine, Scissors, SlidersHorizontal, Trash2, Volume2, VolumeX, X, ZoomIn, ZoomOut } from 'lucide-react';
-import { frameAtTime, timeAtFrame, usesVideoAudio, type AssetRecord, type FrameRate, type ProjectDocument, type Shot } from '@video-quickly/contracts';
+import { ArrowLeft, ArrowRight, Copy, ListChecks, Magnet, Mic, Music2, ScanLine, Scissors, Trash2, X, ZoomIn, ZoomOut, SlidersHorizontal, Volume2, VolumeX } from 'lucide-react';
+import { frameAtTime, timeAtFrame, type AssetRecord, type FrameRate, type ProjectDocument, type Shot, usesVideoAudio } from '@video-quickly/contracts';
 import type { TimelineClip } from '@video-quickly/video';
 import { canSplitShot, maximumSourceOutUs, minimumShotDurationUs, minimumSourceInUs, snapTimeUs } from '@video-quickly/video/editing';
 import { PlaybackClock, usePlayback } from '../lib/playback';
@@ -173,7 +173,7 @@ export default memo(function Timeline({ project, assets, shots, timeline, select
     <div className="timeline-body">
       <div className="timeline-track-headers" aria-label="轨道信息">
         <div className="track-header-ruler"><span>轨道</span><span>{2 + (musicClips.length ? 1 : 0) + (originalCount ? 1 : 0)}</span></div>
-        <div className="track-header track-header--video"><span className="track-header__type"><Film size={14} /><b>V1</b></span><strong>画面</strong><small>{shots.length} 个片段</small></div>
+        <div className="track-header track-header--video"><strong>画面</strong><small>{shots.length} 个片段</small></div>
         <div className="track-header track-header--audio"><span className="track-header__type"><Mic size={14} /><b>A1</b></span><strong>旁白</strong><small>{audioCount ? `${audioCount} 段音频` : '待添加'}</small></div>
         {originalCount > 0 && <div className="track-header track-header--audio"><span className="track-header__type"><Volume2 size={14} /><b>A2</b></span><strong>原声</strong><small>{originalCount} 段</small></div>}
         {musicClips.length > 0 && <div className="track-header track-header--audio"><span className="track-header__type"><Music2 size={14} /><b>{originalCount ? 'A3' : 'A2'}</b></span><strong>背景音乐</strong><small>{musicClips.length} 段音频</small></div>}

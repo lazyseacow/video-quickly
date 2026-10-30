@@ -125,7 +125,7 @@ test('loads 200 shots without snapshot or hidden historical reads and keeps cont
   await info.attach('large-project-interactions', { body: JSON.stringify(metrics), contentType: 'application/json' });
 });
 
-test('applies a generated result as an undo command and rejects it again after subsequent revisions', async ({ page, request }) => {
+test('keeps generated results editable with undo and rejects reapplying them after revisions', async ({ page, request }) => {
   const server = createServer((incoming, response) => {
     incoming.resume();
     response.setHeader('Content-Type', 'application/json');
@@ -141,20 +141,23 @@ test('applies a generated result as an undo command and rejects it again after s
     const project = await rpc(request, 'workflow.save', { projectId: original.id, revision: original.revision, workflow });
     const run = await rpc(request, 'run.start', { projectId: project.id, nodeId: 'script' });
     await expect.poll(async () => (await rpc(request, 'project.get', { projectId: project.id })).latestRun.status).toBe('waiting_review');
+    await rpc(request, 'node.apply', { runId: run.id, nodeId: 'script', revision: project.revision });
     await openProject(page, project.title);
+    await expect(page.getByLabel('镜头标题')).toHaveValue('已生成的分镜');
     await page.getByRole('tab', { name: '制作步骤', exact: true }).click();
     await page.locator('.step-item').filter({ hasText: '旁白与分镜' }).click();
-    await page.getByRole('button', { name: '查看最近产物', exact: true }).click();
-    const output = page.getByRole('dialog', { name: '步骤产物', exact: true });
-    await output.getByRole('button', { name: '应用到项目', exact: true }).click();
-    await expect(output).toHaveCount(0);
-    await page.getByRole('dialog', { name: '旁白与分镜', exact: true }).getByRole('button', { name: '取消', exact: true }).click();
-    await expect(page.getByLabel('镜头标题')).toHaveValue('已生成的分镜');
+    const step = page.getByRole('dialog', { name: '旁白与分镜', exact: true });
+    await expect(step.getByRole('button', { name: '保存', exact: true })).toBeVisible();
+    await expect(step.getByRole('button', { name: '执行', exact: true })).toBeVisible();
+    await expect(step.getByRole('button', { name: '查看最近产物', exact: true })).toHaveCount(0);
+    await step.getByRole('button', { name: '取消', exact: true }).click();
+    await page.getByLabel('镜头标题').fill('人工修订的分镜');
+    await page.getByRole('button', { name: '保存镜头', exact: true }).click();
     await page.getByRole('button', { name: '撤销', exact: true }).click();
-    await expect(page.getByLabel('镜头标题')).toHaveValue('测试镜头 1');
+    await expect(page.getByLabel('镜头标题')).toHaveValue('已生成的分镜');
     await expect(page.getByRole('button', { name: '保存镜头', exact: true })).toBeDisabled();
     await page.getByRole('button', { name: '重做', exact: true }).click();
-    await expect(page.getByLabel('镜头标题')).toHaveValue('已生成的分镜');
+    await expect(page.getByLabel('镜头标题')).toHaveValue('人工修订的分镜');
     await expect(page.getByRole('button', { name: '保存镜头', exact: true })).toBeDisabled();
     const stale = await request.post('/__desktop_rpc', { data: { method: 'node.apply', params: { runId: run.id, nodeId: 'script' } } });
     expect((await stale.json()).error).toContain('项目已在生成后修改');
@@ -162,11 +165,11 @@ test('applies a generated result as an undo command and rejects it again after s
   } finally { await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve())); }
 });
 
-test('separates adjacent layout controls and keeps the quiet glass theme usable at desktop and narrow sizes', async ({ page, request }, info) => {
+test('separates adjacent layout controls and keeps both monochrome themes usable at desktop and narrow sizes', async ({ page, request }, info) => {
   const errors: string[] = [];
   page.on('pageerror', error => errors.push(error.message));
   page.on('console', message => { if (message.type() === 'error') errors.push(message.text()); });
-  const project = await createProject(request, '轻玻璃交互验收');
+  const project = await createProject(request, '灰阶主题交互验收');
   await openProject(page, project.title);
   await expect(page).toHaveTitle(/Video Quickly/);
   for (const theme of ['dark', 'light'] as const) {
@@ -181,13 +184,13 @@ test('separates adjacent layout controls and keeps the quiet glass theme usable 
     await page.getByRole('button', { name: '显示镜头导航', exact: true }).click();
     await expect(page.locator('#project-outline')).toBeVisible();
     await page.getByText('画面预览', { exact: true }).click();
-    await page.screenshot({ path: info.outputPath(`quiet-glass-${theme}-1536.png`) });
+    await page.screenshot({ path: info.outputPath(`monochrome-${theme}-1536.png`) });
   }
   await page.setViewportSize({ width: 600, height: 900 });
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1)).toBe(true);
   await expect(page.getByRole('button', { name: '撤销', exact: true })).toBeVisible();
   await expect(page.getByRole('button', { name: '重做', exact: true })).toBeVisible();
-  await page.screenshot({ path: info.outputPath('quiet-glass-light-600.png') });
+  await page.screenshot({ path: info.outputPath('monochrome-light-600.png') });
   await page.emulateMedia({ reducedMotion: 'reduce' });
   await page.getByRole('button', { name: '新建项目', exact: true }).click();
   const dialog = page.getByRole('dialog', { name: '新建视频项目', exact: true });

@@ -1,3 +1,4 @@
+import { projectSettingAction } from './settings';
 import { writeFile } from 'node:fs/promises';
 import { expect, test, type APIRequestContext, type Page } from '@playwright/test';
 import type { AssetRecord, ProjectDocument } from '@video-quickly/contracts';
@@ -22,7 +23,7 @@ async function openProject(page: Page, title: string) {
   await expect(page.getByLabel('镜头标题')).toHaveValue('弹窗冲突镜头');
 }
 async function waitForRevision(page: Page, revision: number) {
-  await expect(page.locator('.project-heading-copy')).toContainText(`修订 ${revision}`);
+  await expect(page.locator('.project-heading-copy')).toHaveAttribute('data-revision', String(revision));
 }
 function observeErrors(page: Page) {
   const errors: string[] = [];
@@ -97,7 +98,7 @@ test('keeps a music draft when its position changes externally and accepts unrel
   const asset = await rpc<AssetRecord>(request, 'asset.import', { projectId: project.id, path, kind: 'audio' });
   project = await rpc<ProjectDocument>(request, 'project.update', { projectId: project.id, revision: project.revision, patch: { musicClips: [{ id: 'dialog-music', assetId: asset.id, startUs: 0, sourceInUs: 0, durationUs: 2_000_000, gainDb: -18, fadeInUs: 0, fadeOutUs: 0, loop: true }] } });
   await openProject(page, project.title);
-  await page.getByRole('button', { name: '背景音乐', exact: true }).click();
+  await (await projectSettingAction(page, '背景音乐', {exact: true})).click();
   const dialog = page.getByRole('dialog', { name: '背景音乐', exact: true });
   await dialog.getByLabel('音乐 1 音量（dB）', { exact: true }).fill('-6');
   const remote = await rpc<ProjectDocument>(request, 'project.update', { projectId: project.id, revision: project.revision, patch: { musicClips: project.musicClips?.map(clip => ({ ...clip, startUs: 1_000_000 })) } });
@@ -109,7 +110,7 @@ test('keeps a music draft when its position changes externally and accepts unrel
   expect(await savedProject(request, project.id)).toEqual(remote);
   await page.screenshot({ path: info.outputPath('music-dialog-external-position-conflict.png') });
   await dialog.getByRole('button', { name: '取消', exact: true }).click();
-  await page.getByRole('button', { name: '背景音乐', exact: true }).click();
+  await (await projectSettingAction(page, '背景音乐', {exact: true})).click();
   await expect(dialog.getByLabel('音乐 1 项目起点（秒）', { exact: true })).toHaveValue('1');
   await dialog.getByLabel('音乐 1 音量（dB）', { exact: true }).fill('-9');
   const title = '只修改标题的音乐项目';
@@ -174,7 +175,7 @@ test('retries its own unsaved music edit after a rejected save and restores both
     }
     await route.continue();
   });
-  await page.getByRole('button', { name: '背景音乐', exact: true }).click();
+  await (await projectSettingAction(page, '背景音乐', {exact: true})).click();
   const dialog = page.getByRole('dialog', { name: '背景音乐', exact: true });
   await dialog.getByLabel('音乐 1 音量（dB）', { exact: true }).fill('-6');
   await dialog.getByRole('button', { name: '应用背景音乐', exact: true }).click();

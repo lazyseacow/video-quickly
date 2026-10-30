@@ -40,7 +40,7 @@ test('paints the actual source sample in both thumbnail surfaces and invalidates
     await color(page.locator('.timeline-clip--video').nth(index).locator('canvas'), expected);
   }
   const revised = await rpc<ProjectDocument>(request, 'project.update', { projectId: project.id, revision: project.revision, patch: { shots: project.shots.map(shot => shot.id === 'color-0' ? { ...shot, videoInUs: 2_500_000 } : shot) } });
-  await expect(page.getByText(`修订 ${revised.revision}`, { exact: true })).toBeVisible();
+  await expect(page.locator('.project-heading-copy')).toHaveAttribute('data-revision', String(revised.revision));
   await color(page.locator('.outline-shot').first().locator('canvas'), 'blue');
   await color(page.locator('.timeline-clip--video').first().locator('canvas'), 'blue');
   await color(page.locator('.preview-panel .scene-preview canvas'), 'blue');

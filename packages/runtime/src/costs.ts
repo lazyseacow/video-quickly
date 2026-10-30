@@ -1,16 +1,15 @@
 import { createHash } from 'node:crypto';
 import type Database from 'better-sqlite3';
 import { z } from 'zod';
-import { costRequestMetricsSchema, costSummarySchema, costTaskDetailSchema, costTaskSchema, currencySchema, providerUsageSchema, requestModelParameters, usageRecordSchema, type CostRequestMetrics, type CostSummary, type ModelCapability, type ModelPricing, type ModelProfile, type ProjectDocument, type ProviderUsage, type UsageRecord, type WorkflowNode } from '@video-quickly/contracts';
+import { costRequestMetricsSchema, costSummarySchema, tokenMetrics, getModelPlatform, costTaskDetailSchema, costTaskSchema, currencySchema, providerUsageSchema, requestModelParameters, usageRecordSchema, type CostRequestMetrics, type CostSummary, type ModelCapability, type ModelPricing, type ModelProfile, type ProjectDocument, type ProviderUsage, type UsageRecord, type TokenMetric, type WorkflowNode } from '@video-quickly/contracts';
 import { DocumentStore } from './database.js';
 
-type Estimate = { estimatedAmount?: number; estimateBasis?: UsageRecord['estimateBasis'] };
-type Metric = Exclude<keyof ProviderUsage, 'source'>;
 type CurrencyMetric = 'estimatedAmount' | 'actualAmount' | 'estimatedRecords' | 'actualRecords';
-type SummaryRow = { total: number; unknownEstimated: number | null; unknownActual: number | null; unknownSubmissions: number | null } & Record<`${ModelPricing['currency']}_${CurrencyMetric}`, number | null>;
+type SummaryRow = { total: number; unknownEstimated: number | null; unknownActual: number | null; unknownSubmissions: number | null } & Record<`${ModelPricing['currency']}_${CurrencyMetric}`, number | null> & Record<TokenMetric | `${TokenMetric}Records`, number | null>;
 type TaskRow = SummaryRow & { cursor: number; id: string; projectId: string; projectTitle: string; title: string; createdAt: string; updatedAt: string; status: string | null; projectRevision: number | null; workflowVersion: number | null; runAvailable: number };
 
 const summaryColumns = `count(*) AS total,
+  ${tokenMetrics.flatMap(key => [`sum(json_extract(u.body, '$.providerUsage.${key}')) AS ${key}`, `count(json_extract(u.body, '$.providerUsage.${key}')) AS ${key}Records`]).join(', ')},
   sum(json_extract(u.body, '$.estimatedAmount') IS NULL) AS unknownEstimated,
   sum(json_extract(u.body, '$.actualAmount') IS NULL) AS unknownActual,
   sum(json_extract(u.body, '$.status') IN ('submitted','unknown','canceled')) AS unknownSubmissions,
@@ -26,46 +25,7 @@ function summarize(row: SummaryRow): CostSummary {
     const estimatedRecords = row[`${currency}_estimatedRecords`] ?? 0, actualRecords = row[`${currency}_actualRecords`] ?? 0;
     return estimatedRecords || actualRecords ? [{ currency, estimatedRecords, actualRecords, estimatedAmount: row[`${currency}_estimatedAmount`] ?? undefined, actualAmount: row[`${currency}_actualAmount`] ?? undefined }] : [];
   });
-  return costSummarySchema.parse({ total: row.total, unknownEstimated: row.unknownEstimated ?? 0, unknownActual: row.unknownActual ?? 0, unknownSubmissions: row.unknownSubmissions ?? 0, currencies });
-}
-
-/** Configured unit prices produce estimates, never provider invoices. */
-export function estimateUsage(capability: ModelCapability, pricing: ModelPricing | null | undefined, request: CostRequestMetrics, usage?: ProviderUsage): Estimate {
-  if (!pricing) return {};
-  const sources = new Set<'provider' | 'request'>();
-  function quantity(metric: Metric): number | undefined {
-    if (usage?.[metric] !== undefined) { sources.add('provider'); return usage[metric]; }
-    if (metric === 'images' || metric === 'videoSeconds' || metric === 'characters' || metric === 'audioSeconds') {
-      if (request[metric] !== undefined) { sources.add('request'); return request[metric]; }
-    }
-    return undefined;
-  }
-  function tokenAmount(): number | undefined {
-    const input = quantity('inputTokens'), output = quantity('outputTokens');
-    if (input === undefined || output === undefined || pricing?.inputPerMillionTokens === undefined || pricing.outputPerMillionTokens === undefined) return;
-    return (input * pricing.inputPerMillionTokens + output * pricing.outputPerMillionTokens) / 1_000_000;
-  }
-  let amount: number | undefined;
-  if (capability === 'image') {
-    const images = quantity('images');
-    if (images !== undefined && pricing.perImage !== undefined) amount = images * pricing.perImage;
-  } else if (capability === 'video') {
-    const seconds = quantity('videoSeconds');
-    if (seconds !== undefined && pricing.perVideoSecond !== undefined) amount = seconds * pricing.perVideoSecond;
-  } else if (capability === 'tts') {
-    if (pricing.perThousandCharacters !== undefined) {
-      const characters = quantity('characters');
-      if (characters !== undefined) amount = characters * pricing.perThousandCharacters / 1_000;
-    } else if (pricing.perAudioMinute !== undefined) {
-      const seconds = quantity('audioSeconds');
-      if (seconds !== undefined) amount = seconds * pricing.perAudioMinute / 60;
-    }
-  } else if (capability === 'asr' && pricing.perAudioMinute !== undefined) {
-    // Transcription request duration is unknown unless the provider measures it.
-    if (usage?.audioSeconds !== undefined) { sources.add('provider'); amount = usage.audioSeconds * pricing.perAudioMinute / 60; }
-  } else amount = tokenAmount();
-  if (amount === undefined || !Number.isFinite(amount)) return {};
-  return { estimatedAmount: Number(amount.toPrecision(15)), estimateBasis: sources.size > 1 ? 'mixed' : sources.has('provider') ? 'provider' : 'request' };
+  return costSummarySchema.parse({ total: row.total, unknownEstimated: row.unknownEstimated ?? 0, unknownActual: row.unknownActual ?? 0, unknownSubmissions: row.unknownSubmissions ?? 0, currencies, tokens: Object.fromEntries(tokenMetrics.flatMap(key => row[key] === null ? [] : [[key, row[key]]])), tokenRecords: Object.fromEntries(tokenMetrics.map(key => [key, row[`${key}Records`] ?? 0])) });
 }
 
 export interface CostStart {
@@ -104,9 +64,8 @@ export function createCostLedger(options: { database: Database.Database; store: 
     const current = get(operationId);
     if (!current || current.status === 'completed' && next !== 'completed') return current;
     const providerUsage = usage ? providerUsageSchema.parse(usage) : current.providerUsage;
-    const estimate = estimateUsage(current.capability, current.pricing, current.requestMetrics, providerUsage);
     if (current.status === next && JSON.stringify(current.providerUsage) === JSON.stringify(providerUsage)) return current;
-    return save({ ...current, estimatedAmount: estimate.estimatedAmount, estimateBasis: estimate.estimateBasis, providerUsage, status: next, revision: current.revision + 1, updatedAt: new Date().toISOString() });
+    return save({ ...current, providerUsage, status: next, revision: current.revision + 1, updatedAt: new Date().toISOString() });
   }
 
   // A prior process can no longer prove whether a submitted request reached its provider.
@@ -148,8 +107,7 @@ export function createCostLedger(options: { database: Database.Database; store: 
       }
       const timestamp = new Date().toISOString();
       const requestMetrics = costRequestMetricsSchema.parse(input.requestMetrics);
-      const pricing = structuredClone(input.model.pricing);
-      return save({ id: idFor(input.operationId), revision: 1, operationId: input.operationId, runId: input.runId, nodeId: input.nodeId, shotId: input.shotId, projectId: input.projectId, modelId: input.model.id, modelName: input.model.name, provider: input.model.provider, model: input.model.model, capability: input.capability, requestMetrics, pricing, status: 'submitted', note: '', createdAt: timestamp, updatedAt: timestamp, ...estimateUsage(input.capability, pricing, requestMetrics) });
+      return save({ id: idFor(input.operationId), revision: 1, operationId: input.operationId, runId: input.runId, nodeId: input.nodeId, shotId: input.shotId, projectId: input.projectId, modelId: input.model.id, modelName: input.model.name, platform: getModelPlatform(input.model).id, provider: input.model.provider, model: input.model.model, capability: input.capability, requestMetrics, status: 'submitted', note: '', createdAt: timestamp, updatedAt: timestamp });
     },
     status,
     cancelRun(runId: string) {

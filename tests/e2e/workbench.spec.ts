@@ -1,3 +1,5 @@
+import { addModelConnection } from './settings';
+import { projectSettingField } from './settings';
 import { expect, test, type Page } from '@playwright/test';
 import { resolve } from 'node:path';
 
@@ -32,7 +34,7 @@ test('shows pure run notifications for two seconds without replaying on refresh'
     const updated = await request.post('/__desktop_rpc', { data: { method: 'project.update', params: { projectId: project.id, revision: project.revision, patch: { title: project.title } } } });
     const saved = (await updated.json()).result;
     await refreshed;
-    await expect(page.locator('.project-heading')).toContainText(`修订 ${saved.revision}`);
+    await expect(page.locator('.project-heading-copy')).toHaveAttribute('data-revision', String(saved.revision));
     await page.waitForTimeout(250);
     await expect(page.locator('.toast-anchor')).toHaveCount(0);
   } finally {
@@ -155,7 +157,7 @@ for (const reducedMotion of ['no-preference', 'reduce'] as const) {
     await page.getByRole('button', { name: '项目设置', exact: true }).click();
     await page.setViewportSize({ width: 600, height: 900 });
     for (const [ratio, expected] of [['9:16', 9 / 16], ['16:9', 16 / 9]] as const) {
-      await page.getByLabel('画面比例', { exact: true }).selectOption(ratio);
+      await (await projectSettingField(page, '画面比例', { exact: true })).selectOption(ratio);
       const frame = await page.locator('.preview-frame').boundingBox();
       expect(frame).not.toBeNull();
       if (!frame) throw new Error('预览框不可见');
@@ -165,6 +167,8 @@ for (const reducedMotion of ['no-preference', 'reduce'] as const) {
     await page.getByRole('button', { name: '模型连接', exact: true }).click();
     await expect(page.getByRole('heading', { name: '模型连接', exact: true })).toBeVisible();
     await page.getByRole('button', { name: '创作工作台', exact: true }).click();
+    await expect(page.getByRole('button', { name: '项目设置', exact: true })).toHaveAttribute('aria-pressed', 'true');
+    await page.getByRole('button', { name: '镜头属性', exact: true }).click();
     await expect(page.getByLabel('镜头标题')).toHaveValue('切换时保留的草稿');
     expect(errors.filter(message => !message.includes('400 (Bad Request)'))).toEqual([]);
   });
@@ -231,7 +235,8 @@ test('scrubs continuously, steps fractional frames and preserves the editing dra
   await expect(page.getByLabel('镜头标题')).toHaveValue('尚未保存的标题');
   await page.mouse.move(bounds.x + bounds.width + 80, bounds.y + 18); await page.mouse.up();
   await expect(ruler).toHaveAttribute('aria-valuenow', '5973');
-  await expect(page.locator('.track-header--video')).toContainText('V1');
+  await expect(page.locator('.track-header--video')).toContainText('画面');
+  await expect(page.locator('.track-header--video .track-header__type')).toHaveCount(0);
   await expect(page.locator('.track-header--audio')).toContainText('A1');
   await expect(page.locator('.timeline-clip--video canvas')).toHaveCount(2);
   const headerBefore = await page.locator('.timeline-track-headers').boundingBox();
@@ -278,15 +283,15 @@ test('edits real project state, output profiles, graph and theme', async ({ page
   await expect(page.getByLabel('镜头标题')).toHaveValue('一纸登科 · 已编辑');
 
   await page.getByRole('button', { name: '项目设置', exact: true }).click();
-  await page.getByLabel('画面比例', { exact: true }).selectOption('9:16');
-  await page.getByLabel('视频帧率').selectOption('29.97');
-  await expect(page.getByLabel('视频宽度')).toHaveValue('1080');
-  await expect(page.getByLabel('视频高度')).toHaveValue('1920');
-  await page.getByRole('button', { name: '保存设置', exact: true }).click();
+  await (await projectSettingField(page, '画面比例', { exact: true })).selectOption('9:16');
+  await (await projectSettingField(page, '视频帧率')).selectOption('60');
+  await expect((await projectSettingField(page, '视频宽度'))).toHaveValue('1080');
+  await expect((await projectSettingField(page, '视频高度'))).toHaveValue('1920');
+  await page.getByRole('button', { name: '保存', exact: true }).click();
   await page.reload();
   await page.getByRole('button', { name: '项目设置', exact: true }).click();
-  await expect(page.getByLabel('视频帧率')).toHaveValue('29.97');
-  await expect(page.getByLabel('视频高度')).toHaveValue('1920');
+  await expect((await projectSettingField(page, '视频帧率'))).toHaveValue('60');
+  await expect((await projectSettingField(page, '视频高度'))).toHaveValue('1920');
 
   await page.getByRole('button', { name: '流程', exact: true }).click();
   await expect(page.locator('.react-flow')).toBeVisible();
@@ -371,8 +376,7 @@ test('creates a project and connects a model without exposing credentials', asyn
   await expect(page.getByLabel('项目名称', { exact: true })).toHaveValue('界面验收项目');
 
   await page.getByRole('button', { name: '模型连接', exact: true }).click();
-  await page.getByRole('button', { name: '添加模型', exact: true }).first().click();
-  const modelDialog = page.getByRole('dialog');
+  const modelDialog = await addModelConnection(page);
   await modelDialog.getByLabel('连接名称').fill('本地文本服务');
   await modelDialog.getByLabel('服务地址').fill('http://127.0.0.1:11434');
   await modelDialog.getByLabel('模型 ID').fill('local-fixture');

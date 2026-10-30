@@ -1,0 +1,154 @@
+select.select:not([multiple]):not([size]) {
+  cursor: pointer;
+  padding-inline: var(--space-4);
+  transition: background-color var(--motion-fast), border-color var(--motion-fast), box-shadow var(--motion-fast);
+}
+
+select.select:not([multiple]):not([size]):not(:disabled):hover {
+  background-color: var(--surface-hover);
+}
+
+select.select:disabled {
+  cursor: not-allowed;
+  opacity: .5;
+}
+
+.select-value { display: none; }
+
+@supports (appearance: base-select) {
+  select.select:not([multiple]):not([size]),
+  select.select:not([multiple]):not([size])::picker(select) {
+    appearance: base-select;
+  }
+
+  select.select:not([multiple]):not([size]) {
+    position: relative;
+    display: block;
+    min-width: 0;
+    padding-inline-end: calc(var(--space-4) * 3);
+    text-align: start;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    overflow: hidden;
+  }
+
+  .select-value {
+    display: flex;
+    align-items: center;
+    width: 100%;
+    min-width: 0;
+    padding: 0;
+    border: 0;
+    background: transparent;
+    color: inherit;
+    font: inherit;
+    text-align: inherit;
+    cursor: inherit;
+  }
+
+  .select-value__text {
+    display: block;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  select.select:not([multiple]):not([size])::picker-icon {
+    content: '';
+    position: absolute;
+    inset-inline-end: var(--space-4);
+    top: calc(50% - 8px);
+    width: 16px;
+    height: 16px;
+    margin: 0;
+    background-color: var(--text-secondary);
+    mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.75' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E") center / contain no-repeat;
+    pointer-events: none;
+    transition: rotate var(--motion-fast), background-color var(--motion-fast);
+  }
+
+  select.select:not([multiple]):not([size]):open {
+    background-color: var(--surface-hover);
+    border-color: var(--accent);
+  }
+
+  select.select:not([multiple]):not([size]):open::picker-icon {
+    rotate: 180deg;
+    background-color: var(--text);
+  }
+
+  select.select:not([multiple]):not([size])::picker(select) {
+    inline-size: anchor-size(self-inline);
+    max-inline-size: calc(100vw - var(--space-8));
+    max-block-size: min(360px, 50dvh);
+    margin-block: var(--space-2);
+    padding: var(--space-2);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-small);
+    background: var(--surface);
+    color: var(--text);
+    box-shadow: none;
+    font: inherit;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+  }
+
+  select.select:not([multiple]):not([size]) option {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    min-height: var(--control-hit-size);
+    padding: var(--space-2) var(--space-3);
+    border: 0;
+    border-radius: calc(var(--radius-small) - var(--space-1));
+    background: transparent;
+    color: var(--text);
+    font: inherit;
+    line-height: var(--line-height-label);
+    white-space: normal;
+    overflow-wrap: anywhere;
+    cursor: pointer;
+  }
+
+  select.select:not([multiple]):not([size]) option:checked {
+    background: var(--surface-selected);
+    font-weight: var(--font-weight-medium);
+  }
+
+  select.select:not([multiple]):not([size]) option:not(:disabled):is(:hover, :focus-visible) {
+    background: var(--surface-hover);
+    outline: none;
+  }
+
+  select.select:not([multiple]):not([size]) option::checkmark {
+    content: '';
+    order: 1;
+    flex-shrink: 0;
+    width: 16px;
+    height: 16px;
+    margin-inline-start: auto;
+    background: currentColor;
+    mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='1.75' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m20 6-11 11-5-5'/%3E%3C/svg%3E") center / contain no-repeat;
+  }
+
+  select.select:not([multiple]):not([size]) option:disabled {
+    color: var(--text-subtle);
+    opacity: .5;
+    cursor: not-allowed;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    select.select:not([multiple]):not([size])::picker-icon {
+      transition: none;
+    }
+  }
+
+  @media (forced-colors: active) {
+    select.select:not([multiple]):not([size])::picker-icon,
+    select.select:not([multiple]):not([size]) option::checkmark {
+      background: CanvasText;
+      forced-color-adjust: none;
+    }
+  }
+}

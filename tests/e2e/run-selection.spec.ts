@@ -93,7 +93,7 @@ test('keeps an obsolete preview open, rejects execution and starts only after th
   const editor = await open(page, project); await editor.getByRole('button', { name: '预览这步及后续', exact: true }).click();
   const dialog = page.getByRole('dialog', { name: '执行范围', exact: true }); await expect(dialog.locator('.run-scope-steps li')).toHaveCount(5);
   const before = await current(request, project.id), changed = await rpc<ProjectDocument>(request, 'project.update', { projectId: project.id, revision: before.revision, patch: { brief: '另一视图的新输入' } });
-  await expect(page.getByText(`修订 ${changed.revision}`, { exact: true })).toBeVisible();
+  await expect(page.locator('.project-heading-copy')).toHaveAttribute('data-revision', String(changed.revision));
   await dialog.getByRole('button', { name: '确认执行', exact: true }).click(); await expect(dialog.getByRole('alert')).toContainText('重新预览');
   expect((await runs(request, project.id)).items).toEqual([]); expect(submissions).toBe(1);
   hold = false; await dialog.getByRole('button', { name: '重新预览', exact: true }).click(); await expect(dialog.locator('.run-scope-summary dd').first()).toHaveText(String(changed.revision));

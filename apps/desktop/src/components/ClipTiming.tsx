@@ -33,6 +33,6 @@ export default function ClipTiming({ shot, rate, sourceStatus, sourceDurationUs,
     {sourceStatus === 'none' && <p className="tiny-meta">未关联音视频素材，可延长二维场景。</p>}
     {shot.clipEdit && <p className="tiny-meta">入出点使用剪后计划时间；扩展末尾保留已删除的内部缺口。</p>}
     {(sourceFailure || error) && <p className="field-error" role="alert">{sourceFailure || error}</p>}
-    <Button disabled={disabled || waitingForSource || Boolean(error) || !changed} onClick={() => void onTrim(shot.id, inUs, outUs)}>应用入出点</Button>
+    <Button aria-label="应用入出点" disabled={disabled || waitingForSource || Boolean(error) || !changed} onClick={() => void onTrim(shot.id, inUs, outUs)}>应用</Button>
   </div>;
 }

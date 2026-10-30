@@ -1,3 +1,4 @@
+import { settingField, settingControl } from './settings';
 import { createServer } from 'node:http';
 import { writeFile } from 'node:fs/promises';
 import { expect, test, type APIRequestContext, type Page } from '@playwright/test';
@@ -49,11 +50,11 @@ test('creates a visual character library, binds a shot with durable undo, and pr
   await page.getByRole('button', { name: '角色参考库', exact: true }).click();
   await page.getByRole('button', { name: '新建角色', exact: true }).click();
   const dialog = page.getByRole('dialog', { name: '新建角色', exact: true });
-  await dialog.getByLabel('角色名称').fill('稳定角色小青');
-  await dialog.getByLabel('角色设定').fill('青色长衫，圆眼镜，保持人物服饰与面部特征。');
-  await dialog.getByLabel('角色参考图路径', { exact: true }).fill(path);
+  await (await settingField(dialog, '角色名称')).fill('稳定角色小青');
+  await (await settingField(dialog, '角色设定')).fill('青色长衫，圆眼镜，保持人物服饰与面部特征。');
+  await (await settingField(dialog, '角色参考图路径')).fill(path);
   await dialog.getByRole('button', { name: '导入参考图片', exact: true }).click();
-  await expect(dialog.getByRole('checkbox')).toBeChecked();
+  await expect((await settingControl(dialog, 'checkbox'))).toBeChecked();
   await dialog.getByRole('button', { name: '保存角色', exact: true }).click(); await expect(dialog).toHaveCount(0);
   const library = await rpc<{ items: CharacterProfile[] }>(request, 'character.list', { archived: false });
   const character = library.items.find(value => value.name === '稳定角色小青'); expect(character).toBeTruthy();
@@ -90,7 +91,7 @@ test('creates a visual character library, binds a shot with durable undo, and pr
   expect(errors).toEqual(['Failed to load resource: the server responded with a status of 400 (Bad Request)']); await expect(page.locator('vite-error-overlay')).toHaveCount(0);
 });
 
-test('sends frozen character settings into generation and records provider usage, price snapshots and manual payment', async ({ page, request }, info) => {
+test('sends frozen character settings into generation and records provider token counters across reload', async ({ page, request }, info) => {
   const errors = observeErrors(page), calls: string[] = [];
   const server = createServer((request, response) => { void (async () => {
     let body = ''; for await (const chunk of request) body += chunk.toString(); calls.push(body);
@@ -115,7 +116,7 @@ test('sends frozen character settings into generation and records provider usage
     await expect(candidate.locator('.shot-regeneration__comparison')).toContainText('候选旁白');
     expect(calls).toHaveLength(1); expect(calls[0]).toContain('配角阿宁'); expect(calls[0]).toContain('灰色斗篷');
     const ledger = await rpc<{ items: UsageRecord[] }>(request, 'cost.list', { projectId: project.id });
-    expect(ledger.items).toHaveLength(1); expect(ledger.items[0].providerUsage).toMatchObject({ inputTokens: 100, outputTokens: 50 }); expect(ledger.items[0].estimatedAmount).toBeCloseTo(.0004, 8);
+    expect(ledger.items).toHaveLength(1); expect(ledger.items[0].providerUsage).toMatchObject({ inputTokens: 100, outputTokens: 50 }); expect(ledger.items[0].estimatedAmount).toBeUndefined();
     await rpc(request, 'character.save', { character: { ...character, description: '改成红色斗篷' } });
     const blockedCandidate = page.waitForResponse(response => response.url().endsWith('/__desktop_rpc') && response.request().postDataJSON()?.method === 'shot.candidate.apply');
     await candidate.getByRole('button', { name: '应用所选候选', exact: true }).click();
@@ -125,24 +126,21 @@ test('sends frozen character settings into generation and records provider usage
     await page.getByRole('button', { name: '关闭提示', exact: true }).click();
     await expect(page.locator('.toast')).toHaveCount(0);
     await rpc(request, 'model.save', { model: { ...model, pricing: { currency: 'USD', inputPerMillionTokens: 99, outputPerMillionTokens: 99 } } });
-    await page.getByRole('button', { name: '费用记录', exact: true }).click();
-    await page.getByLabel('费用项目').selectOption(project.id);
-    await page.getByRole('button', { name: `查看任务费用详情：${ledger.items[0].runId}`, exact: true }).click();
+    await page.getByRole('button', { name: 'Token 消耗', exact: true }).click();
+    await page.getByLabel('用量项目').selectOption(project.id);
+    await page.getByRole('button', { name: `查看任务用量详情：${ledger.items[0].runId}`, exact: true }).click();
     const row = page.locator('.cost-record').filter({ hasText: '费用计量服务' });
-    await expect(row).toContainText('输入 100 Token'); await expect(row).toContainText('0.0004'); await expect(row).toContainText('实付 待登记');
-    await row.getByRole('button', { name: '核对费用', exact: true }).click();
-    const editor = page.getByRole('dialog', { name: '核对费用', exact: true });
-    await editor.getByLabel('实际支付金额').fill('0.01'); await editor.getByLabel('实付币种').selectOption('USD'); await editor.getByLabel('费用备注').fill('服务账单已核对');
-    await editor.getByRole('button', { name: '保存实付记录', exact: true }).click(); await expect(editor).toHaveCount(0);
-    await expect(row).toContainText('实付 US$0.01');
+    await expect(row.locator('[data-metric="inputTokens"] dd')).toHaveText('100');
+    await expect(row.locator('[data-metric="outputTokens"] dd')).toHaveText('50');
+    await expect(row.locator('[data-metric="cachedOutputTokens"] dd')).toHaveText('—');
     const saved = (await rpc<{ items: UsageRecord[] }>(request, 'cost.list', { projectId: project.id })).items[0];
-    expect(saved.pricing?.inputPerMillionTokens).toBe(2); expect(saved.actualAmount).toBe(.01); expect(saved.note).toBe('服务账单已核对');
+    expect(saved.pricing).toBeUndefined(); expect(saved.actualAmount).toBeUndefined();
     await page.getByRole('button', { name: '浅色外观', exact: true }).click(); await page.setViewportSize({ width: 600, height: 900 });
     await page.screenshot({ path: info.outputPath('cost-records-light-600.png') });
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1)).toBe(true);
-    await page.reload(); await page.getByRole('button', { name: '费用记录', exact: true }).click(); await page.getByLabel('费用项目').selectOption(project.id);
-    await page.getByRole('button', { name: `查看任务费用详情：${ledger.items[0].runId}`, exact: true }).click();
-    await expect(page.locator('.cost-record')).toContainText('服务账单已核对');
+    await page.reload(); await page.getByRole('button', { name: 'Token 消耗', exact: true }).click(); await page.getByLabel('用量项目').selectOption(project.id);
+    await page.getByRole('button', { name: `查看任务用量详情：${ledger.items[0].runId}`, exact: true }).click();
+    await expect(page.locator('.cost-record [data-metric="inputTokens"] dd')).toHaveText('100');
     expect(errors).toEqual(['Failed to load resource: the server responded with a status of 400 (Bad Request)']); await expect(page.locator('vite-error-overlay')).toHaveCount(0);
   } finally { server.closeAllConnections(); await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve())); }
 });

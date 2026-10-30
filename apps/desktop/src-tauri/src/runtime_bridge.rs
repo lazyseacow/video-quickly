@@ -463,10 +463,21 @@ mod tests {
             let (bridge, directory) = fixture();
             let connected = bridge.reconnect().await.unwrap();
             let first = bridge
-                .request("workspace.snapshot".into(), None)
+                .request("workspace.summary".into(), None)
                 .await
                 .unwrap();
+            assert!(first["projects"][0]["shotCount"].is_number());
+            assert!(first["projects"][0].get("shots").is_none());
+            assert!(first.get("runs").is_none());
             let project = first["projects"][0]["id"].clone();
+            let detail = bridge
+                .request(
+                    "project.get".into(),
+                    Some(json!({"projectId":project.clone()})),
+                )
+                .await
+                .unwrap();
+            assert_eq!(detail["project"]["id"], project);
             let run = bridge
                 .request(
                     "run.start".into(),

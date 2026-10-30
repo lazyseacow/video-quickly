@@ -150,7 +150,7 @@ test('recovers a failed detail read explicitly and keeps tabs, tokens and action
   } finally { releaseFailure(); await close(source.server); }
 });
 
-test('handles a live step missing from an older run and uses the frozen kind for a renamed step output', async ({ page, request }) => {
+test('keeps new live steps out of older runs and uses the frozen kind for a renamed step output', async ({ page, request }) => {
   const source = await fixture(request);
   try {
     const run = await source.start(); await source.approve(run.id);
@@ -159,12 +159,17 @@ test('handles a live step missing from an older run and uses the frozen kind for
     await expect(page.getByLabel('项目名称', { exact: true })).toHaveValue(source.project.title);
     await page.getByRole('tab', { name: '制作步骤', exact: true }).click(); await page.locator('.step-item').filter({ hasText: '后加步骤' }).click();
     const missing = page.getByRole('dialog', { name: '后加步骤', exact: true });
-    expectedErrors = ['Failed to load resource: the server responded with a status of 400 (Bad Request)'];
-    await missing.getByRole('button', { name: '查看最近产物', exact: true }).click(); await expect(page.getByRole('alert')).toContainText('冻结流程中没有这个步骤');
-    await expect(missing).toBeVisible(); await expect(page.getByRole('dialog', { name: '步骤产物', exact: true })).toHaveCount(0);
+    await expect(missing.getByLabel('提示词与补充要求', { exact: true })).toBeVisible();
+    await expect(page.getByRole('dialog', { name: '步骤产物', exact: true })).toHaveCount(0);
     await missing.getByRole('button', { name: '取消', exact: true }).click();
-    await page.locator('.step-item').filter({ hasText: '改名后的步骤' }).click();
-    await page.getByRole('dialog', { name: '改名后的步骤', exact: true }).getByRole('button', { name: '查看最近产物', exact: true }).click();
+    const dialog = await open(page, run.id);
+    const steps = dialog.getByRole('navigation', { name: '冻结流程步骤' });
+    await expect(steps).not.toContainText('后加步骤');
+    await expect(steps).not.toContainText('改名后的步骤');
+    await steps.getByRole('button', { name: /冻结风格步骤/ }).click();
+    await dialog.getByRole('tab', { name: '步骤产物', exact: true }).click();
+    await expect(dialog.getByRole('region', { name: '本次产物', exact: true })).toContainText('第 1 版生成风格');
+    await dialog.getByRole('button', { name: '在项目中查看与应用', exact: true }).click();
     const output = page.getByRole('dialog', { name: '步骤产物', exact: true });
     await expect(output).toContainText('第 1 版生成风格'); await expect(output.getByRole('button', { name: '应用到项目', exact: true })).toBeVisible();
     expect(await saved(request, source.project.id)).toEqual(live); expect(source.calls()).toBe(1);

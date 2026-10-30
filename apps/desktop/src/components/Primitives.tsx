@@ -1,4 +1,4 @@
-import { cloneElement, isValidElement, useId, useRef, type ButtonHTMLAttributes, type ReactNode } from 'react';
+import { cloneElement, createElement, isValidElement, useId, useRef, type ButtonHTMLAttributes, type ComponentProps, type ReactNode } from 'react';
 import { Check, CircleAlert, Info, LoaderCircle, X } from 'lucide-react';
 import { gsap, motion, useGSAP } from '../lib/motion';
 
@@ -10,9 +10,13 @@ export function IconButton({ label, children, className = '', ...props }: Button
   return <button type="button" {...props} title={props.title ?? label} aria-label={label} className={`icon-button ${className}`}>{children}</button>;
 }
 
+export function Select({ children, multiple, size, className = '', ...props }: ComponentProps<'select'>) {
+  return <select {...props} className={`select ${className}`} multiple={multiple} size={size}>{!multiple && size === undefined && <button type="button" className="select-value">{createElement('selectedcontent', { className: 'select-value__text' })}</button>}{children}</select>;
+}
+
 export function Field({ label, hint, children, className = '' }: { label: string; hint?: string; children: ReactNode; className?: string }) {
   const hintId = useId();
-  const control = isValidElement<Record<string, unknown>>(children) && typeof children.type === 'string' && ['input', 'select', 'textarea'].includes(children.type)
+  const control = isValidElement<Record<string, unknown>>(children) && (children.type === Select || typeof children.type === 'string' && ['input', 'select', 'textarea'].includes(children.type))
     ? cloneElement(children, { 'aria-label': children.props['aria-label'] ?? label, ...(hint ? { 'aria-describedby': [children.props['aria-describedby'], hintId].filter(Boolean).join(' ') } : {}) })
     : children;
   return <label className={`field ${className}`}><span className="field__label">{label}</span>{control}{hint && <span id={hintId} className="field__hint">{hint}</span>}</label>;

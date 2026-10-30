@@ -13,7 +13,7 @@
 .character-editor .dialog__header, .character-editor .dialog__footer { flex-shrink: 0; }
 .character-editor .dialog__body { min-height: 0; overflow-y: auto; }
 .character-image-picker { display: grid; grid-template-columns: repeat(auto-fill, minmax(125px, 1fr)); gap: 10px; margin-bottom: 12px; max-height: 250px; overflow-y: auto; }
-.character-image-picker label { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; padding: 8px; border: 1px solid var(--border); border-radius: 6px; min-width: 0; font-size: 11px; }
+.character-image-picker label { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; padding: 8px; border: 1px solid var(--border); border-radius: var(--radius-small); min-width: 0; font-size: 11px; }
 .character-image-picker label:has(:checked) { border-color: var(--accent); }
 .character-image-picker img { width: 100%; height: 80px; object-fit: contain; outline: 1px solid var(--image-outline); outline-offset: -1px; }
 .character-image-picker label > span { overflow-wrap: anywhere; }

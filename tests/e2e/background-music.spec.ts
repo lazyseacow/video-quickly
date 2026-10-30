@@ -1,3 +1,4 @@
+import { projectSettingAction } from './settings';
 import { readFile, writeFile } from 'node:fs/promises';
 import { expect, test, type APIRequestContext, type Page } from '@playwright/test';
 import { DEFAULT_AUDIO_MIX_SETTINGS, type AssetRecord, type AudioLevelWindow, type AudioMixJob, type PreparedAudioMix, type ProjectDocument } from '@video-quickly/contracts';
@@ -20,7 +21,7 @@ async function openProject(page: Page, title: string) {
   await expect(page.getByLabel('镜头标题')).toHaveValue('音乐验收镜头 1');
 }
 async function musicEditor(page: Page) {
-  await page.getByRole('button', { name: '背景音乐', exact: true }).click();
+  await (await projectSettingAction(page, '背景音乐', {exact: true})).click();
   const dialog = page.getByRole('dialog', { name: '背景音乐', exact: true });
   await expect(dialog).toBeVisible();
   await expect(dialog.locator('.dialog__surface')).toHaveCSS('opacity', '1');
@@ -202,7 +203,7 @@ test('protects referenced public music and restores it as an independent asset t
   await page.getByRole('button', { name: `打开项目：${project.title}`, exact: true }).click();
   await page.getByRole('button', { name: '项目设置', exact: true }).click();
   const pendingBackup = page.waitForResponse(response => response.url().endsWith('/__desktop_rpc') && response.request().postDataJSON()?.method === 'project.backup');
-  await page.getByRole('button', { name: '备份项目与素材', exact: true }).click();
+  await (await projectSettingAction(page, '备份项目与素材', {exact: true})).click();
   const backup = (await (await pendingBackup).json()).result as { path: string; assets: number };
   expect(backup.assets).toBe(1);
   const portable = JSON.parse(await readFile(`${backup.path}/project.json`, 'utf8'));

@@ -5,6 +5,9 @@ import { join } from 'node:path';
 import { afterEach, expect, it, vi } from 'vitest';
 import { costTaskDetailSchema, costTaskSchema, projectSchema, recordPageSchema, workflowNodeSchema, type ModelProfile, type RunRecord, type UsageRecord } from '@video-quickly/contracts';
 import { createRuntime, SimulatedProcessExit, type RuntimeOptions } from '../packages/runtime/src';
+import { executeDeepAgent } from '../packages/runtime/src/agent';
+import { createCostLedger } from '../packages/runtime/src/costs';
+import { DocumentStore, openDatabase } from '../packages/runtime/src/database';
 
 const directories: string[] = [], servers: Server[] = [];
 const runtimes = new Set<ReturnType<typeof createRuntime>>();
@@ -26,7 +29,7 @@ async function fixture(provider: ModelProfile['provider'] = 'openai-compatible',
     if (state.hold) await new Promise<void>(resolve => { state.release = resolve; response.once('close', resolve); });
     if (response.destroyed) return;
     response.setHeader('content-type', 'application/json');
-    response.end(JSON.stringify(provider === 'ollama' ? { message: { role: 'assistant', content: '本机模型回复' }, prompt_eval_count: 10, eval_count: 3, prompt_eval_cached_count: 2 } : { choices: [{ message: { content: '真实 HTTP 回复' } }], ...(state.usage !== undefined ? { usage: state.usage } : {}) }));
+    response.end(JSON.stringify(provider === 'ollama' ? { message: { role: 'assistant', content: '本机模型回复' }, prompt_eval_count: 10, eval_count: 3, prompt_eval_cached_count: 2 } : { choices: [{ message: { role: 'assistant', content: '真实 HTTP 回复' } }], ...(state.usage !== undefined ? { usage: state.usage } : {}) }));
   })().catch(error => response.destroy(error instanceof Error ? error : undefined)); });
   servers.push(server); await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
   const address = server.address(); if (!address || typeof address === 'string') throw new Error('无效测试服务地址');
@@ -38,11 +41,11 @@ async function fixture(provider: ModelProfile['provider'] = 'openai-compatible',
   return { runtime, directory, project, model, state, start };
 }
 
-it('records official OpenAI usage counters and freezes pricing without storing model parameters as billing evidence', async () => {
+it('records official OpenAI usage counters without storing model parameters or creating monetary estimates', async () => {
   const { runtime, model, state, start } = await fixture();
   const run = await start(), [record] = await records(runtime, run.id);
   expect(state.calls).toBe(1); expect(state.path).toBe('/v1/chat/completions');
-  expect(record).toMatchObject({ status: 'completed', modelId: model.id, operationId: `${run.id}:brief`, requestMetrics: { source: 'request', requestCount: 1 }, providerUsage: { source: 'provider', inputTokens: 100, outputTokens: 20, totalTokens: 120, cachedInputTokens: 50 }, estimatedAmount: .00036, estimateBasis: 'provider' });
+  expect(record).toMatchObject({ status: 'completed', modelId: model.id, operationId: `${run.id}:brief`, requestMetrics: { source: 'request', requestCount: 1 }, providerUsage: { source: 'provider', inputTokens: 100, outputTokens: 20, totalTokens: 120, cachedInputTokens: 50 } });
   expect(record.actualAmount).toBeUndefined(); expect(JSON.stringify(record)).not.toContain('not-for-the-cost-ledger');
   const tasks = recordPageSchema(costTaskSchema).parse(await runtime.dispatch('cost.tasks', { projectId: record.projectId }));
   expect(tasks.items.map(task => task.id)).toEqual([run.id]);
@@ -50,9 +53,26 @@ it('records official OpenAI usage counters and freezes pricing without storing m
   expect(detail).toMatchObject({ projectTitle: '费用追踪', title: '简报', status: 'succeeded', summary: { total: 1 } });
   expect(detail.nodes).toEqual([{ id: 'brief', label: '简报' }]);
   await runtime.dispatch('model.save', { model: { ...model, pricing: { currency: 'CNY', inputPerMillionTokens: 100, outputPerMillionTokens: 100 } } });
-  expect((await records(runtime, run.id))[0].pricing).toEqual(model.pricing);
+  expect((await records(runtime, run.id))[0].pricing).toBeUndefined();
   const paid = await runtime.dispatch('cost.update', { id: record.id, revision: record.revision, actualAmount: .01, actualCurrency: 'CNY', note: '人工核对' }) as UsageRecord;
-  expect(paid).toMatchObject({ estimatedAmount: .00036, actualAmount: .01, actualCurrency: 'CNY' });
+  expect(paid).toMatchObject({ actualAmount: .01, actualCurrency: 'CNY' });
+});
+
+it('records raw Agent cache counters and leaves absent SDK counters unknown', async () => {
+  const { directory, model, project, state } = await fixture();
+  const database = openDatabase(directory), store = new DocumentStore(database), costs = createCostLedger({ database, store });
+  try {
+    state.usage = { prompt_tokens: 100, completion_tokens: 20, prompt_tokens_details: { cached_tokens: 50 }, completion_tokens_details: { cached_tokens: 7 } };
+    const context = { database, model, project, nodeId: 'agent', skills: [], mcpServers: [], dataDirectory: directory, signal: new AbortController().signal, costs };
+    await executeDeepAgent({ ...context, prompt: '输出简报', runId: 'agent-measured' });
+    const measured = costs.dispatch('cost.list', { runId: 'agent-measured' }) as { items: UsageRecord[] };
+    expect(measured.items).toHaveLength(1);
+    expect(measured.items[0].providerUsage).toMatchObject({ inputTokens: 100, outputTokens: 20, cachedInputTokens: 50, cachedOutputTokens: 7 });
+    state.usage = undefined;
+    await executeDeepAgent({ ...context, prompt: '输出另一份简报', runId: 'agent-unmeasured' });
+    const missing = costs.dispatch('cost.list', { runId: 'agent-unmeasured' }) as { items: UsageRecord[] };
+    expect(missing.items[0].providerUsage).toBeUndefined();
+  } finally { database.close(); }
 });
 
 it('uses native Ollama options and provider-reported prompt/eval counters', async () => {
@@ -60,7 +80,7 @@ it('uses native Ollama options and provider-reported prompt/eval counters', asyn
   const run = await start(), [record] = await records(runtime, run.id);
   expect(state.path).toBe('/api/chat'); expect(state.body?.options).toEqual({ temperature: .3, num_predict: 12 }); expect(state.body?.temperature).toBeUndefined();
   expect(record.providerUsage).toMatchObject({ source: 'provider', inputTokens: 10, outputTokens: 3, cachedInputTokens: 2 });
-  expect(record.providerUsage?.totalTokens).toBeUndefined(); expect(record.estimatedAmount).toBe(.000044);
+  expect(record.providerUsage?.totalTokens).toBeUndefined(); expect(record.estimatedAmount).toBeUndefined();
 });
 
 it.each([undefined, { prompt_tokens: 10 }, { prompt_tokens: -1, completion_tokens: '20' }])('keeps absent or partial provider usage unknown: %j', async usage => {

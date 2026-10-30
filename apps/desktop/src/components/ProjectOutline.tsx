@@ -1,5 +1,5 @@
 import { memo, useId, useMemo, useRef, useState, type KeyboardEvent } from 'react';
-import { Check, ChevronRight, Film, GitBranch, ListChecks, LockKeyhole, Plus, SlidersHorizontal, X } from 'lucide-react';
+import { Check, ChevronRight, Film, GitBranch, ListChecks, LockKeyhole, SlidersHorizontal, X, Plus } from 'lucide-react';
 import type { AssetRecord, ProjectDocument, WorkflowNode } from '@video-quickly/contracts';
 import { Button, IconButton } from './Primitives';
 import type { SelectionModifiers } from '../lib/shot-selection';

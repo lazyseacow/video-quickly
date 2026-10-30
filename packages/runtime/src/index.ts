@@ -8,14 +8,16 @@ import { z } from 'zod';
 import { readResearchSource, searchWikipedia, selectResearchPassages, parseResearchResult } from '@video-quickly/integrations/research';
 import { SqliteSaver } from '@langchain/langgraph-checkpoint-sqlite';
 import {
-  applyShotCandidate, assetSchema, audioWaveformSchema, captionTrackSchema, characterProfileSchema, claimSchema, clipSourceAssetIds, createHistoryWorkflow, createSceneTemplate, DEFAULT_VIDEO_PROFILE, LockedShotChangeError, modelSchema, pageInputSchema, projectSchema, providerUsageSchema, runSelectionSchema, shotCandidateFieldSchema, shotCandidateKindSchema, shotCandidateSchema, shotSchema, validateClipEditContent, validateClipEditHistory, validateModelParameters, videoProfileSchema, workflowSchema,
+  applyShotCandidate, assetSchema, audioWaveformSchema, captionTrackSchema, characterProfileSchema, claimSchema, clipSourceAssetIds, createHistoryWorkflow, createSceneTemplate, DEFAULT_VIDEO_PROFILE, LockedShotChangeError, modelSchema, pageInputSchema, projectSchema, providerUsageSchema, runSelectionSchema, shotCandidateFieldSchema, shotCandidateKindSchema, shotCandidateSchema, shotSchema, validateClipEditContent, validateClipEditHistory, validateModelConnection, getModelCapabilities, validateModelParameters, videoProfileSchema, workflowSchema,
   type AssetRecord, type AudioWaveform, type CharacterProfile, type JsonValue, type ModelCapability, type ModelProfile, type PreparedAudioMix, type ProjectDocument, type RunEvent, type RunPlan, type RunRecord, type RunSelection, type RuntimeEvent, type RuntimeSystem, type Shot, type ShotCandidate, type ShotCandidateKind, type SkillPackage, type WorkflowDefinition, type WorkflowNode, type WorkspaceSnapshot,
 } from '@video-quickly/contracts';
 import { ActivityJournal, AmbiguousActivityError, fingerprint, SimulatedProcessExit, type ActivityHooks, type ActivitySafety } from './activities.js';
 import { openDatabase, DocumentStore } from './database.js';
 import { createReadModels } from './read-models.js';
 import { Command, createExecutionGraph } from './graph.js';
-import { generateText, testModelConnection, type TextProvider } from './providers.js';
+import { discoverModels, generateText, testModelConnection, type TextProvider } from './providers.js';
+import { discoverModelVoices } from './model-voices.js';
+import { getModelVoiceCatalog } from '@video-quickly/contracts';
 import { seedHistoryProject } from './seed.js';
 import { importSkill } from './skills.js';
 import { connectMcp, mcpServerSchema, type McpServer } from './mcp.js';
@@ -97,7 +99,7 @@ const now = () => new Date().toISOString();
 const regenerationKinds = {
   script: { nodeKind: 'script', capability: 'text', label: '脚本', protocols: ['openai-compatible', 'ollama', 'custom-http'] },
   image: { nodeKind: 'assets', capability: 'image', label: '画面', protocols: ['openai-compatible', 'seedream', 'comfyui', 'custom-http'] },
-  audio: { nodeKind: 'voice', capability: 'tts', label: '配音', protocols: ['openai-compatible', 'qwen-tts', 'custom-http'] },
+  audio: { nodeKind: 'voice', capability: 'tts', label: '配音', protocols: ['openai-compatible', 'qwen-tts', 'volcengine-tts', 'custom-http'] },
   video: { nodeKind: 'animation', capability: 'video', label: '视频', protocols: ['openai-compatible', 'seedance', 'comfyui', 'custom-http'] },
 } as const;
 
@@ -173,7 +175,7 @@ export function createRuntime(options: RuntimeOptions) {
     const protocols: readonly string[] = configuration.protocols;
     if (!model?.enabled || !model.capabilities.includes(configuration.capability) || !protocols.includes(model.provider)) throw new Error(`请为镜头${configuration.label}重新生成选择可用的对应模型。`);
     const instruction = input.instruction?.trim();
-    if (input.kind === 'audio' && model.provider === 'qwen-tts' && instruction) throw new Error('当前 Qwen-TTS 接口不支持单镜头调整要求，请留空或改用支持语音指令的模型。');
+    if (input.kind === 'audio' && ['qwen-tts', 'volcengine-tts'].includes(model.provider) && instruction) throw new Error('当前配音接口不支持单镜头调整要求，请留空或改用支持语音指令的模型。');
     return {
       id: 'regenerate', kind: configuration.nodeKind, label: `重新生成镜头${configuration.label}`,
       description: template?.description ?? '', prompt: [template?.prompt, instruction].filter(Boolean).join('\n\n'),
@@ -352,6 +354,8 @@ export function createRuntime(options: RuntimeOptions) {
   }
 
   const system = systemStatus();
+  function availableModels(): ModelProfile[] { return store.list<ModelProfile>('model').map(model => ({ ...model, capabilities: getModelCapabilities(model) })); }
+
   function prepareRunSelection(value: ProjectDocument, selection: RunSelection): { plan: RunPlan; saved: RunSnapshot } {
     if (!value.workflow.nodes.some(node => node.id === selection.nodeId)) throw new Error('未找到所选步骤，请重新打开执行范围。');
     const ids = new Set([selection.nodeId]);
@@ -364,7 +368,7 @@ export function createRuntime(options: RuntimeOptions) {
     const bundle = characters.profilesFor(value);
     const saved: RunSnapshot = {
       project: structuredClone(value), nodes, selection, handlerVersion: 2,
-      models: store.list<ModelProfile>('model').filter(model => modelIds.has(model.id)),
+      models: availableModels().filter(model => modelIds.has(model.id)),
       skills: store.list<SkillPackage>('skill').filter(skill => skillIds.has(skill.id)),
       mcpServers: store.list<McpServer>('mcp-server'), characters: bundle.characters, characterAssets: bundle.assets,
       assets: store.list<AssetRecord>('asset').filter(asset => !asset.projectId || asset.projectId === value.id),
@@ -387,7 +391,7 @@ export function createRuntime(options: RuntimeOptions) {
   }
 
   function snapshot(): WorkspaceSnapshot {
-    return { projects: store.list<ProjectDocument>('project'), models: store.list<ModelProfile>('model'), skills: store.list<SkillPackage>('skill'), runs: store.list<RunRecord>('run').map(hydrateRun).reverse(), assets: store.list<AssetRecord>('asset'), events: events(), system };
+    return { projects: store.list<ProjectDocument>('project'), models: availableModels(), skills: store.list<SkillPackage>('skill'), runs: store.list<RunRecord>('run').map(hydrateRun).reverse(), assets: store.list<AssetRecord>('asset'), events: events(), system };
   }
 
   async function executeNode(runId: string, node: WorkflowNode, saved: RunSnapshot, controller: AbortController): Promise<JsonValue> {
@@ -406,7 +410,7 @@ export function createRuntime(options: RuntimeOptions) {
     if (selectedModel) {
       const capability = node.config.operation === 'transcribe' ? 'asr' : node.kind === 'assets' ? 'image' : node.kind === 'voice' ? 'tts' : node.kind === 'animation' ? 'video' : undefined;
       if (capability && !selectedModel.capabilities.includes(capability)) throw new Error('所选模型不具备此步骤需要的生成能力，请修改配置后创建新的运行。');
-      const protocols: Record<string, string[]> = { assets: ['openai-compatible', 'seedream', 'comfyui', 'custom-http'], voice: ['openai-compatible', 'qwen-tts', 'custom-http'], animation: ['openai-compatible', 'seedance', 'comfyui', 'custom-http'] };
+      const protocols: Record<string, string[]> = { assets: ['openai-compatible', 'seedream', 'comfyui', 'custom-http'], voice: ['openai-compatible', 'qwen-tts', 'volcengine-tts', 'custom-http'], animation: ['openai-compatible', 'seedance', 'comfyui', 'custom-http'] };
       if (protocols[node.kind] && !protocols[node.kind].includes(selectedModel.provider)) throw new Error('所选模型的服务协议不适用于此步骤，请修改配置后创建新的运行。');
     }
     const secret = selectedModel?.credentialRef ? rememberSecret(await options.secretStore?.get(selectedModel.credentialRef)) : undefined;
@@ -449,7 +453,7 @@ export function createRuntime(options: RuntimeOptions) {
         database.prepare("UPDATE activities SET status = 'failed', result = NULL, error = '本地渲染文件需要重建' WHERE run_id = ? AND activity_id = ?").run(runId, node.id);
       }
     }
-    const deepAgent = node.kind === 'agent' && selectedModel?.capabilities.includes('tools') && selectedModel.provider === 'openai-compatible';
+    const deepAgent = node.kind === 'agent' && selectedModel?.capabilities.includes('tools') && selectedModel.provider !== 'ollama';
     const capability: ModelCapability | undefined = usesProvider ? 'text' : node.config.operation === 'transcribe' ? 'asr' : node.kind === 'assets' ? 'image' : node.kind === 'voice' ? 'tts' : node.kind === 'animation' ? 'video' : undefined;
     const researchContext = usesProvider && node.kind === 'research' ? selectResearchPassages(executionProject, saved.research?.sourceIds ?? (Array.isArray(node.config.sourceIds) ? node.config.sourceIds.filter((id): id is string => typeof id === 'string') : undefined), saved.research?.instruction ?? node.prompt) : undefined;
     const prompt = usesProvider ? researchContext ? researchPrompt(executionProject, node, saved.skills, researchContext) : buildPrompt(executionProject, node, saved.skills, Boolean(saved.regeneration), executionCharacters) : '';
@@ -570,7 +574,7 @@ export function createRuntime(options: RuntimeOptions) {
       if (error instanceof SimulatedProcessExit) return;
       const latest = run(runId);
       if (latest.status === 'canceled') return;
-      const message = redactError(error instanceof Error ? error.message : '运行失败', store.list<ModelProfile>('model'), transientSecrets);
+      const message = redactError(error instanceof Error ? error.message : '运行失败', availableModels(), transientSecrets);
       const status = error instanceof AmbiguousActivityError || message.includes('请') || message.includes('先') ? 'needs_attention' : 'failed';
       updateRun(runId, { status, error: message });
       recordEvent(runId, 'run.failed', message, latest.currentNodeId);
@@ -644,7 +648,7 @@ export function createRuntime(options: RuntimeOptions) {
     if (closing) throw new Error('运行环境正在关闭。');
     switch (method) {
       case 'workspace.snapshot': return snapshot();
-      case 'workspace.summary': return { projects: reads.projects(), models: store.list<ModelProfile>('model'), skills: store.list<SkillPackage>('skill'), system, version: workspaceVersion, assetsVersion: reads.assetsVersion() };
+      case 'workspace.summary': return { projects: reads.projects(), models: availableModels(), skills: store.list<SkillPackage>('skill'), system, version: workspaceVersion, assetsVersion: reads.assetsVersion() };
       case 'project.get': {
         const input = entityId.extend({ revision: z.number().int().positive().optional(), assetsVersion: z.number().int().nonnegative().optional() }).parse(rawParams);
         return reads.projectDetail(input.projectId, input.revision, input.assetsVersion);
@@ -719,15 +723,19 @@ export function createRuntime(options: RuntimeOptions) {
         const input = entityId.extend({ nodeId: z.string().optional(), parentRunId: z.string().optional(), profile: videoProfileSchema.optional(), destination: z.string().optional(), revision: z.number().int().optional(), transcription: z.object({ shotId: z.string(), modelId: z.string() }).optional(), regeneration: regenerationInput.optional(), research: researchInput.optional(), selection: runSelectionSchema.extend({ previewDigest: z.string().regex(/^[a-f0-9]{64}$/) }).optional() }).parse(rawParams);
         if (input.selection && [input.nodeId, input.profile, input.destination, input.regeneration, input.transcription, input.research].some(value => value !== undefined)) throw new Error('执行范围不能同时指定其他制作任务。');
         let inheritedScope = false;
+        let inheritedNode: WorkflowNode | undefined, inheritedExport: WorkflowNode | undefined;
         if (input.parentRunId) {
           const parent = run(input.parentRunId);
           if (parent.projectId !== input.projectId) throw new Error('父运行不属于当前项目。');
           // Read only the scope, without decoding the parent's full project or asset snapshot.
-          const row = database.prepare("SELECT json_object('exportBatch', json_extract(body, '$.exportBatch'), 'regeneration', json_extract(body, '$.regeneration'), 'research', json_extract(body, '$.research'), 'nodes', json_extract(body, '$.nodes'), 'selection', json_extract(body, '$.selection')) AS body FROM documents WHERE kind = 'run-snapshot' AND id = ?").get(parent.id) as { body: string } | undefined;
+          const row = database.prepare("SELECT json_object('exportBatch', json_extract(body, '$.exportBatch'), 'regeneration', json_extract(body, '$.regeneration'), 'research', json_extract(body, '$.research'), 'nodes', json_extract(body, '$.nodes'), 'selection', json_extract(body, '$.selection'), 'profile', json_extract(body, '$.project.profile'), 'workflowNodeCount', json_array_length(body, '$.project.workflow.nodes')) AS body FROM documents WHERE kind = 'run-snapshot' AND id = ?").get(parent.id) as { body: string } | undefined;
           if (!row) throw new Error('父运行快照不存在，无法确认重新制作范围。');
-          const saved = JSON.parse(row.body) as Pick<RunSnapshot, 'exportBatch' | 'regeneration' | 'research' | 'nodes' | 'selection'>;
+          const saved = JSON.parse(row.body) as Pick<RunSnapshot, 'exportBatch' | 'regeneration' | 'research' | 'nodes' | 'selection'> & { profile: ProjectDocument['profile']; workflowNodeCount: number | null };
+          const originalNodeCount = saved.workflowNodeCount ?? 0;
           if (saved.selection && (!input.selection || saved.selection.nodeId !== input.selection.nodeId || saved.selection.mode !== input.selection.mode)) throw new Error('请先预览原任务的执行范围，再重新制作。');
           const caption = saved.nodes.length === 1 && saved.nodes[0].config.operation === 'transcribe' ? saved.nodes[0] : undefined;
+          const single = !saved.selection && !saved.exportBatch && !saved.regeneration && !saved.research && !caption && saved.nodes.length === 1 ? saved.nodes[0] : undefined;
+          if (single && originalNodeCount < 1) throw new Error('原任务的流程范围不完整，请在项目中确认后重新执行。');
           if ((saved.exportBatch || saved.regeneration || saved.research || caption) && [input.nodeId, input.profile, input.destination, input.regeneration, input.transcription, input.research, input.selection].some(value => value !== undefined)) throw new Error('特殊任务重新制作必须保留原任务范围，请从对应编辑器创建其他任务。');
           if (saved.exportBatch) { await batches.dispatch('render.batch.resume', { batchId: saved.exportBatch.batchId }); return hydrateRun(run(parent.id)); }
           if (saved.regeneration) {
@@ -743,9 +751,20 @@ export function createRuntime(options: RuntimeOptions) {
             const modelId = saved.nodes.find(node => node.kind === 'research')?.modelId;
             if (!modelId) throw new Error('原资料整理模型缺失，请在资料审阅中重新选择模型。');
             input.research = { ...saved.research, modelId }; inheritedScope = true;
+          } else if (single?.kind === 'export') {
+            if ([input.nodeId, input.profile, input.destination, input.regeneration, input.transcription, input.research, input.selection].some(value => value !== undefined)) throw new Error('导出任务重新制作必须保留原规格和路径，请从导出面板创建其他任务。');
+            input.profile = videoProfileSchema.parse(saved.profile); inheritedExport = single; inheritedScope = true;
+          } else if (single && originalNodeCount > 1) {
+            if (input.selection) {
+              if (input.selection.nodeId !== single.id || input.selection.mode !== 'node') throw new Error('请保留原单步骤范围，或在项目中创建新的执行任务。');
+            } else {
+              if ([input.nodeId, input.profile, input.destination, input.regeneration, input.transcription, input.research].some(value => value !== undefined)) throw new Error('请保留原单步骤范围，或在项目中创建新的执行任务。');
+              input.nodeId = single.id; inheritedNode = single; inheritedScope = true;
+            }
           }
         }
         const original = project(input.projectId);
+        if (inheritedNode && !original.workflow.nodes.some(node => node.id === inheritedNode.id && node.kind === inheritedNode.kind)) throw new Error('原单步骤已删除或变更类型，请在项目中确认后重新执行。');
         validateResearchProject(original, original);
         if (inheritedScope && input.revision === undefined) input.revision = original.revision;
         if (input.regeneration && (input.transcription || input.revision === undefined)) throw new Error('镜头重新生成需要当前修订，且不能同时识别字幕。');
@@ -759,13 +778,13 @@ export function createRuntime(options: RuntimeOptions) {
           if (prepared.plan.digest !== input.selection.previewDigest) throw new Error('项目或执行配置已变化，请重新预览执行范围后确认。');
           if (prepared.plan.blockedReason) throw new Error(prepared.plan.blockedReason);
         }
-        let nodes = prepared?.saved.nodes ?? (input.nodeId ? value.workflow.nodes.filter(node => node.id === input.nodeId) : orderedNodes(value.workflow)).map(node => input.destination && node.kind === 'export' ? { ...node, config: { ...node.config, destination: input.destination } } : node);
+        let nodes = inheritedExport ? [inheritedExport] : prepared?.saved.nodes ?? (input.nodeId ? value.workflow.nodes.filter(node => node.id === input.nodeId) : orderedNodes(value.workflow)).map(node => input.destination && node.kind === 'export' ? { ...node, config: { ...node.config, destination: input.destination } } : node);
         if (input.transcription) {
           const shot = value.shots.find(shot => shot.id === input.transcription?.shotId);
           const audio = shot?.audioAssetId ? store.get<AssetRecord>('asset', shot.audioAssetId) : undefined;
           const model = store.get<ModelProfile>('model', input.transcription.modelId);
           if (!audio?.active || audio.kind !== 'audio' || audio.projectId && audio.projectId !== value.id) throw new Error('请先为镜头关联有效的旁白音频。');
-          if (!model?.enabled || !model.capabilities.includes('asr') || model.provider !== 'openai-compatible') throw new Error('请选择支持时间戳的 OpenAI 兼容 ASR 模型。');
+          if (!model?.enabled || !model.capabilities.includes('asr') || !['openai-compatible', 'volcengine-asr'].includes(model.provider)) throw new Error('请选择支持时间戳的语音识别模型。');
           nodes = [{ id: 'caption', kind: 'voice', label: '语音对齐字幕', description: '', prompt: '', skillIds: [], modelId: model.id, config: { operation: 'transcribe', shotId: input.transcription.shotId }, position: { x: 0, y: 0 }, requiresReview: false }];
         }
         if (input.regeneration) nodes = [regenerationNode(value, input.regeneration)];
@@ -782,7 +801,7 @@ export function createRuntime(options: RuntimeOptions) {
         const scope = input.research ? [] : baseline ? [baseline] : input.transcription ? value.shots.filter(shot => shot.id === input.transcription?.shotId) : value.shots;
         const bundle = prepared ? { characters: prepared.saved.characters, assets: prepared.saved.characterAssets } : characters.profilesFor({ shots: scope });
         const legacySelection: RunSelection | undefined = input.nodeId && !input.profile && !input.destination && !input.transcription && !input.regeneration && !input.research && nodes[0].kind !== 'export' ? { nodeId: input.nodeId, mode: 'node' } : undefined;
-        const saved: RunSnapshot = prepared?.saved ?? { project: structuredClone(value), models: store.list<ModelProfile>('model'), skills: store.list<SkillPackage>('skill'), mcpServers: store.list<McpServer>('mcp-server'), nodes, handlerVersion: 1, characters: bundle.characters, characterAssets: bundle.assets, selection: legacySelection, ...(input.research ? { research: { sourceIds: input.research.sourceIds, instruction: input.research.instruction } } : {}), ...(input.regeneration && baseline ? { regeneration: { shotId: baseline.id, baseline: structuredClone(baseline), kind: input.regeneration.kind, instruction: input.regeneration.instruction?.trim() } } : {}) };
+        const saved: RunSnapshot = prepared?.saved ?? { project: structuredClone(value), models: availableModels(), skills: store.list<SkillPackage>('skill'), mcpServers: store.list<McpServer>('mcp-server'), nodes, handlerVersion: 1, characters: bundle.characters, characterAssets: bundle.assets, selection: legacySelection, ...(input.research ? { research: { sourceIds: input.research.sourceIds, instruction: input.research.instruction } } : {}), ...(input.regeneration && baseline ? { regeneration: { shotId: baseline.id, baseline: structuredClone(baseline), kind: input.regeneration.kind, instruction: input.regeneration.instruction?.trim() } } : {}) };
         const timestamp = now();
         const record: RunRecord = { id, projectId: value.id, projectRevision: value.revision, status: 'queued', workflowVersion: value.workflow.version, snapshotDigest: fingerprint(saved), parentRunId: input.parentRunId, selection: saved.selection, stepCount: nodes.length, createdAt: timestamp, updatedAt: timestamp, events: [], activities: [] };
         database.transaction(() => { store.put('run-snapshot', id, saved); store.put('run', id, record); })();
@@ -892,11 +911,27 @@ export function createRuntime(options: RuntimeOptions) {
         const outputs = Object.fromEntries(journal.list(runId).filter(record => record.status === 'completed').map(record => [record.activity_id, JSON.parse(record.result!)]));
         return { run: hydrateRun(value), snapshotDigest: saved ? fingerprint(saved) : null, matchesSnapshot: !!saved && fingerprint(saved) === value.snapshotDigest, outputs, externalCalls: 0 };
       }
+      case 'model.voices': case 'model.discover': {
+        const input = z.object({ model: modelSchema.partial().required({ provider: true, baseUrl: true, capabilities: true }), secret: z.string().optional() }).parse(rawParams);
+        const previous = input.model.id ? store.get<ModelProfile>('model', input.model.id) : undefined;
+        const draft = modelSchema.parse({ id: 'discovery', name: '读取模型', model: 'discovery', createdAt: '', updatedAt: '', ...input.model });
+        let secret = input.secret ? rememberSecret(input.secret) : undefined;
+        if (!secret && previous?.credentialRef) {
+          if (previous.baseUrl !== draft.baseUrl) return { ...(method === 'model.voices' ? getModelVoiceCatalog(draft) : { source: 'remote', items: [] }), message: '服务地址已改变，请填写密钥后读取列表。' };
+          secret = rememberSecret(await options.secretStore?.get(previous.credentialRef));
+        }
+        try { return method === 'model.voices' ? await discoverModelVoices(draft, secret) : await discoverModels(draft, secret); }
+        catch (error) {
+          if (method === 'model.voices') return { ...getModelVoiceCatalog(draft), message: '账号音色暂时无法读取，可选择公共音色预设或自定义填写。' };
+          return { source: 'remote', items: [], message: error instanceof Error && /^读取模型列表返回 HTTP \d+$/.test(error.message) ? `${error.message}，请核对地址与密钥，或手动填写。` : '暂时无法读取模型，请核对服务地址、密钥及接口支持，或手动填写。' };
+        }
+      }
       case 'model.save': {
         const input = z.object({ model: modelSchema.partial().required({ name: true, provider: true, baseUrl: true, model: true, capabilities: true }), secret: z.string().optional() }).parse(rawParams);
         const id = input.model.id || randomUUID();
         const previous = store.get<ModelProfile>('model', id);
-        validateModelParameters({ provider: input.model.provider, capabilities: input.model.capabilities, parameters: input.model.parameters ?? previous?.parameters ?? {} });
+        validateModelConnection({ ...previous, ...input.model });
+        validateModelParameters({ ...previous, ...input.model, parameters: input.model.parameters ?? previous?.parameters ?? {} });
         let credentialRef = previous?.credentialRef;
         let hasSecret = previous?.hasSecret ?? false;
         if (input.secret !== undefined) {
@@ -908,7 +943,7 @@ export function createRuntime(options: RuntimeOptions) {
           else { await options.secretStore.delete(credentialRef); credentialRef = undefined; hasSecret = false; }
         }
         const timestamp = now();
-        const value = modelSchema.parse({ ...previous, ...input.model, id, credentialRef, hasSecret, parameters: input.model.parameters ?? previous?.parameters ?? {}, enabled: input.model.enabled ?? true, createdAt: previous?.createdAt ?? timestamp, updatedAt: timestamp });
+        const value = modelSchema.parse({ ...previous, ...input.model, id, credentialRef, hasSecret, capabilities: getModelCapabilities(input.model), parameters: input.model.parameters ?? previous?.parameters ?? {}, enabled: input.model.enabled ?? true, createdAt: previous?.createdAt ?? timestamp, updatedAt: timestamp });
         store.put('model', id, value); changed(); return value;
       }
       case 'cost.list': case 'cost.update': case 'cost.summary': case 'cost.tasks': case 'cost.task.get': return costs.dispatch(method, rawParams);

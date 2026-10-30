@@ -1,9 +1,9 @@
 import { useEffect, useRef, useState } from 'react';
-import { ArrowDownWideNarrow, LocateFixed, Plus, Scissors, Trash2 } from 'lucide-react';
+import { LocateFixed, Scissors, Trash2, ArrowDownWideNarrow, Plus } from 'lucide-react';
 import { captionTrackSchema, frameAtTime, timeAtFrame, type AssetRecord, type CaptionCue, type CaptionTrack, type FrameRate, type ModelProfile, type Shot } from '@video-quickly/contracts';
 import { createEstimatedCaptionTrack, mediaSourceInUs, sourceCaptionTrack, type ClipEditContext } from '@video-quickly/video';
 import { captionTrackForEditor, commitCaptionEditorTrack, localCaptionTrack } from '../lib/caption-editor-track';
-import { Button, Dialog, Field, IconButton, Notice } from './Primitives';
+import { Button, Dialog, Field, IconButton, Notice, Select } from './Primitives';
 import './caption-editor.css';
 
 export interface CaptionEditorProps {
@@ -36,7 +36,7 @@ export default function CaptionEditor({ shot, rate, models, audioAsset, disabled
   const [draft, setDraft] = useState(() => localCaptionTrack(shot, fullTrack, context));
   const [captionsOff, setCaptionsOff] = useState(false);
   const [initial] = useState(() => ({ draft, fullTrack }));
-  const asrModels = models.filter(model => model.enabled && model.provider === 'openai-compatible' && model.capabilities.includes('asr'));
+  const asrModels = models.filter(model => model.enabled && ['openai-compatible', 'volcengine-asr'].includes(model.provider) && model.capabilities.includes('asr'));
   const [modelId, setModelId] = useState(asrModels[0]?.id ?? '');
   const [candidate, setCandidate] = useState<CaptionTrack>();
   const [transcribing, setTranscribing] = useState(false);
@@ -137,9 +137,9 @@ export default function CaptionEditor({ shot, rate, models, audioAsset, disabled
       {staleSpeech && <Notice kind="error">音频已更换，旧语音字幕需要重新识别或手工校准。</Notice>}
       {draft.cues.some(cue => Array.from(cue.text).length > 60) && <p className="tiny-meta">较长字幕会在预览与导出时自动分页，页内切换按阅读量估时；需要精确到词时，请拆句校准或使用逐词对齐。</p>}
       <div className="caption-editor__actions">
-        <Button disabled={busy || !shot.narration.trim()} onClick={() => useTrack(createEstimatedCaptionTrack(shot))}>从旁白初始化估时</Button>
+        <Button aria-label="按旁白估时" disabled={busy || !shot.narration.trim()} onClick={() => useTrack(createEstimatedCaptionTrack(shot))}>按旁白估时</Button>
         <Button disabled={busy || draft.cues.length < 2} onClick={() => edit(draft.cues.toSorted((a, b) => a.startUs - b.startUs || a.endUs - b.endUs))}><ArrowDownWideNarrow size={14} />按时间排序</Button>
-        <Button disabled={busy || !fullTrack.cues.length && !draft.cues.length} onClick={() => { edit([]); setCaptionsOff(true); }}>关闭此镜头字幕</Button>
+        <Button aria-label="关闭字幕" disabled={busy || !fullTrack.cues.length && !draft.cues.length} onClick={() => { edit([]); setCaptionsOff(true); }}>关闭字幕</Button>
       </div>
       <div className="caption-editor__cues" aria-label="字幕句段">
         {draft.cues.map((cue, index) => <section className="caption-editor__cue" aria-label={`字幕 ${index + 1}`} key={cue.id}>
@@ -155,13 +155,13 @@ export default function CaptionEditor({ shot, rate, models, audioAsset, disabled
       </div>
       <Button disabled={busy || !gap} title={!gap ? '请先缩短或拆分已有句段，为新字幕留出时间' : undefined} onClick={() => { if (gap) edit([...draft.cues, { id: crypto.randomUUID(), ...gap, text: '' }].toSorted((a, b) => a.startUs - b.startUs)); }}><Plus size={14} />添加字幕</Button>
       <section className="caption-editor__recognition" aria-label="语音识别">
-        <div className="caption-editor__recognition-controls"><Field label="语音识别模型"><select value={modelId} disabled={busy || transcribing} onChange={event => setModelId(event.target.value)}><option value="" disabled>选择语音识别模型</option>{asrModels.map(model => <option key={model.id} value={model.id}>{model.name}</option>)}</select></Field><Button busy={transcribing} disabled={busy || !audioAsset || !modelId || !onTranscribe} onClick={() => void transcribe()}>识别音频并对齐</Button></div>
+        <div className="caption-editor__recognition-controls"><Field label="语音识别模型"><Select value={modelId} disabled={busy || transcribing} onChange={event => setModelId(event.target.value)}><option value="" disabled>选择语音识别模型</option>{asrModels.map(model => <option key={model.id} value={model.id}>{model.name}</option>)}</Select></Field><Button aria-label="识别并对齐" busy={transcribing} disabled={busy || !audioAsset || !modelId || !onTranscribe} onClick={() => void transcribe()}>识别并对齐</Button></div>
         {!audioAsset ? <p className="tiny-meta">先为当前镜头关联旁白音频，再进行语音识别。</p> : !asrModels.length ? <p className="tiny-meta">请在模型连接中添加具备语音识别能力的模型。</p> : null}
         {transcribing && <p className="tiny-meta" role="status">正在识别音频，完成后会提供候选字幕。</p>}
-        {candidate && <div className="caption-editor__candidate"><p>识别候选 · {candidate.cues.length} 句</p><p>{candidate.cues.slice(0, 2).map(cue => cue.text).join(' ') || '当前音频未识别到语音。'}</p><Button disabled={busy} onClick={() => { useTrack(candidate); setCandidate(undefined); }}>使用识别候选</Button></div>}
+        {candidate && <div className="caption-editor__candidate"><p>识别候选 · {candidate.cues.length} 句</p><p>{candidate.cues.slice(0, 2).map(cue => cue.text).join(' ') || '当前音频未识别到语音。'}</p><Button aria-label="使用候选" disabled={busy} onClick={() => { useTrack(candidate); setCandidate(undefined); }}>使用候选</Button></div>}
       </section>
       {(failure || error) && <Notice kind="error">{failure || error}</Notice>}
     </div>
-    <div className="dialog__footer"><Button onClick={close}>取消</Button><Button variant="primary" busy={applying} disabled={disabled || transcribing || !changed || Boolean(error) || staleSpeech} onClick={() => void apply()}>应用字幕</Button></div>
+    <div className="dialog__footer"><Button onClick={close}>取消</Button><Button aria-label="应用字幕" variant="primary" busy={applying} disabled={disabled || transcribing || !changed || Boolean(error) || staleSpeech} onClick={() => void apply()}>应用</Button></div>
   </Dialog>;
 }

@@ -28,7 +28,7 @@ export default function RunScopeDialog({ projectId, nodeId, initialMode = 'downs
     <div className="dialog__body">
       {error && <Notice kind="error">{error}</Notice>}
       {read.error && <Notice kind="error">{read.error}</Notice>}
-      <p className="run-scope-intro">基于已保存的项目创建新任务。步骤结果单独保存，可在制作记录中比较并应用。</p>
+      <p className="run-scope-intro">使用已保存的项目创建任务，结果可在制作记录中比较和应用。</p>
       {parentRunId ? <p className="run-scope-intro">沿用原任务范围：{mode === 'node' ? '仅此步骤' : '此步骤及后续'}。</p> : <fieldset className="run-scope-options" disabled={busy}>
         <legend>执行方式</legend>
         <label className="field-inline"><input type="radio" name="run-scope-mode" checked={mode === 'node'} onChange={() => setMode('node')} />仅此步骤</label>
@@ -43,6 +43,6 @@ export default function RunScopeDialog({ projectId, nodeId, initialMode = 'downs
         {plan.boundary.length > 0 && <details className="run-scope-boundary"><summary><GitBranch size={14} aria-hidden="true" />沿用已保存的上游内容</summary><p>这些上游步骤不重新执行，相关输入取自已保存的项目。</p><ul>{plan.boundary.map((edge, index) => <li key={index}>{edge.targetLabel} ← {edge.sourceLabel}</li>)}</ul></details>}
       </>}
     </div>
-    <div className="dialog__footer"><Button onClick={onClose}>{busy ? '关闭' : '取消'}</Button><Button busy={read.busy} disabled={busy} onClick={read.refresh}><RefreshCw size={14} />重新预览</Button><Button variant="primary" busy={busy} disabled={!plan || read.busy || Boolean(read.error || plan.blockedReason)} onClick={() => void start()}><Play size={14} />确认执行</Button></div>
+    <div className="dialog__footer"><Button onClick={onClose}>{busy ? '关闭' : '取消'}</Button><Button busy={read.busy} disabled={busy} onClick={read.refresh}><RefreshCw size={14} />重新预览</Button><Button aria-label="确认执行" variant="primary" busy={busy} disabled={!plan || read.busy || Boolean(read.error || plan.blockedReason)} onClick={() => void start()}><Play size={14} />执行</Button></div>
   </Dialog>;
 }

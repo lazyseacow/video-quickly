@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { exportBatchSchema, exportTargetSchema, formatFrameRate, recordPageSchema, type ExportBatch, type ExportTarget, type ProjectDocument, type VideoProfile } from '@video-quickly/contracts';
-import { Download, FolderOpen, Plus, RefreshCw, Square, Trash2 } from 'lucide-react';
+import { Trash2, Plus, RefreshCw, FolderOpen, Square, Download, Layers, History } from 'lucide-react';
 import type { Action } from '../lib/types';
 import { rpc } from '../lib/client';
-import { Button, Dialog, Field, IconButton, Notice } from './Primitives';
+import { Button, Dialog, Field, IconButton, Notice, Select } from './Primitives';
 import PathPicker, { nativeDesktop, revealFile } from './PathPicker';
 import VideoSettings from './VideoSettings';
+import SettingsSections from './SettingsSections';
 import './batch-export-dialog.css';
 
 const batchesSchema = recordPageSchema(exportBatchSchema);
@@ -29,6 +30,7 @@ export default function BatchExportDialog({ project, onClose, notify }: {
   const [baseline] = useState(() => ({ id: project.id, title: project.title, revision: project.revision, shotCount: project.shots.length }));
   const [targets, setTargets] = useState(() => initialTargets(project.profile));
   const [destination, setDestination] = useState('');
+  const [section, setSection] = useState(() => localStorage.getItem(batchKey(project.id)) ? 'history' : 'targets');
   const [history, setHistory] = useState<ExportBatch[]>([]);
   const [nextCursor, setNextCursor] = useState<number | null>(null);
   const [selectedId, setSelectedId] = useState<string>();
@@ -93,35 +95,34 @@ export default function BatchExportDialog({ project, onClose, notify }: {
         : { projectId: baseline.id, batchId: current?.id }));
       if (!alive.current) return;
       setBatch(value); setSelectedId(value.id); localStorage.setItem(batchKey(baseline.id), value.id); setRefresh(count => count + 1); void loadHistory();
+      setSection('history');
       notify?.(operation === 'start' ? '批量导出已开始' : operation === 'cancel' ? '已请求停止批量导出' : '已继续校验与导出');
     } catch (reason) { if (alive.current) setError(reason instanceof Error ? reason.message : String(reason)); }
     finally { if (alive.current) setBusy(undefined); }
   }
-  return <Dialog title="多比例批量导出" onClose={onClose} className="batch-export-dialog">
-    <div className="dialog__body">
-      <p className="batch-export__intro">{baseline.title} · 保存的修订 {baseline.revision}。各规格独立导出，不改变项目画面规格，也不会调用生成模型。</p>
-      <fieldset className="batch-export__configuration" disabled={Boolean(busy)}><legend>新建导出配置</legend>
+  return <Dialog title="多比例批量导出" onClose={onClose} className="batch-export-dialog settings-dialog">
+    <div className="dialog__body"><SettingsSections label="批量导出设置" value={section} onValueChange={setSection} intro={<p className="batch-export__intro">{baseline.title} · 保存的修订 {baseline.revision}。各规格独立导出，不改变项目画面规格，也不会调用生成模型。</p>} sections={[
+      { id: 'targets', label: '导出规格', icon: Layers, content: <fieldset className="batch-export__configuration" disabled={Boolean(busy)}><legend>导出规格</legend>
         <div className="batch-export__targets">{targets.map((target, index) => <section className={`batch-export__target ${target.selected ? 'is-selected' : ''}`} key={target.id} aria-label={`导出规格 ${target.label}`}>
           <div className="batch-export__target-heading"><label className="field-inline"><input type="checkbox" checked={target.selected} onChange={event => setTargets(values => values.map(item => item.id === target.id ? { ...item, selected: event.target.checked } : item))} />{target.label}</label>{index >= 3 && <IconButton label={`删除规格 ${target.label}`} onClick={() => setTargets(values => values.filter(item => item.id !== target.id))}><Trash2 size={13} /></IconButton>}</div>
           {target.selected && <><Field label={`${target.label} 短边（像素）`}><input type="number" min="64" max="7680" step="2" value={target.shortSide} onChange={event => updateShortSide(target.id, event.target.value)} /></Field><p className="batch-export__spec">{target.profile.width} × {target.profile.height} · {formatFrameRate(target.profile.frameRate)} fps</p><details><summary>调整{target.label}规格</summary><Field label={`${target.label} 输出名称`}><input value={target.label} maxLength={100} onChange={event => setTargets(values => values.map(item => item.id === target.id ? { ...item, label: event.target.value } : item))} /></Field><VideoSettings compact profile={target.profile} onChange={profile => updateProfile(target.id, profile)} /></details></>}
         </section>)}</div>
-        <Button variant="ghost" disabled={targets.length >= 8} onClick={() => setTargets(values => { const profile = structuredClone(values.find(target => target.selected)?.profile ?? project.profile); return [...values, { id: crypto.randomUUID(), label: `自定义 ${values.length + 1}`, profile, selected: true, shortSide: String(Math.min(profile.width, profile.height)), ratio: profile.width / profile.height }]; })}><Plus size={13} />添加导出规格</Button>
-        <Field label="批量输出目录" hint="留空保存到项目输出目录；每批任务和规格使用独立子目录。"><PathPicker label="批量输出目录" mode="directory" value={destination} onChange={setDestination} placeholder="选择或填写文件夹路径" /></Field>
+        <Button aria-label="添加规格" variant="ghost" disabled={targets.length >= 8} onClick={() => setTargets(values => { const profile = structuredClone(values.find(target => target.selected)?.profile ?? project.profile); return [...values, { id: crypto.randomUUID(), label: `自定义 ${values.length + 1}`, profile, selected: true, shortSide: String(Math.min(profile.width, profile.height)), ratio: profile.width / profile.height }]; })}><Plus size={13} />添加规格</Button>
         {!selected.length && <p className="field-error">请至少勾选一个导出规格。</p>}{invalid && !invalid.success && <p role="alert" className="field-error">{invalid.error.issues[0]?.message}</p>}
-      </fieldset>
-      <section className="batch-export__history" aria-label="批量导出进度"><div className="batch-export__history-heading"><h3>导出记录</h3><Button variant="ghost" busy={listBusy} onClick={() => void loadHistory()}><RefreshCw size={13} />刷新导出记录</Button></div>
+      </fieldset> },
+      { id: 'output', label: '输出设置', icon: FolderOpen, content: <fieldset className="batch-export__configuration" disabled={Boolean(busy)}><legend>输出设置</legend><Field label="批量输出目录" hint="留空使用项目输出目录；各批次和规格独立保存。"><PathPicker label="批量输出目录" mode="directory" value={destination} onChange={setDestination} placeholder="选择或填写文件夹路径" /></Field></fieldset> },
+      { id: 'history', label: '导出记录', icon: History, content: <section className="batch-export__history" aria-label="批量导出进度"><div className="batch-export__history-heading"><h3>导出记录</h3><Button aria-label="刷新导出记录" variant="ghost" busy={listBusy} onClick={() => void loadHistory()}><RefreshCw size={13} />刷新</Button></div>
         {listError && <Notice kind="error">{listError}</Notice>}
-        {(history.length > 0 || current) && <Field label="批量导出记录"><select value={selectedId ?? ''} disabled={Boolean(busy)} onChange={event => { setSelectedId(event.target.value); setError(''); }}><option value="" disabled>选择批量导出记录</option>{current && !history.some(item => item.id === current.id) && <option value={current.id}>{new Date(current.createdAt).toLocaleString('zh-CN')} · 修订 {current.projectRevision} · {labels[current.status]}</option>}{history.map(item => <option key={item.id} value={item.id}>{new Date(item.createdAt).toLocaleString('zh-CN')} · 修订 {item.projectRevision} · {labels[item.status]}</option>)}</select></Field>}
-        {nextCursor !== null && <Button busy={listBusy} onClick={() => void loadHistory(nextCursor)}>加载更早导出</Button>}
-        {readError && <Notice kind="error">{readError}<Button onClick={() => setRefresh(count => count + 1)}>重新读取批量进度</Button></Notice>}
+        {(history.length > 0 || current) && <Field label="批量导出记录"><Select value={selectedId ?? ''} disabled={Boolean(busy)} onChange={event => { setSelectedId(event.target.value); setError(''); }}><option value="" disabled>选择批量导出记录</option>{current && !history.some(item => item.id === current.id) && <option value={current.id}>{new Date(current.createdAt).toLocaleString('zh-CN')} · 修订 {current.projectRevision} · {labels[current.status]}</option>}{history.map(item => <option key={item.id} value={item.id}>{new Date(item.createdAt).toLocaleString('zh-CN')} · 修订 {item.projectRevision} · {labels[item.status]}</option>)}</Select></Field>}
+        {nextCursor !== null && <Button aria-label="加载更多导出" busy={listBusy} onClick={() => void loadHistory(nextCursor)}>加载更多</Button>}
+        {readError && <Notice kind="error">{readError}<Button aria-label="重试批量进度" onClick={() => setRefresh(count => count + 1)}>重试</Button></Notice>}
         {current ? <><div className="batch-export__summary" role="status"><span className={`status status--${current.status}`}><span />{labels[current.status]}</span><span>源修订 {current.projectRevision} · {current.targets.filter(target => target.status === 'succeeded').length}/{current.targets.length} 个规格完成</span><code>{current.id}</code></div>
           <p className="tiny-meta">{current.status === 'interrupted' ? '上次执行已中断，点击“继续未完成导出”后恢复。' : running ? '导出在后台继续；关闭窗口后可重新打开查看。' : '每个规格的文件与状态分别保留，继续执行会校验并复用完整产物。'}</p>
           {current.error && <Notice kind="error">{current.error}</Notice>}
-          <div className="batch-export__results">{current.targets.map(target => <article key={target.id} className="batch-export__result" aria-label={`导出结果 ${target.label}`}><header><strong>{target.label}</strong><span className={`status status--${target.status}`}><span />{targetLabels[target.status]}</span></header><p className="tiny-meta">{target.profile.width} × {target.profile.height} · {formatFrameRate(target.profile.frameRate)} fps</p><progress aria-label={`${target.label} 导出进度`} value={target.progress} max={1} /><span className="batch-export__percent">{Math.round(target.progress * 100)}%</span>{target.error && <p role="alert" className="field-error">{target.error}</p>}{([['videoPath', 'MP4'], ['coverPath', '封面'], ['subtitlePath', '字幕'], ['timelinePath', '时间轴']] as const).map(([key, label]) => target[key] && <p className="batch-export__path" key={key}><span>{label}</span><code>{target[key]}</code></p>)}{target.videoPath && nativeDesktop && <Button variant="ghost" onClick={() => void revealFile(target.videoPath!).catch(reason => setError(reason instanceof Error ? reason.message : String(reason)))}><FolderOpen size={13} />在文件夹中显示</Button>}</article>)}</div>
+          <div className="batch-export__results">{current.targets.map(target => <article key={target.id} className="batch-export__result" aria-label={`导出结果 ${target.label}`}><header><strong>{target.label}</strong><span className={`status status--${target.status}`}><span />{targetLabels[target.status]}</span></header><p className="tiny-meta">{target.profile.width} × {target.profile.height} · {formatFrameRate(target.profile.frameRate)} fps</p><progress aria-label={`${target.label} 导出进度`} value={target.progress} max={1} /><span className="batch-export__percent">{Math.round(target.progress * 100)}%</span>{target.error && <p role="alert" className="field-error">{target.error}</p>}{([['videoPath', 'MP4'], ['coverPath', '封面'], ['subtitlePath', '字幕'], ['timelinePath', '时间轴']] as const).map(([key, label]) => target[key] && <p className="batch-export__path" key={key}><span>{label}</span><code>{target[key]}</code></p>)}{target.videoPath && nativeDesktop && <Button aria-label="打开文件夹" variant="ghost" onClick={() => void revealFile(target.videoPath!).catch(reason => setError(reason instanceof Error ? reason.message : String(reason)))}><FolderOpen size={13} />打开文件夹</Button>}</article>)}</div>
         </> : <p className="tiny-meta">{selectedId ? '正在读取批量导出…' : listBusy ? '正在读取导出记录…' : '还没有批量导出记录。'}</p>}
-      </section>
-      {error && <Notice kind="error">{error}</Notice>}
-    </div>
-    <div className="dialog__footer"><Button onClick={onClose}>关闭</Button>{current && running && <Button busy={busy === 'cancel'} disabled={Boolean(busy && busy !== 'cancel')} onClick={() => void mutate('cancel')}><Square size={13} />停止批量导出</Button>}{current && !running && <Button busy={busy === 'resume'} disabled={Boolean(busy && busy !== 'resume')} onClick={() => void mutate('resume')}>{current.status === 'succeeded' ? '校验并恢复导出' : '继续未完成导出'}</Button>}<Button variant="primary" busy={busy === 'start'} disabled={Boolean(busy && busy !== 'start') || running || !selected.length || Boolean(invalid) || !baseline.shotCount} onClick={() => void mutate('start')}><Download size={14} />开始批量导出</Button></div>
+      </section> },
+    ]} notice={error && <Notice kind="error">{error}</Notice>} /></div>
+    <div className="dialog__footer"><Button onClick={onClose}>关闭</Button>{current && running && <Button aria-label="停止批量导出" busy={busy === 'cancel'} disabled={Boolean(busy && busy !== 'cancel')} onClick={() => void mutate('cancel')}><Square size={13} />停止</Button>}{current && !running && <Button aria-label={current.status === 'succeeded' ? '校验并恢复导出' : '继续未完成导出'} busy={busy === 'resume'} disabled={Boolean(busy && busy !== 'resume')} onClick={() => void mutate('resume')}>{current.status === 'succeeded' ? "校验并恢复" : "继续"}</Button>}<Button aria-label="开始导出" variant="primary" busy={busy === 'start'} disabled={Boolean(busy && busy !== 'start') || running || !selected.length || Boolean(invalid) || !baseline.shotCount} onClick={() => void mutate('start')}><Download size={14} />开始导出</Button></div>
   </Dialog>;
 }
