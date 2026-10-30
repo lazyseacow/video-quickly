@@ -38,6 +38,8 @@ function developmentBridge(): Plugin {
       server.httpServer?.on('close', () => { unsubscribe(); void waveforms.close().then(() => runtime.close()); });
       server.middlewares.use('/__desktop_rpc', async (request, response) => {
         response.setHeader('Content-Type', 'application/json; charset=utf-8');
+        // A pooled API client can race Node's idle socket close. RPCs may have side effects, so close each completed exchange.
+        response.setHeader('Connection', 'close');
         if (request.method !== 'POST') { response.statusCode = 405; response.end(JSON.stringify({ error: '只支持 POST' })); return; }
         if (request.headers.origin && request.headers.origin !== `http://127.0.0.1:${developmentPort}`) { response.statusCode = 403; response.end(JSON.stringify({ error: '不允许此来源' })); return; }
         try {
