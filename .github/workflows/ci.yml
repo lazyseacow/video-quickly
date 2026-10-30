@@ -84,6 +84,7 @@ jobs:
           path: |
             .generated/release/
             .generated/test-results.json
+            .generated/audio-failure-diagnostics/
             .generated/packaged-runtime-results.json
             .generated/browser-results.json
             .generated/browser-artifacts/
