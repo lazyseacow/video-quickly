@@ -13,6 +13,7 @@ export function useRecordPage<T extends { id: string }>(method: string, params: 
   const loading = useRef(false);
   const [refreshId, setRefreshId] = useState(0);
   const refresh = useCallback(() => setRefreshId(value => value + 1), []);
+  const replace = useCallback((item: T) => setData(previous => ({ ...previous, items: previous.items.map(current => current.id === item.id ? item : current) })), []);
   useEffect(() => {
     const request = ++generation.current;
     const reset = currentKey.current !== key || currentReset.current !== resetKey;
@@ -45,5 +46,5 @@ export function useRecordPage<T extends { id: string }>(method: string, params: 
     } catch (error) { if (request === generation.current) setError(error instanceof Error ? error.message : String(error)); }
     finally { if (request === generation.current) { loading.current = false; setBusy(false); } }
   }
-  return { ...data, busy, error, refresh, loadMore };
+  return { ...data, busy, error, refresh, loadMore, replace };
 }

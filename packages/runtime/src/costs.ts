@@ -1,11 +1,33 @@
 import { createHash } from 'node:crypto';
 import type Database from 'better-sqlite3';
 import { z } from 'zod';
-import { costRequestMetricsSchema, currencySchema, providerUsageSchema, requestModelParameters, usageRecordSchema, type CostRequestMetrics, type ModelCapability, type ModelPricing, type ModelProfile, type ProjectDocument, type ProviderUsage, type UsageRecord, type WorkflowNode } from '@video-quickly/contracts';
+import { costRequestMetricsSchema, costSummarySchema, costTaskDetailSchema, costTaskSchema, currencySchema, providerUsageSchema, requestModelParameters, usageRecordSchema, type CostRequestMetrics, type CostSummary, type ModelCapability, type ModelPricing, type ModelProfile, type ProjectDocument, type ProviderUsage, type UsageRecord, type WorkflowNode } from '@video-quickly/contracts';
 import { DocumentStore } from './database.js';
 
 type Estimate = { estimatedAmount?: number; estimateBasis?: UsageRecord['estimateBasis'] };
 type Metric = Exclude<keyof ProviderUsage, 'source'>;
+type CurrencyMetric = 'estimatedAmount' | 'actualAmount' | 'estimatedRecords' | 'actualRecords';
+type SummaryRow = { total: number; unknownEstimated: number | null; unknownActual: number | null; unknownSubmissions: number | null } & Record<`${ModelPricing['currency']}_${CurrencyMetric}`, number | null>;
+type TaskRow = SummaryRow & { cursor: number; id: string; projectId: string; projectTitle: string; title: string; createdAt: string; updatedAt: string; status: string | null; projectRevision: number | null; workflowVersion: number | null; runAvailable: number };
+
+const summaryColumns = `count(*) AS total,
+  sum(json_extract(u.body, '$.estimatedAmount') IS NULL) AS unknownEstimated,
+  sum(json_extract(u.body, '$.actualAmount') IS NULL) AS unknownActual,
+  sum(json_extract(u.body, '$.status') IN ('submitted','unknown','canceled')) AS unknownSubmissions,
+  ${currencySchema.options.flatMap(currency => [
+    `sum(CASE WHEN json_extract(u.body, '$.pricing.currency') = '${currency}' THEN json_extract(u.body, '$.estimatedAmount') END) AS ${currency}_estimatedAmount`,
+    `count(CASE WHEN json_extract(u.body, '$.pricing.currency') = '${currency}' THEN json_extract(u.body, '$.estimatedAmount') END) AS ${currency}_estimatedRecords`,
+    `sum(CASE WHEN json_extract(u.body, '$.actualCurrency') = '${currency}' THEN json_extract(u.body, '$.actualAmount') END) AS ${currency}_actualAmount`,
+    `count(CASE WHEN json_extract(u.body, '$.actualCurrency') = '${currency}' THEN json_extract(u.body, '$.actualAmount') END) AS ${currency}_actualRecords`,
+  ]).join(', ')}`;
+
+function summarize(row: SummaryRow): CostSummary {
+  const currencies = currencySchema.options.flatMap(currency => {
+    const estimatedRecords = row[`${currency}_estimatedRecords`] ?? 0, actualRecords = row[`${currency}_actualRecords`] ?? 0;
+    return estimatedRecords || actualRecords ? [{ currency, estimatedRecords, actualRecords, estimatedAmount: row[`${currency}_estimatedAmount`] ?? undefined, actualAmount: row[`${currency}_actualAmount`] ?? undefined }] : [];
+  });
+  return costSummarySchema.parse({ total: row.total, unknownEstimated: row.unknownEstimated ?? 0, unknownActual: row.unknownActual ?? 0, unknownSubmissions: row.unknownSubmissions ?? 0, currencies });
+}
 
 /** Configured unit prices produce estimates, never provider invoices. */
 export function estimateUsage(capability: ModelCapability, pricing: ModelPricing | null | undefined, request: CostRequestMetrics, usage?: ProviderUsage): Estimate {
@@ -91,6 +113,31 @@ export function createCostLedger(options: { database: Database.Database; store: 
   const orphaned = database.prepare("SELECT body FROM documents WHERE kind = 'usage-record' AND json_extract(body, '$.status') = 'submitted'").all() as { body: string }[];
   for (const row of orphaned) { const record = usageRecordSchema.parse(JSON.parse(row.body)); status(record.operationId, 'unknown'); }
 
+  function tasks(projectId?: string, runId?: string, before?: number, limit = 20) {
+    // A task's first ledger row is a stable cursor. Filter after grouping so older pages retain every charge.
+    return database.prepare(`WITH grouped AS (
+      SELECT min(u.rowid) AS cursor, json_extract(u.body, '$.runId') AS id,
+        min(json_extract(u.body, '$.projectId')) AS projectId,
+        min(json_extract(u.body, '$.createdAt')) AS createdAt, max(json_extract(u.body, '$.updatedAt')) AS updatedAt,
+        ${summaryColumns}
+      FROM documents u WHERE u.kind = 'usage-record'
+        AND (? IS NULL OR json_extract(u.body, '$.projectId') = ?)
+        AND (? IS NULL OR json_extract(u.body, '$.runId') = ?)
+      GROUP BY json_extract(u.body, '$.runId')
+    ) SELECT g.*, coalesce(json_extract(s.body, '$.project.title'), json_extract(p.body, '$.title'), '项目制作') AS projectTitle,
+      coalesce(CASE WHEN json_array_length(s.body, '$.nodes') = 1 THEN json_extract(s.body, '$.nodes[0].label') ELSE json_extract(s.body, '$.project.workflow.name') END, '制作任务') AS title,
+      coalesce(json_extract(r.body, '$.createdAt'), g.createdAt) AS taskCreatedAt,
+      json_extract(r.body, '$.status') AS status, json_extract(r.body, '$.projectRevision') AS projectRevision,
+      json_extract(r.body, '$.workflowVersion') AS workflowVersion, r.id IS NOT NULL AS runAvailable
+    FROM grouped g LEFT JOIN documents r ON r.kind = 'run' AND r.id = g.id
+      LEFT JOIN documents s ON s.kind = 'run-snapshot' AND s.id = g.id
+      LEFT JOIN documents p ON p.kind = 'project-summary' AND p.id = g.projectId
+    WHERE (? IS NULL OR g.cursor < ?) ORDER BY g.cursor DESC LIMIT ?`).all(projectId ?? null, projectId ?? null, runId ?? null, runId ?? null, before ?? null, before ?? null, limit) as Array<TaskRow & { taskCreatedAt: string }>;
+  }
+  function taskSummary(row: TaskRow & { taskCreatedAt: string }) {
+    return costTaskSchema.parse({ id: row.id, projectId: row.projectId, projectTitle: row.projectTitle, title: row.title, createdAt: row.taskCreatedAt, updatedAt: row.updatedAt, status: row.status ?? undefined, projectRevision: row.projectRevision ?? undefined, workflowVersion: row.workflowVersion ?? undefined, runAvailable: Boolean(row.runAvailable), summary: summarize(row) });
+  }
+
   return {
     get,
     begin(input: CostStart) {
@@ -110,6 +157,20 @@ export function createCostLedger(options: { database: Database.Database; store: 
       for (const row of rows) { const record = usageRecordSchema.parse(JSON.parse(row.body)); status(record.operationId, 'canceled'); }
     },
     dispatch(method: string, params: unknown) {
+      if (method === 'cost.tasks') {
+        const input = z.object({ projectId: z.string().optional(), before: z.number().int().positive().optional(), limit: z.number().int().min(1).max(100).default(20) }).parse(params);
+        const rows = tasks(input.projectId, undefined, input.before, input.limit + 1);
+        return { items: rows.slice(0, input.limit).map(taskSummary), nextCursor: rows.length > input.limit ? rows[input.limit - 1].cursor : null };
+      }
+      if (method === 'cost.task.get') {
+        const input = z.object({ runId: z.string().min(1) }).parse(params);
+        const [row] = tasks(undefined, input.runId, undefined, 1);
+        if (!row) throw new Error('任务费用归档不存在。');
+        const nodes = database.prepare("SELECT json_object('id', json_extract(n.value, '$.id'), 'label', json_extract(n.value, '$.label')) AS body FROM documents s, json_each(s.body, '$.nodes') n WHERE s.kind = 'run-snapshot' AND s.id = ?").all(input.runId) as { body: string }[];
+        const shots = database.prepare("SELECT json_object('id', json_extract(n.value, '$.id'), 'title', json_extract(n.value, '$.title')) AS body FROM documents s, json_each(s.body, '$.project.shots') n WHERE s.kind = 'run-snapshot' AND s.id = ?").all(input.runId) as { body: string }[];
+        const run = database.prepare("SELECT json_extract(body, '$.parentRunId') AS parentRunId FROM documents WHERE kind = 'run' AND id = ?").get(input.runId) as { parentRunId: string | null } | undefined;
+        return costTaskDetailSchema.parse({ ...taskSummary(row), parentRunId: run?.parentRunId ?? undefined, nodes: nodes.map(value => JSON.parse(value.body)), shots: shots.map(value => JSON.parse(value.body)) });
+      }
       if (method === 'cost.list') {
         const input = z.object({ projectId: z.string().optional(), runId: z.string().optional(), before: z.number().int().positive().optional(), limit: z.number().int().min(1).max(100).default(20) }).parse(params);
         const rows = database.prepare("SELECT rowid AS cursor, body FROM documents WHERE kind = 'usage-record' AND (? IS NULL OR rowid < ?) AND (? IS NULL OR json_extract(body, '$.projectId') = ?) AND (? IS NULL OR json_extract(body, '$.runId') = ?) ORDER BY rowid DESC LIMIT ?").all(input.before ?? null, input.before ?? null, input.projectId ?? null, input.projectId ?? null, input.runId ?? null, input.runId ?? null, input.limit + 1) as { cursor: number; body: string }[];
@@ -125,14 +186,9 @@ export function createCostLedger(options: { database: Database.Database; store: 
       }
       if (method === 'cost.summary') {
         const input = z.object({ projectId: z.string().optional(), runId: z.string().optional() }).parse(params);
-        const filter = "FROM documents WHERE kind = 'usage-record' AND (? IS NULL OR json_extract(body, '$.projectId') = ?) AND (? IS NULL OR json_extract(body, '$.runId') = ?)";
+        const filter = "FROM documents u WHERE u.kind = 'usage-record' AND (? IS NULL OR json_extract(u.body, '$.projectId') = ?) AND (? IS NULL OR json_extract(u.body, '$.runId') = ?)";
         const args = [input.projectId ?? null, input.projectId ?? null, input.runId ?? null, input.runId ?? null];
-        const totals = database.prepare(`SELECT count(*) AS total, sum(json_extract(body, '$.estimatedAmount') IS NULL) AS unknownEstimated, sum(json_extract(body, '$.actualAmount') IS NULL) AS unknownActual, sum(json_extract(body, '$.status') IN ('submitted','unknown','canceled')) AS unknownSubmissions ${filter}`).get(...args) as { total: number; unknownEstimated: number | null; unknownActual: number | null; unknownSubmissions: number | null };
-        const currencies = ['USD', 'CNY'].flatMap(currency => {
-          const row = database.prepare(`SELECT sum(CASE WHEN json_extract(body, '$.pricing.currency') = ? THEN json_extract(body, '$.estimatedAmount') END) AS estimatedAmount, count(CASE WHEN json_extract(body, '$.pricing.currency') = ? THEN json_extract(body, '$.estimatedAmount') END) AS estimatedRecords, sum(CASE WHEN json_extract(body, '$.actualCurrency') = ? THEN json_extract(body, '$.actualAmount') END) AS actualAmount, count(CASE WHEN json_extract(body, '$.actualCurrency') = ? THEN json_extract(body, '$.actualAmount') END) AS actualRecords ${filter}`).get(currency, currency, currency, currency, ...args) as { estimatedAmount: number | null; actualAmount: number | null; estimatedRecords: number; actualRecords: number };
-          return row.estimatedRecords || row.actualRecords ? [{ currency, ...row, estimatedAmount: row.estimatedAmount ?? undefined, actualAmount: row.actualAmount ?? undefined }] : [];
-        });
-        return { ...totals, unknownEstimated: totals.unknownEstimated ?? 0, unknownActual: totals.unknownActual ?? 0, unknownSubmissions: totals.unknownSubmissions ?? 0, currencies };
+        return summarize(database.prepare(`SELECT ${summaryColumns} ${filter}`).get(...args) as SummaryRow);
       }
       throw new Error(`未知费用操作：${method}`);
     },

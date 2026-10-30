@@ -823,7 +823,7 @@ export function createRuntime(options: RuntimeOptions) {
         const value = modelSchema.parse({ ...previous, ...input.model, id, credentialRef, hasSecret, parameters: input.model.parameters ?? previous?.parameters ?? {}, enabled: input.model.enabled ?? true, createdAt: previous?.createdAt ?? timestamp, updatedAt: timestamp });
         store.put('model', id, value); changed(); return value;
       }
-      case 'cost.list': case 'cost.update': case 'cost.summary': return costs.dispatch(method, rawParams);
+      case 'cost.list': case 'cost.update': case 'cost.summary': case 'cost.tasks': case 'cost.task.get': return costs.dispatch(method, rawParams);
       case 'render.batch.start': case 'render.batch.get': case 'render.batch.list': case 'render.batch.cancel': case 'render.batch.resume': return batches.dispatch(method, rawParams);
       case 'character.list': case 'character.get': case 'character.references': case 'character.save': case 'character.archive': case 'character.restore': return characters.dispatch(method, rawParams);
       case 'seriesTemplate.list': case 'seriesTemplate.get': case 'seriesTemplate.save': case 'seriesTemplate.archive': case 'seriesTemplate.restore': return seriesTemplates.dispatch(method, rawParams);

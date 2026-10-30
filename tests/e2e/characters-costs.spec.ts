@@ -124,6 +124,7 @@ test('sends frozen character settings into generation and records provider usage
     await rpc(request, 'model.save', { model: { ...model, pricing: { currency: 'USD', inputPerMillionTokens: 99, outputPerMillionTokens: 99 } } });
     await page.getByRole('button', { name: '费用记录', exact: true }).click();
     await page.getByLabel('费用项目').selectOption(project.id);
+    await page.getByRole('button', { name: `查看任务费用详情：${ledger.items[0].runId}`, exact: true }).click();
     const row = page.locator('.cost-record').filter({ hasText: '费用计量服务' });
     await expect(row).toContainText('输入 100 Token'); await expect(row).toContainText('0.0004'); await expect(row).toContainText('实付 待登记');
     await row.getByRole('button', { name: '核对费用', exact: true }).click();
@@ -137,6 +138,7 @@ test('sends frozen character settings into generation and records provider usage
     await page.screenshot({ path: info.outputPath('cost-records-light-600.png') });
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1)).toBe(true);
     await page.reload(); await page.getByRole('button', { name: '费用记录', exact: true }).click(); await page.getByLabel('费用项目').selectOption(project.id);
+    await page.getByRole('button', { name: `查看任务费用详情：${ledger.items[0].runId}`, exact: true }).click();
     await expect(page.locator('.cost-record')).toContainText('服务账单已核对');
     expect(errors).toEqual(['Failed to load resource: the server responded with a status of 400 (Bad Request)']); await expect(page.locator('vite-error-overlay')).toHaveCount(0);
   } finally { server.closeAllConnections(); await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve())); }

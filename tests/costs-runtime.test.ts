@@ -3,7 +3,7 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, expect, it, vi } from 'vitest';
-import { projectSchema, workflowNodeSchema, type ModelProfile, type RunRecord, type UsageRecord } from '@video-quickly/contracts';
+import { costTaskDetailSchema, costTaskSchema, projectSchema, recordPageSchema, workflowNodeSchema, type ModelProfile, type RunRecord, type UsageRecord } from '@video-quickly/contracts';
 import { createRuntime, SimulatedProcessExit, type RuntimeOptions } from '../packages/runtime/src';
 
 const directories: string[] = [], servers: Server[] = [];
@@ -44,6 +44,11 @@ it('records official OpenAI usage counters and freezes pricing without storing m
   expect(state.calls).toBe(1); expect(state.path).toBe('/v1/chat/completions');
   expect(record).toMatchObject({ status: 'completed', modelId: model.id, operationId: `${run.id}:brief`, requestMetrics: { source: 'request', requestCount: 1 }, providerUsage: { source: 'provider', inputTokens: 100, outputTokens: 20, totalTokens: 120, cachedInputTokens: 50 }, estimatedAmount: .00036, estimateBasis: 'provider' });
   expect(record.actualAmount).toBeUndefined(); expect(JSON.stringify(record)).not.toContain('not-for-the-cost-ledger');
+  const tasks = recordPageSchema(costTaskSchema).parse(await runtime.dispatch('cost.tasks', { projectId: record.projectId }));
+  expect(tasks.items.map(task => task.id)).toEqual([run.id]);
+  const detail = costTaskDetailSchema.parse(await runtime.dispatch('cost.task.get', { runId: run.id }));
+  expect(detail).toMatchObject({ projectTitle: '费用追踪', title: '简报', status: 'succeeded', summary: { total: 1 } });
+  expect(detail.nodes).toEqual([{ id: 'brief', label: '简报' }]);
   await runtime.dispatch('model.save', { model: { ...model, pricing: { currency: 'CNY', inputPerMillionTokens: 100, outputPerMillionTokens: 100 } } });
   expect((await records(runtime, run.id))[0].pricing).toEqual(model.pricing);
   const paid = await runtime.dispatch('cost.update', { id: record.id, revision: record.revision, actualAmount: .01, actualCurrency: 'CNY', note: '人工核对' }) as UsageRecord;

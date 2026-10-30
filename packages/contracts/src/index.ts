@@ -258,6 +258,11 @@ export const usageRecordSchema = z.object({
   createdAt: z.string(), updatedAt: z.string(),
 }).refine(value => (value.actualAmount === undefined) === (value.actualCurrency === undefined), '实际金额与币种须同时填写');
 export type UsageRecord = z.infer<typeof usageRecordSchema>;
+export const costSummarySchema = z.object({
+  currencies: z.array(z.object({ currency: currencySchema, estimatedAmount: z.number().nonnegative().optional(), actualAmount: z.number().nonnegative().optional(), estimatedRecords: z.number().int().nonnegative(), actualRecords: z.number().int().nonnegative() })),
+  total: z.number().int().nonnegative(), unknownEstimated: z.number().int().nonnegative(), unknownActual: z.number().int().nonnegative(), unknownSubmissions: z.number().int().nonnegative(),
+});
+export type CostSummary = z.infer<typeof costSummarySchema>;
 export const skillSchema = z.object({
   id: z.string(), name: z.string(), description: z.string(), source: z.string(), version: z.string(),
   enabled: z.boolean(), instructions: z.string().default(''), resources: z.array(z.string()).default([]),
@@ -303,6 +308,18 @@ export const runSchema = z.object({
 });
 export type StepRun = z.infer<typeof runSchema>;
 export type RunRecord = StepRun;
+export const costTaskSchema = z.object({
+  id: z.string().min(1), projectId: z.string().min(1), projectTitle: z.string(), title: z.string(),
+  createdAt: z.string(), updatedAt: z.string(), status: runStatusSchema.optional(), projectRevision: z.number().int().optional(), workflowVersion: z.number().int().optional(),
+  runAvailable: z.boolean(), summary: costSummarySchema,
+});
+export type CostTask = z.infer<typeof costTaskSchema>;
+export const costTaskDetailSchema = costTaskSchema.extend({
+  parentRunId: z.string().optional(),
+  nodes: z.array(z.object({ id: z.string(), label: z.string() })),
+  shots: z.array(z.object({ id: z.string(), title: z.string() })),
+});
+export type CostTaskDetail = z.infer<typeof costTaskDetailSchema>;
 export const assetSchema = z.object({
   id: z.string(), projectId: z.string().optional(), shotId: z.string().optional(), name: z.string(),
   kind: z.enum(['image', 'video', 'audio', 'subtitle', 'document']), path: z.string(), mimeType: z.string(),
