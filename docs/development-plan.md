@@ -49,11 +49,13 @@
 - 用户模型连接、Skill 导入与版本、JavaScript 工具、MCP 绑定和生成产物应用。
 - 分数帧率、画面比例与尺寸、二维场景及视频素材、配音，以及真实 MP4、封面、字幕和分镜导出。
 - 连续定位、逐帧步进、时间轴缩放、镜头排序／复制／移除、可调面板和布局记忆。
-- 当前本地基线已通过类型检查、452 项自动测试、131 条浏览器流程、4 项原生测试及 Windows NSIS 构建，并完成四组实际媒体导出；新打包执行组件的中英文 PDF 已包含在自动回归中。最新提交的远程安装验证仍由对应平台流水线执行。
+- 当前本地基线已通过类型检查、455 项自动测试、135 条浏览器流程、4 项原生测试及 Windows NSIS 构建，并完成四组实际媒体导出；新打包执行组件的中英文 PDF 已包含在自动回归中。最新提交的远程安装验证仍由对应平台流水线执行。
 
 隔离环境的 Windows 安装与覆盖升级已通过；不同版本升级与原生人工矩阵、真实模型服务闭环仍待验收。现有安装包未签名。已建立百镜头、千素材及长期运行历史的隔离基准；当前记录属于本机 Node／Chromium 测量，Windows 原生窗口的内存与交互延迟仍需单独验证。
 
-此前 `faaacba` 的 [Windows CI](https://github.com/lazyseacow/video-quickly/actions/runs/40997525704) 为 119／120 条浏览器流程通过，一条动效流程收到 `net::ERR_NO_BUFFER_SPACE`，后续打包与安装被跳过。已从失败 trace 定位到 `POST /__desktop_rpc`（状态 -1），附件未保留可解析的该次 RPC 操作名；本轮补充失败请求的方法和无查询参数的路径，保留控制台错误断言。尚未证明它与缩略图资源有关，后续缩略图提交 `dd22ba9` 的 [Windows CI](https://github.com/lazyseacow/video-quickly/actions/runs/41002681250) 已完成浏览器、媒体导出、构建、原生测试、安装和覆盖升级验收。原声提交的远程结果继续以其对应 Actions 为准。
+此前 `faaacba` 的 [Windows CI](https://github.com/lazyseacow/video-quickly/actions/runs/40997525704) 为 119／120 条浏览器流程通过。一条动效流程中的 `workspace.summary` 请求收到 `net::ERR_NO_BUFFER_SPACE`；操作名已从 trace 请求体的 `_file` 资源引用恢复。另两条 `character.list` 请求未完成且没有失败原因，不能据此归因。后续缩略图提交 `dd22ba9` 的 [Windows CI](https://github.com/lazyseacow/video-quickly/actions/runs/41002681250) 已完成浏览器、媒体导出、构建、原生测试、安装和覆盖升级验收；旧缓冲区错误与缩略图的因果关系仍未证明。
+
+原声提交 `5848b7b` 的 [Windows CI](https://github.com/lazyseacow/video-quickly/actions/runs/41009019938) 为 130／131 条浏览器流程通过，一条独立音频入点用例停在项目读取中。Trace 显示摘要请求重叠、较早成功响应被后续刷新作废；可控延迟与实际通知防抖已在旧代码复现同类等待。当前修复将摘要和项目读取分别合并，并让已完成的当前项目响应立即显示；类型检查、455 项自动测试、135 条浏览器流程、4 项原生测试、4 组实际媒体导出和 Windows NSIS 构建均通过。每次提交的安装和覆盖升级结果以对应 Actions 为准。
 
 ## 第一阶段 P0 稳定交付
 

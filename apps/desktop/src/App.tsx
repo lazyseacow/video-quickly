@@ -5,6 +5,7 @@ import { buildTimeline, createSrt } from '@video-quickly/video';
 import { canSplitShot, splitShot, trimShotInContext } from '@video-quickly/video/editing';
 import ClipTiming from './components/ClipTiming';
 import { sourceDurationsKey, useSourceDuration } from './lib/source-duration';
+import { createRefreshQueue } from './lib/refresh-queue';
 import { Button, Dialog, EmptyState, Field, IconButton, Notice, Status, formatTime } from './components/Primitives';
 import VideoSettings from './components/VideoSettings';
 import PlaybackPreview from './components/PlaybackPreview';
@@ -86,6 +87,7 @@ export default function App() {
   const detail = useRef<ProjectDetail | undefined>(undefined);
   const currentProjectId = useRef<string | undefined>(undefined);
   const [loadError, setLoadError] = useState('');
+  const [projectLoadError, setProjectLoadError] = useState('');
   const [connection, setConnection] = useState<RuntimeConnection>({ state: 'ready', generation: 0 });
   const [page, setPage] = useState<Page>('workbench');
   const [projectId, setProjectId] = useState<string>();
@@ -103,31 +105,65 @@ export default function App() {
   const appliedSnapshot = useRef(0);
   const saveBeforeLeave = useRef<(() => Promise<boolean>) | null>(null);
   const notify = useCallback((text: string, error = false) => setToast({ text, error }), []);
-  const refresh = useCallback(async () => {
+  const projectReads = useRef(new Map<string, () => Promise<ProjectDetail | undefined>>());
+  const readProject = useCallback(async (id: string) => {
+    if (currentProjectId.current !== id) return undefined;
+    const previousDetail = detail.current?.id === id ? detail.current : undefined;
+    setProjectLoadError('');
+    try {
+      const loaded = projectDetailSchema.parse(await rpc('project.get', { projectId: id, revision: previousDetail?.revision, assetsVersion: previousDetail?.assetsVersion }));
+      if (currentProjectId.current !== id) return loaded;
+      const merged = { ...loaded, project: loaded.project ?? previousDetail?.project, assets: loaded.assets ?? previousDetail?.assets ?? [] };
+      detail.current = merged;
+      setProject(current => merged.project && current?.id === merged.project.id && current.revision === merged.project.revision ? current : merged.project);
+      setWorkspace(previous => previous ? { ...previous, assets: retainRecords(previous.assets, merged.assets), runs: loaded.latestRun ? [loaded.latestRun] : [] } : previous);
+      return loaded;
+    } catch (error) { if (currentProjectId.current === id) setProjectLoadError(error instanceof Error ? error.message : String(error)); return undefined; }
+  }, []);
+  const refreshProject = useCallback((id: string) => {
+    let queued = projectReads.current.get(id);
+    if (!queued) {
+      queued = createRefreshQueue(() => readProject(id), () => { if (projectReads.current.get(id) === queued) projectReads.current.delete(id); });
+      projectReads.current.set(id, queued);
+    }
+    return queued();
+  }, [readProject]);
+  const readWorkspace = useCallback(async () => {
     const request = ++snapshotRequest.current;
+    const selectedAtStart = currentProjectId.current;
     try {
       const result = workspaceSummarySchema.parse(await rpc('workspace.summary'));
-      if (request < appliedSnapshot.current) return result;
-      const id = currentProjectId.current && result.projects.some(item => item.id === currentProjectId.current && !item.archived) ? currentProjectId.current : result.projects.find(item => !item.archived)?.id;
-      const previousDetail = detail.current?.id === id ? detail.current : undefined;
-      const loaded = id ? projectDetailSchema.parse(await rpc('project.get', { projectId: id, revision: previousDetail?.revision, assetsVersion: previousDetail?.assetsVersion })) : undefined;
-      if (request < snapshotRequest.current) return result;
+      if (request < appliedSnapshot.current) return { summary: result };
       appliedSnapshot.current = request;
-      const merged = loaded ? { ...loaded, project: loaded.project ?? previousDetail?.project, assets: loaded.assets ?? previousDetail?.assets ?? [] } : undefined;
-      detail.current = merged;
-      setProject(current => merged?.project && current?.id === merged.project.id && current.revision === merged.project.revision ? current : merged?.project);
+      let id = currentProjectId.current, fallbackProjectId: string | undefined;
+      if (id === selectedAtStart) {
+        const nextId = result.projects.some(item => item.id === id && !item.archived) ? id : result.projects.find(item => !item.archived)?.id;
+        if (nextId !== id) fallbackProjectId = nextId;
+        id = nextId;
+        currentProjectId.current = id; setProjectId(id);
+      }
+      if (!id) { detail.current = undefined; setProject(undefined); }
       setWorkspace(previous => ({
         ...result,
         projects: previous ? retainRecords(previous.projects, result.projects) : result.projects,
         models: previous ? retainRecords(previous.models, result.models) : result.models,
         skills: previous ? retainRecords(previous.skills, result.skills) : result.skills,
-        assets: previous ? retainRecords(previous.assets, merged?.assets ?? []) : merged?.assets ?? [],
-        runs: loaded?.latestRun ? [loaded.latestRun] : [],
+        assets: id ? previous?.assets ?? [] : [],
+        runs: id ? previous?.runs ?? [] : [],
       }));
-      setLoadError(''); setProjectId(id);
-      return result;
+      setLoadError('');
+      return { summary: result, fallbackProjectId };
     } catch (error) { setLoadError(error instanceof Error ? error.message : String(error)); return undefined; }
   }, []);
+  const refreshWorkspace = useMemo(() => createRefreshQueue(readWorkspace), [readWorkspace]);
+  const refresh = useCallback(async () => {
+    const id = currentProjectId.current;
+    const projectRead = id ? refreshProject(id) : undefined;
+    const result = await refreshWorkspace();
+    if (result?.fallbackProjectId && result.fallbackProjectId === currentProjectId.current) await refreshProject(result.fallbackProjectId);
+    else await projectRead;
+    return result?.summary;
+  }, [refreshProject, refreshWorkspace]);
   useEffect(() => {
     const unsubscribe = subscribe(event => {
       if (event.type === 'runtime.connection') { const parsed = runtimeConnectionSchema.safeParse(event.data); if (parsed.success) setConnection(current => parsed.data.generation >= current.generation ? parsed.data : current); return; }
@@ -163,7 +199,7 @@ export default function App() {
   async function openProject(id: string) { if (page === 'workbench' && id !== projectId && saveBeforeLeave.current && !await saveBeforeLeave.current()) return; currentProjectId.current = id; setProjectId(id); setPage('workbench'); }
   async function createProject() { if (page === 'workbench' && saveBeforeLeave.current && !await saveBeforeLeave.current()) return; setCreating(true); }
   if (!workspace) return <div className="welcome-loading"><Clapperboard size={34} /><strong>Video Quickly</strong><RuntimeConnectionNotice connection={connection} onReconnect={() => void reconnectRuntime()} />{connection.state === 'ready' && <p>{loadError || '正在打开本地工作区…'}</p>}{loadError && connection.state === 'ready' && <Button onClick={() => void refresh()}><RefreshCw size={15} />重新连接</Button>}</div>;
-  return <div ref={appRoot} className={`app workspace-shell ${sidebarCollapsed ? 'workspace-shell--collapsed' : ''}`}><WorkspaceSidebar page={page} projectId={projectId} projects={workspace.projects} navigation={pages} collapsed={sidebarCollapsed} theme={theme} onToggle={toggleSidebar} onTheme={() => setTheme(theme === 'dark' ? 'light' : 'dark')} onNavigate={next => void navigate(next)} onOpen={id => void openProject(id)} onCreate={() => void createProject()} /><div className="main-shell">{saving > 0 && <span className="workspace-action-status" role="status"><RefreshCw className="spin" size={12} />正在处理</span>}<main className="page-body"><RuntimeConnectionNotice connection={connection} onReconnect={() => void reconnectRuntime()} />{loadError && connection.state === 'ready' && <div className="run-notice"><Notice kind="error">{loadError}</Notice></div>}{page === 'workbench' ? project && project.id === projectId ? <Workbench key={project.id} project={project} workspace={workspace} action={action} notify={notify} onRegisterSave={registerSave} /> : projectId ? <div className="empty-state">正在读取项目…</div> : <EmptyState icon={<Clapperboard size={28} />} title="开始一段新的创作" description="创建项目，记录你的主题，再把想法展开成镜头。"><Button variant="primary" onClick={() => setCreating(true)}><Plus size={16} />新建项目</Button></EmptyState> : page === 'projects' ? <ProjectsPage workspace={workspace} action={action} onOpen={openProject} onCreate={() => setCreating(true)} /> : page === 'characters' ? <CharactersPage workspace={workspace} action={action} /> : page === 'templates' ? <Suspense fallback={<div className="empty-state">正在读取系列模板…</div>}><SeriesTemplatesPage workspace={workspace} action={action} /></Suspense> : page === 'costs' ? <CostsPage workspace={workspace} /> : page === 'models' ? <ModelsPage workspace={workspace} action={action} /> : page === 'skills' ? <SkillsPage workspace={workspace} action={action} /> : page === 'assets' ? <AssetsPage workspace={workspace} action={action} project={project} /> : <RunsPage workspace={workspace} action={action} onOpen={openProject} />}</main><footer className="statusbar"><div className="statusbar-right"><span>{workspace.system.ffmpegAvailable ? '媒体引擎已就绪' : '媒体引擎待配置'}</span><span className="shortcut"><kbd>Space</kbd> 播放 / 暂停</span><span className="shortcut"><kbd>Ctrl</kbd><kbd>S</kbd> 保存</span></div></footer></div><ToastNotice toast={toast} onDismiss={() => setToast(undefined)} />{creating && <CreateProjectDialog action={action} onClose={() => setCreating(false)} onCreated={project => { setCreating(false); openProject(project.id); }} />}</div>;
+  return <div ref={appRoot} className={`app workspace-shell ${sidebarCollapsed ? 'workspace-shell--collapsed' : ''}`}><WorkspaceSidebar page={page} projectId={projectId} projects={workspace.projects} navigation={pages} collapsed={sidebarCollapsed} theme={theme} onToggle={toggleSidebar} onTheme={() => setTheme(theme === 'dark' ? 'light' : 'dark')} onNavigate={next => void navigate(next)} onOpen={id => void openProject(id)} onCreate={() => void createProject()} /><div className="main-shell">{saving > 0 && <span className="workspace-action-status" role="status"><RefreshCw className="spin" size={12} />正在处理</span>}<main className="page-body"><RuntimeConnectionNotice connection={connection} onReconnect={() => void reconnectRuntime()} />{loadError && connection.state === 'ready' && <div className="run-notice"><Notice kind="error">{loadError}</Notice></div>}{page === 'workbench' ? project && project.id === projectId ? <Workbench key={project.id} project={project} workspace={workspace} action={action} notify={notify} onRegisterSave={registerSave} /> : projectId ? <div className="empty-state" role={projectLoadError || loadError ? 'alert' : 'status'}>{projectLoadError || loadError ? <><p>{projectLoadError || loadError}</p><Button onClick={() => void refresh()}>重新读取项目</Button></> : '正在读取项目…'}</div> : <EmptyState icon={<Clapperboard size={28} />} title="开始一段新的创作" description="创建项目，记录你的主题，再把想法展开成镜头。"><Button variant="primary" onClick={() => setCreating(true)}><Plus size={16} />新建项目</Button></EmptyState> : page === 'projects' ? <ProjectsPage workspace={workspace} action={action} onOpen={openProject} onCreate={() => setCreating(true)} /> : page === 'characters' ? <CharactersPage workspace={workspace} action={action} /> : page === 'templates' ? <Suspense fallback={<div className="empty-state">正在读取系列模板…</div>}><SeriesTemplatesPage workspace={workspace} action={action} /></Suspense> : page === 'costs' ? <CostsPage workspace={workspace} /> : page === 'models' ? <ModelsPage workspace={workspace} action={action} /> : page === 'skills' ? <SkillsPage workspace={workspace} action={action} /> : page === 'assets' ? <AssetsPage workspace={workspace} action={action} project={project} /> : <RunsPage workspace={workspace} action={action} onOpen={openProject} />}</main><footer className="statusbar"><div className="statusbar-right"><span>{workspace.system.ffmpegAvailable ? '媒体引擎已就绪' : '媒体引擎待配置'}</span><span className="shortcut"><kbd>Space</kbd> 播放 / 暂停</span><span className="shortcut"><kbd>Ctrl</kbd><kbd>S</kbd> 保存</span></div></footer></div><ToastNotice toast={toast} onDismiss={() => setToast(undefined)} />{creating && <CreateProjectDialog action={action} onClose={() => setCreating(false)} onCreated={project => { setCreating(false); openProject(project.id); }} />}</div>;
 }
 
 function retainRecords<T extends { id: string }>(previous: T[], next: T[]): T[] {
