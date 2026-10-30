@@ -1,10 +1,10 @@
-.flow-container { position: relative; }
+.flow-container { --flow-hit-size: var(--control-hit-size); position: relative; }
 .flow-viewport { position: absolute; inset: 0; }
-.flow-gestures { color: var(--text-secondary); font-size: 11px; line-height: 1.8; pointer-events: none; padding: var(--space-2) var(--space-3); border: 1px solid var(--border); border-radius: var(--radius-small); background: var(--surface); }
+.flow-gestures { color: var(--text-secondary); font-size: var(--text-size-caption); line-height: var(--line-height-body); pointer-events: none; padding: var(--space-2) var(--space-3); border: 1px solid var(--border); border-radius: var(--radius-small); background: var(--surface); }
 .flow-gestures span { display: block; color: var(--text-subtle); }
-.flow-save-state { display: block; color: var(--text-secondary); font-size: 11px; margin-bottom: 10px; }
-.flow-inspector .notice { margin-bottom: 15px; }
-.flow-container .react-flow__handle::after { content: ''; position: absolute; width: 40px; height: 40px; left: 50%; top: 50%; transform: translate(-50%, -50%); }
+.flow-save-state { display: block; color: var(--text-secondary); font-size: var(--text-size-caption); margin-bottom: var(--space-2); }
+.flow-inspector .notice { margin-bottom: var(--space-4); }
+.flow-container .react-flow__handle::after { content: ''; position: absolute; width: var(--flow-hit-size); height: var(--flow-hit-size); left: 50%; top: 50%; transform: translate(-50%, -50%); }
 .flow-container .react-flow__handle.valid { background: var(--success); }
 .flow-container .react-flow__node:focus-visible .flow-node { outline: 2px solid var(--accent); outline-offset: 3px; }
-@media (max-width: 650px) { .flow-gestures { display: none; } .flow-container .react-flow__controls-button { width: 44px; height: 44px; } .flow-container .react-flow__handle::after { width: 44px; height: 44px; } }
+@media (max-width: 650px) { .flow-container { --flow-hit-size: 44px; } .flow-gestures { display: none; } .flow-container .react-flow__controls-button { width: var(--flow-hit-size); height: var(--flow-hit-size); } }

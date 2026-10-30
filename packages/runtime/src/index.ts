@@ -3,6 +3,7 @@ import { createReadStream, existsSync } from 'node:fs';
 import { copyFile, mkdir, readFile, stat, writeFile, rename, lstat } from 'node:fs/promises';
 import { basename, extname, join, resolve, dirname, relative, isAbsolute } from 'node:path';
 import { spawnSync } from 'node:child_process';
+import { isDeepStrictEqual } from 'node:util';
 import { z } from 'zod';
 import { readResearchSource, searchWikipedia, selectResearchPassages, parseResearchResult } from '@video-quickly/integrations/research';
 import { SqliteSaver } from '@langchain/langgraph-checkpoint-sqlite';
@@ -603,13 +604,15 @@ export function createRuntime(options: RuntimeOptions) {
         store.put('project', value.id, value); changed(); return value;
       }
       case 'project.update': {
-        const input = entityId.extend({ revision: z.number().int().optional(), patch: z.object({ title: z.string().min(1).max(160).optional(), brief: z.string().max(30000).optional(), profile: videoProfileSchema.optional(), style: z.string().optional(), captionStyle: projectSchema.shape.captionStyle, scenePreset: projectSchema.shape.scenePreset, claims: z.array(claimSchema).optional(), shots: z.array(shotSchema).optional(), researchSources: projectSchema.shape.researchSources, referenceDisplay: projectSchema.shape.referenceDisplay, musicClips: projectSchema.shape.musicClips, audioMix: projectSchema.shape.audioMix, clipEditSources: projectSchema.shape.clipEditSources, clipEditPlans: projectSchema.shape.clipEditPlans }) }).parse(rawParams);
+        const input = entityId.extend({ revision: z.number().int().optional(), patch: z.object({ title: z.string().min(1).max(160).optional(), brief: z.string().max(30000).optional(), profile: videoProfileSchema.optional(), style: z.string().optional(), workflow: workflowSchema.optional(), captionStyle: projectSchema.shape.captionStyle, scenePreset: projectSchema.shape.scenePreset, claims: z.array(claimSchema).optional(), shots: z.array(shotSchema).optional(), researchSources: projectSchema.shape.researchSources, referenceDisplay: projectSchema.shape.referenceDisplay, musicClips: projectSchema.shape.musicClips, audioMix: projectSchema.shape.audioMix, clipEditSources: projectSchema.shape.clipEditSources, clipEditPlans: projectSchema.shape.clipEditPlans }) }).parse(rawParams);
         const value = project(input.projectId); requireRevision(value, input.revision);
+        if (input.patch.workflow) validateWorkflow(input.patch.workflow);
+        const workflow = input.patch.workflow && !isDeepStrictEqual({ ...value.workflow, version: 0 }, { ...input.patch.workflow, version: 0 }) ? { ...input.patch.workflow, version: value.workflow.version + 1 } : value.workflow;
         for (const clip of input.patch.musicClips ?? []) {
           const asset = store.get<AssetRecord>('asset', clip.assetId);
           if (!asset?.active || asset.kind !== 'audio' || asset.projectId && asset.projectId !== value.id) throw new Error('背景音乐需要当前项目或公共素材库中的有效音频。');
         }
-        return saveProject({ ...value, ...input.patch });
+        return saveProject({ ...value, ...input.patch, workflow });
       }
       case 'project.saveShot': {
         const input = entityId.extend({ revision: z.number().int().optional(), shot: shotSchema }).parse(rawParams);

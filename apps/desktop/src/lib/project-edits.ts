@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { barChartSceneTemplateSchema, clipEditPlanSchema, clipEditSourceSchema, comparisonSceneTemplateSchema, musicClipSchema, processSceneTemplateSchema, projectSchema, shotSchema, videoProfileSchema, type ProjectDocument, type Shot } from '@video-quickly/contracts';
+import { barChartSceneTemplateSchema, clipEditPlanSchema, clipEditSourceSchema, comparisonSceneTemplateSchema, musicClipSchema, processSceneTemplateSchema, projectSchema, shotSchema, videoProfileSchema, workflowNodeSchema, workflowSchema, type ProjectDocument, type Shot } from '@video-quickly/contracts';
 
 // Preserve unfinished input, including values the commit schema will reject.
 const draftComparisonSide = comparisonSceneTemplateSchema.shape.left.extend({ title: z.string(), points: z.array(z.string()).min(1).max(5) });
@@ -10,11 +10,17 @@ const draftSceneTemplateSchema = z.discriminatedUnion('kind', [
 ]);
 const draftShotSchema = shotSchema.extend({ title: z.string(), narration: z.string(), visualPrompt: z.string(), durationUs: z.number().finite(), sceneTemplate: draftSceneTemplateSchema.optional() });
 const draftProfileSchema = videoProfileSchema.extend({ width: z.number().finite(), height: z.number().finite(), frameRate: z.object({ numerator: z.number().finite(), denominator: z.number().finite() }) });
-export const editContentSchema = projectSchema.pick({ title: true, brief: true, profile: true, style: true, claims: true, shots: true, musicClips: true, researchSources: true, referenceDisplay: true, captionStyle: true, scenePreset: true, audioMix: true, clipEditSources: true, clipEditPlans: true }).extend({ title: z.string(), brief: z.string(), profile: draftProfileSchema, shots: z.array(draftShotSchema), musicClips: z.array(musicClipSchema).default([]), researchSources: projectSchema.shape.researchSources.unwrap().default([]), referenceDisplay: projectSchema.shape.referenceDisplay.unwrap().default('hidden'), captionStyle: projectSchema.shape.captionStyle.default(null), scenePreset: projectSchema.shape.scenePreset.default(null), audioMix: projectSchema.shape.audioMix.default(null), clipEditSources: projectSchema.shape.clipEditSources.unwrap().default([]), clipEditPlans: projectSchema.shape.clipEditPlans.unwrap().default([]) });
+const draftWorkflowSchema = workflowSchema.extend({ nodes: z.array(workflowNodeSchema.extend({ label: z.string() })).max(100) });
+export const editContentSchema = projectSchema.pick({ title: true, brief: true, profile: true, style: true, claims: true, shots: true, musicClips: true, researchSources: true, referenceDisplay: true, captionStyle: true, scenePreset: true, audioMix: true, clipEditSources: true, clipEditPlans: true }).extend({ title: z.string(), brief: z.string(), profile: draftProfileSchema, shots: z.array(draftShotSchema), workflow: draftWorkflowSchema, musicClips: z.array(musicClipSchema).default([]), researchSources: projectSchema.shape.researchSources.unwrap().default([]), referenceDisplay: projectSchema.shape.referenceDisplay.unwrap().default('hidden'), captionStyle: projectSchema.shape.captionStyle.default(null), scenePreset: projectSchema.shape.scenePreset.default(null), audioMix: projectSchema.shape.audioMix.default(null), clipEditSources: projectSchema.shape.clipEditSources.unwrap().default([]), clipEditPlans: projectSchema.shape.clipEditPlans.unwrap().default([]) });
 export type EditContent = z.infer<typeof editContentSchema>;
 const shotPatchSchema = z.object({ put: z.array(draftShotSchema), remove: z.array(z.string()), order: z.array(z.string()).optional() });
+const workflowPatchSchema = z.object({
+  id: z.string().optional(), name: z.string().optional(),
+  nodes: z.object({ put: z.array(draftWorkflowSchema.shape.nodes.element), remove: z.array(z.string()), order: z.array(z.string()).optional() }).optional(),
+  edges: z.object({ put: z.array(workflowSchema.shape.edges.element), remove: z.array(z.string()), order: z.array(z.string()).optional() }).optional(),
+});
 // Snapshot defaults must never turn an absent incremental field into a clearing command.
-const editPatchSchema = editContentSchema.omit({ shots: true, musicClips: true, researchSources: true, referenceDisplay: true, captionStyle: true, scenePreset: true, style: true, claims: true, audioMix: true, clipEditSources: true, clipEditPlans: true }).partial().extend({ style: projectSchema.shape.style.unwrap().optional(), claims: projectSchema.shape.claims.unwrap().optional(), shots: shotPatchSchema.optional(), musicClips: z.array(musicClipSchema).optional(), researchSources: projectSchema.shape.researchSources, referenceDisplay: projectSchema.shape.referenceDisplay, captionStyle: projectSchema.shape.captionStyle, scenePreset: projectSchema.shape.scenePreset, audioMix: projectSchema.shape.audioMix, clipEditSources: z.object({ put: z.array(clipEditSourceSchema), remove: z.array(z.string()), order: z.array(z.string()).optional() }).optional(), clipEditPlans: z.object({ put: z.array(clipEditPlanSchema), remove: z.array(z.string()), order: z.array(z.string()).optional() }).optional() });
+const editPatchSchema = editContentSchema.omit({ shots: true, workflow: true, musicClips: true, researchSources: true, referenceDisplay: true, captionStyle: true, scenePreset: true, style: true, claims: true, audioMix: true, clipEditSources: true, clipEditPlans: true }).partial().extend({ style: projectSchema.shape.style.unwrap().optional(), claims: projectSchema.shape.claims.unwrap().optional(), shots: shotPatchSchema.optional(), workflow: workflowPatchSchema.optional(), musicClips: z.array(musicClipSchema).optional(), researchSources: projectSchema.shape.researchSources, referenceDisplay: projectSchema.shape.referenceDisplay, captionStyle: projectSchema.shape.captionStyle, scenePreset: projectSchema.shape.scenePreset, audioMix: projectSchema.shape.audioMix, clipEditSources: z.object({ put: z.array(clipEditSourceSchema), remove: z.array(z.string()), order: z.array(z.string()).optional() }).optional(), clipEditPlans: z.object({ put: z.array(clipEditPlanSchema), remove: z.array(z.string()), order: z.array(z.string()).optional() }).optional() });
 type EditPatch = z.infer<typeof editPatchSchema>;
 const commandSchema = z.object({ label: z.string(), before: editPatchSchema, after: editPatchSchema }).transform(command => {
   const before = { ...command.before }, after = { ...command.after };
@@ -23,12 +29,15 @@ const commandSchema = z.object({ label: z.string(), before: editPatchSchema, aft
   return { ...command, before, after };
 });
 type EditCommand = z.infer<typeof commandSchema>;
-export const savedEditsSchema = z.object({
-  version: z.literal(1), projectId: z.string(), revision: z.number().int().positive(), base: editContentSchema, present: editContentSchema,
+const savedEditFields = {
+  projectId: z.string(), revision: z.number().int().positive(),
   undo: z.array(commandSchema).max(50), redo: z.array(commandSchema).max(50), selectedShotId: z.string().optional(),
-});
+};
+const currentSavedEditsSchema = z.object({ ...savedEditFields, version: z.literal(2), base: editContentSchema, present: editContentSchema });
+const legacySavedEditsSchema = z.object({ ...savedEditFields, version: z.literal(1), base: editContentSchema.omit({ workflow: true }), present: editContentSchema.omit({ workflow: true }) });
+export const savedEditsSchema = z.discriminatedUnion('version', [legacySavedEditsSchema, currentSavedEditsSchema]);
 export type SavedEdits = z.infer<typeof savedEditsSchema>;
-type EditorState = SavedEdits & { conflict?: ProjectDocument; recovered: boolean; busy: boolean };
+type EditorState = z.infer<typeof currentSavedEditsSchema> & { conflict?: ProjectDocument; recovered: boolean; busy: boolean };
 export type EditConflict = { path: string; label: string; local: unknown; remote: unknown };
 const keys = ['title', 'brief', 'profile', 'style', 'claims', 'musicClips', 'researchSources', 'referenceDisplay', 'captionStyle', 'scenePreset', 'audioMix'] as const;
 export function sameContent(left: unknown, right: unknown): boolean {
@@ -40,7 +49,18 @@ export function sameContent(left: unknown, right: unknown): boolean {
   return leftKeys.length === rightKeys.length && leftKeys.every(key => Object.hasOwn(right, key) && sameContent(left[key], right[key]));
 }
 export function editContent(project: ProjectDocument): EditContent {
-  return { title: project.title, brief: project.brief, profile: project.profile, style: project.style, claims: project.claims, shots: project.shots, musicClips: project.musicClips ?? [], researchSources: project.researchSources ?? [], referenceDisplay: project.referenceDisplay ?? 'hidden', captionStyle: project.captionStyle ?? null, scenePreset: project.scenePreset ?? null, audioMix: project.audioMix ?? null, clipEditSources: project.clipEditSources ?? [], clipEditPlans: project.clipEditPlans ?? [] };
+  return { title: project.title, brief: project.brief, profile: project.profile, style: project.style, claims: project.claims, shots: project.shots, workflow: project.workflow, musicClips: project.musicClips ?? [], researchSources: project.researchSources ?? [], referenceDisplay: project.referenceDisplay ?? 'hidden', captionStyle: project.captionStyle ?? null, scenePreset: project.scenePreset ?? null, audioMix: project.audioMix ?? null, clipEditSources: project.clipEditSources ?? [], clipEditPlans: project.clipEditPlans ?? [] };
+}
+
+export function sameWorkflow(left: EditContent['workflow'], right: EditContent['workflow']) {
+  const { version: _leftVersion, ...before } = left, { version: _rightVersion, ...after } = right;
+  return sameContent(before, after);
+}
+function sameEdits(left: EditContent, right: EditContent) {
+  return left === right || sameWorkflow(left.workflow, right.workflow) && sameContent({ ...left, workflow: undefined }, { ...right, workflow: undefined });
+}
+function workflowVersion(content: EditContent, version: number): EditContent {
+  return content.workflow.version === version ? content : { ...content, workflow: { ...content.workflow, version } };
 }
 
 function diff(from: EditContent, to: EditContent): EditPatch {
@@ -56,6 +76,8 @@ function diff(from: EditContent, to: EditContent): EditPatch {
   const sources = diffRecords(from.clipEditSources, to.clipEditSources), plans = diffRecords(from.clipEditPlans, to.clipEditPlans);
   if (sources) patch.clipEditSources = sources;
   if (plans) patch.clipEditPlans = plans;
+  const nodes = diffRecords(from.workflow.nodes, to.workflow.nodes), edges = diffRecords(from.workflow.edges, to.workflow.edges);
+  if (!sameWorkflow(from.workflow, to.workflow)) patch.workflow = { ...(from.workflow.id !== to.workflow.id ? { id: to.workflow.id } : {}), ...(from.workflow.name !== to.workflow.name ? { name: to.workflow.name } : {}), ...(nodes ? { nodes } : {}), ...(edges ? { edges } : {}) };
   return patch;
 }
 
@@ -74,8 +96,9 @@ function applyRecords<T extends { id: string }>(current: T[], patch?: { put: T[]
 }
 
 function apply(content: EditContent, patch: EditPatch): EditContent {
-  const { shots: changes, clipEditSources: sources, clipEditPlans: plans, ...settings } = patch;
-  const collections = { clipEditSources: applyRecords(content.clipEditSources, sources), clipEditPlans: applyRecords(content.clipEditPlans, plans) };
+  const { shots: changes, workflow: graph, clipEditSources: sources, clipEditPlans: plans, ...settings } = patch;
+  const workflow = graph ? { ...content.workflow, ...(graph.id !== undefined ? { id: graph.id } : {}), ...(graph.name !== undefined ? { name: graph.name } : {}), nodes: applyRecords(content.workflow.nodes, graph.nodes), edges: applyRecords(content.workflow.edges, graph.edges) } : content.workflow;
+  const collections = { workflow, clipEditSources: applyRecords(content.clipEditSources, sources), clipEditPlans: applyRecords(content.clipEditPlans, plans) };
   if (!changes) return { ...content, ...settings, ...collections };
   const shots = new Map(content.shots.map(shot => [shot.id, shot]));
   for (const id of changes.remove) shots.delete(id);
@@ -95,7 +118,15 @@ export function mergeEdits(base: EditContent, local: EditContent, remote: EditCo
     conflicts.push({ path, label, local: mine, remote: theirs });
     return choices[path] === 'remote' ? theirs : mine;
   }
-  const settings = Object.fromEntries(keys.map(key => [key, merge(base[key], local[key], remote[key], key, fieldLabels[key])])) as Omit<EditContent, 'shots' | 'clipEditSources' | 'clipEditPlans'>;
+  const settings = Object.fromEntries(keys.map(key => [key, merge(base[key], local[key], remote[key], key, fieldLabels[key])])) as Omit<EditContent, 'shots' | 'workflow' | 'clipEditSources' | 'clipEditPlans'>;
+  let workflow: EditContent['workflow'];
+  if (sameWorkflow(local.workflow, base.workflow)) workflow = remote.workflow;
+  else if (sameWorkflow(remote.workflow, base.workflow) || sameWorkflow(local.workflow, remote.workflow)) workflow = workflowVersion(local, remote.workflow.version).workflow;
+  else {
+    // Nodes and edges form one dependency graph; merging their arrays independently can create dangling edges or cycles.
+    conflicts.push({ path: 'workflow', label: '流程编排', local: local.workflow, remote: remote.workflow });
+    workflow = choices.workflow === 'remote' ? remote.workflow : workflowVersion(local, remote.workflow.version).workflow;
+  }
   function mergeRecords<T extends { id: string }>(before: T[], mine: T[], theirs: T[], key: string): T[] {
     const original = new Map(before.map(value => [value.id, value])), localValues = new Map(mine.map(value => [value.id, value])), remoteValues = new Map(theirs.map(value => [value.id, value]));
     return [...new Set([...original.keys(), ...localValues.keys(), ...remoteValues.keys()])].flatMap(id => {
@@ -113,7 +144,7 @@ export function mergeEdits(base: EditContent, local: EditContent, remote: EditCo
   }
   const order = merge(base.shots.map(shot => shot.id), local.shots.map(shot => shot.id), remote.shots.map(shot => shot.id), 'shot-order', '镜头顺序') as string[];
   const ordered = [...new Set([...order, ...shots.keys()])].flatMap(id => { const shot = shots.get(id); return shot ? [shot] : []; });
-  return { content: { ...settings, clipEditSources: mergeRecords(base.clipEditSources, local.clipEditSources, remote.clipEditSources, 'clipEditSources'), clipEditPlans: mergeRecords(base.clipEditPlans, local.clipEditPlans, remote.clipEditPlans, 'clipEditPlans'), shots: ordered }, conflicts };
+  return { content: { ...settings, workflow, clipEditSources: mergeRecords(base.clipEditSources, local.clipEditSources, remote.clipEditSources, 'clipEditSources'), clipEditPlans: mergeRecords(base.clipEditPlans, local.clipEditPlans, remote.clipEditPlans, 'clipEditPlans'), shots: ordered }, conflicts };
 }
 function isObject(value: unknown): value is Record<string, unknown> { return value !== null && typeof value === 'object' && !Array.isArray(value); }
 
@@ -124,13 +155,14 @@ export class ProjectEditSession {
   state: EditorState;
   constructor(project: ProjectDocument, saved?: SavedEdits) {
     const content = editContent(project);
-    this.state = { version: 1, projectId: project.id, revision: project.revision, base: content, present: content, undo: [], redo: [], selectedShotId: project.shots[0]?.id, recovered: false, busy: false, ...(saved?.projectId === project.id ? saved : {}) };
+    const restored = saved?.projectId !== project.id ? undefined : saved.version === 2 ? saved : { ...saved, version: 2 as const, base: { ...saved.base, workflow: content.workflow }, present: { ...saved.present, workflow: content.workflow } };
+    this.state = { version: 2, projectId: project.id, revision: project.revision, base: content, present: content, undo: [], redo: [], selectedShotId: project.shots[0]?.id, recovered: false, busy: false, ...restored };
     this.state.recovered = this.dirty;
     this.receive(project);
   }
   getSnapshot = () => this.state;
   subscribe = (listener: () => void) => { this.listeners.add(listener); return () => { this.listeners.delete(listener); }; };
-  get dirty() { return !sameContent(this.state.base, this.state.present); }
+  get dirty() { return !sameEdits(this.state.base, this.state.present); }
   private publish(patch: Partial<EditorState>) {
     this.state = { ...this.state, ...patch };
     for (const listener of this.listeners) listener();
@@ -138,11 +170,12 @@ export class ProjectEditSession {
   endGroup = () => { this.group = undefined; };
   select(id?: string) { this.endGroup(); this.publish({ selectedShotId: id }); }
   edit(next: EditContent, label: string, group?: string) {
-    if (sameContent(next, this.state.present)) return;
+    next = workflowVersion(next, this.state.present.workflow.version);
+    if (sameEdits(next, this.state.present)) return;
     const undo = [...this.state.undo];
     const previous = group && group === this.group ? undo.pop() : undefined;
     const original = previous ? apply(this.state.present, previous.before) : this.state.present;
-    if (!sameContent(original, next)) undo.push({ label, before: diff(next, original), after: diff(original, next) });
+    if (!sameEdits(original, next)) undo.push({ label, before: diff(next, original), after: diff(original, next) });
     this.group = group;
     this.publish({ present: next, undo: undo.slice(-50), redo: [] });
   }
@@ -162,15 +195,24 @@ export class ProjectEditSession {
     if (project.revision <= this.state.revision) return;
     if (this.state.busy) { this.deferred = project; return; }
     const remote = editContent(project);
-    if (sameContent(remote, this.state.base)) { this.publish({ revision: project.revision, conflict: undefined }); return; }
+    if (sameEdits(remote, this.state.base)) { this.publish({ revision: project.revision, base: remote, present: workflowVersion(this.state.present, remote.workflow.version), conflict: undefined }); return; }
     // A crash can happen after SQLite commits but before the client receives the reply.
-    if (sameContent(remote, this.state.present)) { this.publish({ revision: project.revision, base: remote, conflict: undefined, recovered: false }); return; }
+    if (sameEdits(remote, this.state.present)) { this.publish({ revision: project.revision, base: remote, present: workflowVersion(this.state.present, remote.workflow.version), conflict: undefined, recovered: false }); return; }
+    const changed = Object.keys(diff(this.state.base, remote)) as Array<keyof EditContent>;
+    const protectedFields = new Set([...Object.keys(diff(this.state.base, this.state.present)), ...this.state.undo.flatMap(command => Object.keys(command.before)), ...this.state.redo.flatMap(command => Object.keys(command.after))]);
+    if (changed.every(key => !protectedFields.has(key))) {
+      const present = { ...this.state.present };
+      for (const key of changed) Object.assign(present, { [key]: remote[key] });
+      this.endGroup();
+      this.publish({ revision: project.revision, base: remote, present: workflowVersion(present, remote.workflow.version), conflict: undefined });
+      return;
+    }
     if (this.dirty) { this.publish({ conflict: project }); return; }
     this.endGroup();
     this.publish({ revision: project.revision, base: remote, present: remote, undo: [], redo: [], conflict: undefined });
   }
   beginSave() { this.endGroup(); this.publish({ busy: true }); }
-  saved(project: ProjectDocument) { this.publish({ revision: project.revision, base: editContent(project), conflict: undefined, recovered: false }); }
+  saved(project: ProjectDocument) { this.publish({ revision: project.revision, base: editContent(project), present: workflowVersion(this.state.present, project.workflow.version), conflict: undefined, recovered: false }); }
   applySaved(project: ProjectDocument, label: string) { this.edit(editContent(project), label); this.saved(project); }
   endSave() {
     this.publish({ busy: false });
