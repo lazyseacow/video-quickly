@@ -16,11 +16,13 @@ async function sourceHash(path: string, signal: AbortSignal): Promise<string> {
   return hash.digest('hex');
 }
 
-async function decode(asset: AssetRecord, ffmpeg: string, signal: AbortSignal): Promise<AudioWaveform> {
+function launchDecoder(file: string, args: string[]) { return spawn(file, args, { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] }); }
+
+async function decode(asset: AssetRecord, ffmpeg: string, signal: AbortSignal, spawnDecoder: typeof launchDecoder): Promise<AudioWaveform> {
   signal.throwIfAborted();
   const peaks: number[] = [];
   let samples = 0, peak = 0, remainder = Buffer.alloc(0), stderr = '';
-  const child = spawn(ffmpeg, ['-nostdin', '-v', 'error', '-i', asset.path, '-map', '0:a:0', '-vn', '-ac', '1', '-ar', String(SAMPLE_RATE), '-acodec', 'pcm_f32le', '-f', 'f32le', 'pipe:1'], { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
+  const child = spawnDecoder(ffmpeg, ['-nostdin', '-v', 'error', '-i', asset.path, '-map', '0:a:0', '-vn', '-ac', '1', '-ar', String(SAMPLE_RATE), '-acodec', 'pcm_f32le', '-f', 'f32le', 'pipe:1']);
   let forceKill: ReturnType<typeof setTimeout> | undefined;
   const abort = () => {
     child.kill('SIGTERM');
@@ -61,7 +63,7 @@ async function decode(asset: AssetRecord, ffmpeg: string, signal: AbortSignal): 
 }
 
 /** Derived audio data is content addressed and never enters project documents or edit history. */
-export function createWaveformReader(options: { dataDirectory: string; ffmpegPath?: string; maxConcurrent?: number }) {
+export function createWaveformReader(options: { dataDirectory: string; ffmpegPath?: string; maxConcurrent?: number; spawnDecoder?: typeof launchDecoder }) {
   const cacheDirectory = resolve(options.dataDirectory, 'derived', 'waveforms', ALGORITHM);
   const maximum = options.maxConcurrent ?? 2;
   if (!Number.isInteger(maximum) || maximum < 1 || maximum > 4) throw new RangeError('波形并发数须介于 1 和 4。');
@@ -96,7 +98,7 @@ export function createWaveformReader(options: { dataDirectory: string; ffmpegPat
       if (error instanceof SyntaxError) await rm(cachePath, { force: true });
       else if (!(error instanceof Error && 'code' in error && error.code === 'ENOENT')) throw error;
     }
-    const result = await decode(asset, options.ffmpegPath ?? process.env.VIDEO_QUICKLY_FFMPEG ?? 'ffmpeg', signal);
+    const result = await decode(asset, options.ffmpegPath ?? process.env.VIDEO_QUICKLY_FFMPEG ?? 'ffmpeg', signal, options.spawnDecoder ?? launchDecoder);
     if (await sourceHash(asset.path, signal) !== actualHash) throw new Error('读取期间音频素材已变化，请重新导入后重试。');
     signal.throwIfAborted();
     await mkdir(cacheDirectory, { recursive: true });

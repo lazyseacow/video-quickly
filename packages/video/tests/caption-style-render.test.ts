@@ -92,9 +92,27 @@ it.skipIf(!mediaAvailable)('burns inherited and per-shot font/color/opacity/posi
       expect((await readdir(outputDirectory)).filter(name => /^segment-.*\.mp4$/.test(name))).toHaveLength(3); expect(await Promise.all(segments.map(name => stat(join(outputDirectory, name)).then(value => value.mtimeMs)))).toEqual(times);
       const legacy = shotSchema.parse({ id: 'legacy', title: ' ', narration: 'Legacy caption', visualPrompt: '', durationUs: 1_000_000, sourceInUs: 0, videoAssetId: 'video', audioAssetId: 'voice', animation: { transition: 'cut' } });
       const mixed = await renderProject({ project: { ...project, captionStyle: undefined, shots: [{ ...left, captionStyle: inherited }, right, legacy] }, assets, outputDirectory, ffmpegPath: ffmpeg, ffprobePath: ffprobe });
-      const legacyPixels = await framePixels(mixed.videoPath, 135, 'mixed-legacy'); let cream = 0;
-      for (let offset = 0; offset < legacyPixels.length; offset += 3) if (legacyPixels[offset] > 130 && legacyPixels[offset + 1] > 130 && legacyPixels[offset + 2] > 100 && legacyPixels[offset] - legacyPixels[offset + 2] > 3) cream++;
-      expect(cream).toBeGreaterThan(20);
+      const legacyPixels = await framePixels(mixed.videoPath, 135, 'mixed-legacy');
+      const layout = resolveCaptionLayout(width, height, undefined, { referenceFooter: true }), box = captionBox(layout, 1);
+      const preview = createCanvas(width, height), image = createCanvas(width, height);
+      image.getContext('2d').fillStyle = '#0000FF'; image.getContext('2d').fillRect(0, 0, width, height);
+      drawSceneFrame(preview as unknown as HTMLCanvasElement, { ...legacy, profile, shotIndex: 2, referenceFooter: true, image: image as unknown as CanvasImageSource }, 500_000);
+      // Small antialiased glyphs blend with the dark box, especially after YUV420 chroma subsampling.
+      // Compare visible ink and its preview bounds rather than requiring opaque cream-colored pixels.
+      function ink(values: Uint8Array | Uint8ClampedArray, stride: number) {
+        let count = 0, left = width, right = -1, top = height, bottom = -1;
+        for (let y = Math.ceil(box.y); y < box.y + box.height; y++) for (let x = Math.ceil(box.x); x < box.x + box.width; x++) {
+          const offset = (y * width + x) * stride;
+          if (values[offset] > 130 && values[offset + 1] > 130 && values[offset + 2] > 100) {
+            count++; left = Math.min(left, x); right = Math.max(right, x); top = Math.min(top, y); bottom = Math.max(bottom, y);
+          }
+        }
+        return { count, left, right, top, bottom };
+      }
+      const actual = ink(legacyPixels, 3), expected = ink(preview.getContext('2d').getImageData(0, 0, width, height).data, 4);
+      expect(actual.count).toBeGreaterThan(20); expect(expected.count).toBeGreaterThan(20);
+      expect(Math.abs((actual.left + actual.right) / 2 - (expected.left + expected.right) / 2)).toBeLessThan(3);
+      for (const edge of ['top', 'bottom'] as const) expect(Math.abs(actual[edge] - expected[edge]), JSON.stringify({ actual, expected })).toBeLessThan(layout.fontSize * .6 + 3);
     }
   }
 }, 120_000);

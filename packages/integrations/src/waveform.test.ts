@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -34,16 +34,12 @@ async function fixture() {
   return { directory, asset, bytes };
 }
 
-const quote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`;
-
 it.skipIf(!mediaAvailable)('streams real PCM peaks, deduplicates requests and reuses validated disk cache after restart', async () => {
   const { directory, asset } = await fixture();
-  const log = join(directory, 'decoder-runs');
-  const wrapper = join(directory, 'counted-ffmpeg');
-  await writeFile(wrapper, `#!/bin/sh\nprintf x >> ${quote(log)}\nexec ${quote(ffmpeg)} "$@"\n`, { mode: 0o755 });
-  const reader = createWaveformReader({ dataDirectory: directory, ffmpegPath: wrapper }); readers.push(reader);
+  let decoders = 0;
+  const reader = createWaveformReader({ dataDirectory: directory, ffmpegPath: ffmpeg, spawnDecoder: (file, args) => { decoders++; return spawn(file, args, { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] }); } }); readers.push(reader);
   const results = await Promise.all(Array.from({ length: 8 }, () => reader.read(asset)));
-  expect((await readFile(log, 'utf8')).length).toBe(1);
+  expect(decoders).toBe(1);
   const result = results[0];
   expect(result.durationUs).toBe(2_000_000);
   expect(result.peaks).toHaveLength(200);
@@ -60,12 +56,10 @@ it.skipIf(!mediaAvailable)('streams real PCM peaks, deduplicates requests and re
 
 it.skipIf(!mediaAvailable)('cancels one consumer without canceling the shared decoder and cleans canceled queued work', async () => {
   const { directory, asset } = await fixture();
-  const wrapper = join(directory, 'delayed-ffmpeg');
-  await writeFile(wrapper, `#!/bin/sh\nsleep 0.3\nexec ${quote(ffmpeg)} "$@"\n`, { mode: 0o755 });
-  const reader = createWaveformReader({ dataDirectory: directory, ffmpegPath: wrapper, maxConcurrent: 1 }); readers.push(reader);
+  const reader = createWaveformReader({ dataDirectory: directory, ffmpegPath: ffmpeg, maxConcurrent: 1, spawnDecoder: (file, args) => spawn(file, ['-re', ...args], { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] }) }); readers.push(reader);
   const controller = new AbortController();
   const canceled = reader.read(asset, { signal: controller.signal });
-  const surviving = reader.read(asset);
+  const surviving = Promise.allSettled([reader.read(asset)]);
   controller.abort(new Error('消费者取消'));
   await expect(canceled).rejects.toThrow('消费者取消');
   const secondPath = join(directory, 'second.wav'); await writeFile(secondPath, await readFile(asset.path));
@@ -73,7 +67,9 @@ it.skipIf(!mediaAvailable)('cancels one consumer without canceling the shared de
   const queued = reader.read({ ...asset, id: 'queued', path: secondPath }, { signal: queuedController.signal });
   queuedController.abort(new Error('队列取消'));
   await expect(queued).rejects.toThrow('队列取消');
-  expect((await surviving).peaks).toHaveLength(200);
+  const [result] = await surviving;
+  if (result.status === 'rejected') throw result.reason;
+  expect(result.value.peaks).toHaveLength(200);
   await reader.close();
   const cache = join(directory, 'derived', 'waveforms', 'v1-mono-16000-peak-100hz');
   expect((await readdir(cache)).filter(name => name.endsWith('.tmp'))).toEqual([]);
@@ -91,16 +87,16 @@ it.skipIf(!mediaAvailable)('rejects undecodable sources and leaves no partial de
 
 it.skipIf(!mediaAvailable)('terminates an active real decoder when its last consumer cancels', async () => {
   const { directory, asset } = await fixture();
-  const started = join(directory, 'started');
-  const wrapper = join(directory, 'realtime-ffmpeg');
-  await writeFile(wrapper, `#!/bin/sh\nprintf started > ${quote(started)}\nexec ${quote(ffmpeg)} -re "$@"\n`, { mode: 0o755 });
-  const reader = createWaveformReader({ dataDirectory: directory, ffmpegPath: wrapper }); readers.push(reader);
+  let decoder: ReturnType<typeof spawn> | undefined;
+  const reader = createWaveformReader({ dataDirectory: directory, ffmpegPath: ffmpeg, spawnDecoder: (file, args) => {
+    const child = spawn(file, ['-re', ...args], { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] }); decoder = child; return child;
+  } }); readers.push(reader);
   const controller = new AbortController();
-  const result = reader.read(asset, { signal: controller.signal });
-  const rejection = expect(result).rejects.toThrow('终止读取');
-  await vi.waitFor(async () => expect(await readFile(started, 'utf8')).toBe('started'));
+  const result = Promise.allSettled([reader.read(asset, { signal: controller.signal })]);
+  await vi.waitFor(() => expect(decoder?.pid).toBeGreaterThan(0));
   controller.abort(new Error('终止读取'));
-  await rejection;
+  expect((await result)[0]).toMatchObject({ status: 'rejected', reason: new Error('终止读取') });
   await reader.close();
+  expect(decoder?.exitCode !== null || decoder?.signalCode !== null).toBe(true);
   expect((await readdir(directory)).filter(name => name.endsWith('.tmp'))).toEqual([]);
 }, 30_000);

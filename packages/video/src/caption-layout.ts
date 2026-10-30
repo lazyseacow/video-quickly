@@ -1,6 +1,5 @@
 import { captionStyleSchema, DEFAULT_CAPTION_STYLE, type CaptionStyle } from '@video-quickly/contracts';
 import { citationFooterTop } from './citations.js';
-import { SCENE_TEMPLATE_FONT_FAMILY } from './scene-templates.js';
 
 export const CAPTION_FONT_CATALOG = {
   sans: { label: '无衬线', families: ['Microsoft YaHei', 'Hiragino Sans GB', 'PingFang SC', 'Noto Sans CJK SC', 'Arial', 'DejaVu Sans', 'sans-serif'] },
@@ -43,7 +42,7 @@ export function resolveCaptionLayout(width: number, height: number, value?: Capt
   const maxLines = style?.maxLines ?? geometry.lines, position = style?.position ?? 'bottom', top = height * .235, bottom = geometry.bottom, gap = height * .025;
   const available = position === 'top' ? bottom - top - gap * 2 - 1 : bottom - height * .255 - gap - 1;
   const fontSize = style ? Math.max(1, Math.min(Math.min(width, height) * style.fontSizeRatio, available / (maxLines * 1.55 + 1))) : geometry.fontSize;
-  const fontWeight = style?.fontWeight ?? 500, fontFamily = style ? captionFontFamily(style.fontId) : options.template ? SCENE_TEMPLATE_FONT_FAMILY : '"Microsoft YaHei", sans-serif';
+  const fontWeight = style?.fontWeight ?? 500, fontFamily = captionFontFamily(style?.fontId ?? 'sans');
   const lineHeight = fontSize * 1.55, paddingY = fontSize * .5;
   const maximumBox = maxLines * lineHeight + paddingY * 2;
   return {

@@ -118,7 +118,7 @@ export async function renderProject(options: RenderOptions): Promise<RenderResul
   const citations=createCitationManifest({...options.project,shots});
   const referenceFooter=citations.display==='numbers'&&citations.shots.some(shot=>shot.numbers.length>0);
   const captionLayoutFor=(shot:Shot)=>resolveCaptionLayout(profile.width,profile.height,shot.captionStyle,{referenceFooter,template:Boolean(shot.sceneTemplate)});
-  const captionFontFor=(shot:Shot)=>shot.captionStyle?selectCaptionFont(shot.captionStyle.fontId,name=>GlobalFonts.has(name)):shot.sceneTemplate?selectCaptionFont('sans',name=>GlobalFonts.has(name)):GlobalFonts.has('Arial')?'Arial':'sans-serif';
+  const captionFontFor=(shot:Shot)=>selectCaptionFont(shot.captionStyle?.fontId??'sans',name=>GlobalFonts.has(name));
   const sourceIds=new Set(citations.references.flatMap(reference=>reference.evidence.map(evidence=>evidence.sourceId)));
   for(const source of options.project.researchSources??[])if(sourceIds.has(source.id)&&createHash('sha256').update(source.content,'utf8').digest('hex')!==source.sha256)throw new Error(`资料「${source.title}」正文校验失败，请重新导入资料。`);
   warnings.push(...citations.warnings);
