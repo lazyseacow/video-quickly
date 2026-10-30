@@ -1,7 +1,7 @@
 import { addModelConnection, settingField } from './settings';
 import { createServer } from 'node:http';
 import { expect, test, type APIRequestContext, type Locator, type Page } from '@playwright/test';
-import type { ModelProfile, ProjectDocument, WorkspaceSnapshot } from '@video-quickly/contracts';
+import type { ModelProfile, ProjectDocument, RunSummary, WorkspaceSnapshot } from '@video-quickly/contracts';
 
 async function rpc<T>(request: APIRequestContext, method: string, params: unknown = {}): Promise<T> {
   const response = await request.post('/__desktop_rpc', { data: { method, params } }); const payload = await response.json();
@@ -124,8 +124,27 @@ test('shows protocol-specific controls and rejects malformed values in both UI a
   await page.screenshot({ path: info.outputPath('model-parameters-600.png') }); expect(errors).toEqual([]);
 });
 
-test('uses the saved structured controls in actual text and image HTTP requests without cross-capability leakage', async ({ page, request }) => {
+for (const delayedProgress of [false, true]) test(`uses the saved structured controls in actual text and image HTTP requests without cross-capability leakage${delayedProgress ? ' with delayed terminal progress' : ''}`, async ({ page, request }) => {
   const errors = observe(page), requests: Array<{ path: string; body: Record<string, unknown> }> = [];
+  let releaseProgress!: () => void, terminalObserved!: () => void;
+  const progressGate = new Promise<void>(resolve => { releaseProgress = resolve; });
+  const terminalProgress = new Promise<void>(resolve => { terminalObserved = resolve; });
+  let imageRunId: string | undefined;
+  // Hold only the observer response: the actual HTTP generation and runtime
+  // still finish, while the dialog must retain its previous candidate list.
+  if (delayedProgress) await page.route('**/__desktop_rpc', async route => {
+    const input = route.request().postDataJSON();
+    if (input.method === 'shot.regenerate' && input.params.kind === 'image') {
+      const response = await route.fetch(), payload = await response.json(); imageRunId = payload.result.id;
+      await route.fulfill({ response, json: payload }); return;
+    }
+    if (input.method === 'run.get' && input.params.runId === imageRunId) {
+      const response = await route.fetch(), payload = await response.json();
+      if (payload.result.status === 'succeeded') { terminalObserved(); await progressGate; }
+      await route.fulfill({ response, json: payload }); return;
+    }
+    await route.continue();
+  });
   const png = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScLbtAAAAABJRU5ErkJggg==';
   const server = createServer((incoming, response) => { void (async () => {
     let text = ''; for await (const chunk of incoming) text += chunk.toString(); const path = incoming.url ?? '', body = JSON.parse(text) as Record<string, unknown>; requests.push({ path, body });
@@ -134,16 +153,25 @@ test('uses the saved structured controls in actual text and image HTTP requests 
   })().catch(error => response.destroy(error instanceof Error ? error : undefined)); });
   await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve)); const address = server.address(); if (!address || typeof address === 'string') throw new Error('参数服务未启动');
   try {
-    const name = '实际HTTP表单模型'; await openModels(page); const form = await legacyModel(page, request, name, `http://127.0.0.1:${address.port}/v1`, ['text', 'image', 'tts']);
+    const name = `实际HTTP表单模型${delayedProgress ? ' 延迟进度' : ''}`; await openModels(page); const form = await legacyModel(page, request, name, `http://127.0.0.1:${address.port}/v1`, ['text', 'image', 'tts']);
     await (await settingField(form, '文本温度')).fill('0.25'); await (await settingField(form, '最大输出 Token')).fill('87'); await (await settingField(form, '图片尺寸')).selectOption('1024x1024'); await (await settingField(form, '图片质量')).selectOption('high'); await (await settingField(form, '配音音色')).fill('alloy'); await (await settingField(form, '配音语速')).fill('1.3');
     const json = await advanced(form); const values = JSON.parse(await json.inputValue()); await (await advanced(form)).fill(JSON.stringify({ ...values, vendor_tag: 'round-trip' })); await form.getByRole('button', { name: '保存连接', exact: true }).click(); await expect(form).toHaveCount(0); const model = await savedModel(request, name);
-    let project = await rpc<ProjectDocument>(request, 'project.create', { title: '参数真实请求验收' }); project = await rpc<ProjectDocument>(request, 'project.update', { projectId: project.id, revision: project.revision, patch: { shots: [{ id: 'parameters-shot', title: '原镜头', narration: '旁白', visualPrompt: '画面', durationUs: 2_000_000 }] } });
+    let project = await rpc<ProjectDocument>(request, 'project.create', { title: `参数真实请求验收${delayedProgress ? ' 延迟进度' : ''}` }); project = await rpc<ProjectDocument>(request, 'project.update', { projectId: project.id, revision: project.revision, patch: { shots: [{ id: 'parameters-shot', title: '原镜头', narration: '旁白', visualPrompt: '画面', durationUs: 2_000_000 }] } });
     await page.reload(); await page.getByRole('button', { name: '我的项目', exact: true }).click(); await page.locator('.project-card').filter({ hasText: project.title }).getByRole('button', { name: /继续创作/ }).click(); await page.getByRole('button', { name: 'AI 微调', exact: true }).click();
     const dialog = page.getByRole('dialog', { name: '镜头候选', exact: true }); await (await settingField(dialog, '生成模型')).selectOption(model.id); await dialog.getByRole('button', { name: '生成候选', exact: true }).click();
     await expect(dialog.locator('.shot-regeneration__comparison')).toContainText('真实参数候选'); await expect(dialog.getByRole('button', { name: '生成候选', exact: true })).toBeEnabled();
-    await (await settingField(dialog, '生成内容')).selectOption('image'); await (await settingField(dialog, '生成模型')).selectOption(model.id); await dialog.getByRole('button', { name: '生成候选', exact: true }).click(); await expect(dialog.locator('.shot-regeneration__history-item')).toHaveCount(2);
+    await (await settingField(dialog, '生成内容')).selectOption('image'); await (await settingField(dialog, '生成模型')).selectOption(model.id);
+    const imageStarted = page.waitForResponse(response => response.url().endsWith('/__desktop_rpc') && response.request().method() === 'POST' && response.request().postDataJSON().method === 'shot.regenerate' && response.request().postDataJSON().params.kind === 'image');
+    await dialog.getByRole('button', { name: '生成候选', exact: true }).click();
+    const started = await (await imageStarted).json(); expect(started.error).toBeUndefined();
+    // Starting the run is asynchronous. Keep the normal UI assertion timeout
+    // separate from generation, initial workspace refresh and progress polling.
+    await expect.poll(async () => (await rpc<RunSummary>(request, 'run.get', { runId: started.result.id })).status, { timeout: 30_000 }).toBe('succeeded');
+    if (delayedProgress) { await terminalProgress; await expect(dialog.locator('.shot-regeneration__history-item')).toHaveCount(1); releaseProgress(); }
+    await expect(dialog.locator('.shot-regeneration__history-item')).toHaveCount(2);
+    await expect(dialog.getByAltText('候选画面')).toBeVisible();
     expect(requests).toHaveLength(2); expect(requests[0].body).toMatchObject({ temperature: .25, max_tokens: 87, vendor_tag: 'round-trip' }); for (const key of ['quality', 'size', 'voice', 'speed']) expect(requests[0].body).not.toHaveProperty(key);
     expect(requests[1].body).toMatchObject({ size: '1024x1024', quality: 'high', vendor_tag: 'round-trip' }); for (const key of ['temperature', 'max_tokens', 'voice', 'speed']) expect(requests[1].body).not.toHaveProperty(key);
     expect((await rpc<{ project: ProjectDocument }>(request, 'project.get', { projectId: project.id })).project).toEqual(project); expect(errors).toEqual([]);
-  } finally { server.closeAllConnections(); await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve())); }
+  } finally { releaseProgress(); server.closeAllConnections(); await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve())); }
 });
