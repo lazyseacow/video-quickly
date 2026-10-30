@@ -27,6 +27,7 @@ import { createSeriesTemplateLibrary } from './series-templates.js';
 import { replaceShotMedia } from '@video-quickly/video/clip-edits';
 import { trimShotInContext } from '@video-quickly/video/editing';
 import { createAudioPreview, type AudioMixCallbacks } from './audio-preview.js';
+import { createRunInspector, redactInspectionText } from './run-inspection.js';
 
 export { ActivityJournal, AmbiguousActivityError, SimulatedProcessExit } from './activities.js';
 export type { ActivityContext } from './activities.js';
@@ -123,6 +124,14 @@ export function createRuntime(options: RuntimeOptions) {
   const characters = createCharacterLibrary({ database, store, onChanged: changed });
   const seriesTemplates = createSeriesTemplateLibrary({ database, store, onChanged: changed });
   const audioPreview = createAudioPreview({ directory, store, callbacks: options.audioMix, project, validate: value => { validateEdits(value, project(value.id)); validateResearchProject(value, project(value.id)); characters.profilesFor(value); } });
+  const runInspector = createRunInspector({ database, store, dataDirectory: directory, run,
+    async secrets(models) {
+      const references = [...new Set(models.flatMap(model => model.credentialRef ? [model.credentialRef] : []))];
+      const values = await Promise.all(references.map(async reference => rememberSecret(await options.secretStore?.get(reference))));
+      return [...transientSecrets, ...values.filter((value): value is string => Boolean(value))];
+    },
+    redactText: (text, models, secrets) => redactError(text, models, secrets, Number.POSITIVE_INFINITY),
+  });
 
   if (options.seed !== false && !store.get('metadata', 'initialized')) {
     database.transaction(() => {
@@ -275,6 +284,27 @@ export function createRuntime(options: RuntimeOptions) {
     return { ...value, shots: value.shots.map(shot => shot.id === shotId ? { ...shot, assetId: asset.id, sceneTemplate: undefined } : shot) };
   }
 
+  function nodeResultAssets(result: JsonValue): AssetRecord[] {
+    return result && typeof result === 'object' && !Array.isArray(result) && Array.isArray(result.assets) ? z.array(assetSchema).parse(result.assets) : [];
+  }
+
+  function projectAfterNode(value: ProjectDocument, node: WorkflowNode, result: JsonValue, assets: AssetRecord[]): ProjectDocument {
+    let working = value;
+    if (result && typeof result === 'object' && !Array.isArray(result)) {
+      if (node.kind === 'script' && Array.isArray(result.shots)) working = { ...working, shots: z.array(shotSchema).parse(result.shots) };
+      if (node.kind === 'style' && typeof result.text === 'string') working = { ...working, style: result.text };
+    }
+    for (const asset of assets) {
+      if (asset.projectId !== value.id) throw new Error('生成素材与当前项目不匹配。');
+      if (!asset.shotId || !['image', 'audio', 'video'].includes(asset.kind)) continue;
+      const shot = working.shots.find(shot => shot.id === asset.shotId);
+      if (!shot) throw new Error('生成素材对应的镜头不存在。');
+      if (shot.locked) throw new Error('请先解锁镜头，再更换素材。');
+      working = asset.kind === 'image' ? { ...working, shots: working.shots.map(shot => shot.id === asset.shotId ? { ...shot, assetId: asset.id } : shot) } : bindMedia(working, asset.shotId, asset, false);
+    }
+    return working;
+  }
+
   function updateRun(id: string, patch: Partial<RunRecord>) {
     const updated = { ...run(id), ...patch, updatedAt: now() };
     store.put('run', id, updated);
@@ -377,6 +407,8 @@ export function createRuntime(options: RuntimeOptions) {
     const capability: ModelCapability | undefined = usesProvider ? 'text' : node.config.operation === 'transcribe' ? 'asr' : node.kind === 'assets' ? 'image' : node.kind === 'voice' ? 'tts' : node.kind === 'animation' ? 'video' : undefined;
     const researchContext = usesProvider && node.kind === 'research' ? selectResearchPassages(executionProject, saved.research?.sourceIds ?? (Array.isArray(node.config.sourceIds) ? node.config.sourceIds.filter((id): id is string => typeof id === 'string') : undefined), saved.research?.instruction ?? node.prompt) : undefined;
     const prompt = usesProvider ? researchContext ? researchPrompt(executionProject, node, saved.skills, researchContext) : buildPrompt(executionProject, node, saved.skills, Boolean(saved.regeneration), executionCharacters) : '';
+    if (!cached || cached.status === 'prepared') runInspector.captureInput(runId, node.id, { inputHash: fingerprint(input), recordedAt: now(),
+      prompt: usesProvider ? redactInspectionText(prompt, text => redactError(text, saved.models, transientSecrets, Number.POSITIVE_INFINITY)) : undefined });
     const costOperation = selectedModel && capability && !deepAgent ? `${runId}:${node.id}` : undefined;
     if (costOperation && selectedModel && capability) {
       const existing = costs.get(costOperation);
@@ -440,21 +472,9 @@ export function createRuntime(options: RuntimeOptions) {
         store.put('node-result', `${runId}:${node.id}`, { ...output, candidateId: candidate.id });
         return;
       }
-      let working = executionProject;
-      if (output && typeof output === 'object' && !Array.isArray(output)) {
-        if (Array.isArray(output.shots) && node.kind === 'script') working = { ...working, shots: z.array(shotSchema).parse(output.shots) };
-        if (node.kind === 'style' && typeof output.text === 'string') working = { ...working, style: output.text };
-      }
-      if (output && typeof output === 'object' && !Array.isArray(output) && Array.isArray(output.assets)) {
-        for (const candidate of output.assets) {
-          const asset = assetSchema.parse(candidate);
-          if (asset.projectId !== saved.project.id) throw new Error('生成素材与当前项目不匹配。');
-          store.put('asset', asset.id, asset);
-          if (asset.shotId && ['image', 'audio', 'video'].includes(asset.kind)) {
-            working = asset.kind === 'image' ? { ...working, shots: working.shots.map(shot => shot.id === asset.shotId ? { ...shot, assetId: asset.id } : shot) } : bindMedia(working, asset.shotId, asset, false);
-          }
-        }
-      }
+      const assets = nodeResultAssets(output);
+      const working = projectAfterNode(executionProject, node, output, assets);
+      for (const asset of assets) store.put('asset', asset.id, asset);
       store.put('run-project', runId, working);
       store.put('node-result', `${runId}:${node.id}`, output);
     });
@@ -586,10 +606,14 @@ export function createRuntime(options: RuntimeOptions) {
       }
       case 'run.events':
       case 'run.activities': {
-        const input = pageInputSchema.extend({ runId: z.string().min(1) }).parse(rawParams);
+        const input = pageInputSchema.extend({ runId: z.string().min(1), nodeId: z.string().min(1).optional() }).parse(rawParams);
         const value = run(input.runId);
-        return method === 'run.events' ? reads.events(value, input.before, input.limit) : reads.activities(value.id, input.before, input.limit);
+        return method === 'run.events' ? reads.events(value, input.before, input.limit, input.nodeId) : reads.activities(value.id, input.before, input.limit, input.nodeId);
       }
+      case 'run.inspect':
+      case 'run.step.payload':
+      case 'run.step.versions':
+      case 'run.diagnostics': return runInspector.dispatch(method, rawParams);
       case 'asset.list': {
         const input = pageInputSchema.extend({ kind: assetSchema.shape.kind.optional() }).parse(rawParams);
         const result = reads.assets(input.before, input.limit, input.kind);
@@ -1072,8 +1096,21 @@ export function createRuntime(options: RuntimeOptions) {
         }
         if (node?.kind === 'script' && Array.isArray(result.shots)) return saveProject({ ...currentValue, shots: z.array(shotSchema).parse(result.shots) });
         if (node?.kind === 'style' && typeof result.text === 'string') return saveProject({ ...currentValue, style: result.text });
-        const working = store.get<ProjectDocument>('run-project', runId);
-        if (working && ['assets', 'voice', 'animation'].includes(node?.kind ?? '')) return saveProject({ ...currentValue, shots: working.shots, clipEditSources: working.clipEditSources, clipEditPlans: working.clipEditPlans });
+        if (node && ['assets', 'voice', 'animation'].includes(node.kind)) {
+          const input = store.get<ProjectDocument>('node-project', `${runId}:${nodeId}`);
+          if (!input) throw new Error('这个历史步骤没有保存执行输入，请重新生成后应用。');
+          const assets = nodeResultAssets(result); requireCandidateAssets(assets);
+          for (const asset of assets) {
+            const info = await stat(asset.path).catch(() => undefined);
+            if (!info?.isFile() || info.size !== asset.size) throw new Error('步骤产物素材缺失或已更改，请重新生成。');
+            const hash = createHash('sha256');
+            for await (const chunk of createReadStream(asset.path)) hash.update(chunk);
+            if (hash.digest('hex') !== asset.sha256) throw new Error('步骤产物素材校验失败，请重新生成。');
+          }
+          const latest = verifiedProject(); requireCandidateAssets(assets);
+          const working = projectAfterNode(input, node, result, assets);
+          return saveProject({ ...latest, shots: working.shots, clipEditSources: working.clipEditSources, clipEditPlans: working.clipEditPlans });
+        }
         throw new Error('此步骤结果用于审阅，无需写入项目。');
       }
       default: throw new Error(`未知操作：${method}`);
@@ -1179,8 +1216,8 @@ function mediaKind(extension: string): { kind: AssetRecord['kind']; mimeType: st
   const value = formats[extension]; if (!value) throw new Error('暂不支持该文件格式。'); return value;
 }
 
-function redactError(message: string, models: ModelProfile[], secrets: Iterable<string> = []) {
-  let safe = message.replace(/Bearer\s+[^\s]+/gi, 'Bearer [已隐藏]').replace(/sk-[a-z0-9_-]+/gi, '[已隐藏]');
+function redactError(message: string, models: ModelProfile[], secrets: Iterable<string> = [], maximum = 1200) {
+  let safe = message.replace(/\b(Bearer|Basic)\s+[^\s"'<>]+/gi, '$1 [已隐藏]').replace(/sk-[a-z0-9_-]+/gi, '[已隐藏]');
   for (const secret of secrets) {
     if (!secret) continue;
     safe = safe.replaceAll(secret, '[已隐藏]').replaceAll(encodeURIComponent(secret), '[已隐藏]');
@@ -1188,5 +1225,5 @@ function redactError(message: string, models: ModelProfile[], secrets: Iterable<
   for (const model of models) {
     try { const url = new URL(model.baseUrl); if (url.search) safe = safe.replaceAll(model.baseUrl, `${url.origin}${url.pathname}`); } catch { /* Stored URLs are schema-validated; ignore historical invalid entries. */ }
   }
-  return safe.slice(0, 1200);
+  return safe.slice(0, maximum);
 }

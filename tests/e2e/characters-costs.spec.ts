@@ -1,7 +1,7 @@
 import { createServer } from 'node:http';
 import { writeFile } from 'node:fs/promises';
 import { expect, test, type APIRequestContext, type Page } from '@playwright/test';
-import type { AssetRecord, CharacterProfile, ModelProfile, ProjectDocument, UsageRecord } from '@video-quickly/contracts';
+import type { AssetRecord, CharacterProfile, ModelProfile, ProjectDocument, RunSummary, UsageRecord } from '@video-quickly/contracts';
 
 async function rpc<T>(request: APIRequestContext, method: string, params: unknown = {}): Promise<T> {
   const response = await request.post('/__desktop_rpc', { data: { method, params } });
@@ -108,7 +108,10 @@ test('sends frozen character settings into generation and records provider usage
     await page.getByRole('button', { name: 'AI 微调', exact: true }).click();
     const candidate = page.getByRole('dialog', { name: '镜头候选', exact: true });
     await candidate.getByLabel('生成模型', { exact: true }).selectOption(model.id);
+    const started = page.waitForResponse(response => response.url().endsWith('/__desktop_rpc') && response.request().postDataJSON()?.method === 'shot.regenerate');
     await candidate.getByRole('button', { name: '生成候选', exact: true }).click();
+    const generated = await (await started).json(); expect(generated.error).toBeUndefined();
+    await expect.poll(async () => (await rpc<RunSummary>(request, 'run.get', { runId: generated.result.id })).status, { timeout: 30_000 }).toBe('succeeded');
     await expect(candidate.locator('.shot-regeneration__comparison')).toContainText('候选旁白');
     expect(calls).toHaveLength(1); expect(calls[0]).toContain('配角阿宁'); expect(calls[0]).toContain('灰色斗篷');
     const ledger = await rpc<{ items: UsageRecord[] }>(request, 'cost.list', { projectId: project.id });

@@ -6,6 +6,14 @@ type DocumentRow = { cursor: number; body: string };
 type EventRow = { sequence: number; type: string; body: string; created_at: string };
 type ActivityRow = { cursor: number; activity_id: string; status: string; input_hash: string; remote_id: string | null; error: string | null; started_at: string; completed_at: string | null };
 
+export function activityNodeId(activityId: string, nodeIds: readonly string[]) {
+  return nodeIds.filter(id => activityId === id || activityId.startsWith(`${id}:`)).sort((left, right) => right.length - left.length)[0] ?? activityId.split(':')[0];
+}
+
+// Exact namespace matching keeps IDs containing ':' or SQL wildcard characters
+// distinct from another step's nested model/tool activities.
+const stepFilter = (column: string) => `(@nodeId IS NULL OR ((${column} = @nodeId OR substr(${column}, 1, length(@nodeId) + 1) = @nodeId || ':') AND NOT EXISTS (SELECT 1 FROM json_each(@nodes) other WHERE length(other.value) > length(@nodeId) AND (${column} = other.value OR substr(${column}, 1, length(other.value) + 1) = other.value || ':'))))`;
+
 export function createReadModels(database: Database.Database, store: DocumentStore) {
   function assetsVersion() {
     return Number((database.prepare("SELECT value FROM runtime_metadata WHERE key = 'assets-version'").get() as { value: string }).value);
@@ -33,17 +41,24 @@ export function createReadModels(database: Database.Database, store: DocumentSto
     const rows = database.prepare("SELECT rowid AS cursor, body FROM documents WHERE kind = 'run' AND (? IS NULL OR rowid < ?) AND (? IS NULL OR json_extract(body, '$.projectId') = ?) ORDER BY rowid DESC LIMIT ?").all(before ?? null, before ?? null, projectId ?? null, projectId ?? null, limit + 1) as DocumentRow[];
     return page(rows, limit, row => runSummary(JSON.parse(row.body)));
   }
-  function events(run: RunRecord, before: number | undefined, limit: number): RecordPage<RunEvent> {
-    const rows = database.prepare('SELECT sequence, type, body, created_at FROM execution_events WHERE run_id = ? AND (? IS NULL OR sequence < ?) ORDER BY sequence DESC LIMIT ?').all(run.id, before ?? null, before ?? null, limit + 1) as EventRow[];
+  function nodeIds(runId: string) {
+    const row = database.prepare("SELECT json_extract(body, '$.nodes') AS nodes FROM documents WHERE kind = 'run-snapshot' AND id = ?").get(runId) as { nodes: string | null } | undefined;
+    return row?.nodes ? (JSON.parse(row.nodes) as { id: string }[]).map(node => node.id) : [];
+  }
+  function events(run: RunRecord, before: number | undefined, limit: number, nodeId?: string): RecordPage<RunEvent> {
+    const ids = nodeIds(run.id);
+    const rows = database.prepare(`WITH entries AS (SELECT sequence, type, body, created_at, coalesce(json_extract(body, '$.nodeId'), json_extract(body, '$.activityId')) AS step_id FROM execution_events WHERE run_id = @runId AND (@before IS NULL OR sequence < @before)) SELECT sequence, type, body, created_at FROM entries WHERE ${stepFilter('step_id')} ORDER BY sequence DESC LIMIT @limit`).all({ runId: run.id, before: before ?? null, nodeId: nodeId ?? null, nodes: JSON.stringify(ids), limit: limit + 1 }) as EventRow[];
     return page(rows.map(row => ({ ...row, cursor: row.sequence })), limit, row => {
       const body = JSON.parse(row.body) as { message?: string; nodeId?: string; activityId?: string };
-      return { id: `event-${row.sequence}`, runId: run.id, projectId: run.projectId, sequence: row.sequence, type: row.type, message: body.message ?? '步骤结果已保存', nodeId: body.nodeId ?? body.activityId, createdAt: row.created_at };
+      const sourceId = body.nodeId ?? body.activityId;
+      return { id: `event-${row.sequence}`, runId: run.id, projectId: run.projectId, sequence: row.sequence, type: row.type, message: body.message ?? '步骤结果已保存', nodeId: sourceId ? activityNodeId(sourceId, ids) : undefined, createdAt: row.created_at };
     });
   }
-  function activities(runId: string, before: number | undefined, limit: number): RecordPage<ActivityRecord> {
+  function activities(runId: string, before: number | undefined, limit: number, nodeId?: string): RecordPage<ActivityRecord> {
     // Results are fetched through node.result; opening a log never transfers generated media payloads.
-    const rows = database.prepare('SELECT rowid AS cursor, activity_id, status, input_hash, remote_id, error, started_at, completed_at FROM activities WHERE run_id = ? AND (? IS NULL OR rowid < ?) ORDER BY rowid DESC LIMIT ?').all(runId, before ?? null, before ?? null, limit + 1) as ActivityRow[];
-    return page(rows, limit, row => ({ id: row.activity_id, runId, nodeId: row.activity_id.split(':')[0], status: (row.status === 'dispatched' ? 'submitted' : row.status) as ActivityRecord['status'], inputHash: row.input_hash, remoteTaskId: row.remote_id ?? undefined, attempt: 1, createdAt: row.started_at, updatedAt: row.completed_at ?? row.started_at, error: row.error ?? undefined }));
+    const ids = nodeIds(runId);
+    const rows = database.prepare(`SELECT rowid AS cursor, activity_id, status, input_hash, remote_id, error, started_at, completed_at FROM activities WHERE run_id = @runId AND (@before IS NULL OR rowid < @before) AND ${stepFilter('activity_id')} ORDER BY rowid DESC LIMIT @limit`).all({ runId, before: before ?? null, nodeId: nodeId ?? null, nodes: JSON.stringify(ids), limit: limit + 1 }) as ActivityRow[];
+    return page(rows, limit, row => ({ id: row.activity_id, runId, nodeId: activityNodeId(row.activity_id, ids), status: (row.status === 'dispatched' ? 'submitted' : row.status) as ActivityRecord['status'], inputHash: row.input_hash, remoteTaskId: row.remote_id ?? undefined, attempt: 1, createdAt: row.started_at, updatedAt: row.completed_at ?? row.started_at, error: row.error ?? undefined }));
   }
   function assets(before: number | undefined, limit: number, kind?: AssetRecord['kind']): RecordPage<AssetListItem> {
     const rows = database.prepare(`SELECT rowid AS cursor, body FROM documents WHERE kind = 'asset' AND coalesce(json_extract(body, '$.active'), 1) = 1 AND (? IS NULL OR rowid < ?) AND (? IS NULL OR json_extract(body, '$.kind') = ?) ORDER BY rowid DESC LIMIT ?`).all(before ?? null, before ?? null, kind ?? null, kind ?? null, limit + 1) as DocumentRow[];

@@ -1,10 +1,11 @@
 import { request as httpRequest, Agent } from 'node:http';
+import { randomUUID } from 'node:crypto';
 import type { Socket } from 'node:net';
 import { expect, test } from '@playwright/test';
 import { projectDetailSchema, projectSchema, workspaceSummarySchema } from '@video-quickly/contracts';
 
-test('completes each development RPC on its own connection even when the caller pools sockets', async ({ baseURL }) => {
-  const agent = new Agent({ keepAlive: true }), sockets = new Set<Socket>();
+test('reuses a development RPC connection across bursts and idle periods without repeating a write', async ({ baseURL }) => {
+  const agent = new Agent({ keepAlive: true, maxSockets: 1 }), sockets = new Set<Socket>();
   let calls = 0;
   function rpc(method: string, params: unknown = {}) {
     calls++;
@@ -15,7 +16,7 @@ test('completes each development RPC on its own connection even when the caller 
         response.on('error', reject); response.on('data', bytes => chunks.push(bytes));
         response.on('end', () => {
           try {
-            expect(response.statusCode).toBe(200); expect(response.headers.connection).toBe('close');
+            expect(response.statusCode).toBe(200); expect(response.headers.connection).toBe('keep-alive');
             const result = JSON.parse(Buffer.concat(chunks).toString('utf8'));
             expect(result.error).toBeUndefined(); resolve(result.result);
           } catch (error) { reject(error); }
@@ -25,10 +26,15 @@ test('completes each development RPC on its own connection even when the caller 
     });
   }
   try {
-    const project = projectSchema.parse(await rpc('project.create', { title: '开发连接生命周期验收' }));
+    const project = projectSchema.parse(await rpc('project.create', { title: `开发连接生命周期验收 ${randomUUID()}` }));
     expect(projectDetailSchema.parse(await rpc('project.get', { projectId: project.id })).project).toEqual(project);
     const summary = workspaceSummarySchema.parse(await rpc('workspace.summary'));
-    expect(summary.projects.filter(item => item.id === project.id)).toHaveLength(1);
-    expect(calls).toBe(3); expect(sockets.size).toBe(3);
+    expect(summary.projects.filter(item => item.title === project.title)).toHaveLength(1);
+    expect(calls).toBe(3); expect(sockets.size).toBe(1);
+    for (let index = 0; index < 64; index++) projectDetailSchema.parse(await rpc('project.get', { projectId: project.id }));
+    await new Promise(resolve => setTimeout(resolve, 6500));
+    const afterIdle = workspaceSummarySchema.parse(await rpc('workspace.summary'));
+    expect(afterIdle.projects.filter(item => item.title === project.title)).toHaveLength(1);
+    expect(calls).toBe(68); expect(sockets.size).toBe(1);
   } finally { agent.destroy(); }
 });

@@ -18,7 +18,7 @@ async function createProject(request: APIRequestContext, title: string, template
 async function openProject(page: Page, title: string) {
   await page.goto('/'); await page.getByRole('button', { name: '我的项目', exact: true }).click(); await page.locator('.project-card').filter({ hasText: title }).getByRole('button', { name: /继续创作/ }).click(); await expect(page.getByLabel('镜头标题', { exact: true })).toHaveValue('模板镜头');
 }
-async function save(page: Page) { const button = page.getByRole('button', { name: '保存镜头', exact: true }); if (await button.isEnabled()) await button.click(); await expect(button).toBeDisabled(); }
+async function save(page: Page) { const button = page.getByRole('button', { name: '保存镜头', exact: true }); await expect(button).not.toHaveAttribute('aria-busy', 'true'); if (await button.isEnabled()) await button.click(); await expect(button).toBeDisabled(); await expect(button).not.toHaveAttribute('aria-busy', 'true'); }
 function observe(page: Page) { const errors: string[] = []; page.on('pageerror', error => errors.push(error.message)); return errors; }
 async function canvasPixel(page: Page) { return page.locator('.preview-frame canvas').evaluate((element: HTMLCanvasElement) => [...element.getContext('2d')!.getImageData(Math.floor(element.width * .5), Math.floor(element.height * .6), 1, 1).data]); }
 async function openBatch(page: Page) {

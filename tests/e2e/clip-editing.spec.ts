@@ -59,6 +59,8 @@ async function seekFrames(page: Page, frames: number) {
 }
 
 async function dragBy(page: Page, handle: Locator, deltaX: number) {
+  await expect(handle).toBeEnabled();
+  await handle.click({ trial: true });
   const bounds = await handle.boundingBox();
   if (!bounds) throw new Error('时间轴拖动目标不可见');
   const x = bounds.x + bounds.width / 2, y = bounds.y + bounds.height / 2;

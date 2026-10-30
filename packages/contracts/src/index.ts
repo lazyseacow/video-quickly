@@ -346,6 +346,43 @@ export const projectSummarySchema = projectSchema.pick({ id: true, title: true, 
 export type ProjectSummary = z.infer<typeof projectSummarySchema>;
 export const runSummarySchema = runSchema.omit({ events: true, activities: true }).extend({ completedNodeIds: z.array(z.string()) });
 export type RunSummary = z.infer<typeof runSummarySchema>;
+export const runStepStatusSchema = z.enum(['pending', 'running', 'waiting_review', 'waiting_external', 'retry_scheduled', 'needs_attention', 'succeeded', 'failed', 'canceled', 'skipped', 'not_recorded']);
+export const runStepSummarySchema = z.object({
+  id: z.string().min(1), label: z.string(), kind: nodeKindSchema, description: z.string(), requiresReview: z.boolean(),
+  status: runStepStatusSchema, reason: z.string(), inputAvailable: z.boolean(), outputAvailable: z.boolean(),
+  activityCount: z.number().int().nonnegative(), unknownSubmission: z.boolean(),
+  startedAt: z.string().optional(), completedAt: z.string().optional(), error: z.string().optional(),
+});
+export type RunStepSummary = z.infer<typeof runStepSummarySchema>;
+export const runRecoverySchema = z.object({ review: z.boolean(), resume: z.boolean(), cancel: z.boolean(), restart: z.boolean(), reason: z.string() });
+export const runInspectionSchema = z.object({
+  run: runSummarySchema, projectTitle: z.string(), snapshotAvailable: z.boolean(), checkpointAvailable: z.boolean(),
+  steps: z.array(runStepSummarySchema).max(100), recovery: runRecoverySchema,
+  selected: z.object({
+    node: workflowNodeSchema, dependencies: z.array(z.string()),
+    model: z.object({ id: z.string(), name: z.string(), provider: modelSchema.shape.provider, model: z.string() }).optional(),
+    skills: z.array(z.object({ id: z.string(), name: z.string(), version: z.string(), enabled: z.boolean() })),
+    handlerVersion: z.number().int().optional(),
+  }).optional(),
+});
+export type RunInspection = z.infer<typeof runInspectionSchema>;
+export const runStepPayloadSchema = z.object({
+  runId: z.string(), nodeId: z.string(), kind: z.enum(['input', 'output']), available: z.boolean(),
+  value: jsonValueSchema.nullable(), inputHash: z.string().optional(), resolvedPromptRecorded: z.boolean().optional(),
+});
+export type RunStepPayload = z.infer<typeof runStepPayloadSchema>;
+export const stepOutputVersionSchema = z.object({
+  id: z.string(), nodeId: z.string(), label: z.string(), createdAt: z.string(), status: runStatusSchema,
+  projectRevision: z.number().int(), workflowVersion: z.number().int(),
+});
+export type StepOutputVersion = z.infer<typeof stepOutputVersionSchema>;
+export const runDiagnosticsSchema = z.object({ path: z.string(), bytes: z.number().int().nonnegative(), format: z.literal('json.gz') });
+export const runDiagnosticBundleSchema = z.object({
+  version: z.literal(1), captureStartedAt: z.string(), captureCompletedAt: z.string(),
+  inspection: runInspectionSchema, checkpoint: z.object({ available: z.boolean(), values: jsonValueSchema }), snapshot: jsonValueSchema.nullable(),
+  steps: z.array(z.object({ nodeId: z.string(), input: runStepPayloadSchema, output: runStepPayloadSchema })),
+  events: z.array(jsonValueSchema), activities: z.array(jsonValueSchema),
+});
 export const workspaceSummarySchema = z.object({
   projects: z.array(projectSummarySchema), models: z.array(modelSchema), skills: z.array(skillSchema), system: systemSchema,
   version: z.number().int().nonnegative(), assetsVersion: z.number().int().nonnegative(),

@@ -21,7 +21,7 @@ async function open(page: Page, title: string, flow = true) {
   if (flow) { await page.getByRole('button', { name: '流程', exact: true }).click(); await expect(page.locator('.react-flow')).toBeVisible(); }
 }
 const node = (page: Page, id: string) => page.locator(`.react-flow__node[data-id="${id}"]`);
-async function save(page: Page) { const button = page.getByRole('button', { name: '保存流程', exact: true }); await expect(button).toBeEnabled(); await button.click(); await expect(button).toBeDisabled(); }
+async function save(page: Page) { const button = page.getByRole('button', { name: '保存流程', exact: true }); await expect(button).toBeEnabled(); await button.click(); await expect(button).toBeDisabled(); await expect(button).not.toHaveAttribute('aria-busy', 'true'); }
 async function history(page: Page, name: '撤销' | '重做') { const button = page.getByRole('button', { name, exact: true }); await expect(button).toBeEnabled(); await button.click(); }
 async function center(element: Locator) { const box = await element.boundingBox(); if (!box) throw new Error('连接点不可见'); return { x: box.x + box.width / 2, y: box.y + box.height / 2 }; }
 async function connect(page: Page, from: string, to: string) {
@@ -65,7 +65,7 @@ test('groups real node dragging and text edits, restoring shared history and ser
   await history(page, '撤销');
   await expect(page.getByLabel('步骤名称', { exact: true })).toHaveValue('新的简报');
   await history(page, '撤销'); await expect(page.getByLabel('步骤名称', { exact: true })).toHaveValue('简报 A');
-  await history(page, '重做'); await history(page, '重做'); await expect(page.getByRole('button', { name: '保存流程', exact: true })).toBeDisabled();
+  await history(page, '重做'); await history(page, '重做'); await expect(page.getByRole('button', { name: '保存流程', exact: true })).toBeDisabled(); await expect(page.getByRole('button', { name: '保存流程', exact: true })).not.toHaveAttribute('aria-busy', 'true');
   const saved = await current(request, project.id); expect(saved.workflow.nodes[0].position).not.toEqual(project.workflow.nodes[0].position);
   expect(saved.workflow.version).toBe(project.workflow.version + 2);
   await page.reload(); await open(page, project.title); await node(page, 'a').click(); await history(page, '撤销');
