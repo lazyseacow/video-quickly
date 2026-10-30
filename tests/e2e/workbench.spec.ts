@@ -90,6 +90,14 @@ for (const reducedMotion of ['no-preference', 'reduce'] as const) {
     const errors: string[] = [];
     page.on('pageerror', error => errors.push(error.message));
     page.on('console', message => { if (message.type() === 'error') errors.push(message.text()); });
+    page.on('requestfailed', request => {
+      if (request.failure()?.errorText === 'net::ERR_NO_BUFFER_SPACE') {
+        const url = new URL(request.url());
+        const body: unknown = url.pathname === '/__desktop_rpc' ? request.postDataJSON() : undefined;
+        const operation = body && typeof body === 'object' && 'method' in body && typeof body.method === 'string' ? body.method : '';
+        errors.push(`网络资源不足：${request.method()} ${url.origin}${url.pathname}${operation ? ` · ${operation}` : ''}`);
+      }
+    });
     await page.emulateMedia({ reducedMotion });
     const title = `动效交互验收 ${reducedMotion}`;
     const created = await request.post('/__desktop_rpc', { data: { method: 'project.create', params: { title } } });

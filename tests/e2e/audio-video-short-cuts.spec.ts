@@ -166,8 +166,9 @@ test('keeps EDL playback advancing across the short gap without decoded-frame ca
   await page.getByRole('button', { name: '播放预览', exact: true }).click();
   await expect(page.getByRole('button', { name: '暂停预览', exact: true })).toBeVisible();
   await expect(page.getByRole('button', { name: '播放预览', exact: true })).toBeVisible({ timeout: 5000 });
+  // The clock stops before an asynchronous accurate seek necessarily paints its final frame.
+  await expect.poll(async () => color(await pixel())).toBe('blue');
   const colors = await samples.evaluate(value => { value.stop(); return value.state.colors; }); await samples.dispose();
   expect(colors.filter((value, index) => !index || value !== colors[index - 1])).toEqual(['green', 'blue']);
-  await expect.poll(async () => color(await pixel())).toBe('blue');
   await info.attach('fallback-canvas-colors.json', { body: JSON.stringify(colors), contentType: 'application/json' });
 });

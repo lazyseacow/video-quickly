@@ -5,6 +5,8 @@ import { effectiveCaptionStyle, type AssetRecord, type ProjectDocument, type Sho
 import { getAssetUrl } from '../lib/client';
 import { CircleAlert, LoaderCircle, RefreshCw, Upload } from 'lucide-react';
 import { createPreviewVideoController, loadPreviewImage, previewAssetKey } from './preview-media';
+import { videoThumbnails, type ThumbnailFrame } from './preview-thumbnails';
+import { useThumbnailVisibility } from './thumbnail-visibility';
 
 interface ScenePreviewProps {
   project: Pick<ProjectDocument, 'profile'> & Partial<Pick<ProjectDocument, 'claims' | 'researchSources' | 'referenceDisplay' | 'shots' | 'captionStyle' | 'clipEditSources' | 'clipEditPlans'>>;
@@ -28,6 +30,8 @@ export const ScenePreview = memo(function ScenePreview({ project, shot, shotInde
   const previousImageRetry = useRef(0);
   const [image, setImage] = useState<{ key: string; element: HTMLImageElement }>();
   const [video, setVideo] = useState<{ key: string; element: HTMLVideoElement }>();
+  const [still, setStill] = useState<{ key: string; frame: ThumbnailFrame }>();
+  const { container, visible } = useThumbnailVisibility(thumbnail);
   const [mediaError, setMediaError] = useState<{ key: string; message: string }>();
   const [retry, setRetry] = useState(0);
   const templateActive = Boolean(shot.sceneTemplate);
@@ -44,8 +48,6 @@ export const ScenePreview = memo(function ScenePreview({ project, shot, shotInde
   let resolutionError = '', resolvedTime = { videoUs: 0, discontinuityKey: 'invalid', spanIndex: 0 };
   try { resolvedTime = resolveShotTime(shot, project, timeUs); }
   catch (failure) { resolutionError = failure instanceof Error ? failure.message : String(failure); }
-  const error = resolutionError || (!templateActive && mediaError?.key === mediaKey ? mediaError.message : '');
-  const loading = !error && (hasVideo ? !activeVideo : hasImage ? !activeImage : false);
   const discontinuityKey = JSON.stringify([shot.id, shot.sourceInUs, shot.videoInUs, resolvedTime.discontinuityKey]);
   const videoSpans = useMemo(() => {
     if (!shot.clipEdit) return [];
@@ -60,6 +62,11 @@ export const ScenePreview = memo(function ScenePreview({ project, shot, shotInde
     const scale = Math.min(project.profile.previewScale, (thumbnail ? 420 : 1280) / project.profile.width);
     return { ...project.profile, width: Math.max(64, Math.round(project.profile.width * scale)), height: Math.max(64, Math.round(project.profile.height * scale)) };
   }, [project.profile.width, project.profile.height, project.profile.previewScale, project.profile.fitMode, project.profile.frameRate.numerator, project.profile.frameRate.denominator, thumbnail]);
+  const thumbnailKey = JSON.stringify([mediaKey, resolvedTime.videoUs, profile.width, profile.height]);
+  const activeStill = still?.key === thumbnailKey ? still.frame : undefined;
+  const mediaErrorKey = thumbnail && hasVideo ? thumbnailKey : mediaKey;
+  const error = visible ? resolutionError || (!templateActive && mediaError?.key === mediaErrorKey ? mediaError.message : '') : '';
+  const loading = visible && !error && (hasVideo ? thumbnail ? !activeStill : !activeVideo : hasImage ? !activeImage : false);
   const frameSize = useRef({ width: profile.width, height: profile.height }); frameSize.current = profile;
 
   const requestRender = useCallback(() => {
@@ -71,6 +78,7 @@ export const ScenePreview = memo(function ScenePreview({ project, shot, shotInde
   }, []);
 
   useEffect(() => {
+    if (!visible) { setImage(undefined); return; }
     if (!hasImage) return;
     if (!imageAsset) { setMediaError({ key: mediaKey, message: '未找到镜头图片素材' }); return; }
     let active = true;
@@ -83,10 +91,22 @@ export const ScenePreview = memo(function ScenePreview({ project, shot, shotInde
       if (active) setMediaError({ key: mediaKey, message: '图片素材无法读取或解码' });
     });
     return () => { active = false; };
-  }, [imageKey, shot.assetId, hasImage, retry]);
+  }, [imageKey, shot.assetId, hasImage, retry, visible]);
 
   useEffect(() => {
-    if (!hasVideo) return;
+    if (!thumbnail || !hasVideo) return;
+    if (!visible) { setStill(undefined); return; }
+    if (!videoAsset) { setMediaError({ key: mediaErrorKey, message: '未找到镜头视频素材' }); return; }
+    if (resolutionError) return;
+    const controller = new AbortController(); setMediaError(undefined);
+    void videoThumbnails.read({ asset: videoAsset, timeUs: resolvedTime.videoUs, width: profile.width, height: profile.height }, controller.signal)
+      .then(frame => { if (!controller.signal.aborted) setStill({ key: thumbnailKey, frame }); })
+      .catch(error => { if (!controller.signal.aborted) setMediaError({ key: mediaErrorKey, message: error instanceof Error ? error.message : '视频缩略图无法读取' }); });
+    return () => controller.abort();
+  }, [thumbnail, visible, hasVideo, videoKey, resolvedTime.videoUs, profile.width, profile.height, thumbnailKey, resolutionError]);
+
+  useEffect(() => {
+    if (!hasVideo || thumbnail) return;
     if (!videoAsset) { setMediaError({ key: mediaKey, message: '未找到镜头视频素材' }); return; }
     let active = true;
     setMediaError(undefined);
@@ -118,16 +138,18 @@ export const ScenePreview = memo(function ScenePreview({ project, shot, shotInde
   useEffect(() => {
     draw.current = () => {
       const target = canvas.current;
-      if (!target || error || loading) return;
-      if (hasVideo && (!activeVideo || activeVideo.readyState < 2 || activeVideo.seeking)) return;
-      const videoFrame = activeVideo ? videoController.current?.frameForPaint(videoRange) : undefined;
+      if (!target) return;
+      if (!visible) { target.width = target.height = 1; return; }
+      if (error || loading) return;
+      if (hasVideo && !thumbnail && (!activeVideo || activeVideo.readyState < 2 || activeVideo.seeking)) return;
+      const videoFrame = thumbnail ? activeStill?.image : activeVideo ? videoController.current?.frameForPaint(videoRange) : undefined;
       if (hasVideo && !videoFrame) return;
       if (target.width !== profile.width) target.width = profile.width;
       if (target.height !== profile.height) target.height = profile.height;
       drawSceneFrame(target, { title: shot.title, narration: shot.narration, sceneTemplate: shot.sceneTemplate, captionTrack: shot.captionTrack, clipEdit: shot.clipEdit, clipEditContext: project, sourceInUs: shot.sourceInUs, audioInUs: shot.audioInUs, videoInUs: shot.videoInUs, shotIndex, sceneIndex: shot.sceneIndex, profile, durationUs: shot.durationUs, sceneInUs: shot.sceneInUs, sceneDurationUs: shot.sceneDurationUs, animation: shot.animation, image: videoFrame ?? activeImage, citation, referenceFooter, captionStyle }, timeUs);
     };
     requestRender();
-  }, [profile, shot.title, shot.narration, shot.sceneTemplate, shot.captionTrack, shot.clipEdit, project.clipEditSources, project.clipEditPlans, shot.sourceInUs, shot.audioInUs, shot.videoInUs, shot.durationUs, shot.sceneInUs, shot.sceneDurationUs, hasVideo, shot.animation, shotIndex, shot.sceneIndex, timeUs, activeImage, activeVideo, videoRange?.startUs, videoRange?.endUs, error, loading, citation, referenceFooter, captionStyle, requestRender]);
+  }, [profile, shot.title, shot.narration, shot.sceneTemplate, shot.captionTrack, shot.clipEdit, project.clipEditSources, project.clipEditPlans, shot.sourceInUs, shot.audioInUs, shot.videoInUs, shot.durationUs, shot.sceneInUs, shot.sceneDurationUs, hasVideo, shot.animation, shotIndex, shot.sceneIndex, timeUs, activeImage, activeVideo, activeStill, thumbnail, visible, videoRange?.startUs, videoRange?.endUs, error, loading, citation, referenceFooter, captionStyle, requestRender]);
 
   useEffect(() => {
     document.addEventListener('visibilitychange', requestRender);
@@ -138,5 +160,5 @@ export const ScenePreview = memo(function ScenePreview({ project, shot, shotInde
     };
   }, [requestRender]);
 
-  return <span className={`scene-preview ${thumbnail ? 'scene-preview--thumbnail' : ''}`} aria-busy={loading}><canvas ref={canvas} className={className} role="img" aria-label={`${shot.title} · 镜头预览`} style={error || loading ? { visibility: 'hidden' } : undefined} />{(error || loading) && <span className="scene-preview__state" role={error ? 'alert' : 'status'}>{error ? <CircleAlert size={thumbnail ? 18 : 27} /> : <LoaderCircle className="spin" size={thumbnail ? 18 : 27} />}<strong>{error || '正在读取素材…'}</strong>{error && !thumbnail && <><span>检查源文件，或为这个镜头重新导入素材。</span><span className="scene-preview__actions"><button type="button" onClick={() => setRetry(value => value + 1)}><RefreshCw size={15} />重新读取</button>{onRepair && <button type="button" onClick={onRepair}><Upload size={15} />重新导入</button>}</span></>}</span>}</span>;
+  return <span ref={container} className={`scene-preview ${thumbnail ? 'scene-preview--thumbnail' : ''}`} aria-busy={loading}><canvas ref={canvas} className={className} role="img" aria-label={`${shot.title} · 镜头预览`} style={error || loading ? { visibility: 'hidden' } : undefined} />{(error || loading) && <span className="scene-preview__state" role={error ? 'alert' : 'status'}>{error ? <CircleAlert size={thumbnail ? 18 : 27} /> : <LoaderCircle className="spin" size={thumbnail ? 18 : 27} />}<strong>{error || '正在读取素材…'}</strong>{error && !thumbnail && <><span>检查源文件，或为这个镜头重新导入素材。</span><span className="scene-preview__actions"><button type="button" onClick={() => setRetry(value => value + 1)}><RefreshCw size={15} />重新读取</button>{onRepair && <button type="button" onClick={onRepair}><Upload size={15} />重新导入</button>}</span></>}</span>}</span>;
 });
