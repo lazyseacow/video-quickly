@@ -113,7 +113,7 @@ Chromium 堆不等于进程私有内存或 GPU 显存；该工具明确记录 `n
 
 ## 完成判定
 
-本轮合并代码已通过完整工作区类型检查和构建，以及 585／585 项自动测试，包含仓库外完整打包组件的中英文 PDF 解析，零跳过。本机 FFmpeg 通过容器运行，完整测试使用 `pnpm test --maxWorkers=2`，保留原超时和业务断言，避免容器并发争用；原始结果为 `/tmp/vq-final-unit-bounded.json`。独立打包 stdio 验收另覆盖两层子流程逐次审阅与重启、两镜头原生 Send 并行及应用回执重用、首请求失败后阻止排队镜头与未知提交防重；其证据为 `/var/folders/3d/l2gcznsn6cgdwr09q4vv_zrw0000gn/T/vq-packaged-native-review-pQMj1j/evidence.json`。合并后的 206／206 条浏览器流程通过，零跳过／重试，耗时约 6.8 分钟；报告为 `/tmp/vq-final-browser-results.json`，截图和 trace 目录为 `/tmp/vq-final-browser-artifacts`。推送后的 Windows CI 结果以对应提交的 Actions 为准。
+首个集成提交 `dfb0fbc` 已通过完整工作区类型检查和构建，以及 585／585 项自动测试，包含仓库外完整打包组件的中英文 PDF 解析，零跳过。本机 FFmpeg 通过容器运行，完整测试使用 `pnpm test --maxWorkers=2`，保留原超时和业务断言，避免容器并发争用；原始结果为 `/tmp/vq-final-unit-bounded.json`。独立打包 stdio 验收另覆盖两层子流程逐次审阅与重启、两镜头原生 Send 并行及应用回执重用、首请求失败后阻止排队镜头与未知提交防重；其证据为 `/var/folders/3d/l2gcznsn6cgdwr09q4vv_zrw0000gn/T/vq-packaged-native-review-pQMj1j/evidence.json`。合并后的 206／206 条浏览器流程通过，零跳过／重试，耗时约 6.8 分钟；报告为 `/tmp/vq-final-browser-results.json`，截图和 trace 目录为 `/tmp/vq-final-browser-artifacts`。推送后的 Windows CI 结果以对应提交的 Actions 为准。
 
 | 范围 | 必须具备的证据 | 本轮状态 |
 | --- | --- | --- |

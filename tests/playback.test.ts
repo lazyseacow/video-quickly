@@ -34,6 +34,53 @@ describe('local preview clock', () => {
     clock.step(-10); expect(clock.getSnapshot().timeUs).toBe(0);
   });
 
+  it('records explicit transport intent even on the same frame, without treating ticks or internal pauses as commands', () => {
+    const clock = new PlaybackClock(10_000_000, { numerator: 30000, denominator: 1001 });
+    const initial = clock.getSnapshot();
+    expect(clock.transportRevision).toBe(0);
+    clock.seek(0);
+    expect(clock.getSnapshot()).toBe(initial);
+    expect(clock.transportRevision).toBe(1);
+    for (let index = 0; index < 6; index++) clock.step(10);
+    expect(clock.getSnapshot()).toEqual({ playing: false, timeUs: 2_002_000 });
+    expect(clock.transportRevision).toBe(7);
+    clock.toggle();
+    expect(clock.transportRevision).toBe(8);
+    advance(1000);
+    expect(clock.transportRevision).toBe(8);
+    clock.pause();
+    expect(clock.transportRevision).toBe(8);
+    clock.configure(9_000_000, { numerator: 30, denominator: 1 });
+    expect(clock.transportRevision).toBe(8);
+    clock.toggle(); clock.toggle();
+    expect(clock.transportRevision).toBe(10);
+    expect(clock.getSnapshot().playing).toBe(false);
+  });
+
+  it('positions deferred selections only while their transport intent is current, preserving consecutive selections', () => {
+    const clock = new PlaybackClock(10_000_000, { numerator: 30000, denominator: 1001 });
+    const revision = clock.transportRevision;
+    clock.seekIfUnchanged(revision, 3_000_000);
+    expect(clock.getSnapshot().timeUs).toBe(3_003_000);
+    clock.seekIfUnchanged(revision, 4_500_000);
+    expect(clock.getSnapshot().timeUs).toBe(4_504_500);
+    clock.seek(0);
+    const homeRevision = clock.transportRevision;
+    clock.seek(0);
+    clock.seekIfUnchanged(homeRevision, 3_000_000);
+    expect(clock.getSnapshot().timeUs).toBe(0);
+    const current = clock.transportRevision;
+    clock.configure(12_000_000, { numerator: 30, denominator: 1 });
+    clock.pause();
+    clock.seekIfUnchanged(current, 3_000_000);
+    expect(clock.getSnapshot().timeUs).toBe(3_000_000);
+    clock.toggle();
+    advance(1000);
+    clock.seekIfUnchanged(current, 0);
+    expect(clock.getSnapshot()).toEqual({ playing: true, timeUs: 4_000_000 });
+    clock.dispose();
+  });
+
   it('stops on the final valid frame, can replay and pauses without background ticks', () => {
     const clock = new PlaybackClock(500_000, { numerator: 120, denominator: 1 });
     clock.toggle(); advance(500);

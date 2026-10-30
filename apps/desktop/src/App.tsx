@@ -490,11 +490,12 @@ function Workbench({ project, workspace, action, notify, onRegisterSave, outputR
     window.addEventListener('keydown', keydown); return () => window.removeEventListener('keydown', keydown);
   }, [clock, save, totalUs, view, selectedShotId, profile.frameRate, savingEdits]);
   async function selectShot(id: string, modifiers?: SelectionModifiers) {
-    if ((dirtyShot || dirtyProject) && !await save()) return;
+    const transportRevision = clock.transportRevision;
+    if ((saveInFlight.current || dirtyShot || dirtyProject) && !await save()) return;
     const next = updateShotSelection(selectionRef.current, session.state.present.shots.map(shot => shot.id), id, modifiers);
     setSelection(next); setInspectorTab('shot');
     const clip = buildTimeline(timingContent().shots).find(item => item.shotId === (next.primary ?? id));
-    if (clip) clock.seek(clip.startUs);
+    if (clip) clock.seekIfUnchanged(transportRevision, clip.startUs);
   }
   function timingContent(current = session.state.present, ids?: readonly string[]): EditContent {
     const resolved = measuredShots(current.shots);

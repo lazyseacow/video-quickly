@@ -2,6 +2,7 @@ import { expect, test, type APIRequestContext, type Locator, type Page } from '@
 import type { ProjectDocument } from '@video-quickly/contracts';
 
 const frameUs = 1_000_000 * 1001 / 30000;
+const selectionModifier: 'Meta' | 'Control' = process.platform === 'darwin' ? 'Meta' : 'Control';
 
 async function rpc<T>(request: APIRequestContext, method: string, params: unknown = {}): Promise<T> {
   const response = await request.post('/__desktop_rpc', { data: { method, params } });
@@ -71,6 +72,66 @@ async function dragBy(page: Page, handle: Locator, deltaX: number) {
   await page.mouse.up();
 }
 
+for (const transport of ['rapid frames', 'pressed frames', 'unchanged Home', 'no newer command', 'newer shot selection', 'additive shot selection'] as const) {
+  test(`keeps newer keyboard transport after a delayed shot-selection save: ${transport}`, async ({ page, request }, info) => {
+    const errors = observeErrors(page);
+    const project = await createProject(request, `保存等待期间的播放头定位 ${transport}`);
+    await openProject(page, project.title);
+    let releaseSave!: () => void, committedSave!: () => void;
+    const released = new Promise<void>(resolve => { releaseSave = resolve; });
+    const committed = new Promise<void>(resolve => { committedSave = resolve; });
+    let intercepted = false;
+    await page.route('**/__desktop_rpc', async route => {
+      const body = route.request().postDataJSON();
+      if (intercepted || body.method !== 'project.update' || body.params?.projectId !== project.id) { await route.continue(); return; }
+      intercepted = true;
+      const response = await route.fetch();
+      committedSave();
+      await released;
+      await route.fulfill({ response });
+    });
+    try {
+      await page.getByLabel('镜头标题').fill('保存中的第一镜头');
+      await page.locator('.outline-shot').nth(1).click();
+      // The server commit is durable, but the selecting click still awaits its
+      // acknowledgement. Keyboard intent must survive that late continuation.
+      await committed;
+      expect((await savedProject(request, project.id)).shots[0].title).toBe('保存中的第一镜头');
+      const ruler = page.getByRole('slider', { name: '预览播放位置', exact: true });
+      await ruler.focus();
+      const framesRequested = transport === 'rapid frames' || transport === 'pressed frames';
+      if (transport === 'rapid frames') {
+        // Dispatch a burst in one browser task, before any animation frame or
+        // React render can occur between commands.
+        await ruler.evaluate(element => {
+          for (let index = 0; index < 6; index++) element.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight', code: 'ArrowRight', shiftKey: true, bubbles: true, cancelable: true }));
+        });
+        await expect(ruler).toHaveAttribute('aria-valuenow', '2002');
+      } else if (transport === 'pressed frames') {
+        for (let index = 0; index < 6; index++) await ruler.press('Shift+ArrowRight');
+        await expect(ruler).toHaveAttribute('aria-valuenow', '2002');
+      } else if (transport === 'unchanged Home') {
+        await expect(ruler).toHaveAttribute('aria-valuenow', '0');
+        await ruler.press('Home');
+        await expect(ruler).toHaveAttribute('aria-valuenow', '0');
+      } else if (transport === 'newer shot selection' || transport === 'additive shot selection') {
+        await page.locator('.outline-shot').nth(2).click({ modifiers: transport === 'additive shot selection' ? [selectionModifier] : [] });
+      }
+      releaseSave();
+      const nextSelection = transport === 'newer shot selection' || transport === 'additive shot selection';
+      await expect(page.getByLabel('镜头标题')).toHaveValue(nextSelection ? '裁剪镜头 3' : '裁剪镜头 2');
+      await expect(ruler).toHaveAttribute('aria-valuenow', framesRequested ? '2002' : transport === 'unchanged Home' ? '0' : nextSelection ? '4505' : '3003');
+      if (transport === 'additive shot selection') {
+        await expect(page.locator('.outline-shot').nth(0)).toHaveAttribute('aria-pressed', 'false');
+        await expect(page.locator('.outline-shot').nth(1)).toHaveAttribute('aria-pressed', 'true');
+        await expect(page.locator('.outline-shot').nth(2)).toHaveAttribute('aria-pressed', 'true');
+      }
+      if (framesRequested) await page.screenshot({ path: info.outputPath('delayed-selection-keeps-60-frames.png') });
+      await expectHealthy(page, errors);
+    } finally { releaseSave(); }
+  });
+}
+
 test('splits at 29.97 fps with continuous source ranges and restores undo/redo after reload', async ({ page, request }, info) => {
   const errors = observeErrors(page);
   const project = await createProject(request, '分数帧率分割与恢复验收', 500_500);
@@ -122,6 +183,7 @@ test('splits at 29.97 fps with continuous source ranges and restores undo/redo a
   await page.getByRole('button', { name: '撤销', exact: true }).click();
   await expect.poll(async () => (await savedProject(request, project.id)).shots).toEqual(project.shots);
   await seekFrames(page, 30);
+  await expect(split).toBeEnabled();
   await page.keyboard.press('s');
   await expect.poll(async () => (await savedProject(request, project.id)).shots.length).toBe(4);
   expect((await savedProject(request, project.id)).revision).toBe(project.revision + 7);
