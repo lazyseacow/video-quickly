@@ -193,8 +193,17 @@ it('recovers parallel media receipts after SIGKILL while preserving completed si
 it('never repeats an unknown parallel submission after SIGKILL and reopening the same journal', async () => {
   const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=', 'base64');
   let posts = 0, received!: () => void; const ambiguous = new Promise<void>(resolve => { received = resolve; }); let base = '';
+  const submissions: { name: string; operationId: string | string[] | undefined }[] = [];
+  const httpEvents: string[] = [];
   const server = createServer(async (request, response) => {
-    if (request.method === 'POST') { posts++; let text = ''; for await (const chunk of request) text += chunk; const name = JSON.parse(text).name; if (name === 'shot-1') { received(); return; } response.setHeader('Content-Type', 'application/json'); response.end(JSON.stringify({ url: `${base}/asset/${name}` })); return; }
+    if (request.method === 'POST') {
+      posts++; let text = ''; for await (const chunk of request) text += chunk; const name = JSON.parse(text).name;
+      submissions.push({ name, operationId: request.headers['idempotency-key'] });
+      response.on('finish', () => httpEvents.push(`${name}:finish`));
+      response.on('close', () => httpEvents.push(`${name}:close:${response.writableFinished}`));
+      if (name === 'shot-1') { received(); return; }
+      response.setHeader('Content-Type', 'application/json'); response.end(JSON.stringify({ url: `${base}/asset/${name}` })); return;
+    }
     response.end(png);
   });
   compositionServers.push(server); await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve)); const address = server.address(); if (!address || typeof address === 'string') throw new Error('Missing address'); base = `http://127.0.0.1:${address.port}`;
@@ -204,7 +213,20 @@ it('never repeats an unknown parallel submission after SIGKILL and reopening the
   await first.request('project.update', { projectId: project.id, revision: project.revision, patch: { shots: [0, 1].map(index => ({ id: `shot-${index}`, title: `镜头${index}`, narration: `shot-${index}`, visualPrompt: '', durationUs: 1_000_000 })), workflow: { id: 'parallel', version: 1, name: 'parallel', nodes: [{ id: 'images', kind: 'assets', label: '图片', modelId: model.id }], edges: [], execution: { maxConcurrentShots: 2, modelLimits: { [model.id]: 2 } } } } });
   const run = await first.request<RunRecord>('run.start', { projectId: project.id }); await ambiguous;
   const receipt = join(directory, 'projects', project.id, 'activities', createHash('sha256').update(`${run.id}:images`).digest('hex').slice(0, 24), `${createHash('sha256').update('shot-0').digest('hex').slice(0, 24)}.receipt.json`);
-  await expect.poll(async () => { try { return JSON.parse(await readFile(receipt, 'utf8')).state; } catch { return ''; } }, { timeout: processTimeout }).toBe('completed'); await first.kill(); expect(posts).toBe(2);
+  try {
+    await expect.poll(async () => { try { return JSON.parse(await readFile(receipt, 'utf8')).state; } catch { return ''; } }, { timeout: processTimeout }).toBe('completed');
+  } catch (error) {
+    const value = JSON.parse(await readFile(receipt, 'utf8'));
+    const observer = openDatabase(directory);
+    try {
+      const nativeErrors = observer.prepare("SELECT task_id, type, value FROM writes WHERE thread_id = ? AND channel = '__error__'").all(`${run.id}:media:images`).map(row => {
+        const entry = row as { task_id: string; type: string; value: Buffer };
+        return { taskId: entry.task_id, type: entry.type, error: entry.value.toString('utf8') };
+      });
+      throw new Error(`Completed sibling receipt failed: ${JSON.stringify({ submissions, httpEvents, receipt: { state: value.state, taskId: value.taskId, hasDownloadUrl: Boolean(value.downloadUrl), hasBase64: Boolean(value.base64), error: value.error }, nativeErrors })}`, { cause: error });
+    } finally { observer.close(); }
+  }
+  await first.kill(); expect(posts).toBe(2);
   const second = new RpcProcess(directory); await second.request('run.resume', { runId: run.id });
   await expect.poll(async () => (await second.request<WorkspaceSnapshot>('workspace.snapshot')).runs.find(value => value.id === run.id)?.status, { timeout: processTimeout }).toBe('failed'); expect(posts).toBe(2);
   const inspection = await second.request<RunInspection>('run.inspect', { runId: run.id }); expect(inspection.steps[0].reason).toContain('核对');
