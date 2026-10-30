@@ -67,7 +67,7 @@ test('retains an unavailable saved model until the user chooses a compatible rep
   const text = source.models.find(model => model.capabilities.includes('text'))!;
   await selector.selectOption(text.id); await expect(dialog.getByRole('button', { name: '执行', exact: true })).toBeEnabled();
   await dialog.getByRole('button', { name: '保存', exact: true }).click(); await expect(dialog).toHaveCount(0);
-  await page.getByRole('region', { name: '制作指引', exact: true }).getByRole('button', { name: '高级编排', exact: true }).click();
+  await page.getByRole('button', { name: '流程', exact: true }).click();
   await page.locator('.react-flow__node[data-id="script"]').click();
   const graphSelector = page.getByLabel('使用模型', { exact: true }); await expect(graphSelector).toHaveValue(text.id);
   for (const other of source.models.filter(model => model.id !== text.id)) await expect(graphSelector.locator(`option[value="${other.id}"]`)).toHaveCount(0);
