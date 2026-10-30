@@ -1,4 +1,4 @@
-import { cp, mkdir, readdir, rename, rm, stat, writeFile, readFile, realpath } from 'node:fs/promises';
+import { cp, mkdir, readdir, rename, rm, stat, writeFile, readFile, realpath, symlink } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import { dirname, join, resolve } from 'node:path';
@@ -7,6 +7,7 @@ const root=resolve(dirname(fileURLToPath(import.meta.url)),'..');
 const generated=join(root,'.generated');
 const sidecar=join(generated,'sidecar');
 const stage=join(generated,`sidecar-stage-${Date.now()}`);
+const development=process.argv.includes('--development');
 await mkdir(generated,{recursive:true});
 const runtime=join(root,'packages/runtime/dist/main.mjs');
 await stat(runtime);
@@ -40,7 +41,10 @@ const fromPdf=await copyModule('pdf-parse',fromIntegrations);
 await copyModule('pdfjs-dist',fromPdf);
 await writeFile(join(stage,'package.json'),JSON.stringify({name:'video-quickly-runtime',version:'0.1.0',private:true,type:'module'}));
 await cp(runtime,join(stage,'runtime.mjs'));
-await cp(process.execPath,join(stage,process.platform==='win32'?'node.exe':'node'));
+// Homebrew Node depends on libraries beside its original executable.
+// A development link preserves those paths; release bundles still copy Node.
+if(development&&process.platform!=='win32')await symlink(process.execPath,join(stage,'node'));
+else await cp(process.execPath,join(stage,process.platform==='win32'?'node.exe':'node'));
 const mediaRoot=process.env.VIDEO_QUICKLY_MEDIA_DIR;
 if(mediaRoot){
   const mediaSource=resolve(mediaRoot);
@@ -49,7 +53,7 @@ if(mediaRoot){
   if(hasBin)await cp(join(mediaSource,'LICENSE.txt'),join(stage,'media','LICENSE-FFmpeg.txt'));
   await cp(join(mediaSource,'provenance.json'),join(stage,'media','provenance.json'));
 }
-else{
+else if(process.platform==='win32'){
   const tools=join(root,'.tools');
   const entries=await readdir(tools,{withFileTypes:true}).catch(()=>[]);
   const mediaLock=JSON.parse(await readFile(join(root,'scripts','media-manifest.json'),'utf8'));
@@ -62,17 +66,25 @@ else{
     await cp(provenance,join(stage,'media','provenance.json'));
   }
 }
-for(const executable of ['ffmpeg.exe','ffprobe.exe'])await stat(join(stage,'media',executable));
-const mediaProvenance=JSON.parse(await readFile(join(stage,'media','provenance.json'),'utf8'));
-await writeFile(join(stage,'media','SOURCE.txt'),[
-  'FFmpeg is a separately licensed executable component.',
-  'The bundled build license is included in LICENSE-FFmpeg.txt.',
-  `FFmpeg corresponding source: ${mediaProvenance.correspondingSource}`,
-  `Build scripts and dependency source recipes: ${mediaProvenance.source}`,
-  'Exact build, download location and archive checksum are recorded in provenance.json.',
-].join('\n'));
-const nodeLicense=join(dirname(process.execPath),'LICENSE');
-if(await stat(nodeLicense).then(()=>true,()=>false))await cp(nodeLicense,join(stage,'LICENSE-Node.txt'));
+const hasMedia=await stat(join(stage,'media')).then(value=>value.isDirectory(),()=>false);
+if(!hasMedia&&(!development||process.platform==='win32'))throw new Error('未找到 FFmpeg 媒体组件。Windows 请先运行 pnpm prepare:media；其他平台打包需通过 VIDEO_QUICKLY_MEDIA_DIR 提供对应平台的组件及许可来源。');
+if(hasMedia){
+  const extension=process.platform==='win32'?'.exe':'';
+  for(const executable of ['ffmpeg','ffprobe'])await stat(join(stage,'media',`${executable}${extension}`));
+  const mediaProvenance=JSON.parse(await readFile(join(stage,'media','provenance.json'),'utf8'));
+  await writeFile(join(stage,'media','SOURCE.txt'),[
+    'FFmpeg is a separately licensed executable component.',
+    'The bundled build license is included in LICENSE-FFmpeg.txt.',
+    `FFmpeg corresponding source: ${mediaProvenance.correspondingSource}`,
+    `Build scripts and dependency source recipes: ${mediaProvenance.source}`,
+    'Exact build, download location and archive checksum are recorded in provenance.json.',
+  ].join('\n'));
+}else console.log('开发模式使用系统 FFmpeg；媒体处理需在 PATH 中安装 ffmpeg/ffprobe，或设置 VIDEO_QUICKLY_FFMPEG 和 VIDEO_QUICKLY_FFPROBE。');
+// Homebrew keeps the Node license one directory above bin/.
+const nodeLicenses=[join(dirname(process.execPath),'LICENSE'),resolve(dirname(process.execPath),'../LICENSE')];
+let nodeLicense;
+for(const candidate of nodeLicenses)if(await stat(candidate).then(value=>value.isFile(),()=>false)){nodeLicense=candidate;break;}
+if(nodeLicense)await cp(nodeLicense,join(stage,'LICENSE-Node.txt'));
 else{
   const response=await fetch(`https://nodejs.org/dist/${process.version}/LICENSE`);
   if(!response.ok)throw new Error('无法取得随附 Node.js 的许可文件');

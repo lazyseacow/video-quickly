@@ -194,7 +194,11 @@ async fn render_begin(
         .path()
         .resource_dir()
         .map_err(|error| error.to_string())?;
-    let bundled = resource.join("sidecar/media/ffmpeg.exe");
+    let bundled = resource.join(if cfg!(windows) {
+        "sidecar/media/ffmpeg.exe"
+    } else {
+        "sidecar/media/ffmpeg"
+    });
     let ffmpeg = std::env::var_os("VIDEO_QUICKLY_FFMPEG")
         .map(PathBuf::from)
         .unwrap_or_else(|| {

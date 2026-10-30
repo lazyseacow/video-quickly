@@ -209,10 +209,12 @@ impl RuntimeBridge {
         #[cfg(windows)]
         command.creation_flags(0x08000000);
         let media = self.directory.join("media");
-        if media.join("ffmpeg.exe").exists() {
+        let ffmpeg = media.join(if cfg!(windows) { "ffmpeg.exe" } else { "ffmpeg" });
+        let ffprobe = media.join(if cfg!(windows) { "ffprobe.exe" } else { "ffprobe" });
+        if ffmpeg.exists() {
             command
-                .env("VIDEO_QUICKLY_FFMPEG", media.join("ffmpeg.exe"))
-                .env("VIDEO_QUICKLY_FFPROBE", media.join("ffprobe.exe"));
+                .env("VIDEO_QUICKLY_FFMPEG", ffmpeg)
+                .env("VIDEO_QUICKLY_FFPROBE", ffprobe);
         }
         let mut child = command
             .spawn()
@@ -436,7 +438,7 @@ mod tests {
         std::fs::create_dir(&directory).unwrap();
         let sidecar = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../.generated/sidecar");
         let bridge = RuntimeBridge::new(
-            sidecar.join("node.exe"),
+            sidecar.join(if cfg!(windows) { "node.exe" } else { "node" }),
             vec![
                 sidecar.join("runtime.mjs").to_string_lossy().into_owned(),
                 "--data-dir".into(),

@@ -102,6 +102,57 @@ describe('workspace database upgrades', () => {
     expect(await readdir(join(path, 'database-backups'))).toHaveLength(1);
   });
 
+  it('upgrades legacy v3 read models that predate the asset reference table', async () => {
+    const path = await directory(), previous = new Database(join(path, 'workspace.sqlite'));
+    migrateDatabase(previous, path, WORKSPACE_MIGRATIONS.filter(migration => migration.version <= 3));
+    const project = projectSchema.parse({ id: 'legacy-v3', title: '保留旧版项目', brief: '', revision: 4, profile: DEFAULT_VIDEO_PROFILE, workflow: createHistoryWorkflow(), createdAt: '', updatedAt: '', shots: [{ id: 'shot', title: '镜头', narration: '', visualPrompt: '', durationUs: 2_000_000, assetId: 'image', audioAssetId: 'audio', videoAssetId: 'video', captionTrack: { timeBase: 'source', alignment: 'manual', sourceAssetId: 'caption-audio', cues: [] } }], musicClips: [{ id: 'music', assetId: 'music-audio', durationUs: 2_000_000 }] });
+    const oldStore = new DocumentStore(previous); oldStore.put('project', project.id, project);
+    oldStore.put('run', 'review', { status: 'waiting_review' }); oldStore.put('model', 'connection', { credentialRef: 'reference-only' });
+    // The original v3 only maintained summaries. Its version and migration
+    // history match later v3 databases, but there was no reference projection.
+    previous.exec(`
+      DROP TRIGGER project_summary_insert;
+      DROP TRIGGER project_summary_update;
+      DROP TRIGGER project_summary_delete;
+      DROP TABLE project_asset_references;
+      CREATE TRIGGER project_summary_insert AFTER INSERT ON documents WHEN new.kind = 'project' BEGIN
+        INSERT OR REPLACE INTO documents(kind, id, body) VALUES ('project-summary', new.id, new.body);
+      END;
+      CREATE TRIGGER project_summary_update AFTER UPDATE OF body ON documents WHEN new.kind = 'project' BEGIN
+        INSERT OR REPLACE INTO documents(kind, id, body) VALUES ('project-summary', new.id, new.body);
+      END;
+      CREATE TRIGGER project_summary_delete AFTER DELETE ON documents WHEN old.kind = 'project' BEGIN
+        DELETE FROM documents WHERE kind = 'project-summary' AND id = old.id;
+      END;
+      CREATE TABLE checkpoints (thread_id TEXT PRIMARY KEY, checkpoint BLOB);
+      INSERT INTO checkpoints VALUES ('review', X'010203');
+    `);
+    previous.close();
+    const upgraded = openDatabase(path), store = new DocumentStore(upgraded);
+    try {
+      expect(upgraded.pragma('user_version', { simple: true })).toBe(7);
+      expect(store.get('project', project.id)).toEqual(project);
+      expect(store.get('run', 'review')).toEqual({ status: 'waiting_review' });
+      expect(store.get('model', 'connection')).toEqual({ credentialRef: 'reference-only' });
+      expect(upgraded.prepare('SELECT hex(checkpoint) AS value FROM checkpoints').get()).toEqual({ value: '010203' });
+      expect(store.get('project-summary', project.id)).toMatchObject({ id: project.id, revision: 4, shotCount: 1 });
+      expect(upgraded.prepare('SELECT asset_id FROM project_asset_references ORDER BY asset_id').all()).toEqual(['audio', 'caption-audio', 'image', 'music-audio', 'video'].map(asset_id => ({ asset_id })));
+      store.put('project', project.id, { ...project, revision: 5, shots: [], musicClips: [] });
+      expect(upgraded.prepare('SELECT * FROM project_asset_references').all()).toEqual([]);
+      store.put('project', project.id, project); store.delete('project', project.id);
+      expect(store.get('project-summary', project.id)).toBeUndefined();
+      expect(upgraded.prepare('SELECT * FROM project_asset_references').all()).toEqual([]);
+    } finally { upgraded.close(); }
+    const backups = await readdir(join(path, 'database-backups')); expect(backups).toHaveLength(1);
+    const backup = new Database(join(path, 'database-backups', backups[0]), { readonly: true });
+    try {
+      expect(backup.pragma('user_version', { simple: true })).toBe(3);
+      expect(new DocumentStore(backup).get('project', project.id)).toEqual(project);
+      expect(backup.prepare("SELECT 1 FROM sqlite_master WHERE name = 'project_asset_references'").get()).toBeUndefined();
+    } finally { backup.close(); }
+    openDatabase(path).close(); expect(await readdir(join(path, 'database-backups'))).toHaveLength(1);
+  });
+
   it('upgrades actual v4 summaries without changing projects, assets, audio references or review checkpoints', async () => {
     const path = await directory(), previous = new Database(join(path, 'workspace.sqlite'));
     migrateDatabase(previous, path, WORKSPACE_MIGRATIONS.filter(migration => migration.version <= 4));

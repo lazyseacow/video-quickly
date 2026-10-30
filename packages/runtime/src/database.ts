@@ -77,8 +77,12 @@ const allReferences = (body: string) => `
   UNION ${audioReferences(body)}
 `;
 const AUDIO_REFERENCE_SCHEMA = `
+  -- Early v3 databases only projected summaries and had no asset reference table.
+  CREATE TABLE IF NOT EXISTS project_asset_references (project_id TEXT NOT NULL, asset_id TEXT NOT NULL, PRIMARY KEY(project_id, asset_id));
+  CREATE INDEX IF NOT EXISTS project_asset_references_asset ON project_asset_references(asset_id);
   DROP TRIGGER project_summary_insert;
   DROP TRIGGER project_summary_update;
+  DROP TRIGGER project_summary_delete;
   CREATE TRIGGER project_summary_insert AFTER INSERT ON documents WHEN new.kind = 'project' BEGIN
     INSERT INTO documents(kind, id, body) VALUES ('project-summary', new.id, ${summaryBody('new.body')}) ON CONFLICT(kind, id) DO UPDATE SET body = excluded.body;
     INSERT OR IGNORE INTO project_asset_references(project_id, asset_id) SELECT new.id, refs.value FROM (${allReferences('new.body')}) AS refs;
@@ -88,6 +92,13 @@ const AUDIO_REFERENCE_SCHEMA = `
     DELETE FROM project_asset_references WHERE project_id = new.id;
     INSERT OR IGNORE INTO project_asset_references(project_id, asset_id) SELECT new.id, refs.value FROM (${allReferences('new.body')}) AS refs;
   END;
+  CREATE TRIGGER project_summary_delete AFTER DELETE ON documents WHEN old.kind = 'project' BEGIN
+    DELETE FROM documents WHERE kind = 'project-summary' AND id = old.id;
+    DELETE FROM project_asset_references WHERE project_id = old.id;
+  END;
+  INSERT OR IGNORE INTO project_asset_references(project_id, asset_id)
+    SELECT documents.id, field.value FROM documents, json_each(documents.body, '$.shots') shot, json_each(shot.value) field
+    WHERE documents.kind = 'project' AND field.key IN ('assetId', 'audioAssetId', 'videoAssetId') AND field.type = 'text';
   INSERT OR IGNORE INTO project_asset_references(project_id, asset_id)
     SELECT documents.id, json_extract(clip.value, '$.assetId') FROM documents, json_each(documents.body, '$.musicClips') clip
     WHERE documents.kind = 'project' AND json_type(clip.value, '$.assetId') = 'text';
@@ -96,7 +107,7 @@ const AUDIO_REFERENCE_SCHEMA = `
     WHERE documents.kind = 'project' AND json_type(shot.value, '$.captionTrack.sourceAssetId') = 'text';
 `;
 
-// Leave the v3/v4 SQL unchanged: v5 adds the lightweight inherited thumbnail style.
+// v5 adds the lightweight inherited thumbnail style.
 const captionSummaryBody = (body: string) => `json_set(${summaryBody(body)}, '$.captionStyle', json_extract(${body}, '$.captionStyle'))`;
 const CAPTION_SUMMARY_SCHEMA = `
   DROP TRIGGER project_summary_insert;
