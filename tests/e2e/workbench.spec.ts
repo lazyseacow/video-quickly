@@ -2,6 +2,7 @@ import { addModelConnection } from './settings';
 import { projectSettingField } from './settings';
 import { expect, test, type Page } from '@playwright/test';
 import { resolve } from 'node:path';
+import { modelCatalog } from './model-catalog';
 
 async function openApp(page: Page) {
   // Navigation completes before the workspace request on a cold CI browser.
@@ -365,23 +366,27 @@ test('resizes and restores editor panels, and saves before opening a recent proj
 });
 
 test('creates a project and connects a model without exposing credentials', async ({ page }) => {
-  await openApp(page);
-  await page.getByRole('button', { name: '我的项目', exact: true }).click();
-  await page.getByRole('button', { name: '新建项目', exact: true }).last().click();
-  const dialog = page.getByRole('dialog', { name: '新建视频项目' });
-  await dialog.getByLabel('项目名称', { exact: true }).fill('界面验收项目');
-  await dialog.getByLabel('创意简报').fill('这是隔离数据目录中的编辑与恢复验证项目。');
-  await dialog.getByRole('button', { name: '创建项目', exact: true }).click();
-  await expect(dialog).toHaveCount(0);
-  await expect(page.getByLabel('项目名称', { exact: true })).toHaveValue('界面验收项目');
+  const catalog = await modelCatalog(['local-fixture']);
+  try {
+    await openApp(page);
+    await page.getByRole('button', { name: '我的项目', exact: true }).click();
+    await page.getByRole('button', { name: '新建项目', exact: true }).last().click();
+    const dialog = page.getByRole('dialog', { name: '新建视频项目' });
+    await dialog.getByLabel('项目名称', { exact: true }).fill('界面验收项目');
+    await dialog.getByLabel('创意简报').fill('这是隔离数据目录中的编辑与恢复验证项目。');
+    await dialog.getByRole('button', { name: '创建项目', exact: true }).click();
+    await expect(dialog).toHaveCount(0);
+    await expect(page.getByLabel('项目名称', { exact: true })).toHaveValue('界面验收项目');
 
-  await page.getByRole('button', { name: '模型连接', exact: true }).click();
-  const modelDialog = await addModelConnection(page);
-  await modelDialog.getByLabel('连接名称').fill('本地文本服务');
-  await modelDialog.getByLabel('服务地址').fill('http://127.0.0.1:11434');
-  await modelDialog.getByLabel('模型 ID').fill('local-fixture');
-  await modelDialog.getByRole('button', { name: '保存连接', exact: true }).click();
-  await expect(page.getByText('本地文本服务', { exact: true })).toBeVisible();
+    await page.getByRole('button', { name: '模型连接', exact: true }).click();
+    const modelDialog = await addModelConnection(page);
+    await modelDialog.getByLabel('连接名称').fill('本地文本服务');
+    await modelDialog.getByLabel('模型平台', { exact: true }).selectOption('custom');
+    await modelDialog.getByLabel('服务地址').fill(catalog.baseUrl);
+    await modelDialog.getByLabel('模型 ID').selectOption('local-fixture');
+    await modelDialog.getByRole('button', { name: '保存连接', exact: true }).click();
+    await expect(page.getByText('本地文本服务', { exact: true })).toBeVisible();
+  } finally { await catalog.close(); }
 });
 
 test('persists a review decision and supports read-only replay', async ({ page, request }) => {

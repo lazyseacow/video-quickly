@@ -2,6 +2,11 @@ import { addModelConnection, settingField } from './settings';
 import { createServer } from 'node:http';
 import { expect, test, type APIRequestContext, type Locator, type Page } from '@playwright/test';
 import type { ModelProfile, ProjectDocument, RunSummary, WorkspaceSnapshot } from '@video-quickly/contracts';
+import { modelCatalog } from './model-catalog';
+
+let catalog: Awaited<ReturnType<typeof modelCatalog>>;
+test.beforeEach(async () => { catalog = await modelCatalog(['fixture-parameters']); });
+test.afterEach(async () => { await catalog.close(); });
 
 async function rpc<T>(request: APIRequestContext, method: string, params: unknown = {}): Promise<T> {
   const response = await request.post('/__desktop_rpc', { data: { method, params } }); const payload = await response.json();
@@ -9,12 +14,14 @@ async function rpc<T>(request: APIRequestContext, method: string, params: unknow
 }
 async function savedModel(request: APIRequestContext, name: string) { return (await rpc<WorkspaceSnapshot>(request, 'workspace.snapshot')).models.find(model => model.name === name)!; }
 async function openModels(page: Page) { await page.goto('/'); await expect(page).toHaveTitle(/Video Quickly/); await page.getByRole('button', { name: '模型连接', exact: true }).click(); }
-async function newModel(page: Page, name: string, url = 'http://127.0.0.1:1/v1', type = '文本模型') {
+async function newModel(page: Page, name: string, url = catalog.baseUrl, type = '文本模型') {
   const dialog = await addModelConnection(page, type);
-  await (await settingField(dialog, '连接名称')).fill(name); await (await settingField(dialog, '服务地址')).fill(url); await (await settingField(dialog, '模型 ID')).fill('fixture-parameters'); return dialog;
+  await (await settingField(dialog, '模型平台')).selectOption('custom');
+  await (await settingField(dialog, '连接名称')).fill(name); await (await settingField(dialog, '服务地址')).fill(url);
+  await (await settingField(dialog, '模型 ID')).selectOption('fixture-parameters'); return dialog;
 }
 async function reopen(page: Page, name: string) { await page.getByRole('button', { name: `编辑“${name}”`, exact: true }).click(); return page.getByRole('dialog', { name: '编辑模型连接', exact: true }); }
-async function legacyModel(page: Page, request: APIRequestContext, name: string, url = 'http://127.0.0.1:1/v1', capabilities = ['text', 'image', 'video', 'tts', 'asr']) {
+async function legacyModel(page: Page, request: APIRequestContext, name: string, url = catalog.baseUrl, capabilities = ['text', 'image', 'video', 'tts', 'asr']) {
   await rpc(request, 'model.save', { model: { name, provider: 'openai-compatible', baseUrl: url, model: 'fixture-parameters', capabilities } });
   return reopen(page, name);
 }
@@ -31,18 +38,18 @@ for (const { width, theme } of [{ width: 1536, theme: 'dark' }, { width: 390, th
   const show = dialog.getByRole('button', { name: '显示密钥', exact: true });
   await expect(key).toHaveAttribute('type', 'password'); await expect(show).toBeDisabled();
   await key.fill('fixture-key-for-visibility');
-  await (await settingField(dialog, '模型 ID')).click();
+  await (await settingField(dialog, '模型 ID')).focus();
   await expect(show).toBeVisible(); await expect(show).toBeEnabled();
   await key.click(); await show.click();
   await expect(key).toHaveAttribute('type', 'text'); await expect(key).toHaveValue('fixture-key-for-visibility');
   const hide = dialog.getByRole('button', { name: '隐藏密钥', exact: true });
   await expect(hide).toHaveAttribute('aria-pressed', 'true');
-  await (await settingField(dialog, '模型 ID')).click(); await expect(hide).toBeVisible();
+  await (await settingField(dialog, '模型 ID')).focus(); await expect(hide).toBeVisible();
   await hide.focus(); await page.keyboard.press('Space');
   await expect(key).toHaveAttribute('type', 'password'); await expect(show).toHaveAttribute('aria-pressed', 'false');
   await show.focus(); await page.keyboard.press('Enter');
   await expect(key).toHaveAttribute('type', 'text');
-  await hide.click(); await (await settingField(dialog, '模型 ID')).click();
+  await hide.click(); await (await settingField(dialog, '模型 ID')).focus();
   await expect(key).toHaveValue('fixture-key-for-visibility'); await expect(show).toBeInViewport();
   const button = await show.boundingBox(); expect(button!.width).toBeGreaterThanOrEqual(width < 650 ? 44 : 40);
   await page.screenshot({ path: info.outputPath('api-key-reveal-after-blur.png') });
@@ -66,8 +73,8 @@ test('offers branded platform presets and a persisted Gemini-compatible connecti
     await platform.selectOption('custom'); await expect(await settingField(dialog, 'API 协议')).toHaveValue('chat-completions');
     await platform.selectOption('google');
     await expect(dialog.locator('.capability-grid')).toHaveCount(0);
-    await (await settingField(dialog, '模型 ID')).fill('fixture-gemini');
     await (await settingField(dialog, '服务地址')).fill(`http://127.0.0.1:${address.port}/v1beta/openai`);
+    await (await settingField(dialog, '模型 ID')).selectOption('fixture-gemini');
     await dialog.getByRole('button', { name: '保存连接', exact: true }).click(); await expect(dialog).toHaveCount(0);
     const card = page.locator('.list-card').filter({ has: page.getByRole('heading', { name, exact: true }) });
     await expect(card).toContainText('Gemini'); await expect(card.locator('.platform-icon')).toBeVisible();
@@ -147,6 +154,7 @@ for (const delayedProgress of [false, true]) test(`uses the saved structured con
   });
   const png = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScLbtAAAAABJRU5ErkJggg==';
   const server = createServer((incoming, response) => { void (async () => {
+    if (incoming.method === 'GET') { response.end(JSON.stringify({ data: [{ id: 'fixture-parameters' }] })); return; }
     let text = ''; for await (const chunk of incoming) text += chunk.toString(); const path = incoming.url ?? '', body = JSON.parse(text) as Record<string, unknown>; requests.push({ path, body });
     if (path.endsWith('/chat/completions')) response.end(JSON.stringify({ choices: [{ message: { content: JSON.stringify({ shots: [{ title: '真实参数候选', narration: '旁白', visualPrompt: '画面', durationUs: 2_000_000 }] }) } }] }));
     else if (path.endsWith('/images/generations')) response.end(JSON.stringify({ data: [{ b64_json: png }] })); else { response.statusCode = 404; response.end(); }

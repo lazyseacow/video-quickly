@@ -13,11 +13,8 @@
 .model-discovery { margin-top: var(--space-5); }
 .model-discovery .field { margin-bottom: var(--space-2); }
 .model-discovery__control { position: relative; }
-.model-discovery__control > input { padding-inline-end: calc(var(--control-hit-size) + var(--space-4)); }
 .model-discovery__control > select.select:not([multiple]):not([size]) { padding-inline-end: calc(var(--control-hit-size) + var(--space-4) * 3); }
 .model-discovery__control > select.select:not([multiple]):not([size])::picker-icon { inset-inline-end: calc(var(--control-hit-size) + var(--space-3)); }
 .model-discovery__control > .icon-button { position: absolute; inset-inline-end: var(--space-1); top: 50%; transform: translateY(-50%); width: var(--control-hit-size); height: var(--control-hit-size); }
-.model-discovery__actions { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); }
-.model-discovery__actions .button { min-height: 32px; padding: var(--space-1) var(--space-3); font-size: var(--text-size-caption); }
 .model-discovery > .field__hint { display: block; margin: var(--space-2) 0 0; }
 @media (max-width: 650px) { .model-connection-fields, .model-type-grid { grid-template-columns: minmax(0, 1fr); } .model-type-grid .model-type-choice { min-height: 88px; padding: var(--space-4); } }

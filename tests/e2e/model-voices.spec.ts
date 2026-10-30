@@ -47,7 +47,8 @@ test('loads Qwen account voices, selects by ID, and saves without training or sy
   try {
     await page.goto('/'); await page.getByRole('button', { name: '模型连接', exact: true }).click(); const dialog = await addModelConnection(page, '音频模型');
     await (await settingField(dialog, '模型平台')).selectOption('qwen-tts'); await (await settingField(dialog, '连接名称')).fill('账号音色连接');
-    await (await settingField(dialog, '模型 ID')).fill('qwen3-tts-vc'); await (await settingField(dialog, '服务地址')).fill(`http://127.0.0.1:${address.port}/api/v1`); await (await settingField(dialog, 'API Key')).fill('fixture-key');
+    await (await settingField(dialog, '服务地址')).fill(`http://127.0.0.1:${address.port}/api/v1`);
+    await (await settingField(dialog, '模型 ID')).selectOption('qwen3-tts-vc'); await (await settingField(dialog, 'API Key')).fill('fixture-key');
     await dialog.getByRole('tab', { name: '配音参数', exact: true }).click(); const voice = dialog.locator('select[aria-label="配音音色"]');
     await expect(voice).toBeVisible(); await voice.selectOption('fixture-account-voice');
     await dialog.getByRole('button', { name: '保存连接', exact: true }).click(); await expect(dialog).toHaveCount(0);

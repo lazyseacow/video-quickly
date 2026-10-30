@@ -1,6 +1,7 @@
 import { expect, test, type APIRequestContext } from '@playwright/test';
 import type { ModelProfile, SeriesTemplate } from '@video-quickly/contracts';
 import { addModelConnection, settingField, showSettingsPreview } from './settings';
+import { modelCatalog } from './model-catalog';
 
 async function rpc<T>(request: APIRequestContext, method: string, params: unknown = {}): Promise<T> {
   const response = await request.post('/__desktop_rpc', { data: { method, params } }); const payload = await response.json();
@@ -49,17 +50,20 @@ for (const viewport of [{ width: 1536, height: 960, theme: 'dark' }, { width: 10
 
 test('opens the required model section on submit and retains parameter changes', async ({ page, request }) => {
   const errors: string[] = []; page.on('pageerror', error => errors.push(error.message)); page.on('console', message => { if (message.type() === 'error') errors.push(message.text()); });
-  await page.goto('/'); await page.getByRole('button', { name: '模型连接', exact: true }).click(); const dialog = await addModelConnection(page);
-  await dialog.getByRole('tab', { name: '文本参数', exact: true }).click(); await dialog.getByLabel('文本温度', { exact: true }).fill('0.55');
-  await dialog.getByRole('button', { name: '保存连接', exact: true }).click();
-  await expect(dialog.getByRole('tab', { name: '基本连接', exact: true })).toHaveAttribute('aria-selected', 'true');
-  await expect(dialog.getByLabel('连接名称', { exact: true })).toBeFocused();
-  const name = '分区表单原生校验验收'; await dialog.getByLabel('连接名称', { exact: true }).fill(name);
-  await dialog.getByRole('tab', { name: '文本参数', exact: true }).click(); await dialog.getByRole('button', { name: '保存连接', exact: true }).click();
-  await expect(dialog.getByLabel('模型 ID', { exact: true })).toBeFocused();
-  await dialog.getByLabel('模型 ID', { exact: true }).fill('fixture-model');
-  await expect(await settingField(dialog, '文本温度')).toHaveValue('0.55');
-  await dialog.getByRole('button', { name: '保存连接', exact: true }).click(); await expect(dialog).toHaveCount(0);
-  const workspace = await rpc<{ models: ModelProfile[] }>(request, 'workspace.summary');
-  expect(workspace.models.find(model => model.name === name)?.parameters.temperature).toBe(.55); expect(errors).toEqual([]);
+  const catalog = await modelCatalog(['fixture-model']);
+  try {
+    await page.goto('/'); await page.getByRole('button', { name: '模型连接', exact: true }).click(); const dialog = await addModelConnection(page);
+    await expect(dialog.getByRole('button', { name: '保存连接', exact: true })).toBeDisabled();
+    await (await settingField(dialog, '模型平台')).selectOption('custom'); await (await settingField(dialog, '服务地址')).fill(catalog.baseUrl);
+    await (await settingField(dialog, '模型 ID')).selectOption('fixture-model');
+    await dialog.getByRole('tab', { name: '文本参数', exact: true }).click(); await dialog.getByLabel('文本温度', { exact: true }).fill('0.55');
+    await dialog.getByRole('button', { name: '保存连接', exact: true }).click();
+    await expect(dialog.getByRole('tab', { name: '基本连接', exact: true })).toHaveAttribute('aria-selected', 'true');
+    await expect(dialog.getByLabel('连接名称', { exact: true })).toBeFocused();
+    const name = '分区表单原生校验验收'; await dialog.getByLabel('连接名称', { exact: true }).fill(name);
+    await expect(await settingField(dialog, '文本温度')).toHaveValue('0.55');
+    await dialog.getByRole('button', { name: '保存连接', exact: true }).click(); await expect(dialog).toHaveCount(0);
+    const workspace = await rpc<{ models: ModelProfile[] }>(request, 'workspace.summary');
+    expect(workspace.models.find(model => model.name === name)?.parameters.temperature).toBe(.55); expect(errors).toEqual([]);
+  } finally { await catalog.close(); }
 });

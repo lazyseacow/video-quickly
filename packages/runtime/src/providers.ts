@@ -1,4 +1,4 @@
-import { requestModelParameters, textProtocols, validateModelParameters, type JsonValue, type ModelDiscovery, type ModelProfile, type ProviderUsage } from '@video-quickly/contracts';
+import { getModelConnectionType, requestModelParameters, textProtocols, validateModelParameters, type JsonValue, type ModelDiscovery, type ModelProfile, type ProviderUsage } from '@video-quickly/contracts';
 
 export interface TextGenerationRequest {
   model: ModelProfile;
@@ -134,11 +134,40 @@ export async function testModelConnection(model: ModelProfile, secret?: string) 
   return { connected: true, models: modelIds, message: modelIds.includes(model.model) ? '连接正常，已找到配置的模型。' : '服务可连接，请确认模型 ID 与能力配置。' };
 }
 
+function discoveredModelTime(row: Record<string, unknown>): number {
+  for (const value of [row.created, row.created_at, row.modified_at]) {
+    const numeric = typeof value === 'number' ? value : typeof value === 'string' && value.trim() ? Number(value) : NaN;
+    // Compatible endpoints use Unix seconds or milliseconds; Messages and
+    // Ollama use ISO timestamps. Normalize them before merging all pages.
+    let timestamp = typeof value === 'string' ? Date.parse(value) : NaN;
+    if (Number.isFinite(numeric)) timestamp = Math.abs(numeric) < 1e12 ? numeric * 1000 : numeric;
+    if (Number.isFinite(timestamp)) return timestamp;
+  }
+  return Number.NEGATIVE_INFINITY;
+}
+
+function matchesOpenAIConnection(id: string, model: ModelProfile): boolean {
+  // OpenAI's model list has no modality field. Classify known families by their
+  // base model ID; fine-tuning organization and suffix names are not modalities.
+  const baseId = id.startsWith('ft:') ? id.split(':')[1] ?? '' : id;
+  const connectionType = getModelConnectionType(model);
+  if (connectionType === 'image') return /^(?:gpt-image|chatgpt-image|dall-e)(?:-|$)/.test(baseId);
+  if (connectionType === 'video') return /^sora(?:-|$)/.test(baseId);
+  if (connectionType === 'audio') {
+    return model.capabilities.includes('tts') && /^(?:tts(?:-|$)|gpt-.*-tts(?:-|$))/.test(baseId)
+      || model.capabilities.includes('asr') && /^(?:whisper(?:-|$)|gpt-.*-transcribe(?:-|$))/.test(baseId);
+  }
+  return /^(?:gpt-|chatgpt-|o\d+(?:-|$)|codex-)/.test(baseId)
+    && !/(?:^|-)(?:audio|realtime|live|image|transcribe|tts)(?:-|$)/.test(baseId);
+}
+
 export async function discoverModels(model: ModelProfile, secret?: string): Promise<ModelDiscovery> {
   if (model.provider === 'volcengine-tts') return { source: 'preset', items: ['seed-tts-2.0', 'seed-tts-1.0', 'seed-tts-1.0-concurr', 'seed-icl-2.0', 'seed-icl-1.0', 'seed-icl-1.0-concurr'].map(id => ({ id, label: id })), message: '豆包语音资源预设；实际可用权限以控制台开通为准。请在配音参数中选择音色。' };
   if (model.provider === 'volcengine-asr') return { source: 'preset', items: [{ id: 'volc.bigasr.auc_turbo', label: '豆包语音识别 · 极速版' }], message: '语音识别资源预设，需在豆包语音控制台开通。' };
   if (model.provider === 'comfyui') return { source: 'workflow', items: [{ id: 'workflow', label: '使用工作流中的模型' }], message: 'ComfyUI 的模型由所配置工作流指定。' };
-  const items = new Map<string, { id: string; label: string }>(); let after: string | undefined;
+  const filterOpenAI = model.provider === 'openai-compatible' && (model.platform === 'openai' || new URL(model.baseUrl).hostname === 'api.openai.com');
+  const items = new Map<string, { id: string; label: string; timestamp: number; retired: boolean }>(); let after: string | undefined;
+  const now = Date.now();
   const signal = AbortSignal.timeout(15_000);
   for (let page = 0; page < 20; page++) {
     const url = new URL(modelEndpoint(model.baseUrl, model.provider === 'ollama' ? 'api/tags' : 'models'));
@@ -153,11 +182,18 @@ export async function discoverModels(model: ModelProfile, secret?: string): Prom
       if (!row || typeof row !== 'object') continue;
       const id = row.id ?? row.name ?? row.model;
       if (typeof id !== 'string' || !id.trim() || id.length > 500) continue;
+      if (filterOpenAI && !matchesOpenAIConnection(id, model)) continue;
       const label = typeof row.display_name === 'string' ? row.display_name : typeof row.displayName === 'string' ? row.displayName : id;
-      items.set(id, { id, label: label === id ? id : `${label} · ${id}` });
+      const timestamp = Math.max(discoveredModelTime(row), items.get(id)?.timestamp ?? Number.NEGATIVE_INFINITY);
+      const shutdownAt = typeof row.shutdown_date === 'string' ? Date.parse(row.shutdown_date) : NaN;
+      const retired = row.lifecycle === 'retired' || Number.isFinite(shutdownAt) && shutdownAt <= now;
+      items.set(id, { id, label: label === id ? id : `${label} · ${id}`, timestamp, retired });
     }
     if (!value.has_more || typeof value.last_id !== 'string' || value.last_id === after) break;
     after = value.last_id;
   }
-  return { source: 'remote', items: [...items.values()], message: items.size ? `已读取 ${items.size} 个模型；请选择与当前连接类型对应的专用型号。` : '服务未返回模型，可手动填写模型 ID。' };
+  const sorted = [...items.values()].filter(item => !item.retired).sort((left, right) => left.timestamp === right.timestamp ? 0 : right.timestamp - left.timestamp).map(({ id, label }) => ({ id, label }));
+  return { source: 'remote', items: sorted, message: sorted.length
+    ? `已读取 ${sorted.length} 个模型；${filterOpenAI ? '已按当前连接类型筛选。' : '请选择与当前连接类型对应的专用型号。'}`
+    : filterOpenAI ? '服务未返回适合当前连接类型的模型，请核对连接类型与账号权限后重试。' : '服务未返回可用模型，请核对服务地址与账号权限后重试。' };
 }

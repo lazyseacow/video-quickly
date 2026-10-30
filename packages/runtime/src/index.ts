@@ -1058,7 +1058,7 @@ export function createRuntime(options: RuntimeOptions) {
         try { return method === 'model.voices' ? await discoverModelVoices(draft, secret) : await discoverModels(draft, secret); }
         catch (error) {
           if (method === 'model.voices') return { ...getModelVoiceCatalog(draft), message: '账号音色暂时无法读取，可选择公共音色预设或自定义填写。' };
-          return { source: 'remote', items: [], message: error instanceof Error && /^读取模型列表返回 HTTP \d+$/.test(error.message) ? `${error.message}，请核对地址与密钥，或手动填写。` : '暂时无法读取模型，请核对服务地址、密钥及接口支持，或手动填写。' };
+          return { source: 'remote', items: [], message: error instanceof Error && /^读取模型列表返回 HTTP \d+$/.test(error.message) ? `${error.message}，请核对地址与密钥后重试。` : '暂时无法读取模型，请核对服务地址、密钥及接口支持后重试。' };
         }
       }
       case 'model.save': {

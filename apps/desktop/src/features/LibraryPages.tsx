@@ -74,28 +74,30 @@ function ModelDialog({ model, connectionType: addingType = 'text', action, onClo
   const [busy, setBusy] = useState(false);
   const [parametersText, setParametersText] = useState(JSON.stringify(model?.parameters ?? {}, null, 2));
   const [saveError, setSaveError] = useState('');
-  const [discovery, setDiscovery] = useState<ModelDiscovery>();
+  const [discoveryResult, setDiscoveryResult] = useState<{ key: string; catalog: ModelDiscovery }>();
   const [discovering, setDiscovering] = useState(false);
-  const [manualModel, setManualModel] = useState(false);
   const [discoveryRefresh, setDiscoveryRefresh] = useState(0);
+  const discoveryKey = JSON.stringify([baseUrl, secret, provider, platform, connectionType, textProtocol, capabilities, discoveryRefresh]);
+  const discovery = discoveryResult?.key === discoveryKey ? discoveryResult.catalog : undefined;
+  const selectedModelId = discovery?.items.some(item => item.id === modelId) ? modelId : '';
   const forceDiscovery = useRef(false);
   const speechProvider = provider === 'volcengine-tts' || provider === 'volcengine-asr';
   useEffect(() => {
     let active = true, local = false, valid = false;
     try { const url = new URL(baseUrl); valid = ['http:', 'https:'].includes(url.protocol) && !url.username && !url.password; local = ['localhost', '127.0.0.1', '[::1]'].includes(url.hostname); } catch { /* An incomplete address is expected while editing. */ }
     const force = forceDiscovery.current; forceDiscovery.current = false;
-    setDiscovery(undefined); setDiscovering(false);
+    setDiscoveryResult(undefined); setDiscovering(false);
     if (!valid || !(force || speechProvider || provider === 'comfyui' || provider === 'ollama' || local || secret || model?.hasSecret && baseUrl === model.baseUrl)) return;
     const timer = setTimeout(() => {
       setDiscovering(true);
-      void rpc('model.discover', { model: { id: model?.id, provider, platform, textProtocol, baseUrl, capabilities }, ...(secret ? { secret } : {}) }).then(value => {
+      void rpc('model.discover', { model: { id: model?.id, provider, platform, connectionType, textProtocol, baseUrl, capabilities }, ...(secret ? { secret } : {}) }).then(value => {
         if (!active) return;
-        const result = modelDiscoverySchema.parse(value); setDiscovery(result);
+        const result = modelDiscoverySchema.parse(value); setDiscoveryResult({ key: discoveryKey, catalog: result });
         if (result.source === 'workflow') setModelId('workflow');
-      }).catch(() => { if (active) setDiscovery({ source: 'remote', items: [], message: '模型读取失败，可重试或手动填写。' }); }).finally(() => { if (active) setDiscovering(false); });
+      }).catch(() => { if (active) setDiscoveryResult({ key: discoveryKey, catalog: { source: 'remote', items: [], message: '模型读取失败，请重试。' } }); }).finally(() => { if (active) setDiscovering(false); });
     }, speechProvider || provider === 'comfyui' ? 0 : 500);
     return () => { active = false; clearTimeout(timer); };
-  }, [baseUrl, secret, provider, platform, textProtocol, model?.id, model?.hasSecret, model?.baseUrl, capabilities.join('|'), discoveryRefresh]);
+  }, [discoveryKey, model?.id, model?.hasSecret, model?.baseUrl]);
   const [voiceResult, setVoiceResult] = useState<{ key: string; catalog: VoiceDiscovery }>();
   const [voicesLoading, setVoicesLoading] = useState(false);
   const [voiceRefresh, setVoiceRefresh] = useState(0);
@@ -126,9 +128,9 @@ function ModelDialog({ model, connectionType: addingType = 'text', action, onClo
   }
   async function save(event: React.FormEvent) {
     event.preventDefault(); setSaveError('');
-    if (jsonError || parameterError) return;
+    if (jsonError || parameterError || !selectedModelId || discovering) return;
     setBusy(true);
-    const result = await action('model.save', { model: { ...model, ...(savedConnectionType ? { connectionType: savedConnectionType } : {}), name, platform, provider, ...(capabilities.includes('text') ? { textProtocol } : {}), baseUrl, model: modelId, capabilities, parameters }, ...(secret ? { secret } : {}) }, '模型连接已保存');
+    const result = await action('model.save', { model: { ...model, ...(savedConnectionType ? { connectionType: savedConnectionType } : {}), name, platform, provider, ...(capabilities.includes('text') ? { textProtocol } : {}), baseUrl, model: selectedModelId, capabilities, parameters }, ...(secret ? { secret } : {}) }, '模型连接已保存');
     setBusy(false);
     if (result !== null) onClose(); else setSaveError('连接尚未保存，请核对提示后重试。');
   }
@@ -160,21 +162,21 @@ function ModelDialog({ model, connectionType: addingType = 'text', action, onClo
       <div className="model-connection-fields"><Field label="连接名称"><input required autoFocus value={name} onChange={event => setName(event.target.value)} placeholder="例如：本地分镜助手" /></Field>
       <Field label="模型平台"><Select value={platform} disabled={busy} onChange={event => {
         const selected = platformForConnection(modelPlatformSchema.parse(event.target.value), connectionType);
-        setPlatform(selected.id); setProvider(selected.provider); setBaseUrl(selected.baseUrl); setManualModel(false);
+        setPlatform(selected.id); setProvider(selected.provider); setBaseUrl(selected.baseUrl);
         if (!jsonError) changeTextProtocol(selected.textProtocol ?? 'chat-completions');
         else setTextProtocol(selected.textProtocol ?? 'chat-completions');
         if (selected.provider === 'volcengine-tts') setModelId('seed-tts-2.0');
         setCapabilities(legacyConfiguration ? getModelCapabilities({ provider: selected.provider, capabilities: selected.provider === 'openai-compatible' ? model!.capabilities : [...selected.capabilities] }) : connectionType === 'text' ? ['text', 'vision', 'tools', 'structured-output'] : connectionType === 'audio' ? [['qwen-tts', 'volcengine-tts'].includes(selected.provider) ? 'tts' : capabilities.includes('asr') ? 'asr' : 'tts'] : [connectionType]);
       }}>{platforms.map(item => <option key={item.id} value={item.id}><span className="platform-option"><PlatformIcon platform={item.id} /><span>{platformForConnection(item.id, connectionType).label}</span></span></option>)}</Select></Field>
       {capabilities.includes('text') && <Field label={legacyConfiguration ? '文本 API 协议' : 'API 协议'}><Select value={provider === 'ollama' ? 'ollama' : textProtocol} disabled={busy || Boolean(jsonError) || provider === 'ollama'} onChange={event => changeTextProtocol(textProtocolSchema.parse(event.target.value))}>{provider === 'ollama' ? <option value="ollama">Ollama 原生 API</option> : textProtocols.map(protocol => <option key={protocol.id} value={protocol.id}>{protocol.label}</option>)}</Select></Field>}
-      {connectionType === 'audio' && <Field label="API 协议"><Select value={audioProtocol} disabled={busy} onChange={event => { const protocol = event.target.value; setManualModel(false); setProvider(protocol.startsWith('openai-') ? 'openai-compatible' : protocol as ModelProfile['provider']); setCapabilities([protocol === 'openai-asr' || protocol === 'volcengine-asr' ? 'asr' : 'tts']); if (protocol.startsWith('volcengine-')) setModelId(protocol === 'volcengine-asr' ? 'volc.bigasr.auc_turbo' : 'seed-tts-2.0'); }}>{audioProtocols.map(protocol => <option key={protocol.id} value={protocol.id}>{protocol.label}</option>)}</Select></Field>}
+      {connectionType === 'audio' && <Field label="API 协议"><Select value={audioProtocol} disabled={busy} onChange={event => { const protocol = event.target.value; setProvider(protocol.startsWith('openai-') ? 'openai-compatible' : protocol as ModelProfile['provider']); setCapabilities([protocol === 'openai-asr' || protocol === 'volcengine-asr' ? 'asr' : 'tts']); if (protocol.startsWith('volcengine-')) setModelId(protocol === 'volcengine-asr' ? 'volc.bigasr.auc_turbo' : 'seed-tts-2.0'); }}>{audioProtocols.map(protocol => <option key={protocol.id} value={protocol.id}>{protocol.label}</option>)}</Select></Field>}
       {mediaCapabilities.length > 0 && connectionType !== 'audio' && <Field label={legacyConfiguration ? '素材 API 协议' : 'API 协议'}><Select value={provider} disabled={busy || platform !== 'custom'} onChange={event => setProvider(event.target.value as ModelProfile['provider'])}>{!adapters.some(adapter => adapter.id === provider) && <option value={provider} disabled>{mediaAdapters.find(adapter => adapter.id === provider)?.label ?? '当前接入方式'}</option>}{adapters.map(adapter => <option key={adapter.id} value={adapter.id}>{adapter.id === 'openai-compatible' && !legacyConfiguration ? connectionType === 'image' ? 'OpenAI Images API' : 'OpenAI Videos API' : adapter.label}</option>)}</Select></Field>}
       <Field label="服务地址" hint={preset.addressHint} className={legacyConfiguration ? 'model-connection-fields__wide' : ''}><input required type="url" value={baseUrl} onChange={event => setBaseUrl(event.target.value)} placeholder={preset.addressPlaceholder} spellCheck={false} /></Field></div>
       <div className="field"><label className="field__label" htmlFor={secretId}>API Key</label><div className="model-secret-input"><input id={secretId} type={secretVisible ? 'text' : 'password'} autoComplete="new-password" autoCapitalize="none" spellCheck={false} aria-describedby={`${secretId}-hint`} value={secret} onChange={event => setSecret(event.target.value)} placeholder={model?.hasSecret ? '••••••••••••' : '输入密钥'} /><IconButton label={secretVisible ? '隐藏密钥' : '显示密钥'} aria-pressed={secretVisible} aria-controls={secretId} disabled={!secret} onClick={() => setSecretVisible(value => !value)}>{secretVisible ? <EyeOff size={16} /> : <Eye size={16} />}</IconButton></div><span id={`${secretId}-hint`} className="field__hint">{model?.hasSecret ? '已保存密钥；留空保留原值。' : '本地免鉴权服务可留空。'}</span></div>
       <div className="model-discovery"><div className="field"><label className="field__label" htmlFor={modelInputId}>{speechProvider ? '资源 ID' : '模型 ID'}</label><div className="model-discovery__control">
-        {!manualModel && discovery?.items.length ? <Select id={modelInputId} aria-label={speechProvider ? '资源 ID' : '模型 ID'} required value={modelId} disabled={busy || discovery.source === 'workflow'} onChange={event => setModelId(event.target.value)}><option value="" disabled>选择模型</option>{modelId && !discovery.items.some(item => item.id === modelId) && <option value={modelId}>当前：{modelId}</option>}{discovery.items.map(item => <option key={item.id} value={item.id}>{item.label}</option>)}</Select> : <input id={modelInputId} aria-label={speechProvider ? '资源 ID' : '模型 ID'} required value={modelId} onChange={event => { setModelId(event.target.value); setManualModel(true); }} placeholder={discovering ? '正在读取可用模型…' : '填写连接信息后读取，或手动填写'} spellCheck={false} />}
-        <IconButton label="获取模型列表" disabled={busy || discovering} aria-busy={discovering || undefined} onClick={() => { forceDiscovery.current = true; setManualModel(false); setDiscoveryRefresh(value => value + 1); }}>{discovering ? <LoaderCircle size={16} className="spin" /> : <Download size={16} />}</IconButton>
-      </div></div>{Boolean(discovery?.items.length) && discovery?.source !== 'workflow' && <div className="model-discovery__actions"><Button static variant="ghost" onClick={() => setManualModel(value => !value)}>{manualModel ? '从列表选择' : '手动填写'}</Button></div>}<p className="field__hint" role="status">{discovering ? '正在读取模型列表…' : discovery?.message ?? '填写服务地址与密钥后，自动读取模型列表。'}</p></div>
+        <Select id={modelInputId} aria-label={speechProvider ? '资源 ID' : '模型 ID'} required value={selectedModelId} disabled={busy || discovering || !discovery?.items.length || discovery.source === 'workflow'} onChange={event => setModelId(event.target.value)}><option value="" disabled>{discovering ? '正在读取模型…' : !discovery ? '请先获取模型列表' : discovery.items.length ? '选择模型' : '暂无可用模型'}</option>{discovery?.items.map(item => <option key={item.id} value={item.id}>{item.label}</option>)}</Select>
+        <IconButton label="获取模型列表" disabled={busy || discovering} aria-busy={discovering || undefined} onClick={() => { forceDiscovery.current = true; setDiscoveryRefresh(value => value + 1); }}>{discovering ? <LoaderCircle size={16} className="spin" /> : <Download size={16} />}</IconButton>
+      </div></div><p className="field__hint" role="status">{discovering ? '正在读取模型列表…' : discovery?.message ?? '填写服务地址与密钥后，自动读取模型列表。'}</p></div>
 
       </> },
       ...modelParameterSections.filter(section => parameterFields.some(field => field.operation === section.id)).map(section => ({ id: section.id, label: section.label, content: <ModelParameters operation={section.id} provider={provider} textProtocol={textProtocol} capabilities={capabilities} value={parameters} disabled={busy || Boolean(jsonError)} voices={voices} voiceContextKey={voiceKey} voicesLoading={voicesLoading} onReloadVoices={canReadVoices ? () => setVoiceRefresh(value => value + 1) : undefined} onChange={changeParameters} /> })),
@@ -183,7 +185,7 @@ function ModelDialog({ model, connectionType: addingType = 'text', action, onClo
       {(jsonError || parameterError) && <p role="alert" className="field-error">{jsonError || parameterError}</p>}
       {saveError && <p role="alert" className="field-error">{saveError}</p>}
     </>} /></div>
-    <div className="dialog__footer"><Button onClick={onClose}>取消</Button><Button aria-label="保存连接" variant="primary" type="submit" busy={busy} disabled={!capabilities.length || Boolean(jsonError || parameterError)}>保存</Button></div>
+    <div className="dialog__footer"><Button onClick={onClose}>取消</Button><Button aria-label="保存连接" variant="primary" type="submit" busy={busy} disabled={!selectedModelId || discovering || !capabilities.length || Boolean(jsonError || parameterError)}>保存</Button></div>
   </form></Dialog>;
 }
 
