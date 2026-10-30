@@ -28,7 +28,7 @@ export default function RunScopeDialog({ projectId, nodeId, initialMode = 'downs
     <div className="dialog__body">
       {error && <Notice kind="error">{error}</Notice>}
       {read.error && <Notice kind="error">{read.error}</Notice>}
-      <p className="run-scope-intro">使用已保存的项目创建任务，结果可在制作记录中比较和应用。</p>
+      <p className="run-scope-intro">先核对将要运行的步骤。执行后可在工作台查看进度、审阅和应用产物。</p>
       {parentRunId ? <p className="run-scope-intro">沿用原任务范围：{mode === 'node' ? '仅此步骤' : '此步骤及后续'}。</p> : <fieldset className="run-scope-options" disabled={busy}>
         <legend>执行方式</legend>
         <label className="field-inline"><input type="radio" name="run-scope-mode" checked={mode === 'node'} onChange={() => setMode('node')} />仅此步骤</label>

@@ -7,6 +7,7 @@ import { getAssetUrl, rpc } from '../lib/client';
 import { useRecordPage } from '../lib/use-record-page';
 import { useRuntimeRead } from '../lib/use-runtime-read';
 import type { StepOutputSelection } from '../lib/types';
+import RunActions from './RunActions';
 import './run-inspector.css';
 
 const versionsSchema = recordPageSchema(stepOutputVersionSchema);
@@ -16,13 +17,13 @@ const stepStates: Record<string, string> = { pending: '待执行', skipped: '未
 const date = (value: string) => new Date(value).toLocaleString('zh-CN');
 const text = (value: JsonValue) => typeof value === 'string' ? value : JSON.stringify(value, null, 2);
 
-export default function RunInspector({ runId, version, onClose, onChanged, onOpenOutput, onRestart }: {
-  runId: string; version: number; onClose: () => void; onChanged: () => void;
+export default function RunInspector({ runId, initialNodeId, version, onClose, onChanged, onOpenOutput, onRestart }: {
+  runId: string; initialNodeId?: string; version: number; onClose: () => void; onChanged: () => void;
   onOpenOutput: (selection: StepOutputSelection) => void;
   onRestart: (run: RunSummary) => void;
 }) {
   const inspection = useRuntimeRead('run.inspect', { runId }, version, runInspectionSchema);
-  const [selectedId, setSelectedId] = useState('');
+  const [selectedId, setSelectedId] = useState(initialNodeId ?? '');
   const [pending, setPending] = useState('');
   const [error, setError] = useState('');
   const [diagnostic, setDiagnostic] = useState<ReturnType<typeof runDiagnosticsSchema.parse> & { url: string }>();
@@ -56,10 +57,7 @@ export default function RunInspector({ runId, version, onClose, onChanged, onOpe
     <div className="dialog__footer run-inspector__footer">
       <Button busy={pending === 'run.diagnostics'} disabled={Boolean(pending) || !data} onClick={() => void perform('run.diagnostics')}><Download size={16} />导出诊断</Button>
       <Button aria-label="刷新详情" busy={inspection.busy} disabled={Boolean(pending)} onClick={inspection.refresh}><RefreshCw size={16} />刷新</Button>
-      {data?.recovery.review && <><Button disabled={Boolean(pending)} onClick={() => void perform('run.review', { approved: false })}>停止并修改</Button><Button variant="primary" busy={pending === 'run.review'} disabled={Boolean(pending)} onClick={() => void perform('run.review', { approved: true })}>通过审阅并继续</Button></>}
-      {data?.recovery.resume && <Button aria-label="继续执行" variant="primary" busy={pending === 'run.resume'} disabled={Boolean(pending)} onClick={() => void perform('run.resume')}>继续</Button>}
-      {data?.recovery.cancel && <Button aria-label="停止制作" disabled={Boolean(pending)} onClick={() => void perform('run.cancel')}>停止</Button>}
-      {data?.recovery.restart && <Button disabled={Boolean(pending)} onClick={() => { if (data.run.selection) onRestart(data.run); else void perform('run.start', { projectId: data.run.projectId, parentRunId: runId }); }}>重新制作</Button>}
+      {data && <RunActions inspection={data} pending={pending} onPerform={(method, params) => void perform(method, params)} onRestart={onRestart} />}
       <Button onClick={onClose}>关闭</Button>
     </div>
   </Dialog>;
