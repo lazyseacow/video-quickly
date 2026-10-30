@@ -26,6 +26,8 @@ test('renders a completed project read while a later notification refresh is sti
   const unrelated = await rpc<ProjectDocument>(request, 'project.create', { title: '通知来源项目' });
   let notifications = 0;
   page.on('websocket', socket => socket.on('framereceived', frame => { if (String(frame.payload).includes('workspace.changed')) notifications++; }));
+  const network = await page.context().newCDPSession(page); await network.send('Network.enable');
+  network.on('Network.eventSourceMessageReceived', event => { if (event.data.includes('workspace.changed')) notifications++; });
   await page.goto('/'); await expect(page.getByLabel('镜头标题', { exact: true })).toBeVisible();
   await page.getByRole('button', { name: '我的项目', exact: true }).click();
   const card = page.locator('.project-card').filter({ has: page.getByRole('heading', { name: target.title, exact: true }) });

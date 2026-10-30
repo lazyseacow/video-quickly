@@ -59,3 +59,16 @@ node scripts/recover-database.mjs --backup "D:\备份\workspace-v4-to-v5-快照.
 原生桥接以一次执行组件启动为一个代次，串行处理重连请求，等待启动握手后才接收业务请求。失联时结束该代次的未完成请求；替换前停止原进程组，旧代次事件不会覆盖新连接状态。
 
 重新连接只刷新持久化状态。创建项目、生成素材、导出及其他已提交操作不会由桥接自动重试。已经存在的运行继续遵守 LangGraph 检查点和外部调用回执的恢复规则；提交结果不明的活动仍需核对。
+
+
+## 浏览器构建产物验收
+
+`pnpm test:e2e` 在隔离目录中先构建 `browser-test` 前端，再通过 Vite 的预览服务运行相同的真实 TypeScript 执行层、SQLite、媒体组件和临时模型凭据库。构建文件写入 `apps/desktop/.generated/browser-preview`；不会替换桌面打包使用的 `dist`。手动启动 `pnpm dev:e2e` 时，默认数据目录为 `.data/browser-preview`，显式设置的 `VIDEO_QUICKLY_DATA_DIR` 优先。
+
+此模式下前端使用生产编译与分块加载，通过经过公共事件 Schema 校验的同源 EventSource 接收实际工作区通知。连接恢复后只重新读取状态，业务请求不重试。测试继续覆盖真实生成夹具、人工审阅、保存失败、撤销、导出以及原有像素／时间断言；通知竞态用 CDP 观察实际 SSE 或开发 WebSocket 事件，并执行同一个通知防抖计时器。
+
+`pnpm dev` 保持源码开发与 HMR；正式桌面构建继续使用原生 IPC。浏览器测试模式是显式构建选项，正式包不启用浏览器 RPC 或事件桥接。桥接复用 [Vite 的 configurePreviewServer](https://vite.dev/guide/api-plugin.html#configurepreviewserver)，没有增加新的服务框架或依赖。
+
+`c0ae26e` 的 [Windows CI](https://github.com/lazyseacow/video-quickly/actions/runs/41020129645) 为 138／139 条浏览器流程通过，后续构建／安装未执行。失败 trace 中 `src/lib/source-duration.ts` 返回 `net::ERR_NO_BUFFER_SPACE`，截图为入口尚未完成加载的白屏；浏览器尚未调用工作区接口。与先前 RPC 连接问题分别记录，缺少当时的 TCP 采样，不据此断言端口耗尽。构建产物专项检查实际加载的脚本路径，确认不再请求开发源码模块或 HMR 客户端。
+
+缩略图取消回归通过仅在浏览器测试构建中导出的编译入口读取生产组件的同一个缓存实例；既有并发取消、重读真实蓝色帧和只保留一个带源视频元素的断言保持不变。测试入口由构建清单定位，正式桌面构建不包含该夹具。

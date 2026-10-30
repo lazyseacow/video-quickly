@@ -299,7 +299,12 @@ export function createRuntime(options: RuntimeOptions) {
       if (!asset.shotId || !['image', 'audio', 'video'].includes(asset.kind)) continue;
       const shot = working.shots.find(shot => shot.id === asset.shotId);
       if (!shot) throw new Error('生成素材对应的镜头不存在。');
-      if (shot.locked) throw new Error('请先解锁镜头，再更换素材。');
+      if (shot.locked) {
+        const binding = asset.kind === 'image' ? 'assetId' : asset.kind === 'audio' ? 'audioAssetId' : 'videoAssetId';
+        if (shot[binding] !== asset.id) throw new Error('请先解锁镜头，再更换素材。');
+        requireCandidateAssets([asset]);
+        continue;
+      }
       working = asset.kind === 'image' ? { ...working, shots: working.shots.map(shot => shot.id === asset.shotId ? { ...shot, assetId: asset.id } : shot) } : bindMedia(working, asset.shotId, asset, false);
     }
     return working;
@@ -474,7 +479,10 @@ export function createRuntime(options: RuntimeOptions) {
       }
       const assets = nodeResultAssets(output);
       const working = projectAfterNode(executionProject, node, output, assets);
-      for (const asset of assets) store.put('asset', asset.id, asset);
+      for (const asset of assets) {
+        if (store.get<AssetRecord>('asset', asset.id)) requireCandidateAssets([asset]);
+        else store.put('asset', asset.id, asset);
+      }
       store.put('run-project', runId, working);
       store.put('node-result', `${runId}:${node.id}`, output);
     });

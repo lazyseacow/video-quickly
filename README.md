@@ -11,7 +11,9 @@ pnpm install
 pnpm dev
 ```
 
-打开 <http://127.0.0.1:1420>。开发预览连接同一套 TypeScript 执行层，数据保存在 `.data/development/`；`VIDEO_QUICKLY_DATA_DIR` 可指定隔离数据目录。此开发桥接只用于 Vite 开发模式。
+打开 <http://127.0.0.1:1420>。开发预览连接同一套 TypeScript 执行层，数据保存在 `.data/development/`；`VIDEO_QUICKLY_DATA_DIR` 可指定隔离数据目录。此桥接只用于 Vite 开发与浏览器验收，正式桌面客户端使用原生 IPC。
+
+浏览器验收使用 `pnpm test:e2e`：自动构建独立的测试前端产物，以真实本地执行层与事件通知运行全部流程。`pnpm dev:e2e` 可手动启动该预览，默认使用 `.data/browser-preview/`；测试模式不会替换正式桌面构建。
 
 桌面应用使用 Tauri IPC 与 Node 附属进程通信。桌面开发与打包另外需要 Rust MSVC 工具链、Visual Studio C++ Build Tools 和 WebView2。桌面开发前先构建随附组件：
 

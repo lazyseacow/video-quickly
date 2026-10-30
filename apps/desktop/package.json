@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "scripts": { "dev": "node --import tsx node_modules/vite/bin/vite.js --host 127.0.0.1", "build": "tsc -p tsconfig.json && node --import tsx node_modules/vite/bin/vite.js build", "typecheck": "tsc -p tsconfig.json", "tauri": "tauri" },
+  "scripts": { "dev": "node --import tsx node_modules/vite/bin/vite.js --host 127.0.0.1", "dev:e2e": "node --import tsx node_modules/vite/bin/vite.js build --mode browser-test && node --import tsx node_modules/vite/bin/vite.js preview --mode browser-test", "build": "tsc -p tsconfig.json && node --import tsx node_modules/vite/bin/vite.js build", "typecheck": "tsc -p tsconfig.json", "tauri": "tauri" },
   "dependencies": {
     "@video-quickly/contracts": "workspace:*", "@video-quickly/video": "workspace:*",
     "@gsap/react": "2.1.2", "gsap": "3.15.0",

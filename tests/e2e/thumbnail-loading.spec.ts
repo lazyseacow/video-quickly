@@ -64,7 +64,7 @@ test('cancels real frame reads without retaining thumbnail video elements or poi
   const { project, asset } = await fixture(request, info); await open(page, project.title);
   await color(page.locator('.outline-shot').last().locator('canvas'), 'blue');
   const result = await page.evaluate(async asset => {
-    const modulePath: string = '/src/components/preview-thumbnails.ts';
+    const modulePath: string = '/__desktop_test/thumbnail';
     const { videoThumbnails } = await import(modulePath);
     const controllers = Array.from({ length: 80 }, () => new AbortController());
     const pending = controllers.map((controller, index) => videoThumbnails.read({ asset, timeUs: index * 30_000, width: 123, height: 69 }, controller.signal));

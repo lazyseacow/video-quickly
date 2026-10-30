@@ -400,7 +400,8 @@ export const recordPageSchema = <T extends z.ZodType>(item: T) => z.object({ ite
 export type RecordPage<T> = { items: T[]; nextCursor: number | null };
 export const runtimeConnectionSchema = z.object({ state: z.enum(['ready', 'reconnecting', 'disconnected']), generation: z.number().int().nonnegative(), message: z.string().nullable().optional() });
 export type RuntimeConnection = z.infer<typeof runtimeConnectionSchema>;
-export type RuntimeEvent = { type: 'workspace.changed' | 'run.event' | 'runtime.ready' | 'runtime.connection'; data?: JsonValue };
+export const runtimeEventSchema = z.object({ type: z.enum(['workspace.changed', 'run.event', 'runtime.ready', 'runtime.connection']), data: jsonValueSchema.optional() });
+export type RuntimeEvent = z.infer<typeof runtimeEventSchema>;
 export type RpcRequest = { jsonrpc: '2.0'; id: string | number; method: string; params?: unknown };
 export type RpcResponse = { jsonrpc: '2.0'; id: string | number; result?: unknown; error?: { code: number; message: string } };
 

@@ -1,13 +1,15 @@
 import { mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
+import { execFileSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { gunzipSync } from 'node:zlib';
 import { afterEach, expect, it } from 'vitest';
-import { activitySchema, assetSchema, modelSchema, projectDetailSchema, projectSchema, recordPageSchema, runDiagnosticBundleSchema, runDiagnosticsSchema, runEventSchema, runInspectionSchema, runStepPayloadSchema, runSchema, stepOutputVersionSchema, workflowNodeSchema, type AssetRecord, type WorkflowNode } from '@video-quickly/contracts';
+import { activitySchema, assetSchema, jsonValueSchema, modelSchema, projectDetailSchema, projectSchema, recordPageSchema, runDiagnosticBundleSchema, runDiagnosticsSchema, runEventSchema, runInspectionSchema, runStepPayloadSchema, runSchema, stepOutputVersionSchema, workflowNodeSchema, type AssetRecord, type WorkflowNode } from '@video-quickly/contracts';
 import { createRuntime, SimulatedProcessExit, type RuntimeOptions } from '../packages/runtime/src';
 import { ActivityJournal } from '../packages/runtime/src/activities';
 import { DocumentStore, openDatabase } from '../packages/runtime/src/database';
+import { createActivityExecutor } from '../packages/integrations/src';
 
 const directories: string[] = [], runtimes: ReturnType<typeof createRuntime>[] = [];
 afterEach(async () => {
@@ -179,5 +181,53 @@ it('keeps the project unchanged when a selected step media file has changed afte
   const { runtime, baseline, run, assets } = await mediaVersions();
   const corrupted = await readFile(assets[0].path); corrupted[0] ^= 1; await writeFile(assets[0].path, corrupted);
   await expect(runtime.dispatch('node.apply', { runId: run.id, nodeId: 'image-a', revision: baseline.revision })).rejects.toThrow(/素材.*(损坏|更改|校验|缺失)/);
+  expect(projectDetailSchema.parse(await runtime.dispatch('project.get', { projectId: baseline.id })).project).toEqual(baseline);
+});
+
+async function mediaReuseFixture(options: Partial<RuntimeOptions> = {}, lockShot = true, kind: 'image' | 'audio' | 'video' = 'image') {
+  const { runtime, project, directory } = await fixture({ executeActivity: createActivityExecutor(), ...options });
+  const initial = projectSchema.parse(await runtime.dispatch('project.update', { projectId: project.id, revision: project.revision, patch: { shots: [{ id: 'locked-image', title: '已经确认的画面', narration: '', visualPrompt: '', durationUs: 1_000_000 }] } }));
+  const path = join(directory, `locked-media.${kind === 'image' ? 'svg' : kind === 'audio' ? 'wav' : 'mp4'}`);
+  if (kind === 'image') await writeFile(path, '<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64"><rect width="64" height="64" fill="red"/></svg>');
+  else execFileSync(process.env.VIDEO_QUICKLY_FFMPEG ?? 'ffmpeg', ['-hide_banner', '-loglevel', 'error', '-y', '-f', 'lavfi', '-i', kind === 'audio' ? 'anullsrc=r=8000:cl=mono' : 'color=c=blue:s=64x64:r=10:d=2', '-t', '2', ...(kind === 'audio' ? ['-c:a', 'pcm_s16le'] : ['-an', '-c:v', 'libx264', '-preset', 'ultrafast', '-pix_fmt', 'yuv420p']), path], { windowsHide: true });
+  const asset = assetSchema.parse(await runtime.dispatch('asset.import', { projectId: initial.id, shotId: initial.shots[0].id, path, kind }));
+  const imported = projectDetailSchema.parse(await runtime.dispatch('project.get', { projectId: initial.id })).project!;
+  const locked = projectSchema.parse(await runtime.dispatch('project.update', { projectId: imported.id, revision: imported.revision, patch: { shots: imported.shots.map(shot => ({ ...shot, locked: lockShot, sourceInUs: 250_000, sceneInUs: 125_000, audioInUs: 333_000, videoInUs: 222_000 })) } }));
+  const model = kind === 'video' ? modelSchema.parse(await runtime.dispatch('model.save', { model: { name: '仅复用锁定视频的模型夹具', provider: 'custom-http', baseUrl: 'http://127.0.0.1:1', model: 'locked-existing', capabilities: ['video'] } })) : undefined;
+  const baseline = await workflow(runtime, locked.id, [workflowNodeSchema.parse({ id: 'assets', kind: kind === 'image' ? 'assets' : kind === 'audio' ? 'voice' : 'animation', modelId: model?.id, label: '复用已经确认的素材' })]);
+  return { runtime, baseline, asset };
+}
+
+it.each(['image', 'audio', 'video'] as const)('reuses locked %s through the actual media executor without replacing its binding or source offsets', async kind => {
+  const { runtime, baseline, asset } = await mediaReuseFixture({}, true, kind);
+  const run = await start(runtime, baseline.id);
+  expect((await inspect(runtime, run.id)).run.status).toBe('succeeded');
+  const output = await payload(runtime, run.id, 'assets', 'output'); expect(output.value).toMatchObject({ assets: [{ id: asset.id }], source: kind === 'video' ? 'model' : 'imported' });
+  const applied = projectSchema.parse(await runtime.dispatch('node.apply', { runId: run.id, nodeId: 'assets', revision: baseline.revision }));
+  expect(applied.shots).toEqual(baseline.shots);
+});
+
+
+it.each(['binding', 'version'] as const)('rejects a changed locked image %s returned by the media executor without rewriting the source asset', async change => {
+  const execute = createActivityExecutor();
+  const { runtime, baseline, asset } = await mediaReuseFixture({ executeActivity: async context => {
+    const output = await execute(context);
+    if (!output || typeof output !== 'object' || Array.isArray(output) || !Array.isArray(output.assets)) throw new Error('Expected the actual imported-media output');
+    return jsonValueSchema.parse({ ...output, assets: output.assets.map(value => { const parsed = assetSchema.parse(value); return change === 'binding' ? { ...parsed, id: 'replacement' } : { ...parsed, version: parsed.version + 1 }; }) });
+  } });
+  const run = await start(runtime, baseline.id);
+  const detail = await inspect(runtime, run.id); expect(detail.run.status).toBe('needs_attention'); expect(detail.steps[0].outputAvailable).toBe(false);
+  const assets = recordPageSchema(assetSchema).parse(await runtime.dispatch('asset.list'));
+  expect(assets.items.find(item => item.id === asset.id)).toEqual(asset); expect(assets.items.some(item => item.id === 'replacement')).toBe(false);
+  expect(projectDetailSchema.parse(await runtime.dispatch('project.get', { projectId: baseline.id })).project).toEqual(baseline);
+});
+
+it('retains an asset-library change made while an imported-media result is being prepared', async () => {
+  const execute = createActivityExecutor(); let retain: () => Promise<void> = async () => {};
+  const { runtime, baseline, asset } = await mediaReuseFixture({ executeActivity: async context => { const output = await execute(context); await retain(); return output; } }, false);
+  retain = async () => { await runtime.dispatch('asset.retain', { assetId: asset.id, retained: true }); };
+  const run = await start(runtime, baseline.id); expect((await inspect(runtime, run.id)).run.status).toBe('succeeded');
+  const assets = recordPageSchema(assetSchema).parse(await runtime.dispatch('asset.list'));
+  expect(assets.items.find(item => item.id === asset.id)).toEqual({ ...asset, retained: true });
   expect(projectDetailSchema.parse(await runtime.dispatch('project.get', { projectId: baseline.id })).project).toEqual(baseline);
 });
