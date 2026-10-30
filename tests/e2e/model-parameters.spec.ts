@@ -126,21 +126,26 @@ test('shows protocol-specific controls and rejects malformed values in both UI a
 
 for (const delayedProgress of [false, true]) test(`uses the saved structured controls in actual text and image HTTP requests without cross-capability leakage${delayedProgress ? ' with delayed terminal progress' : ''}`, async ({ page, request }) => {
   const errors = observe(page), requests: Array<{ path: string; body: Record<string, unknown> }> = [];
-  let releaseProgress!: () => void, terminalObserved!: () => void;
-  const progressGate = new Promise<void>(resolve => { releaseProgress = resolve; });
-  const terminalProgress = new Promise<void>(resolve => { terminalObserved = resolve; });
-  let imageRunId: string | undefined;
+  function progressGate() {
+    let release!: () => void, observe!: () => void;
+    const released = new Promise<void>(resolve => { release = resolve; });
+    const observed = new Promise<void>(resolve => { observe = resolve; });
+    return { release, observe, released, observed };
+  }
+  const gates = { script: progressGate(), image: progressGate() };
+  const generatedKinds = new Map<string, keyof typeof gates>();
   // Hold only the observer response: the actual HTTP generation and runtime
   // still finish, while the dialog must retain its previous candidate list.
   if (delayedProgress) await page.route('**/__desktop_rpc', async route => {
     const input = route.request().postDataJSON();
-    if (input.method === 'shot.regenerate' && input.params.kind === 'image') {
-      const response = await route.fetch(), payload = await response.json(); imageRunId = payload.result.id;
+    if (input.method === 'shot.regenerate' && (input.params.kind === 'script' || input.params.kind === 'image')) {
+      const response = await route.fetch(), payload = await response.json(); generatedKinds.set(payload.result.id, input.params.kind);
       await route.fulfill({ response, json: payload }); return;
     }
-    if (input.method === 'run.get' && input.params.runId === imageRunId) {
+    const kind = input.method === 'run.get' ? generatedKinds.get(input.params.runId) : undefined;
+    if (kind) {
       const response = await route.fetch(), payload = await response.json();
-      if (payload.result.status === 'succeeded') { terminalObserved(); await progressGate; }
+      if (payload.result.status === 'succeeded') { gates[kind].observe(); await gates[kind].released; }
       await route.fulfill({ response, json: payload }); return;
     }
     await route.continue();
@@ -158,20 +163,27 @@ for (const delayedProgress of [false, true]) test(`uses the saved structured con
     const json = await advanced(form); const values = JSON.parse(await json.inputValue()); await (await advanced(form)).fill(JSON.stringify({ ...values, vendor_tag: 'round-trip' })); await form.getByRole('button', { name: '保存连接', exact: true }).click(); await expect(form).toHaveCount(0); const model = await savedModel(request, name);
     let project = await rpc<ProjectDocument>(request, 'project.create', { title: `参数真实请求验收${delayedProgress ? ' 延迟进度' : ''}` }); project = await rpc<ProjectDocument>(request, 'project.update', { projectId: project.id, revision: project.revision, patch: { shots: [{ id: 'parameters-shot', title: '原镜头', narration: '旁白', visualPrompt: '画面', durationUs: 2_000_000 }] } });
     await page.reload(); await page.getByRole('button', { name: '我的项目', exact: true }).click(); await page.locator('.project-card').filter({ hasText: project.title }).getByRole('button', { name: /继续创作/ }).click(); await page.getByRole('button', { name: 'AI 微调', exact: true }).click();
-    const dialog = page.getByRole('dialog', { name: '镜头候选', exact: true }); await (await settingField(dialog, '生成模型')).selectOption(model.id); await dialog.getByRole('button', { name: '生成候选', exact: true }).click();
+    const dialog = page.getByRole('dialog', { name: '镜头候选', exact: true });
+    async function generateAndWait(kind: keyof typeof gates, previousCandidates: number) {
+      await (await settingField(dialog, '生成内容')).selectOption(kind); await (await settingField(dialog, '生成模型')).selectOption(model.id);
+      const generated = page.waitForResponse(response => {
+        if (!response.url().endsWith('/__desktop_rpc') || response.request().method() !== 'POST') return false;
+        const input = response.request().postDataJSON(); return input.method === 'shot.regenerate' && input.params.projectId === project.id && input.params.kind === kind;
+      });
+      await dialog.getByRole('button', { name: '生成候选', exact: true }).click();
+      const response = await generated, started = await response.json(); expect(response.ok()).toBe(true); expect(started.error).toBeUndefined();
+      // Both text and image generation are asynchronous. Keep the normal UI
+      // assertion timeout separate from startup, generation and progress reads.
+      await expect.poll(async () => (await rpc<RunSummary>(request, 'run.get', { runId: started.result.id })).status, { timeout: 30_000 }).toBe('succeeded');
+      if (delayedProgress) { await gates[kind].observed; await expect(dialog.locator('.shot-regeneration__history-item')).toHaveCount(previousCandidates); gates[kind].release(); }
+    }
+    await generateAndWait('script', 0);
     await expect(dialog.locator('.shot-regeneration__comparison')).toContainText('真实参数候选'); await expect(dialog.getByRole('button', { name: '生成候选', exact: true })).toBeEnabled();
-    await (await settingField(dialog, '生成内容')).selectOption('image'); await (await settingField(dialog, '生成模型')).selectOption(model.id);
-    const imageStarted = page.waitForResponse(response => response.url().endsWith('/__desktop_rpc') && response.request().method() === 'POST' && response.request().postDataJSON().method === 'shot.regenerate' && response.request().postDataJSON().params.kind === 'image');
-    await dialog.getByRole('button', { name: '生成候选', exact: true }).click();
-    const started = await (await imageStarted).json(); expect(started.error).toBeUndefined();
-    // Starting the run is asynchronous. Keep the normal UI assertion timeout
-    // separate from generation, initial workspace refresh and progress polling.
-    await expect.poll(async () => (await rpc<RunSummary>(request, 'run.get', { runId: started.result.id })).status, { timeout: 30_000 }).toBe('succeeded');
-    if (delayedProgress) { await terminalProgress; await expect(dialog.locator('.shot-regeneration__history-item')).toHaveCount(1); releaseProgress(); }
+    await generateAndWait('image', 1);
     await expect(dialog.locator('.shot-regeneration__history-item')).toHaveCount(2);
     await expect(dialog.getByAltText('候选画面')).toBeVisible();
     expect(requests).toHaveLength(2); expect(requests[0].body).toMatchObject({ temperature: .25, max_tokens: 87, vendor_tag: 'round-trip' }); for (const key of ['quality', 'size', 'voice', 'speed']) expect(requests[0].body).not.toHaveProperty(key);
     expect(requests[1].body).toMatchObject({ size: '1024x1024', quality: 'high', vendor_tag: 'round-trip' }); for (const key of ['temperature', 'max_tokens', 'voice', 'speed']) expect(requests[1].body).not.toHaveProperty(key);
     expect((await rpc<{ project: ProjectDocument }>(request, 'project.get', { projectId: project.id })).project).toEqual(project); expect(errors).toEqual([]);
-  } finally { releaseProgress(); server.closeAllConnections(); await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve())); }
+  } finally { gates.script.release(); gates.image.release(); server.closeAllConnections(); await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve())); }
 });

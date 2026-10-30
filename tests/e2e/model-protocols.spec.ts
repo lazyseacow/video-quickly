@@ -8,6 +8,45 @@ async function rpc<T>(request: APIRequestContext, method: string, params: unknow
   expect(response.ok()).toBe(true); expect(payload.error).toBeUndefined(); return payload.result;
 }
 
+for (const manual of ['focused before typing', 'already typing'] as const) {
+  test(`preserves manual model input when discovery completes: ${manual}`, async ({ page, request }) => {
+    let releaseModels!: () => void, requestedModels!: () => void;
+    const released = new Promise<void>(resolve => { releaseModels = resolve; });
+    const requested = new Promise<void>(resolve => { requestedModels = resolve; });
+    const server = createServer(async (incoming, response) => {
+      expect(incoming.method).toBe('GET'); expect(incoming.url).toBe('/v1/models');
+      requestedModels(); await released;
+      response.setHeader('Content-Type', 'application/json'); response.end(JSON.stringify({ data: [{ id: 'discovered-model' }] }));
+    });
+    await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
+    const address = server.address(); if (!address || typeof address === 'string') throw new Error('测试服务未启动。');
+    try {
+      await page.setViewportSize({ width: 390, height: 844 }); await page.goto('/');
+      await page.getByRole('button', { name: '模型连接', exact: true }).click();
+      const dialog = await addModelConnection(page), name = `异步发现期间的手动型号 ${manual}`;
+      await (await settingField(dialog, '连接名称')).fill(name);
+      await (await settingField(dialog, '模型平台')).selectOption('custom');
+      await (await settingField(dialog, '服务地址')).fill(`http://127.0.0.1:${address.port}/v1`);
+      await requested;
+      const input = dialog.locator('input[aria-label="模型 ID"]');
+      await input.focus();
+      if (manual === 'already typing') await page.keyboard.insertText('private-');
+      releaseModels();
+      await expect(dialog.getByRole('status')).toContainText('已读取 1 个模型');
+      await expect(input).toBeFocused();
+      await page.keyboard.insertText(manual === 'already typing' ? 'model' : 'private-model');
+      await expect(input).toHaveValue('private-model');
+      await dialog.getByRole('button', { name: '从列表选择', exact: true }).click();
+      const selector = dialog.locator('select[aria-label="模型 ID"]');
+      await expect(selector).toHaveValue('private-model');
+      await expect(selector.locator('option[value="discovered-model"]')).toHaveCount(1);
+      await dialog.getByRole('button', { name: '保存连接', exact: true }).click(); await expect(dialog).toHaveCount(0);
+      const workspace = await rpc<{ models: ModelProfile[] }>(request, 'workspace.summary');
+      expect(workspace.models.find(model => model.name === name)?.model).toBe('private-model');
+    } finally { releaseModels(); server.closeAllConnections(); await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve())); }
+  });
+}
+
 for (const viewport of [{ width: 1536, height: 960, theme: 'dark' }, { width: 390, height: 844, theme: 'light' }]) {
   for (const protocol of ['chat-completions', 'responses', 'messages'] as const) {
     test(`saves and executes ${protocol} from the model form at ${viewport.width}px`, async ({ page, request }, info) => {
@@ -29,7 +68,10 @@ for (const viewport of [{ width: 1536, height: 960, theme: 'dark' }, { width: 39
         await (await settingField(dialog, '模型平台')).selectOption(protocol === 'messages' ? 'anthropic' : 'custom');
         await expect(await settingField(dialog, 'API 协议')).toHaveValue(protocol === 'messages' ? 'messages' : 'chat-completions');
         expect(await (await settingField(dialog, 'API 协议')).locator('option').allTextContents()).toEqual(['Chat Completions', 'Responses API', 'Anthropic Messages']);
-        await (await settingField(dialog, '服务地址')).fill(`http://127.0.0.1:${address.port}/proxy/v1`); await (await settingField(dialog, '模型 ID')).fill('fixture-protocol');
+        await (await settingField(dialog, '服务地址')).fill(`http://127.0.0.1:${address.port}/proxy/v1`);
+        const models = dialog.locator('select[aria-label="模型 ID"]');
+        await expect(models.locator('option[value="fixture-protocol"]')).toHaveCount(1);
+        await models.selectOption('fixture-protocol');
         await (await settingField(dialog, '最大输出 Token')).fill('128'); await (await settingField(dialog, '文本温度')).fill('0.5');
         await (await settingField(dialog, 'API 协议')).selectOption(protocol); await expect(await settingField(dialog, '最大输出 Token')).toHaveValue('128');
         await dialog.getByRole('tab', { name: '基本连接', exact: true }).click();
