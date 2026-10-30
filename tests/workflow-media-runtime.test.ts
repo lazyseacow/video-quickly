@@ -4,9 +4,9 @@ import { mkdtemp, rm, writeFile, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { afterEach, expect, it } from 'vitest';
-import { projectSchema, workflowSchema, workflowNodeSchema, type ProjectDocument, type RunRecord, type RunInspection } from '@video-quickly/contracts';
+import { projectSchema, workflowSchema, workflowNodeSchema, type ModelProfile, type ProjectDocument, type RunRecord, type RunInspection } from '@video-quickly/contracts';
 import { createRuntime, SimulatedProcessExit } from '../packages/runtime/src/index';
-import { createActivityExecutor } from '../packages/integrations/src/index';
+import { createActivityExecutor, validateMediaActivity, type MediaActivityContext } from '../packages/integrations/src/index';
 import { openDatabase, DocumentStore } from '../packages/runtime/src/database';
 
 const directories: string[] = [], servers: Server[] = [], runtimes: ReturnType<typeof createRuntime>[] = [];
@@ -14,21 +14,50 @@ afterEach(async () => { await Promise.allSettled(runtimes.splice(0).map(value =>
 const png = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=';
 async function service(handler: RequestListener) { const server = createServer(handler); servers.push(server); await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve)); const address = server.address(); if (!address || typeof address === 'string') throw new Error('Missing address'); return `http://127.0.0.1:${address.port}`; }
 async function fixture(baseUrl: string, options: Partial<Parameters<typeof createRuntime>[0]> = {}) {
-  const directory = await mkdtemp(join(tmpdir(), 'vq-media-runtime-')); directories.push(directory); const runtime = createRuntime({ dataDirectory: directory, seed: false, executeActivity: createActivityExecutor(), ...options }); runtimes.push(runtime);
+  const directory = await mkdtemp(join(tmpdir(), 'vq-media-runtime-')); directories.push(directory); const runtime = createRuntime({ dataDirectory: directory, seed: false, preflightActivity: validateMediaActivity, executeActivity: createActivityExecutor(), ...options }); runtimes.push(runtime);
   const project = projectSchema.parse(await runtime.dispatch('project.create', { title: '并发任务', brief: '' }));
-  const model = await runtime.dispatch('model.save', { model: { name: 'HTTP夹具', provider: 'custom-http', model: 'fixture', baseUrl, capabilities: ['image'], parameters: { requestPath: 'generate', requestTemplate: { name: '{{narration}}' }, resultUrlPath: 'url' } } }) as { id: string };
+  const model = await runtime.dispatch('model.save', { model: { name: 'HTTP夹具', provider: 'custom-http', model: 'fixture', baseUrl, capabilities: ['image'], parameters: { requestPath: 'generate', requestTemplate: { name: '{{narration}}' }, resultUrlPath: 'url' } } }) as ModelProfile;
   const saved = projectSchema.parse(await runtime.dispatch('project.update', { projectId: project.id, revision: project.revision, patch: { shots: [0, 1].map(index => ({ id: `shot-${index}`, title: `镜头${index}`, narration: `shot-${index}`, visualPrompt: '', durationUs: 1_000_000 })), workflow: workflowSchema.parse({ id: 'parallel', version: 1, name: 'parallel', nodes: [workflowNodeSchema.parse({ id: 'images', kind: 'assets', label: '画面', modelId: model.id })], edges: [], execution: { maxConcurrentShots: 2, modelLimits: { [model.id]: 2 } } }) } }));
-  return { runtime, directory, project: saved };
+  return { runtime, directory, project: saved, model };
 }
 async function body(request: Parameters<RequestListener>[0]) { let text = ''; for await (const chunk of request) text += chunk; return JSON.parse(text); }
-function restart(directory: string) { const runtime = createRuntime({ dataDirectory: directory, seed: false, executeActivity: createActivityExecutor() }); runtimes.push(runtime); return runtime; }
-it('stops native sibling requests queued behind a model limit before releasing a failed request slot', async () => {
-  let posts = 0;
-  const base = await service(async (request, response) => { if (request.method === 'POST') { posts++; await body(request); } response.writeHead(503).end(); });
-  const { runtime, project } = await fixture(base); const modelId = project.workflow.nodes[0].modelId!;
+function restart(directory: string) { const runtime = createRuntime({ dataDirectory: directory, seed: false, preflightActivity: validateMediaActivity, executeActivity: createActivityExecutor() }); runtimes.push(runtime); return runtime; }
+it('checks the whole batch before any fresh sibling POST when another shot has a prepared or unknown receipt', async () => {
+  const posts: string[] = []; let release!: () => void, submitted!: () => void;
+  const gate = new Promise<void>(resolve => { release = resolve; }), received = new Promise<void>(resolve => { submitted = resolve; });
+  const base = await service(async (request, response) => { if (request.method === 'POST') { posts.push((await body(request)).name); submitted(); await gate; } response.writeHead(503).end(); });
+  const { directory, project, model } = await fixture(base);
+  const serial = { ...project, workflow: { ...project.workflow, execution: { maxConcurrentShots: 1, modelLimits: { [model.id]: 1 } } } };
+  const context: MediaActivityContext = { project: serial, node: project.workflow.nodes[0], model, runId: 'receipt-preflight', operationId: 'receipt-preflight:images', dataDirectory: directory, assets: [], signal: new AbortController().signal, persistRemoteTask() {} };
+  const first = expect(createActivityExecutor()({ ...context, project: { ...serial, shots: [serial.shots[1]] } })).rejects.toThrow('HTTP 503');
+  try {
+    await received;
+    await expect(validateMediaActivity({ ...context, operationId: undefined, dataDirectory: undefined })).resolves.toBeUndefined();
+    await expect(validateMediaActivity(context)).rejects.toThrow('核对'); expect(posts).toEqual(['shot-1']);
+  }
+  finally { release(); await first; }
+  // A fresh executor has no in-memory scheduling state. Its first shot is the
+  // still-unsubmitted sibling, so only a full-batch receipt check can stop it.
+  await expect(createActivityExecutor()(context)).rejects.toThrow('核对'); expect(posts).toEqual(['shot-1']);
+});
+it.each([429, 503])('stops native sibling requests on HTTP %i and preserves the original receipt across restart', async status => {
+  const posts: string[] = [];
+  const base = await service(async (request, response) => {
+    if (request.method === 'POST') posts.push((await body(request)).name);
+    response.writeHead(status, { 'Retry-After': '1' }).end();
+  });
+  const { runtime, directory, project } = await fixture(base); const modelId = project.workflow.nodes[0].modelId!;
   await runtime.dispatch('workflow.save', { projectId: project.id, revision: project.revision, workflow: { ...project.workflow, execution: { maxConcurrentShots: 2, modelLimits: { [modelId]: 1 } } } });
   const run = await runtime.dispatch('run.start', { projectId: project.id }) as RunRecord; await runtime.waitForIdle();
-  expect((await runtime.dispatch('run.inspect', { runId: run.id }) as RunInspection).run.status).toBe('failed'); expect(posts).toBe(1);
+  expect(posts).toHaveLength(1); const unknownShot = posts[0]; expect(project.shots.map(shot => shot.id)).toContain(unknownShot);
+  const failed = (await runtime.dispatch('run.inspect', { runId: run.id }) as RunInspection).run;
+  expect(failed.status).toBe('failed'); expect(failed.error).toContain('核对'); expect(posts).toEqual([unknownShot]);
+  const receiptPath = join(directory, 'projects', project.id, 'activities', createHash('sha256').update(`${run.id}:images`).digest('hex').slice(0, 24), `${createHash('sha256').update(unknownShot).digest('hex').slice(0, 24)}.receipt.json`);
+  const receipt = await readFile(receiptPath, 'utf8'); expect(JSON.parse(receipt)).toMatchObject({ state: 'unknown' });
+  await runtime.close();
+  const recovered = restart(directory); await recovered.dispatch('run.resume', { runId: run.id }); await recovered.waitForIdle();
+  const restored = (await recovered.dispatch('run.inspect', { runId: run.id }) as RunInspection).run;
+  expect(restored.status).toBe('failed'); expect(restored.error).toContain('核对'); expect(posts).toEqual([unknownShot]); expect(await readFile(receiptPath, 'utf8')).toBe(receipt);
 });
 it('validates native cached assets before committing the parent activity and never resubmits corrupted completed shots', async () => {
   let posts = 0, downloads = 0;

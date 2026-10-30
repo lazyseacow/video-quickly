@@ -108,7 +108,9 @@ function comfyPrompt(context: MediaActivityContext, shot: Shot, references: Reso
   return workflow;
 }
 
-type MediaPreflightContext = Pick<MediaActivityContext, 'project' | 'node' | 'assets' | 'model' | 'characters'>;
+type MediaPreflightContext = Pick<MediaActivityContext, 'project' | 'node' | 'assets' | 'model' | 'characters'> & Partial<Pick<MediaActivityContext, 'operationId' | 'dataDirectory' | 'signal'>>;
+const mediaActivityDirectory = (dataDirectory: string, projectId: string, operationId: string) => resolve(dataDirectory, 'projects', projectId, 'activities', createHash('sha256').update(operationId).digest('hex').slice(0, 24));
+const mediaShotFileId = (shotId: string) => createHash('sha256').update(shotId).digest('hex').slice(0, 24);
 const imageMimeTypes = ['image/png', 'image/jpeg', 'image/webp'];
 function currentVideoImage(context: MediaPreflightContext, shot: Shot): AssetRecord | undefined {
   return context.assets.find(asset => asset.id === shot.assetId && asset.kind === 'image' && asset.active)
@@ -170,6 +172,17 @@ export async function validateMediaActivity(context: MediaPreflightContext): Pro
   const protocols: Record<string, string[]> = { assets: ['openai-compatible', 'seedream', 'comfyui', 'custom-http'], voice: ['openai-compatible', 'qwen-tts', 'volcengine-tts', 'custom-http'], animation: ['openai-compatible', 'seedance', 'comfyui', 'custom-http'] };
   if (protocols[context.node.kind] && !protocols[context.node.kind].includes(model.provider)) throw new Error('所选模型的服务协议不适用于此制作步骤');
   if (context.node.kind === 'voice' && ['qwen-tts', 'volcengine-tts'].includes(model.provider) && context.node.config.operation === 'regenerate' && typeof context.node.config.instruction === 'string' && context.node.config.instruction.trim()) throw new Error('当前配音接口不支持单镜头调整要求，请留空或改用支持语音指令的模型。');
+  if (capability && context.operationId && context.dataDirectory) {
+    // Check the frozen batch before native tasks are replayed. A queued sibling
+    // can run before the failed task; its own missing receipt is not permission
+    // to create more paid work while another submission remains ambiguous.
+    const directory = mediaActivityDirectory(context.dataDirectory, context.project.id, context.operationId);
+    for (const shot of context.project.shots) {
+      context.signal?.throwIfAborted();
+      const receipt = await readReceipt(join(directory, `${mediaShotFileId(shot.id)}.receipt.json`));
+      if (receipt && ['prepared', 'unknown'].includes(receipt.state)) throw new Error('有镜头上次提交结果不明确，核对服务端任务后再继续。');
+    }
+  }
   if (!['assets', 'animation'].includes(context.node.kind)) return;
   for (const shot of context.project.shots) {
     const kind = context.node.kind === 'assets' ? 'image' : 'video';
@@ -273,7 +286,7 @@ async function generateMedia(context: MediaActivityContext, directory: string, s
   const instruction = context.node.config.operation === 'regenerate' && typeof context.node.config.instruction === 'string' ? context.node.config.instruction : '';
   if (kind === 'audio' && ['qwen-tts', 'volcengine-tts'].includes(model.provider) && instruction.trim()) throw new Error('当前配音接口不支持单镜头调整要求，请留空或改用支持语音指令的模型。');
   const extension = kind === 'image' ? '.png' : kind === 'video' ? '.mp4' : '.mp3';
-  const fileId = createHash('sha256').update(shot.id).digest('hex').slice(0, 24);
+  const fileId = mediaShotFileId(shot.id);
   const destination = join(directory, `${fileId}${extension}`);
   const receiptPath = join(directory, `${fileId}.receipt.json`);
   let receipt = await readReceipt(receiptPath);
@@ -301,7 +314,10 @@ async function generateMedia(context: MediaActivityContext, directory: string, s
         receipt = taskId ? { state: 'submitted', taskId } : { state: 'download', downloadUrl: stringOrUndefined(atPath(result, model.parameters.resultUrlPath)), base64: stringOrUndefined(atPath(result, model.parameters.resultBase64Path)) };
         receipt.providerUsage = providerReportedUsage(result);
       } else if (kind === 'image' && model.provider !== 'comfyui') {
-        const imageParameters = { ...parameters, model: model.model, prompt, n: 1, size: parameters.size ?? `${context.project.profile.width}x${context.project.profile.height}` };
+        // GPT Image chooses a valid generation resolution independently of the
+        // export profile; arbitrary project dimensions may violate its limits.
+        const defaultSize = model.provider === 'openai-compatible' && (model.model.startsWith('gpt-image-') || model.model === 'chatgpt-image-latest') ? 'auto' : `${context.project.profile.width}x${context.project.profile.height}`;
+        const imageParameters = { ...parameters, model: model.model, prompt, n: 1, size: parameters.size ?? defaultSize };
         const editing = references.images.length > 0 && model.provider === 'openai-compatible';
         const imageBody = JSON.stringify({ ...imageParameters, ...(editing ? { images: references.images.map(image => ({ image_url: image.dataUrl })) } : references.images.length && model.provider === 'seedream' ? { image: references.images.map(image => image.dataUrl) } : {}) });
         const result = await requestJson(endpoint(model.baseUrl, editing ? 'images/edits' : 'images/generations'), context, {
@@ -437,7 +453,7 @@ export function createActivityExecutor(options: { ffmpegPath?: string } = {}) {
     // Per-shot receipts own ambiguous submit recovery; allow the parent graph
     // to enter this adapter again and inspect them after a process restart.
     if (context.model) context.persistRemoteTask(`media-receipts:${context.operationId}`);
-    const directory = resolve(context.dataDirectory, 'projects', context.project.id, 'activities', createHash('sha256').update(context.operationId).digest('hex').slice(0, 24));
+    const directory = mediaActivityDirectory(context.dataDirectory, context.project.id, context.operationId);
     await mkdir(directory, { recursive: true });
     if (context.node.kind === 'export') {
       const output = await renderProject({ project: context.project, assets: context.assets, outputDirectory: directory, ffmpegPath: options.ffmpegPath, signal: context.signal, onProgress: context.onProgress, preparedAudioMix: context.preparedAudioMix });

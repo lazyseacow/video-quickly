@@ -39,7 +39,7 @@ jobs:
       - name: Check types
         run: pnpm typecheck
       - name: Test runtime and contracts
-        run: pnpm exec vitest run --reporter=default --reporter=json --outputFile=.generated/test-results.json
+        run: pnpm exec vitest run --maxWorkers=2 --reporter=default --reporter=json --outputFile=.generated/test-results.json
       - name: Install test browser
         run: pnpm exec playwright install chromium
       - name: Test workbench
@@ -50,6 +50,10 @@ jobs:
         run: pnpm test:media -- --4k
       - name: Build Windows client
         run: pnpm build:desktop
+      - name: Test packaged PDF parsing outside repository
+        env:
+          VIDEO_QUICKLY_RESEARCH_RUNTIME_STAGE: ${{ github.workspace }}\.generated\sidecar
+        run: pnpm exec vitest run tests/research-packaging.test.ts --maxWorkers=1 --reporter=default --reporter=json --outputFile=.generated/packaged-runtime-results.json
       - name: Test native runtime bridge
         working-directory: apps/desktop/src-tauri
         run: cargo test --locked --lib
@@ -71,6 +75,7 @@ jobs:
           path: |
             .generated/release/
             .generated/test-results.json
+            .generated/packaged-runtime-results.json
             .generated/browser-results.json
             .generated/browser-artifacts/
             .generated/real-service-cli-regression/fixture-check.json

@@ -72,7 +72,7 @@ export interface RuntimeOptions {
   provider?: TextProvider;
   failpoint?: ActivityHooks['failpoint'];
   executeActivity?: (context: ActivityExecutionContext) => Promise<JsonValue>;
-  preflightActivity?: (context: Pick<ActivityExecutionContext, 'project' | 'node' | 'assets' | 'model' | 'characters' | 'signal' | 'dataDirectory'>) => void | Promise<void>;
+  preflightActivity?: (context: Pick<ActivityExecutionContext, 'project' | 'node' | 'assets' | 'model' | 'characters' | 'signal' | 'dataDirectory'> & Partial<Pick<ActivityExecutionContext, 'operationId'>>) => void | Promise<void>;
   readAudioWaveform?: (asset: AssetRecord) => Promise<AudioWaveform>;
   audioMix?: AudioMixCallbacks;
   activitySafety?: (node: WorkflowNode) => ActivitySafety;
@@ -459,7 +459,7 @@ export function createRuntime(options: RuntimeOptions) {
       ...generatedAssets,
       ...characterAssets,
     ].map(asset => [asset.id, asset])).values()] : [];
-    if (media && selectedModel) await options.preflightActivity?.({ project: executionProject, node, assets: activityAssets, model: selectedModel, characters: executionCharacters, signal: controller.signal, dataDirectory: directory });
+    if (media && selectedModel) await options.preflightActivity?.({ project: executionProject, node, assets: activityAssets, model: selectedModel, characters: executionCharacters, signal: controller.signal, dataDirectory: directory, operationId: `${runId}:${node.id}` });
     if (media && cached?.status === 'completed' && cached.result) {
       const result: unknown = JSON.parse(cached.result);
       if (node.config.operation === 'transcribe') {

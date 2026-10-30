@@ -3,7 +3,7 @@ import { createServer, type Server } from 'node:http';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, expect, it, vi } from 'vitest';
+import { afterEach, expect, it } from 'vitest';
 import { applyResearchClaims, projectSchema, researchResultSchema, runSchema, type ModelProfile, type ProjectDocument, type ResearchSource, type UsageRecord } from '@video-quickly/contracts';
 import { createRuntime, SimulatedProcessExit, type RuntimeOptions } from '../packages/runtime/src';
 
@@ -14,9 +14,11 @@ function open(directory: string, options: Partial<RuntimeOptions> = {}) { const 
 async function current(runtime: ReturnType<typeof createRuntime>, projectId: string) { return (await runtime.dispatch('project.get', { projectId }) as { project: ProjectDocument }).project; }
 async function fixture(options: Partial<RuntimeOptions> = {}) {
   const directory = await mkdtemp(join(tmpdir(), 'video-quickly-research-runtime-')); directories.push(directory);
+  let received!: () => void;
+  const requestReceived = new Promise<void>(resolve => { received = resolve; });
   const requests: Array<{ model: string; messages: Array<{ content: string }> }> = [], state = { sourceId: '', drop: false, hold: false, script: false };
   const server = createServer((request, response) => { void (async () => {
-    let body = ''; for await (const chunk of request) body += chunk.toString(); requests.push(JSON.parse(body));
+    let body = ''; for await (const chunk of request) body += chunk.toString(); requests.push(JSON.parse(body)); received();
     if (state.drop) { response.destroy(); return; } if (state.hold) return;
     response.setHeader('content-type', 'application/json');
     response.end(JSON.stringify({ choices: [{ message: { content: JSON.stringify(state.script ? { shots: [{ title: '候选镜头', narration: '候选文案', visualPrompt: '候选画面' }] } : { claims: [{ text: '纸张由植物纤维构成', status: 'verified', evidence: [{ sourceId: state.sourceId, quote: '纸张由植物纤维构成。' }], shotIds: ['shot-1'] }] }) } }], usage: { prompt_tokens: 20, completion_tokens: 30, total_tokens: 50 } }));
@@ -26,7 +28,7 @@ async function fixture(options: Partial<RuntimeOptions> = {}) {
   const source = await runtime.dispatch('research.source.read', { text: '真实资料：纸张由植物纤维构成。\n其他原文供人工核验。', title: '真实原文' }) as ResearchSource; state.sourceId = source.id;
   const project = projectSchema.parse(await runtime.dispatch('project.update', { projectId: original.id, revision: original.revision, patch: { researchSources: [source], shots: [1, 2].map(index => ({ id: `shot-${index}`, title: `镜头${index}`, narration: '原始旁白', visualPrompt: '', durationUs: 1_000_000 })) } }));
   const model = await runtime.dispatch('model.save', { model: { name: '研究HTTP夹具', provider: 'openai-compatible', baseUrl: `http://127.0.0.1:${address.port}/v1`, model: 'research-fixture', capabilities: ['text'], pricing: { currency: 'USD', inputPerMillionTokens: 1, outputPerMillionTokens: 2 } } }) as ModelProfile;
-  return { runtime, directory, project, source, model, requests, state };
+  return { runtime, directory, project, source, model, requests, state, requestReceived };
 }
 async function analyze(runtime: ReturnType<typeof createRuntime>, project: ProjectDocument, model: ModelProfile, extra = {}) { return runSchema.parse(await runtime.dispatch('research.analyze', { projectId: project.id, revision: project.revision, modelId: model.id, ...extra })); }
 
@@ -72,8 +74,8 @@ it('never repeats an unknown research submission through restart and resume', as
 });
 
 it('preserves research scope on an explicit canceled-task remake instead of running the whole project', async () => {
-  const { runtime, project, model, state, requests } = await fixture(); state.hold = true;
-  const parent = await analyze(runtime, project, model, { sourceIds: [project.researchSources![0].id], instruction: '固定研究要求' }); await vi.waitFor(() => expect(requests).toHaveLength(1));
+  const { runtime, project, model, state, requests, requestReceived } = await fixture(); state.hold = true;
+  const parent = await analyze(runtime, project, model, { sourceIds: [project.researchSources![0].id], instruction: '固定研究要求' }); await requestReceived; expect(requests).toHaveLength(1);
   await runtime.dispatch('run.cancel', { runId: parent.id }); await runtime.waitForIdle(); state.hold = false;
   const restarted = runSchema.parse(await runtime.dispatch('run.start', { projectId: project.id, parentRunId: parent.id })); await runtime.waitForIdle(); expect(requests).toHaveLength(2); expect(requests[1].messages[0].content).toContain('固定研究要求'); expect(restarted.parentRunId).toBe(parent.id);
   const result = researchResultSchema.parse(await runtime.dispatch('node.result', { runId: restarted.id, nodeId: 'research' })); expect(result.claims).toHaveLength(1); expect(await current(runtime, project.id)).toEqual(project);

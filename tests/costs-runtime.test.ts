@@ -2,7 +2,7 @@ import { createServer, type Server } from 'node:http';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, expect, it, vi } from 'vitest';
+import { afterEach, expect, it } from 'vitest';
 import { costTaskDetailSchema, costTaskSchema, projectSchema, recordPageSchema, workflowNodeSchema, type ModelProfile, type RunRecord, type UsageRecord } from '@video-quickly/contracts';
 import { createRuntime, SimulatedProcessExit, type RuntimeOptions } from '../packages/runtime/src';
 import { executeDeepAgent } from '../packages/runtime/src/agent';
@@ -21,10 +21,13 @@ async function records(runtime: ReturnType<typeof createRuntime>, runId: string)
 
 async function fixture(provider: ModelProfile['provider'] = 'openai-compatible', options: Partial<RuntimeOptions> = {}) {
   const directory = await mkdtemp(join(tmpdir(), 'video-quickly-cost-http-')); directories.push(directory);
+  let requestReceived!: () => void;
+  const received = new Promise<void>(resolve => { requestReceived = resolve; });
   const state: { usage: unknown; drop: boolean; hold: boolean; release: () => void; calls: number; body?: Record<string, unknown>; path?: string } = { usage: { prompt_tokens: 100, completion_tokens: 20, total_tokens: 120, prompt_tokens_details: { cached_tokens: 50 } }, drop: false, hold: false, release() {}, calls: 0 };
   const server = createServer((request, response) => { void (async () => {
     let body = ''; for await (const chunk of request) body += chunk.toString();
     state.calls++; state.body = JSON.parse(body) as Record<string, unknown>; state.path = request.url;
+    requestReceived();
     if (state.drop) { response.destroy(); return; }
     if (state.hold) await new Promise<void>(resolve => { state.release = resolve; response.once('close', resolve); });
     if (response.destroyed) return;
@@ -38,7 +41,7 @@ async function fixture(provider: ModelProfile['provider'] = 'openai-compatible',
   const model = await runtime.dispatch('model.save', { model: { name: '费用模型', provider, baseUrl: `http://127.0.0.1:${address.port}${provider === 'ollama' ? '' : '/v1'}`, model: 'metered-model', capabilities: ['text'], parameters: provider === 'ollama' ? { options: { temperature: .3, num_predict: 12 } } : { temperature: .2, private_fixture: 'not-for-the-cost-ledger' }, pricing: { currency: 'USD', inputPerMillionTokens: 2, outputPerMillionTokens: 8 } } }) as ModelProfile;
   await runtime.dispatch('workflow.save', { projectId: project.id, workflow: { id: 'metered', version: 1, name: '费用夹具', nodes: [workflowNodeSchema.parse({ id: 'brief', kind: 'brief', label: '简报', modelId: model.id })], edges: [] } });
   const start = async () => { const run = await runtime.dispatch('run.start', { projectId: project.id }) as RunRecord; await runtime.waitForIdle(); return run; };
-  return { runtime, directory, project, model, state, start };
+  return { runtime, directory, project, model, state, start, received };
 }
 
 it('records official OpenAI usage counters without storing model parameters or creating monetary estimates', async () => {
@@ -119,9 +122,10 @@ it('keeps legacy injected string providers compatible and leaves token charges u
 });
 
 it('marks a canceled in-flight HTTP request without claiming a paid amount', async () => {
-  const { runtime, project, state } = await fixture(); state.hold = true;
+  const { runtime, project, state, received } = await fixture(); state.hold = true;
   const run = await runtime.dispatch('run.start', { projectId: project.id }) as RunRecord;
-  await vi.waitFor(() => expect(state.calls).toBe(1));
+  await received;
+  expect(state.calls).toBe(1);
   expect((await records(runtime, run.id))[0].status).toBe('submitted');
   await runtime.dispatch('run.cancel', { runId: run.id }); await runtime.waitForIdle(); state.release();
   const [record] = await records(runtime, run.id); expect(record.status).toBe('canceled'); expect(record.actualAmount).toBeUndefined(); expect(record.estimatedAmount).toBeUndefined();
