@@ -215,7 +215,17 @@ function aspectRatio(width: number, height: number): string {
 async function atomicJson(path: string, value: unknown) {
   const temporary = `${path}.${randomUUID()}.tmp`;
   await writeFile(temporary, JSON.stringify(value));
-  await rename(temporary, path);
+  // Windows file sharing/permission errors can clear after a handle closes.
+  // Retry only this local replacement, keeping the same temporary file and
+  // the previous receipt intact; external requests never enter this loop.
+  for (let attempt = 0; ; attempt++) {
+    try { await rename(temporary, path); return; }
+    catch (error) {
+      const retryable = error instanceof Error && 'code' in error && typeof error.code === 'string' && ['EPERM', 'EACCES', 'EBUSY'].includes(error.code);
+      if (!retryable || attempt === 5) throw error;
+      await delay(50 * (attempt + 1));
+    }
+  }
 }
 
 async function readReceipt(path: string): Promise<Receipt | undefined> {
