@@ -13,6 +13,9 @@ export { clipSourceAssetIds, validateClipEditContent, validateClipEditHistory, t
 export class TranscriptionTimestampError extends Error {
   constructor() { super('模型没有返回语音时间戳。请选择支持分段时间戳的模型，不能用纯文字结果进行语音对齐。'); }
 }
+export class LockedShotChangeError extends Error {
+  constructor() { super('分镜结果改变了锁定镜头，请保留锁定镜头后重新生成。'); }
+}
 
 export type JsonValue = string | number | boolean | null | JsonValue[] | { [key: string]: JsonValue };
 export const jsonValueSchema: z.ZodType<JsonValue> = z.lazy(() => z.union([
@@ -300,10 +303,20 @@ export const runEventSchema = z.object({
   message: z.string(), nodeId: z.string().optional(), createdAt: z.string(),
 });
 export type RunEvent = z.infer<typeof runEventSchema>;
+export const runSelectionSchema = z.object({ nodeId: z.string().min(1), mode: z.enum(['node', 'downstream']) });
+export type RunSelection = z.infer<typeof runSelectionSchema>;
+export const runPlanSchema = z.object({
+  projectId: z.string(), projectTitle: z.string(), projectRevision: z.number().int(), workflowVersion: z.number().int(),
+  selection: runSelectionSchema, digest: z.string().regex(/^[a-f0-9]{64}$/),
+  steps: z.array(z.object({ id: z.string(), label: z.string(), kind: nodeKindSchema, requiresReview: z.boolean(), modelName: z.string().optional() })),
+  boundary: z.array(z.object({ sourceId: z.string(), sourceLabel: z.string(), targetId: z.string(), targetLabel: z.string() })),
+  shotCount: z.number().int().nonnegative(), lockedShotCount: z.number().int().nonnegative(), hasConditions: z.boolean(), blockedReason: z.string(),
+});
+export type RunPlan = z.infer<typeof runPlanSchema>;
 export const runSchema = z.object({
   id: z.string(), projectId: z.string(), projectRevision: z.number().int(), status: runStatusSchema,
   workflowVersion: z.number().int(), snapshotDigest: z.string(), currentNodeId: z.string().optional(),
-  parentRunId: z.string().optional(), createdAt: z.string(), updatedAt: z.string(), error: z.string().optional(),
+  parentRunId: z.string().optional(), selection: runSelectionSchema.optional(), stepCount: z.number().int().positive().optional(), createdAt: z.string(), updatedAt: z.string(), error: z.string().optional(),
   events: z.array(runEventSchema).default([]), activities: z.array(activitySchema).default([]),
 });
 export type StepRun = z.infer<typeof runSchema>;

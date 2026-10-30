@@ -72,3 +72,6 @@ node scripts/recover-database.mjs --backup "D:\备份\workspace-v4-to-v5-快照.
 `c0ae26e` 的 [Windows CI](https://github.com/lazyseacow/video-quickly/actions/runs/41020129645) 为 138／139 条浏览器流程通过，后续构建／安装未执行。失败 trace 中 `src/lib/source-duration.ts` 返回 `net::ERR_NO_BUFFER_SPACE`，截图为入口尚未完成加载的白屏；浏览器尚未调用工作区接口。与先前 RPC 连接问题分别记录，缺少当时的 TCP 采样，不据此断言端口耗尽。构建产物专项检查实际加载的脚本路径，确认不再请求开发源码模块或 HMR 客户端。
 
 缩略图取消回归通过仅在浏览器测试构建中导出的编译入口读取生产组件的同一个缓存实例；既有并发取消、重读真实蓝色帧和只保留一个带源视频元素的断言保持不变。测试入口由构建清单定位，正式桌面构建不包含该夹具。
+
+
+`7c45341` 的 [Windows CI](https://github.com/lazyseacow/video-quickly/actions/runs/41028813935) 为 139／140 条浏览器流程通过，后续构建／安装未执行。失败的步骤详情回归先返回了预期的 HTTP 500，随后在用户重试前又出现成功读取，截图显示错误提示已消失。已为读取失败增加显式重试状态，并以真实工作区通知覆盖读取中排队刷新及失败后的刷新；保留原有键盘、主题、Token 和焦点断言。后续远程结果以包含此修复的提交为准。

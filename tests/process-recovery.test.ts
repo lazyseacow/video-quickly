@@ -2,10 +2,10 @@ import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { createInterface } from 'node:readline';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { basename, dirname, join, resolve } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { afterEach, describe, expect, it } from 'vitest';
-import type { RunRecord, WorkspaceSnapshot } from '@video-quickly/contracts';
+import type { ProjectDocument, RunInspection, RunPlan, RunRecord, WorkspaceSnapshot } from '@video-quickly/contracts';
 
 const directories: string[] = [];
 const children: RpcProcess[] = [];
@@ -48,7 +48,10 @@ class RpcProcess {
 
 afterEach(async () => {
   await Promise.all(children.splice(0).map(child => child.kill()));
-  await Promise.all(directories.splice(0).map(path => rm(path, { recursive: true, force: true })));
+  await Promise.all(directories.splice(0).map(path => {
+    if (dirname(resolve(path)) !== resolve(tmpdir()) || !basename(path).startsWith('video-quickly-process-')) throw new Error('Unexpected process-test cleanup path');
+    return rm(path, { recursive: true, force: true });
+  }));
 });
 
 async function waitFor(process: RpcProcess, runId: string, status: string) {
@@ -63,6 +66,28 @@ async function waitFor(process: RpcProcess, runId: string, status: string) {
 }
 
 describe('actual sidecar process recovery', () => {
+  it('retains a scoped version-two workflow after a hard exit while preserving later manual project edits', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'video-quickly-process-scope-')); directories.push(directory);
+    const first = new RpcProcess(directory);
+    const created = await first.request<ProjectDocument>('project.create', { title: '进程终止后的局部执行' });
+    const project = await first.request<ProjectDocument>('project.update', { projectId: created.id, revision: created.revision, patch: { workflow: {
+      id: 'scoped', name: '冻结的局部流程', version: 1,
+      nodes: [{ id: 'outside', kind: 'brief', label: '保持不执行的上游' }, { id: 'selected', kind: 'brief', label: '等待审阅的选中步骤', requiresReview: true }, { id: 'tail', kind: 'brief', label: '范围内的后续步骤' }],
+      edges: [{ id: 'os', source: 'outside', target: 'selected' }, { id: 'st', source: 'selected', target: 'tail' }],
+    } } });
+    const plan = await first.request<RunPlan>('run.plan', { projectId: project.id, selection: { nodeId: 'selected', mode: 'downstream' } });
+    const run = await first.request<RunRecord>('run.start', { projectId: project.id, selection: { ...plan.selection, previewDigest: plan.digest } });
+    const before = await waitFor(first, run.id, 'waiting_review'); expect(before.activities.map(activity => activity.id)).toEqual(['selected']);
+    await first.request('workspace.snapshot'); await first.kill();
+    const second = new RpcProcess(directory);
+    const edited = await second.request<ProjectDocument>('project.update', { projectId: project.id, revision: project.revision, patch: { title: '恢复前的人工标题', workflow: { ...project.workflow, nodes: [...project.workflow.nodes, { ...project.workflow.nodes[0], id: 'new-outside', label: '新增的范围外步骤' }] } } });
+    await second.request('run.review', { runId: run.id, approved: true });
+    const after = await waitFor(second, run.id, 'succeeded'); expect(after.selection).toEqual(plan.selection); expect(after.activities.map(activity => activity.id)).toEqual(['selected', 'tail']);
+    const inspection = await second.request<RunInspection>('run.inspect', { runId: run.id, nodeId: 'selected' }); expect(inspection.selected?.handlerVersion).toBe(2); expect(inspection.steps.map(step => step.id)).toEqual(['selected', 'tail']);
+    expect((await second.request<{ project: ProjectDocument }>('project.get', { projectId: project.id })).project).toEqual(edited);
+    expect(await second.request('run.replay', { runId: run.id })).toMatchObject({ externalCalls: 0, matchesSnapshot: true });
+  }, 30000);
+
   it('continues a persisted human review after a hard process termination', async () => {
     const directory = await mkdtemp(join(tmpdir(), 'video-quickly-process-'));
     directories.push(directory);

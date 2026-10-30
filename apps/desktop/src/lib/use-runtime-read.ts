@@ -9,22 +9,26 @@ export function useRuntimeRead<T>(method: string, params: Record<string, unknown
   const query = useMemo(() => {
     let state: { data?: T; error: string; busy: boolean } = { error: '', busy: true };
     let observedVersion: number | undefined;
+    let failed = false;
     const listeners = new Set<() => void>();
     function publish(next: typeof state) { state = next; for (const listener of listeners) listener(); }
     const read = createRefreshQueue(async () => {
+      // A notification queued before the failure must not silently retry it.
+      if (failed) return;
       publish({ ...state, busy: true });
       try {
         const data = schema.parse(await rpc(method, JSON.parse(parameters)));
         publish({ data, error: '', busy: false });
       } catch (error) {
+        failed = true;
         publish({ ...state, error: error instanceof Error ? error.message : String(error), busy: false });
       }
     });
     return {
       snapshot: () => state,
       subscribe: (listener: () => void) => { listeners.add(listener); return () => { listeners.delete(listener); }; },
-      refresh: () => { void read(); },
-      observe: (version: number) => { if (version !== observedVersion) { observedVersion = version; void read(); } },
+      refresh: () => { failed = false; void read(); },
+      observe: (version: number) => { if (version !== observedVersion) { observedVersion = version; if (!failed) void read(); } },
     };
   }, [method, parameters, schema]);
   const current = useSyncExternalStore(query.subscribe, query.snapshot);

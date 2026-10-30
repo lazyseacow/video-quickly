@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import type Database from 'better-sqlite3';
-import { TranscriptionTimestampError } from '@video-quickly/contracts';
+import { LockedShotChangeError, TranscriptionTimestampError } from '@video-quickly/contracts';
 import { DocumentStore } from './database.js';
 
 export type ActivitySafety = 'local' | 'idempotent' | 'external';
@@ -101,7 +101,7 @@ export class ActivityJournal {
       return result;
     } catch (error) {
       if (error instanceof SimulatedProcessExit) throw error;
-      const message = error instanceof TranscriptionTimestampError ? error.message : safety === 'external' ? '外部调用未完成，结果需要核对。' : error instanceof Error ? error.message : '活动执行失败';
+      const message = error instanceof TranscriptionTimestampError || error instanceof LockedShotChangeError ? error.message : safety === 'external' ? '外部调用未完成，结果需要核对。' : error instanceof Error ? error.message : '活动执行失败';
       this.database.prepare('UPDATE activities SET status = ?, error = ? WHERE run_id = ? AND activity_id = ?').run(safety === 'external' ? 'unknown' : 'failed', message, runId, activityId);
       // LangGraph also persists thrown errors in pending writes. Replace the
       // error before crossing that boundary; redacting only UI logs is too late.

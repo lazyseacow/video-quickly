@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { ChevronDown, Download, FolderOpen, History, RefreshCw } from 'lucide-react';
-import { activitySchema, assetSchema, recordPageSchema, runDiagnosticsSchema, runEventSchema, runInspectionSchema, runStepPayloadSchema, stepOutputVersionSchema, type JsonValue, type RunInspection, type RunStepSummary } from '@video-quickly/contracts';
+import { activitySchema, assetSchema, recordPageSchema, runDiagnosticsSchema, runEventSchema, runInspectionSchema, runStepPayloadSchema, stepOutputVersionSchema, type JsonValue, type RunInspection, type RunStepSummary, type RunSummary } from '@video-quickly/contracts';
 import { Button, Dialog, Notice, Status, statusLabels } from '../components/Primitives';
 import { nativeDesktop, revealFile } from '../components/PathPicker';
 import { getAssetUrl, rpc } from '../lib/client';
@@ -16,9 +16,10 @@ const stepStates: Record<string, string> = { pending: '待执行', skipped: '未
 const date = (value: string) => new Date(value).toLocaleString('zh-CN');
 const text = (value: JsonValue) => typeof value === 'string' ? value : JSON.stringify(value, null, 2);
 
-export default function RunInspector({ runId, version, onClose, onChanged, onOpenOutput }: {
+export default function RunInspector({ runId, version, onClose, onChanged, onOpenOutput, onRestart }: {
   runId: string; version: number; onClose: () => void; onChanged: () => void;
   onOpenOutput: (selection: StepOutputSelection) => void;
+  onRestart: (run: RunSummary) => void;
 }) {
   const inspection = useRuntimeRead('run.inspect', { runId }, version, runInspectionSchema);
   const [selectedId, setSelectedId] = useState('');
@@ -58,7 +59,7 @@ export default function RunInspector({ runId, version, onClose, onChanged, onOpe
       {data?.recovery.review && <><Button disabled={Boolean(pending)} onClick={() => void perform('run.review', { approved: false })}>停止并修改</Button><Button variant="primary" busy={pending === 'run.review'} disabled={Boolean(pending)} onClick={() => void perform('run.review', { approved: true })}>通过审阅并继续</Button></>}
       {data?.recovery.resume && <Button variant="primary" busy={pending === 'run.resume'} disabled={Boolean(pending)} onClick={() => void perform('run.resume')}>继续执行</Button>}
       {data?.recovery.cancel && <Button disabled={Boolean(pending)} onClick={() => void perform('run.cancel')}>停止制作</Button>}
-      {data?.recovery.restart && <Button disabled={Boolean(pending)} onClick={() => void perform('run.start', { projectId: data.run.projectId, parentRunId: runId })}>重新制作</Button>}
+      {data?.recovery.restart && <Button disabled={Boolean(pending)} onClick={() => { if (data.run.selection) onRestart(data.run); else void perform('run.start', { projectId: data.run.projectId, parentRunId: runId }); }}>重新制作</Button>}
       <Button onClick={onClose}>关闭</Button>
     </div>
   </Dialog>;

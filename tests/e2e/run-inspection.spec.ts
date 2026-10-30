@@ -113,11 +113,23 @@ test('keeps late historical reads scoped and retains manual edits when an older 
 test('recovers a failed detail read explicitly and keeps tabs, tokens and actions usable in both themes at narrow width', async ({ page, request }, info) => {
   await page.setViewportSize({ width: 600, height: 850 }); await page.emulateMedia({ reducedMotion: 'reduce' });
   const source = await fixture(request);
+  let releaseFailure = () => {};
   try {
-    const run = await source.start(); let failures = 0;
-    await page.route('**/__desktop_rpc', async route => { const input = route.request().postDataJSON(); if (!failures && input.method === 'run.inspect') { failures++; await route.fulfill({ status: 500, json: { error: '隔离的步骤详情读取失败' } }); } else await route.continue(); });
+    const run = await source.start(); let failures = 0, inspectionReads = 0;
+    const failureGate = new Promise<void>(resolve => { releaseFailure = resolve; });
+    let failureStarted = () => {};
+    const started = new Promise<void>(resolve => { failureStarted = resolve; });
+    await page.route('**/__desktop_rpc', async route => { const input = route.request().postDataJSON(); if (input.method === 'run.inspect' && !input.params.nodeId) inspectionReads++; if (!failures && input.method === 'run.inspect') { failures++; failureStarted(); await failureGate; await route.fulfill({ status: 500, json: { error: '隔离的步骤详情读取失败' } }); } else await route.continue(); });
     expectedErrors = ['Failed to load resource: the server responded with a status of 500 (Internal Server Error)']; await page.goto('/'); await page.getByRole('button', { name: '制作记录', exact: true }).click(); await page.locator(`.run-card[data-run-id="${run.id}"]`).getByRole('button', { name: '查看步骤', exact: true }).click();
+    await started;
+    const queued = await rpc<ProjectDocument>(request, 'project.create', { title: `详情读取期间通知 ${randomUUID().slice(0, 8)}` });
+    await expect(page.locator('.sidebar-projects')).toContainText(queued.title);
+    releaseFailure();
     const dialog = page.getByRole('dialog', { name: '制作步骤详情', exact: true }); await expect(dialog.getByRole('alert')).toContainText('隔离的步骤详情读取失败');
+    const later = await rpc<ProjectDocument>(request, 'project.create', { title: `详情失败后通知 ${randomUUID().slice(0, 8)}` });
+    await expect(page.locator('.sidebar-projects')).toContainText(later.title);
+    await page.evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
+    expect(inspectionReads).toBe(1); await expect(dialog.getByRole('alert')).toContainText('隔离的步骤详情读取失败');
     await dialog.getByRole('button', { name: '重试读取详情', exact: true }).click(); await expect(dialog.getByRole('navigation', { name: '冻结流程步骤' })).toBeVisible();
     await dialog.getByRole('navigation', { name: '冻结流程步骤' }).getByRole('button', { name: /冻结风格步骤/ }).click();
     const status = dialog.getByRole('tab', { name: '执行状态', exact: true }); await status.focus(); await status.press('ArrowRight'); await expect(dialog.getByRole('tab', { name: '执行输入', exact: true })).toBeFocused();
@@ -135,7 +147,7 @@ test('recovers a failed detail read explicitly and keeps tabs, tokens and action
     await page.keyboard.press('Escape'); await expect(dialog).toHaveCount(0);
     await expect(page.locator(`.run-card[data-run-id="${run.id}"]`).getByRole('button', { name: '查看步骤', exact: true })).toBeFocused();
     expect(source.calls()).toBe(1);
-  } finally { await close(source.server); }
+  } finally { releaseFailure(); await close(source.server); }
 });
 
 test('handles a live step missing from an older run and uses the frozen kind for a renamed step output', async ({ page, request }) => {
