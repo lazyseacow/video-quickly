@@ -5,6 +5,9 @@
 
 * { box-sizing: border-box; }
 html, body, #root { width: 100%; height: 100%; margin: 0; }
+html[data-native-platform='macos'], html[data-native-platform='macos'] .page-body { overscroll-behavior-x: none; }
+html[data-native-platform='macos'] body { -webkit-user-select: none; user-select: none; }
+html[data-native-platform='macos'] :is(input, textarea, [contenteditable]:not([contenteditable='false'])) { -webkit-user-select: text; user-select: text; }
 body { min-width: 360px; background: var(--background); color: var(--text); font-size: var(--text-size-body); line-height: var(--line-height-body); }
 button, input, textarea, select { font: inherit; }
 button { cursor: pointer; }

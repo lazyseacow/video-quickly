@@ -14,6 +14,10 @@ use tokio::{
 mod runtime_bridge;
 use runtime_bridge::{ConnectionStatus, RuntimeBridge};
 
+#[cfg(all(test, unix))]
+#[path = "../build.rs"]
+mod build_resources;
+
 #[cfg(windows)]
 fn contain_runtime(child: &Child) -> Result<std::os::windows::io::OwnedHandle, String> {
     use std::os::windows::io::{FromRawHandle, RawHandle};
