@@ -8,9 +8,9 @@ export function previewClipIds(context: ClipEditContext, prefix = 'clip-preview'
   return kind => { let id: string; do { id = `${prefix}-${kind}-${++counter}`; } while (used.has(id)); used.add(id); return id; };
 }
 
-export function shotWaveformSpans(shot: Shot, context: ClipEditContext, range?: { inUs: number; outUs: number; rate: FrameRate; sourceDurationUs?: number }): WaveformSpan[] {
+export function shotWaveformSpans(shot: Shot, context: ClipEditContext, range?: { inUs: number; outUs: number; rate: FrameRate; sourceDurationUs?: number }, kind: 'audio' | 'video' = 'audio'): WaveformSpan[] {
   const document = range ? trimShotInContext({ ...context, shots: [shot] }, shot.id, range, range.rate, range.sourceDurationUs, previewClipIds(context, 'waveform-preview')) : { ...context, shots: [shot] };
-  return resolveShotSpans(document.shots[0], document).map(span => ({ outputStartUs: span.outputStartUs, durationUs: span.durationUs, sourceInUs: span.audioInUs }));
+  return resolveShotSpans(document.shots[0], document).map(span => ({ outputStartUs: span.outputStartUs, durationUs: span.durationUs, sourceInUs: kind === 'video' ? span.videoInUs : span.audioInUs }));
 }
 
 /** Media preview uses a private plan and the candidate baseline; it never mutates the live draft. */

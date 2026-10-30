@@ -17,6 +17,17 @@ it('keys the actual sound projection independently of visual edits and target ex
   expect(original).toEqual(before);
 });
 
+it('keys enabled video source windows and gain while leaving muted video changes outside the sound dependency', () => {
+  const original = project(), video: AssetRecord = { ...voice, id: 'video', kind: 'video', sha256: 'c'.repeat(64) };
+  const enabled = projectSchema.parse({ ...original, shots: [{ ...original.shots[0], videoAssetId: video.id, videoInUs: 400_000, audioProcessing: { version: 2, gainDb: 0, denoise: false, noiseReductionDb: 12, videoAudio: { enabled: true, gainDb: -6 } } }] });
+  const assets = [voice, video], key = audioMixProjectionKey(enabled, assets);
+  expect(audioMixProjectionKey({ ...enabled, shots: [{ ...enabled.shots[0], videoInUs: 800_000 }] }, assets)).not.toBe(key);
+  expect(audioMixProjectionKey(enabled, [voice, { ...video, sha256: 'd'.repeat(64) }])).not.toBe(key);
+  expect(() => audioMixProjectionKey(enabled, [voice, { ...video, active: false }])).toThrow('有效视频');
+  const muted = projectSchema.parse({ ...enabled, shots: [{ ...enabled.shots[0], audioProcessing: { ...enabled.shots[0].audioProcessing, videoAudio: { enabled: false, gainDb: -6 } } }] });
+  expect(audioMixProjectionKey({ ...muted, shots: [{ ...muted.shots[0], videoInUs: 900_000 }] }, [voice, { ...video, active: false }])).toBe(audioMixProjectionKey(muted, assets));
+});
+
 it('scopes duration metadata to its project and shot identities across backup imports', () => {
   const original = project(), shared = [{ ...voice, projectId: undefined }];
   expect(audioMixProjectionKey({ ...original, id: 'restored-project' }, shared)).not.toBe(audioMixProjectionKey(original, shared));

@@ -34,6 +34,21 @@ async function fixture() {
   return { directory, asset, bytes };
 }
 
+it.skipIf(!mediaAvailable)('aligns delayed video audio to the media origin and separates audio-only interpretations in the cache', async () => {
+  const { directory, asset } = await fixture(), path = join(directory, 'delayed-video.mp4');
+  const generated = spawnSync(ffmpeg, ['-v', 'error', '-y', '-f', 'lavfi', '-i', 'color=blue:size=160x90:rate=30:duration=2.4', '-itsoffset', '0.4', '-i', asset.path, '-map', '0:v:0', '-map', '1:a:0', '-t', '2.4', '-c:v', 'libx264', '-preset', 'ultrafast', '-c:a', 'aac', path], { windowsHide: true, encoding: 'utf8', timeout: 20_000 });
+  expect(generated.status, generated.stderr).toBe(0);
+  const bytes = await readFile(path), video: AssetRecord = { ...asset, id: 'delayed-video', path, kind: 'video', mimeType: 'video/mp4', sha256: createHash('sha256').update(bytes).digest('hex'), size: bytes.length };
+  const reader = createWaveformReader({ dataDirectory: directory, ffmpegPath: ffmpeg }); readers.push(reader);
+  const [aligned, audioOnly] = await Promise.all([reader.read(video), reader.read({ ...video, id: 'audio-interpretation', kind: 'audio' })]);
+  expect(aligned.peaks[65]).toBeLessThan(.005); expect(aligned.peaks[150]).toBeGreaterThan(.65);
+  expect(audioOnly.peaks[65]).toBeGreaterThan(.15);
+  await reader.close();
+  const restored = createWaveformReader({ dataDirectory: directory, ffmpegPath: ffmpeg }); readers.push(restored);
+  expect((await restored.read(video)).peaks).toEqual(aligned.peaks);
+  expect((await restored.read({ ...video, kind: 'audio' })).peaks).toEqual(audioOnly.peaks);
+}, 30_000);
+
 it.skipIf(!mediaAvailable)('streams real PCM peaks, deduplicates requests and reuses validated disk cache after restart', async () => {
   const { directory, asset } = await fixture();
   let decoders = 0;
@@ -71,8 +86,8 @@ it.skipIf(!mediaAvailable)('cancels one consumer without canceling the shared de
   if (result.status === 'rejected') throw result.reason;
   expect(result.value.peaks).toHaveLength(200);
   await reader.close();
-  const cache = join(directory, 'derived', 'waveforms', 'v1-mono-16000-peak-100hz');
-  expect((await readdir(cache)).filter(name => name.endsWith('.tmp'))).toEqual([]);
+  const cache = join(directory, 'derived', 'waveforms');
+  expect((await readdir(cache, { recursive: true })).filter(name => name.endsWith('.tmp'))).toEqual([]);
   await expect(reader.read(asset)).rejects.toThrow('已关闭');
 }, 30_000);
 

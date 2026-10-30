@@ -1,4 +1,4 @@
-import { firstFrameAtUs, timeAtFrame, type AssetRecord, type CaptionTrack, type ClipEditPlan, type ClipEditSource, type ClipEditSpan, type FrameRate, type ProjectDocument, type Shot } from '@video-quickly/contracts';
+import { firstFrameAtUs, timeAtFrame, usesVideoAudio, type AssetRecord, type CaptionTrack, type ClipEditPlan, type ClipEditSource, type ClipEditSpan, type FrameRate, type ProjectDocument, type Shot } from '@video-quickly/contracts';
 
 export type ClipEditContext = Pick<ProjectDocument, 'clipEditSources' | 'clipEditPlans'>;
 export type ClipEditDocument = ClipEditContext & Pick<ProjectDocument, 'shots'>;
@@ -18,12 +18,12 @@ export function clipEditTotalUs(plan: Pick<ClipEditPlan, 'spans'>): number {
 }
 
 /** Return an absolute plan-clock endpoint, preserving the existing longer-tail hold/pad rule. */
-export function clipSourceOutUs(shot: ClipTimingShot & Partial<Pick<Shot, 'audioAssetId' | 'videoAssetId' | 'sceneTemplate'>>, context: ClipEditContext, durations: { audioDurationUs?: number; videoDurationUs?: number }): number | undefined {
+export function clipSourceOutUs(shot: ClipTimingShot & Partial<Pick<Shot, 'audioAssetId' | 'videoAssetId' | 'sceneTemplate' | 'audioProcessing'>>, context: ClipEditContext, durations: { audioDurationUs?: number; videoDurationUs?: number }): number | undefined {
   const plan = clipEditPlan(shot, context);
   const last = plan?.spans.at(-1), totalUs = plan ? clipEditTotalUs(plan) : 0;
   const tails: number[] = [];
   if (durations.audioDurationUs !== undefined) tails.push(durations.audioDurationUs - (last ? last.audioInUs + last.durationUs : shot.audioInUs ?? shot.sourceInUs ?? 0));
-  if (durations.videoDurationUs !== undefined && !shot.sceneTemplate) tails.push(durations.videoDurationUs - (last ? last.videoInUs + last.durationUs : shot.videoInUs ?? shot.sourceInUs ?? 0));
+  if (durations.videoDurationUs !== undefined && (!shot.sceneTemplate || usesVideoAudio(shot))) tails.push(durations.videoDurationUs - (last ? last.videoInUs + last.durationUs : shot.videoInUs ?? shot.sourceInUs ?? 0));
   return tails.length ? (plan ? totalUs : shot.sourceInUs ?? 0) + Math.max(...tails) : undefined;
 }
 

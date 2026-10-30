@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { Headphones } from 'lucide-react';
-import { audioMixSettingsSchema, audioProcessingSchema, DEFAULT_AUDIO_MIX_SETTINGS, DEFAULT_AUDIO_PROCESSING, preparedAudioMixSchema, type AudioMixSettings, type AudioProcessing, type PreparedAudioMix, type ProjectDocument, type Shot } from '@video-quickly/contracts';
+import { audioMixSettingsSchema, audioProcessingSchema, DEFAULT_AUDIO_MIX_SETTINGS, DEFAULT_AUDIO_PROCESSING, DEFAULT_VIDEO_AUDIO, preparedAudioMixSchema, type AudioMixSettings, type AudioProcessing, type PreparedAudioMix, type ProjectDocument, type Shot } from '@video-quickly/contracts';
 import { Button, Dialog, Field, Notice } from './Primitives';
 import type { AudioProcessingValue } from '../lib/audio-edits';
 import PreparedMixPreview, { type ReadAudioLevels } from './PreparedMixPreview';
@@ -21,6 +21,7 @@ export default function AudioProcessingDialog({ project, shot, disabled = false,
   const [baseline] = useState(() => structuredClone(project)), [target] = useState(() => shot ? structuredClone(shot) : undefined);
   const [mix, setMix] = useState(() => audioMixSettingsSchema.parse(project.audioMix ?? DEFAULT_AUDIO_MIX_SETTINGS));
   const [processing, setProcessing] = useState(() => audioProcessingSchema.parse(shot?.audioProcessing ?? DEFAULT_AUDIO_PROCESSING));
+  const videoAudio = processing.version === 2 ? processing.videoAudio : DEFAULT_VIDEO_AUDIO;
   const [gainEnabled, setGainEnabled] = useState(processing.gainDb !== 0);
   const [applying, setApplying] = useState(false), [preparing, setPreparing] = useState(false), [failure, setFailure] = useState(''), [previewFailure, setPreviewFailure] = useState('');
   const [preview, setPreview] = useState<{ input: string; mix: PreparedAudioMix }>();
@@ -54,7 +55,7 @@ export default function AudioProcessingDialog({ project, shot, disabled = false,
     finally { if (alive.current) setApplying(false); }
   }
   return <Dialog title={target ? '镜头声音处理' : '项目混音设置'} className="audio-processing-dialog" onClose={onClose}>
-    <div className="dialog__body"><p className="audio-processing-dialog__scope">{target ? `${target.title}：只调整这一镜头的旁白。项目混音设置保持原样。` : '调整整段项目的混音。镜头各自的增益和降噪保持原样。'} 试听与成片使用相同处理，应用为一步撤销。</p>
+    <div className="dialog__body"><p className="audio-processing-dialog__scope">{target ? `${target.title}：调整这一镜头的旁白与视频原声。` : '调整整段项目的混音。'} 试听与成片使用相同处理，应用为一步撤销。</p>
       <div className="audio-processing-dialog__workspace"><fieldset className="audio-processing-fields" disabled={frozen}>
         {target ? <>
           <label className="field-inline"><input type="checkbox" checked={gainEnabled} onChange={event => { setGainEnabled(event.target.checked); setFailure(''); }} />调整旁白增益</label>
@@ -62,6 +63,9 @@ export default function AudioProcessingDialog({ project, shot, disabled = false,
           <label className="field-inline"><input type="checkbox" checked={processing.denoise} onChange={event => changeProcessing({ ...processing, denoise: event.target.checked })} />启用旁白降噪</label>
           <Field label="降噪量（dB）"><input type="number" min={3} max={40} step={1} value={Number.isFinite(processing.noiseReductionDb) ? processing.noiseReductionDb : ''} disabled={!processing.denoise} onChange={event => changeProcessing({ ...processing, noiseReductionDb: event.target.valueAsNumber })} /></Field>
           {!target.audioAssetId && <p className="tiny-meta">当前镜头尚未关联旁白音频；设置会在添加配音后生效。</p>}
+          <label className="field-inline"><input type="checkbox" checked={videoAudio.enabled} onChange={event => changeProcessing({ ...processing, version: 2, videoAudio: { ...videoAudio, enabled: event.target.checked } })} />启用视频原声</label>
+          <Field label="视频原声增益（dB）" hint="使用视频首条音轨，并跟随视频入点和剪辑区间。"><input type="number" min={-60} max={18} step={.5} value={Number.isFinite(videoAudio.gainDb) ? videoAudio.gainDb : ''} disabled={!videoAudio.enabled} onChange={event => changeProcessing({ ...processing, version: 2, videoAudio: { ...videoAudio, gainDb: event.target.valueAsNumber } })} /></Field>
+          {!target.videoAssetId && <p className="tiny-meta">当前镜头尚未关联视频；原声设置会在添加视频后生效。</p>}
         </> : <>
           <label className="field-inline"><input type="checkbox" checked={mix.loudness.enabled} onChange={event => changeMix({ ...mix, loudness: { ...mix.loudness, enabled: event.target.checked } })} />统一混音响度</label>
           <div className="audio-processing-fields__row"><Field label="目标响度（LUFS）"><input type="number" min={-30} max={-9} step={.5} value={Number.isFinite(mix.loudness.targetLufs) ? mix.loudness.targetLufs : ''} disabled={!mix.loudness.enabled} onChange={event => changeMix({ ...mix, loudness: { ...mix.loudness, targetLufs: event.target.valueAsNumber } })} /></Field><Field label="真峰值上限（dBTP）"><input type="number" min={-6} max={-.1} step={.1} value={Number.isFinite(mix.loudness.truePeakDb) ? mix.loudness.truePeakDb : ''} disabled={!mix.loudness.enabled} onChange={event => changeMix({ ...mix, loudness: { ...mix.loudness, truePeakDb: event.target.valueAsNumber } })} /></Field></div>

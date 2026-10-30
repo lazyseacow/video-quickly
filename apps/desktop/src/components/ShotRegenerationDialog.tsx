@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { ChevronDown, Pause, Play, RefreshCw, Sparkles, Square } from 'lucide-react';
-import { type AssetRecord, type ModelProfile, type ProjectDocument, type RunSummary, type Shot, type ShotCandidate, type ShotCandidateField, type ShotCandidateKind } from '@video-quickly/contracts';
+import { usesVideoAudio, type AssetRecord, type ModelProfile, type ProjectDocument, type RunSummary, type Shot, type ShotCandidate, type ShotCandidateField, type ShotCandidateKind } from '@video-quickly/contracts';
 import { candidateKindLabels, candidateRunActive, readCandidateAssets, readShotCandidate, readShotCandidates, watchCandidateRun } from '../lib/shot-candidates';
 import { getAssetUrl, rpc } from '../lib/client';
 import { Button, Dialog, Field, Notice, Status } from './Primitives';
@@ -180,7 +180,7 @@ function CandidateClipPreview({ label, project, shot, assets, audioOnly }: { lab
   const [clock] = useState(() => new PlaybackClock(shot.durationUs, project.profile.frameRate));
   const { timeUs, playing } = usePlayback(clock);
   const [audioReady, setAudioReady] = useState(false), [failure, setFailure] = useState('');
-  const hasAudio = Boolean(shot.audioAssetId), mix = usePreparedProjectMix(solo, assets, hasAudio);
+  const hasAudio = Boolean(shot.audioAssetId) || usesVideoAudio(shot), mix = usePreparedProjectMix(solo, assets, hasAudio);
   useEffect(() => { clock.configure(shot.durationUs, project.profile.frameRate); clock.seek(0); setFailure(''); }, [clock, shot.durationUs, shot.clipEdit?.planId, shot.audioAssetId, shot.videoAssetId, project.profile.frameRate.numerator, project.profile.frameRate.denominator]);
   useEffect(() => () => clock.dispose(), [clock]);
   useEffect(() => { if (document.hidden) clock.pause(); const pause = () => { if (document.hidden) clock.pause(); }; document.addEventListener('visibilitychange', pause); return () => document.removeEventListener('visibilitychange', pause); }, [clock]);

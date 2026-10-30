@@ -1,5 +1,5 @@
 import { expect, it } from 'vitest';
-import { assetSchema, createHistoryWorkflow, DEFAULT_VIDEO_PROFILE, projectSchema, type AudioWaveform, type ShotCandidate } from '@video-quickly/contracts';
+import { assetSchema, createHistoryWorkflow, createSceneTemplate, DEFAULT_AUDIO_PROCESSING, DEFAULT_VIDEO_PROFILE, projectSchema, type AudioWaveform, type ShotCandidate } from '@video-quickly/contracts';
 import { deleteShotRanges, resolveShotSpans } from '../packages/video/src/clip-edits';
 import { trimShot } from '../packages/video/src/editing';
 import { captionAtTime } from '../packages/video/src/captions';
@@ -62,6 +62,16 @@ it('extends only the selected private bulk plan and retains the sibling and both
   expect(() => applyBulkShotEdit(baseline, baseline, ['shot'], { durationUs: 8_000_001 }, { voice: 10_000_000, video: 8_000_000 })).toThrow('真实时长');
   const changed = { ...baseline, clipEditPlans: baseline.clipEditPlans.map(plan => ({ ...plan, spans: plan.spans.map((span, index) => index ? span : { ...span, audioInUs: 1 }) })) };
   expect(() => applyBulkShotEdit(changed, baseline, ['shot'], { durationUs: 7_000_000 }, { voice: 10_000_000, video: 8_000_000 })).toThrow('计划已变化');
+});
+
+it('uses an enabled template video original track to bound a private EDL tail extension', () => {
+  const { project } = fixture();
+  const baseline = editContent({ ...project, shots: [{ ...project.shots[0], sceneTemplate: createSceneTemplate('process'), audioProcessing: { ...DEFAULT_AUDIO_PROCESSING, version: 2, videoAudio: { enabled: true, gainDb: 0 } } }] });
+  let sequence = 0;
+  const result = applyBulkShotEdit(baseline, baseline, ['shot'], { durationUs: 7_000_000 }, { voice: 2_000_000, video: 10_000_000 }, kind => `original-tail-${kind}-${++sequence}`);
+  expect(result.shots[0].durationUs).toBe(7_000_000);
+  expect(resolveShotSpans(result.shots[0], result).at(-1)).toMatchObject({ videoInUs: 8_000_000, durationUs: 1_000_000 });
+  expect(() => applyBulkShotEdit(baseline, baseline, ['shot'], { durationUs: 9_000_000 }, { voice: 2_000_000, video: 10_000_000 })).toThrow('真实时长');
 });
 
 it('keeps genuine ASR untouched and stores manual caption edits on plan time while preserving hidden captions', () => {

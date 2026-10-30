@@ -3,7 +3,7 @@ import { createReadStream } from 'node:fs';
 import { mkdir, mkdtemp, open, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
-import { audioLevelWindowSchema, audioMixSettingsSchema, audioProcessingSchema, DEFAULT_AUDIO_MIX_SETTINGS, DEFAULT_AUDIO_PROCESSING, preparedAudioMixSchema, silenceDetectionSchema, type AssetRecord, type AudioLevelWindow, type PreparedAudioMix, type ProjectDocument, type Shot, type SilenceDetection } from '@video-quickly/contracts';
+import { audioLevelWindowSchema, audioMixSettingsSchema, audioProcessingSchema, usesVideoAudio, DEFAULT_AUDIO_MIX_SETTINGS, DEFAULT_AUDIO_PROCESSING, preparedAudioMixSchema, silenceDetectionSchema, type AssetRecord, type AudioLevelWindow, type PreparedAudioMix, type ProjectDocument, type Shot, type SilenceDetection } from '@video-quickly/contracts';
 import { clipEditSource, resolveShotSpans } from './clip-edits.js';
 import { audioMixProjection, AUDIO_MIX_ALGORITHM } from './audio-projection.js';
 import { probeMedia, runMedia, runMediaCapture } from './media-process.js';
@@ -19,9 +19,9 @@ export interface PrepareAudioMixOptions {
   ffmpegPath?: string; ffprobePath?: string; signal?: AbortSignal; onProgress?: (value: number) => void;
 }
 
-function audioAsset(id: string, projectId: string, assets: readonly AssetRecord[], label = '音频'): AssetRecord {
+function audioAsset(id: string, projectId: string, assets: readonly AssetRecord[], label = '音频', kind: 'audio' | 'video' = 'audio'): AssetRecord {
   const asset = assets.find(value => value.id === id);
-  if (!asset || asset.kind !== 'audio' || !asset.active || (asset.projectId !== undefined && asset.projectId !== projectId)) throw new Error(`${label}必须引用当前项目或共享素材库中的有效音频。`);
+  if (!asset || asset.kind !== kind || !asset.active || (asset.projectId !== undefined && asset.projectId !== projectId)) throw new Error(`${label}必须引用当前项目或共享素材库中的有效${kind === 'video' ? '视频' : '音频'}。`);
   return asset;
 }
 
@@ -144,12 +144,15 @@ async function prepare(options: PrepareAudioMixOptions, key: string): Promise<Pr
   const durationUs = mixDuration(project);
   if (durationUs <= 0) throw new Error('请先添加镜头，再准备声音。');
   const voices = project.shots.filter(shot => shot.audioAssetId).map(shot => audioAsset(shot.audioAssetId!, project.id, options.assets));
+  const originals = project.shots.filter(usesVideoAudio).map(shot => audioAsset(shot.videoAssetId, project.id, options.assets, '视频原声', 'video'));
   const music = (project.musicClips ?? []).filter(clip => clip.startUs < durationUs).map(clip => ({ clip, asset: audioAsset(clip.assetId, project.id, options.assets, '背景音乐') }));
-  const used = [...new Map([...voices, ...music.map(value => value.asset)].map(asset => [asset.id, asset])).values()];
+  const used = [...new Map([...voices, ...originals, ...music.map(value => value.asset)].map(asset => [asset.id, asset])).values()];
   for (const asset of used) await verifyAudio(asset, signal);
   for (const shot of project.shots) {
     const source = clipEditSource(shot, project), frozen = source?.assetHashes.find(value => value.assetId === shot.audioAssetId);
     if (frozen && frozen.sha256 !== audioAsset(frozen.assetId, project.id, options.assets).sha256) throw new Error('剪辑来源音频已变化，请恢复原素材或重新建立剪辑。');
+    const video = usesVideoAudio(shot) ? source?.assetHashes.find(value => value.assetId === shot.videoAssetId) : undefined;
+    if (video && video.sha256 !== audioAsset(video.assetId, project.id, options.assets, '视频原声', 'video').sha256) throw new Error('剪辑来源视频已变化，请恢复原素材或重新建立剪辑。');
   }
   await mkdir(options.outputDirectory, { recursive: true });
   const path = join(options.outputDirectory, `mix-${key}.wav`), hit = await cached(path, key, signal);
@@ -158,7 +161,7 @@ async function prepare(options: PrepareAudioMixOptions, key: string): Promise<Pr
   const totalSamples = sampleAt(durationUs), settings = audioMixSettingsSchema.parse(project.audioMix ?? DEFAULT_AUDIO_MIX_SETTINGS), warnings: string[] = [];
   const stems = new Map<string, { path: string; samples: number }>();
   async function stem(asset: AssetRecord, denoise: boolean, reduction: number) {
-    const stemKey = digest(JSON.stringify([asset.sha256, denoise, denoise ? reduction : 0, ALGORITHM]));
+    const stemKey = digest(JSON.stringify([asset.sha256, asset.kind, denoise, denoise ? reduction : 0, ALGORITHM]));
     const found = stems.get(stemKey); if (found) return found;
     const output = join(options.outputDirectory, `source-${stemKey}.wav`), metadataPath = `${output}.json`;
     try {
@@ -168,36 +171,58 @@ async function prepare(options: PrepareAudioMixOptions, key: string): Promise<Pr
       }
     } catch (error) { signal?.throwIfAborted(); if (!(error instanceof SyntaxError || error instanceof Error && 'code' in error && error.code === 'ENOENT')) throw error; }
     const pending = join(temporary, `source-${stemKey}.wav`);
-    const filters = ['aresample=48000', 'aformat=sample_fmts=fltp:channel_layouts=stereo', ...(denoise ? [`afftdn=nr=${reduction}:nf=-50`] : [])];
+    // Preserve audio that starts after the video's time origin, including its
+    // leading silence. Voice-only assets retain their existing sample origin.
+    const filters = [asset.kind === 'video' ? 'aresample=48000:async=1:first_pts=0' : 'aresample=48000', 'aformat=sample_fmts=fltp:channel_layouts=stereo', ...(denoise ? [`afftdn=nr=${reduction}:nf=-50`] : [])];
     await runMedia(ffmpeg, ['-nostdin', '-v', 'error', '-y', '-i', asset.path, '-map', '0:a:0', '-vn', '-af', filters.join(','), '-c:a', 'pcm_f32le', pending], { signal });
     const metadata = await probeMedia(pending, ffprobe, signal), result = { path: output, samples: Math.round((metadata.audioDuration ?? metadata.duration) * SAMPLE_RATE) };
     const pendingMetadata = join(temporary, `source-${stemKey}.json`); await writeFile(pendingMetadata, JSON.stringify({ samples: result.samples, sha256: await fileHash(pending, signal) }));
     await rename(pending, output); await rename(pendingMetadata, metadataPath);
     stems.set(stemKey, result); return result;
   }
+  async function writeShotTrack(shot: Shot, source: { path: string; samples: number } | undefined, kind: 'audio' | 'video', cursorUs: number, gainDb: number, output: string) {
+    const spans = resolveShotSpans(shot, project), args = ['-nostdin', '-v', 'error', '-y'];
+    if (source) args.push('-i', source.path);
+    const filters: string[] = [], labels: string[] = [];
+    for (const [part, span] of spans.entries()) {
+      const count = sampleAt(cursorUs + span.outputEndUs) - sampleAt(cursorUs + span.outputStartUs), first = sampleAt(kind === 'video' ? span.videoInUs : span.audioInUs), label = `s${part}`;
+      if (count <= 0) continue;
+      const input = source && first < source.samples ? `[0:a]atrim=start_sample=${first}:end_sample=${first + count}` : 'anullsrc=r=48000:cl=stereo';
+      filters.push(`${input},asetpts=N/SR/TB,apad=whole_len=${count},atrim=end_sample=${count},volume=${10 ** (gainDb / 20)}[${label}]`); labels.push(`[${label}]`);
+    }
+    filters.push(`${labels.join('')}concat=n=${labels.length}:v=0:a=1[voice]`);
+    args.push('-filter_complex', filters.join(';'), '-map', '[voice]', '-ar', '48000', '-ac', '2', '-c:a', 'pcm_f32le', output);
+    await runMedia(ffmpeg, args, { signal });
+  }
+  async function concatenate(files: string[], name: string) {
+    const list = join(temporary, `${name}.txt`); await writeFile(list, files.map(file => `file '${basename(file)}'`).join('\n'));
+    const path = join(temporary, `${name}.wav`);
+    await runMedia(ffmpeg, ['-nostdin', '-v', 'error', '-y', '-f', 'concat', '-safe', '0', '-i', list, '-c:a', 'pcm_f32le', path], { signal });
+    return path;
+  }
   try {
-    const voiceFiles: string[] = []; let cursorUs = 0;
+    const voiceFiles: string[] = [], originalFiles: string[] = [], videoTracks = new Map<string, boolean>(); let cursorUs = 0;
     for (const [index, shot] of project.shots.entries()) {
       const output = join(temporary, `voice-${index}.wav`), processing = audioProcessingSchema.parse(shot.audioProcessing ?? DEFAULT_AUDIO_PROCESSING);
       const source = shot.audioAssetId ? await stem(audioAsset(shot.audioAssetId, project.id, options.assets), processing.denoise, processing.noiseReductionDb) : undefined;
-      if (!source) warnings.push(`“${shot.title}”尚未添加配音，本镜头使用静音音轨。`);
-      const spans = resolveShotSpans(shot, project), args = ['-nostdin', '-v', 'error', '-y'];
-      if (source) args.push('-i', source.path);
-      const filters: string[] = [], labels: string[] = [];
-      for (const [part, span] of spans.entries()) {
-        const count = sampleAt(cursorUs + span.outputEndUs) - sampleAt(cursorUs + span.outputStartUs), first = sampleAt(span.audioInUs), label = `s${part}`;
-        if (count <= 0) continue;
-        const input = source && first < source.samples ? `[0:a]atrim=start_sample=${first}:end_sample=${first + count}` : 'anullsrc=r=48000:cl=stereo';
-        filters.push(`${input},asetpts=N/SR/TB,apad=whole_len=${count},atrim=end_sample=${count},volume=${10 ** (processing.gainDb / 20)}[${label}]`); labels.push(`[${label}]`);
+      if (!source && !usesVideoAudio(shot)) warnings.push(`“${shot.title}”尚未添加配音，本镜头使用静音音轨。`);
+      await writeShotTrack(shot, source, 'audio', cursorUs, processing.gainDb, output); voiceFiles.push(output);
+      if (originals.length) {
+        let original: Awaited<ReturnType<typeof stem>> | undefined;
+        if (usesVideoAudio(shot)) {
+          const asset = audioAsset(shot.videoAssetId, project.id, options.assets, '视频原声', 'video');
+          if (!videoTracks.has(asset.id)) videoTracks.set(asset.id, (await probeMedia(asset.path, ffprobe, signal)).audio);
+          if (videoTracks.get(asset.id)) original = await stem(asset, false, 0);
+          else warnings.push(`“${shot.title}”关联的视频没有音轨，原声使用静音。`);
+        }
+        const originalOutput = join(temporary, `original-${index}.wav`);
+        await writeShotTrack(shot, original, 'video', cursorUs, processing.version === 2 ? processing.videoAudio.gainDb : 0, originalOutput); originalFiles.push(originalOutput);
       }
-      filters.push(`${labels.join('')}concat=n=${labels.length}:v=0:a=1[voice]`);
-      args.push('-filter_complex', filters.join(';'), '-map', '[voice]', '-ar', '48000', '-ac', '2', '-c:a', 'pcm_f32le', output);
-      await runMedia(ffmpeg, args, { signal }); voiceFiles.push(output); cursorUs += shot.durationUs;
+      cursorUs += shot.durationUs;
       options.onProgress?.(.05 + .35 * (index + 1) / project.shots.length);
     }
-    const list = join(temporary, 'voices.txt'); await writeFile(list, voiceFiles.map(file => `file '${basename(file)}'`).join('\n'));
-    const voicePath = join(temporary, 'voice.wav');
-    await runMedia(ffmpeg, ['-nostdin', '-v', 'error', '-y', '-f', 'concat', '-safe', '0', '-i', list, '-c:a', 'pcm_f32le', voicePath], { signal });
+    const voicePath = await concatenate(voiceFiles, 'voice');
+    const originalPath = originalFiles.length ? await concatenate(originalFiles, 'original') : undefined;
     const args = ['-nostdin', '-v', 'error', '-y', '-i', voicePath], filters: string[] = [];
     for (const [index, { clip, asset }] of music.entries()) {
       const source = await stem(asset, false, 0), first = sampleAt(clip.sourceInUs);
@@ -219,6 +244,11 @@ async function prepare(options: PrepareAudioMixOptions, key: string): Promise<Pr
         filters.push('[0:a]asplit=2[side][voice]', `[music][side]sidechaincompress=threshold=${10 ** (duck.thresholdDb / 20)}:ratio=${duck.ratio}:attack=${duck.attackMs}:release=${duck.releaseMs}:makeup=1[ducked]`, '[voice][ducked]amix=inputs=2:normalize=0:duration=first[mixed]');
       } else filters.push('[0:a][music]amix=inputs=2:normalize=0:duration=first[mixed]');
       output = 'mixed';
+    }
+    if (originalPath) {
+      args.push('-i', originalPath);
+      filters.push(`[${output}][${music.length + 1}:a]amix=inputs=2:normalize=0:duration=first[withOriginal]`);
+      output = 'withOriginal';
     }
     const rawMix = join(temporary, 'raw.wav');
     if (filters.length) { filters.push(`[${output}]apad=whole_len=${totalSamples},atrim=end_sample=${totalSamples}[final]`); args.push('-filter_complex', filters.join(';'), '-map', '[final]'); }

@@ -31,7 +31,7 @@ export default memo(function AudioWaveform({ asset, sourceInUs, durationUs, span
   const [visible, setVisible] = useState(false);
   const [width, setWidth] = useState(0);
   const [result, setResult] = useState<{ key: string; waveform?: Waveform; error?: string }>();
-  const key = asset ? JSON.stringify([asset.id, asset.sha256, asset.version]) : '';
+  const key = asset ? JSON.stringify([asset.id, asset.sha256, asset.version, asset.kind, asset.path]) : '';
   useEffect(() => {
     const element = container.current;
     if (!element) return;

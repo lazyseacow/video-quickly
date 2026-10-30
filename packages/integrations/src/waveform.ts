@@ -5,7 +5,7 @@ import { join, resolve } from 'node:path';
 import { spawn } from 'node:child_process';
 import { audioWaveformSchema, type AssetRecord, type AudioWaveform } from '@video-quickly/contracts';
 
-const ALGORITHM = 'v1-mono-16000-peak-100hz';
+const ALGORITHM = 'v2-media-origin-mono-16000-peak-100hz';
 const SAMPLE_RATE = 16_000;
 const SAMPLES_PER_PEAK = 160;
 
@@ -22,7 +22,7 @@ async function decode(asset: AssetRecord, ffmpeg: string, signal: AbortSignal, s
   signal.throwIfAborted();
   const peaks: number[] = [];
   let samples = 0, peak = 0, remainder = Buffer.alloc(0), stderr = '';
-  const child = spawnDecoder(ffmpeg, ['-nostdin', '-v', 'error', '-i', asset.path, '-map', '0:a:0', '-vn', '-ac', '1', '-ar', String(SAMPLE_RATE), '-acodec', 'pcm_f32le', '-f', 'f32le', 'pipe:1']);
+  const child = spawnDecoder(ffmpeg, ['-nostdin', '-v', 'error', '-i', asset.path, '-map', '0:a:0', '-vn', ...(asset.kind === 'video' ? ['-af', `aresample=${SAMPLE_RATE}:async=1:first_pts=0`] : []), '-ac', '1', '-ar', String(SAMPLE_RATE), '-acodec', 'pcm_f32le', '-f', 'f32le', 'pipe:1']);
   let forceKill: ReturnType<typeof setTimeout> | undefined;
   const abort = () => {
     child.kill('SIGTERM');
@@ -89,7 +89,7 @@ export function createWaveformReader(options: { dataDirectory: string; ffmpegPat
   async function readOrDecode(asset: AssetRecord, signal: AbortSignal): Promise<AudioWaveform> {
     const actualHash = await sourceHash(asset.path, signal);
     if (actualHash !== asset.sha256) throw new Error('音频素材校验失败，请重新导入后生成波形。');
-    const cachePath = join(cacheDirectory, `${actualHash}.json`);
+    const cachePath = join(cacheDirectory, `${actualHash}-${asset.kind}.json`);
     try {
       const cached = audioWaveformSchema.safeParse(JSON.parse(await readFile(cachePath, 'utf8')));
       if (cached.success && cached.data.sha256 === actualHash) return { ...cached.data, assetId: asset.id };
@@ -116,7 +116,7 @@ export function createWaveformReader(options: { dataDirectory: string; ffmpegPat
       if (closed) return Promise.reject(new Error('音频波形读取器已关闭。'));
       if (asset.kind !== 'audio' && asset.kind !== 'video') return Promise.reject(new Error('此素材不包含音频波形。'));
       if (request.signal?.aborted) return Promise.reject(request.signal.reason);
-      const key = JSON.stringify([resolve(asset.path), asset.sha256]);
+      const key = JSON.stringify([resolve(asset.path), asset.sha256, asset.kind]);
       let job = jobs.get(key);
       if (!job) {
         const controller = new AbortController();

@@ -1,7 +1,7 @@
 import type { MusicClip, Shot } from '@video-quickly/contracts';
 import { clipSourceOutUs, resolveShotTime, type ClipEditContext } from './clip-edits.js';
 
-export type MediaSourceOffsets = Pick<Shot, 'sourceInUs' | 'audioInUs' | 'videoInUs'> & Partial<Pick<Shot, 'clipEdit' | 'durationUs'>>;
+export type MediaSourceOffsets = Pick<Shot, 'sourceInUs' | 'audioInUs' | 'videoInUs'> & Partial<Pick<Shot, 'clipEdit' | 'durationUs' | 'sceneTemplate' | 'audioProcessing' | 'videoAssetId'>>;
 export interface SourceDurations { audioDurationUs?: number; videoDurationUs?: number }
 
 export function mediaSourceInUs(shot: MediaSourceOffsets, kind: 'audio' | 'video', context: ClipEditContext = {}): number {

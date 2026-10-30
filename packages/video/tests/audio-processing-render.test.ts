@@ -28,6 +28,13 @@ async function fixture(directory: string) {
   await runMedia(ffmpeg, ['-v', 'error', '-y', '-f', 'lavfi', '-i', `aevalsrc=exprs='0.2*${tone}|0.1*${tone}':sample_rate=48000:duration=3`, '-c:a', 'pcm_s16le', path]);
   return asset('voice', path);
 }
+async function embeddedVideo(directory: string, delay = 0, silent = false) {
+  const voice = await fixture(directory), path = join(directory, `embedded-${delay}-${silent}.mp4`);
+  await runMedia(ffmpeg, ['-v', 'error', '-y', '-f', 'lavfi', '-i', 'color=blue:size=320x180:rate=30:duration=3',
+    ...(silent ? [] : ['-itsoffset', String(delay), '-i', voice.path]), '-map', '0:v:0', ...(silent ? ['-an'] : ['-map', '1:a:0', '-c:a', 'aac', '-b:a', '192k']),
+    '-t', '3', '-c:v', 'libx264', '-preset', 'ultrafast', '-pix_fmt', 'yuv420p', path]);
+  return asset('embedded-video', path, 'video');
+}
 async function pcm(path: string, directory: string, name: string) {
   const output = join(directory, `${name}.f32`); await runMedia(ffmpeg, ['-v', 'error', '-y', '-i', path, '-ar', '48000', '-ac', '2', '-f', 'f32le', output]); return readFile(output);
 }
@@ -132,3 +139,70 @@ it.skipIf(!available)('ducks multiple music clips from real voice, measures two-
   expect((await prepareAudioMix({ ...options, project: noiseProject, assets: [noisy] })).sha256).toBe(raw.sha256);
   const controller = new AbortController(); controller.abort(); await expect(prepareAudioMix({ ...options, signal: controller.signal })).rejects.toMatchObject({ name: 'AbortError' });
 }, 180_000);
+
+it.skipIf(!available)('keeps embedded video sound opt-in and applies its own gain and mute independently of voice offsets', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'vq-video-audio-toggle-')); directories.push(directory);
+  const video = await embeddedVideo(directory), shot = shotSchema.parse({ id: 'embedded', title: 'Embedded', narration: '', visualPrompt: '', durationUs: 1_000_000, videoInUs: 800_000, audioInUs: 2_100_000, videoAssetId: video.id });
+  const options = { assets: [video], outputDirectory: join(directory, 'cache'), ffmpegPath: ffmpeg, ffprobePath: ffprobe };
+  const legacy = await prepareAudioMix({ ...options, project: project([shot]) });
+  expect(amplitude(await pcm(legacy.path, directory, 'legacy-muted'), 880, .1)).toBeLessThan(.001);
+  const enabled = { ...shot, audioProcessing: { ...DEFAULT_AUDIO_PROCESSING, version: 2 as const, videoAudio: { enabled: true, gainDb: -6 } } };
+  const audible = await prepareAudioMix({ ...options, project: project([enabled]) });
+  const level = amplitude(await pcm(audible.path, directory, 'enabled'), 880, .1);
+  expect(level).toBeGreaterThan(.085); expect(level).toBeLessThan(.12);
+  expect(audible.warnings.some(value => value.includes('本镜头使用静音'))).toBe(false);
+  const muted = await prepareAudioMix({ ...options, project: project([{ ...enabled, audioProcessing: { ...enabled.audioProcessing, videoAudio: { enabled: false, gainDb: -6 } } }]) });
+  expect(amplitude(await pcm(muted.path, directory, 'muted'), 880, .1)).toBeLessThan(.001);
+  expect(muted.key).not.toBe(audible.key);
+}, 60_000);
+
+it.skipIf(!available)('cuts embedded audio on the video source spans while retaining a separate voice and matching exported sound', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'vq-video-audio-edl-')); directories.push(directory);
+  const video = await embeddedVideo(directory), voicePath = join(directory, 'independent-voice.wav');
+  await runMedia(ffmpeg, ['-v', 'error', '-y', '-f', 'lavfi', '-i', 'aevalsrc=exprs=0.1*sin(2*PI*220*t)|0.1*sin(2*PI*220*t):s=48000:d=3', '-c:a', 'pcm_s16le', voicePath]);
+  const voice = await asset('independent-voice', voicePath), assets = [video, voice];
+  const original = shotSchema.parse({ id: 'embedded', title: 'Edited embedded', narration: '', visualPrompt: '', durationUs: 2_200_000, sourceInUs: 0, audioInUs: 0, videoInUs: 800_000, videoAssetId: video.id, audioAssetId: voice.id, audioProcessing: { ...DEFAULT_AUDIO_PROCESSING, version: 2, videoAudio: { enabled: true, gainDb: 0 } } });
+  const source = captureClipEditSource(original, assets, 'original-source');
+  const plan = { id: 'video-plan', sourceId: source.id, spans: [
+    { id: 'first', durationUs: 400_000, originInUs: 0, sourceInUs: 0, audioInUs: 0, videoInUs: 800_000, sceneInUs: 0 },
+    { id: 'second', durationUs: 600_000, originInUs: 1_200_000, sourceInUs: 1_200_000, audioInUs: 1_200_000, videoInUs: 2_000_000, sceneInUs: 1_200_000 },
+  ] };
+  const document = { ...project([{ ...original, durationUs: 1_000_000, clipEdit: { planId: plan.id, inUs: 0, restoreInUs: 0, restoreDurationUs: 2_200_000 } }]), clipEditSources: [source], clipEditPlans: [plan] };
+  const options = { project: document, assets, outputDirectory: join(directory, 'cache'), ffmpegPath: ffmpeg, ffprobePath: ffprobe };
+  const mix = await prepareAudioMix(options), actual = await pcm(mix.path, directory, 'cut-original');
+  expect(mix.durationUs).toBe(1_000_000); expect(amplitude(actual, 880, .1)).toBeGreaterThan(.17);
+  expect(amplitude(actual, 1320, .65)).toBeGreaterThan(.17); expect(amplitude(actual, 880, .65)).toBeLessThan(.01);
+  expect(amplitude(actual, 220, .1)).toBeGreaterThan(.085); expect(amplitude(actual, 220, .65)).toBeGreaterThan(.085);
+  const rendered = await renderProject({ ...options, outputDirectory: join(directory, 'export'), preparedAudioMix: mix }), exported = await pcm(rendered.videoPath, directory, 'exported-original');
+  expect(amplitude(exported, 880, .1)).toBeGreaterThan(.16); expect(amplitude(exported, 1320, .65)).toBeGreaterThan(.16); expect(amplitude(exported, 220, .65)).toBeGreaterThan(.08);
+  const changedBytes = Buffer.concat([await readFile(video.path), Buffer.from('changed after editing')]); await writeFile(video.path, changedBytes);
+  const changedVideo = { ...await asset(video.id, video.path, 'video'), version: 2 };
+  await expect(prepareAudioMix({ ...options, assets: [changedVideo, voice] })).rejects.toThrow('剪辑来源视频已变化');
+}, 60_000);
+
+it.skipIf(!available)('preserves a delayed embedded audio start relative to the video origin', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'vq-video-audio-delay-')); directories.push(directory);
+  const video = await embeddedVideo(directory, .3), shot = shotSchema.parse({ id: 'delayed', title: 'Delayed source', narration: '', visualPrompt: '', durationUs: 1_000_000, videoInUs: 100_000, videoAssetId: video.id, audioProcessing: { ...DEFAULT_AUDIO_PROCESSING, version: 2, videoAudio: { enabled: true, gainDb: 0 } } });
+  const mix = await prepareAudioMix({ project: project([shot]), assets: [video], outputDirectory: join(directory, 'cache'), ffmpegPath: ffmpeg, ffprobePath: ffprobe }), actual = await pcm(mix.path, directory, 'delayed');
+  expect(amplitude(actual, 440, .03)).toBeLessThan(.001); expect(amplitude(actual, 440, .3)).toBeGreaterThan(.17);
+}, 60_000);
+
+it.skipIf(!available)('keeps silent videos playable and reports the absent original audio track', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'vq-video-audio-silent-')); directories.push(directory);
+  const video = await embeddedVideo(directory, 0, true), shot = shotSchema.parse({ id: 'silent', title: 'Silent video', narration: '', visualPrompt: '', durationUs: 1_000_000, videoAssetId: video.id, audioProcessing: { ...DEFAULT_AUDIO_PROCESSING, version: 2, videoAudio: { enabled: true, gainDb: 0 } } });
+  const mix = await prepareAudioMix({ project: project([shot]), assets: [video], outputDirectory: join(directory, 'cache'), ffmpegPath: ffmpeg, ffprobePath: ffprobe });
+  expect(mix.warnings.some(value => value.includes('视频没有音轨'))).toBe(true);
+  expect((await readAudioLevelWindow({ mix, startUs: 0, durationUs: 500_000 })).samples.every(value => value.peakLeft === 0 && value.peakRight === 0)).toBe(true);
+}, 60_000);
+
+it.skipIf(!available)('mixes original sound separately so it does not trigger voice-only music ducking', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'vq-video-audio-ducking-')); directories.push(directory);
+  const video = await embeddedVideo(directory), musicPath = join(directory, 'music.wav');
+  await runMedia(ffmpeg, ['-v', 'error', '-y', '-f', 'lavfi', '-i', 'aevalsrc=exprs=0.15*sin(2*PI*660*t)|0.15*sin(2*PI*660*t):s=48000:d=1', '-c:a', 'pcm_s16le', musicPath]);
+  const music = await asset('music', musicPath), shot = shotSchema.parse({ id: 'original', title: 'Original with music', narration: '', visualPrompt: '', durationUs: 1_000_000, videoInUs: 800_000, videoAssetId: video.id, audioProcessing: { ...DEFAULT_AUDIO_PROCESSING, version: 2, videoAudio: { enabled: true, gainDb: 0 } } });
+  const document = project([shot]); document.musicClips = [{ id: 'music-clip', assetId: music.id, startUs: 0, sourceInUs: 0, durationUs: 1_000_000, gainDb: 0, loop: false, fadeInUs: 0, fadeOutUs: 0 }];
+  document.audioMix = { ...DEFAULT_AUDIO_MIX_SETTINGS, loudness: { ...DEFAULT_AUDIO_MIX_SETTINGS.loudness, enabled: false }, ducking: { ...DEFAULT_AUDIO_MIX_SETTINGS.ducking, enabled: true, thresholdDb: -40, ratio: 20 } };
+  const mix = await prepareAudioMix({ project: document, assets: [video, music], outputDirectory: join(directory, 'cache'), ffmpegPath: ffmpeg, ffprobePath: ffprobe }), actual = await pcm(mix.path, directory, 'original-with-music');
+  expect(amplitude(actual, 880, .1)).toBeGreaterThan(.17); expect(amplitude(actual, 660, .1)).toBeGreaterThan(.13);
+  expect(amplitude(actual, 660, .1)).toBeGreaterThan(amplitude(actual, 660, .75) * .9);
+}, 60_000);

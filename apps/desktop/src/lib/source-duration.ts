@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import type { AssetRecord, Shot } from '@video-quickly/contracts';
+import { usesVideoAudio, type AssetRecord, type Shot } from '@video-quickly/contracts';
 import { commonSourceOutUs, type SourceDurations } from '@video-quickly/video/audio';
 import type { ClipEditContext } from '@video-quickly/video/clip-edits';
 import { getAssetUrl } from './client';
@@ -45,7 +45,7 @@ async function readDuration(asset: AssetRecord, signal: AbortSignal): Promise<nu
 }
 
 function sourceIds(shots: readonly Shot[]) {
-  return [...new Set(shots.flatMap(shot => [shot.audioAssetId, shot.sceneTemplate ? undefined : shot.videoAssetId]).filter((id): id is string => Boolean(id)))].sort();
+  return [...new Set(shots.flatMap(shot => [shot.audioAssetId, shot.sceneTemplate && !usesVideoAudio(shot) ? undefined : shot.videoAssetId]).filter((id): id is string => Boolean(id)))].sort();
 }
 
 export function sourceDurationsKey(shots: readonly Shot[], assets: readonly AssetRecord[]): string {
@@ -88,8 +88,8 @@ export function useBulkSourceDurations(shots: readonly Shot[], assets: readonly 
   return result.error ? { key, status: 'error' as const, error: result.error, durations: {} } : { key, status: 'ready' as const, durations: result.durations ?? {} };
 }
 
-export function useSourceDuration(shot: (Pick<Shot, 'videoAssetId' | 'audioAssetId' | 'sourceInUs' | 'audioInUs' | 'videoInUs' | 'sceneTemplate'> & Partial<Pick<Shot, 'clipEdit' | 'durationUs'>>) | undefined, assets: AssetRecord[], context: ClipEditContext = {}): SourceDurationResult {
-  const videoId = shot?.sceneTemplate ? undefined : shot?.videoAssetId;
+export function useSourceDuration(shot: (Pick<Shot, 'videoAssetId' | 'audioAssetId' | 'sourceInUs' | 'audioInUs' | 'videoInUs' | 'sceneTemplate' | 'audioProcessing'> & Partial<Pick<Shot, 'clipEdit' | 'durationUs'>>) | undefined, assets: AssetRecord[], context: ClipEditContext = {}): SourceDurationResult {
+  const videoId = shot?.sceneTemplate && !usesVideoAudio(shot) ? undefined : shot?.videoAssetId;
   const video = assets.find(asset => asset.id === videoId);
   const audio = assets.find(asset => asset.id === shot?.audioAssetId);
   const media = [video, audio].filter((asset): asset is AssetRecord => !!asset);

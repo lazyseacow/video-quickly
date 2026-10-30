@@ -3,7 +3,7 @@ import { createReadStream } from 'node:fs';
 import { mkdir, stat } from 'node:fs/promises';
 import { isAbsolute, join, relative, resolve } from 'node:path';
 import { z } from 'zod';
-import { audioLevelWindowSchema, audioMixJobSchema, preparedAudioMixSchema, projectSchema, silenceDetectionSchema, workflowSchema, type AssetRecord, type AudioLevelWindow, type AudioMixJob, type AudioMixPrepareResult, type PreparedAudioMix, type ProjectDocument, type SilenceDetection } from '@video-quickly/contracts';
+import { audioLevelWindowSchema, audioMixJobSchema, preparedAudioMixSchema, projectSchema, silenceDetectionSchema, usesVideoAudio, workflowSchema, type AssetRecord, type AudioLevelWindow, type AudioMixJob, type AudioMixPrepareResult, type PreparedAudioMix, type ProjectDocument, type SilenceDetection } from '@video-quickly/contracts';
 import type { DocumentStore } from './database.js';
 
 export interface AudioMixCallbacks {
@@ -23,7 +23,7 @@ export function compactAudioProject(project: ProjectDocument): ProjectDocument {
   const planIds = new Set(project.shots.flatMap(shot => shot.clipEdit ? [shot.clipEdit.planId] : []));
   const plans = (project.clipEditPlans ?? []).filter(plan => planIds.has(plan.id)), sourceIds = new Set(plans.map(plan => plan.sourceId));
   return { ...project, title: '声音试听', brief: '', style: '', claims: [], researchSources: undefined, referenceDisplay: undefined,
-    shots: project.shots.map(shot => ({ ...shot, title: '声音片段', narration: '', visualPrompt: '', captionTrack: undefined, sceneTemplate: undefined, characterIds: undefined, claimIds: [], assetId: undefined, videoAssetId: undefined })),
+    shots: project.shots.map(shot => ({ ...shot, title: '声音片段', narration: '', visualPrompt: '', captionTrack: undefined, sceneTemplate: undefined, characterIds: undefined, claimIds: [], assetId: undefined, videoAssetId: usesVideoAudio(shot) ? shot.videoAssetId : undefined })),
     clipEditPlans: structuredClone(plans),
     clipEditSources: (project.clipEditSources ?? []).filter(source => sourceIds.has(source.id)).map(source => ({ ...source, original: { ...source.original, captionTrack: source.original.captionTrack ? { ...source.original.captionTrack, cues: [] } : undefined }, assetHashes: structuredClone(source.assetHashes) })),
     audioMix: structuredClone(project.audioMix), musicClips: structuredClone(project.musicClips),
@@ -61,12 +61,19 @@ export function createAudioPreview(options: {
     return current.revision === project.revision ? undefined : { status: 'revision_changed', revision: current.revision };
   }
   function currentAssets(project: ProjectDocument): AssetRecord[] {
-    const ids = new Set([...project.shots.map(shot => shot.audioAssetId), ...(project.musicClips ?? []).map(clip => clip.assetId)].filter((id): id is string => Boolean(id)));
-    return [...ids].map(id => {
+    const references = [
+      ...project.shots.flatMap(shot => [
+        ...(shot.audioAssetId ? [{ id: shot.audioAssetId, kind: 'audio' as const }] : []),
+        ...(usesVideoAudio(shot) ? [{ id: shot.videoAssetId, kind: 'video' as const }] : []),
+      ]),
+      ...(project.musicClips ?? []).map(clip => ({ id: clip.assetId, kind: 'audio' as const })),
+    ];
+    const assets = references.map(({ id, kind }) => {
       const asset = store.get<AssetRecord>('asset', id);
-      if (!asset?.active || asset.kind !== 'audio' || asset.projectId && asset.projectId !== project.id) throw new Error('试听引用的音频已移除或不属于当前项目。');
+      if (!asset?.active || asset.kind !== kind || asset.projectId && asset.projectId !== project.id) throw new Error('试听引用的音频已移除或不属于当前项目。');
       return asset;
     });
+    return [...new Map(assets.map(asset => [asset.id, asset])).values()];
   }
   function recheck(assets: readonly AssetRecord[]) {
     for (const asset of assets) {

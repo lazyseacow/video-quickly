@@ -63,6 +63,8 @@
 .audio-waveform--error { color: var(--text-secondary); }
 .timeline-clip--music .timeline-clip__select { cursor: pointer; }
 .workspace-shell .workbench-grid:has(.track--music) { grid-template-rows: minmax(260px, 1fr) 308px; }
+.workspace-shell .workbench-grid:has(.track--original) { grid-template-rows: minmax(260px, 1fr) 308px; }
+.workspace-shell .workbench-grid:has(.track--original):has(.track--music) { grid-template-rows: minmax(260px, 1fr) 368px; }
 @media (max-width: 950px) { .workspace-shell .workbench-grid:has(.track--music) { grid-template-rows: 420px 308px auto; } }
 .timeline-clip--pending { border-style: dashed; border-color: var(--border); color: var(--text-subtle); background: color-mix(in srgb, var(--surface-raised) 35%, transparent); }
 .timeline-clip--pending.selected { border-color: color-mix(in srgb, var(--accent) 50%, var(--border)); box-shadow: none; }

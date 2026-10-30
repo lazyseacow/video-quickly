@@ -7,6 +7,16 @@ function fixture() {
   return projectSchema.parse({ id: 'audio-project', title: '声音精修', brief: '', revision: 1, profile: DEFAULT_VIDEO_PROFILE, workflow: createHistoryWorkflow(), createdAt: '', updatedAt: '', clipEditSources: [source], clipEditPlans: [plan], shots: [{ id: 'shot', title: '原录音', narration: '', visualPrompt: '', durationUs: 3_000_000, clipEdit: { planId: plan.id, inUs: 0, restoreInUs: 0, restoreDurationUs: 4_000_000 } }] });
 }
 
+it('requires an explicit processing version for video audio and validates its independent gain', () => {
+  const enabled = { ...DEFAULT_AUDIO_PROCESSING, version: 2, videoAudio: { enabled: true, gainDb: -6 } };
+  expect(audioProcessingSchema.parse(enabled)).toEqual(enabled);
+  expect(audioProcessingSchema.safeParse({ ...enabled, version: 1 }).success).toBe(false);
+  expect(audioProcessingSchema.safeParse({ ...enabled, videoAudio: { enabled: true, gainDb: 19 } }).success).toBe(false);
+  expect(audioProcessingSchema.safeParse({ ...enabled, videoAudio: { enabled: true, gainDb: NaN } }).success).toBe(false);
+  const document = fixture(); document.shots[0].audioProcessing = audioProcessingSchema.parse(enabled);
+  expect(projectSchema.parse(JSON.parse(JSON.stringify(document))).shots[0].audioProcessing).toEqual(enabled);
+});
+
 it('retains old projects without silently adding processing or edit plans', () => {
   const value = fixture(); const { clipEditSources, clipEditPlans, ...legacy } = value;
   const parsed = projectSchema.parse({ ...legacy, shots: value.shots.map(({ clipEdit, ...shot }) => shot) });

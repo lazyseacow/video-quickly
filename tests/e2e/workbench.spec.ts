@@ -14,7 +14,7 @@ test('shows pure run notifications for two seconds without replaying on refresh'
   const initial = await request.post('/__desktop_rpc', { data: { method: 'workspace.snapshot' } });
   const project = (await initial.json()).result.projects.find((value: { id: string }) => value.id === 'example-history');
   await openApp(page);
-  await expect(page.getByLabel('项目名称')).toHaveValue(project.title);
+  await expect(page.getByLabel('项目名称', { exact: true })).toHaveValue(project.title);
   const started = await request.post('/__desktop_rpc', { data: { method: 'run.start', params: { projectId: project.id, nodeId: 'style' } } });
   const run = (await started.json()).result;
   try {
@@ -309,6 +309,7 @@ test('edits real project state, output profiles, graph and theme', async ({ page
 test('keeps flow edits through background refresh and saves before switching views', async ({ page, request }) => {
   const response = await request.post('/__desktop_rpc', { data: { method: 'project.create', params: { title: '流程交互验收' } } });
   const project = (await response.json()).result;
+  await request.post('/__desktop_rpc', { data: { method: 'project.create', params: { title: '外部更新的项目名称' } } });
   await openApp(page);
   await page.getByRole('button', { name: '我的项目', exact: true }).click();
   await page.locator('.project-card').filter({ hasText: '流程交互验收' }).getByRole('button', { name: /继续创作/ }).click();
@@ -318,7 +319,7 @@ test('keeps flow edits through background refresh and saves before switching vie
   await page.getByLabel('步骤名称').fill('后台刷新保留的步骤');
   const renamed = await request.post('/__desktop_rpc', { data: { method: 'project.update', params: { projectId: project.id, revision: project.revision, patch: { title: '流程交互验收 · 新修订' } } } });
   expect((await renamed.json()).error).toBeUndefined();
-  await expect(page.getByLabel('项目名称')).toHaveValue('流程交互验收 · 新修订');
+  await expect(page.getByLabel('项目名称', { exact: true })).toHaveValue('流程交互验收 · 新修订');
   await expect(page.getByLabel('步骤名称')).toHaveValue('后台刷新保留的步骤');
   await page.setViewportSize({ width: 600, height: 900 });
   const canvas = await page.locator('.react-flow').boundingBox();
@@ -353,7 +354,7 @@ test('resizes and restores editor panels, and saves before opening a recent proj
   await page.getByRole('button', { name: '退出专注预览', exact: true }).click();
   await expect(page.getByLabel('镜头标题')).toHaveValue('专注模式保留的草稿');
   await page.getByRole('button', { name: `打开项目：${nextProject.title}`, exact: true }).click();
-  await expect(page.getByLabel('项目名称')).toHaveValue(nextProject.title);
+  await expect(page.getByLabel('项目名称', { exact: true })).toHaveValue(nextProject.title);
   const saved = await request.post('/__desktop_rpc', { data: { method: 'workspace.snapshot' } });
   expect((await saved.json()).result.projects.find((project: { id: string }) => project.id === original.id).shots[0].title).toBe('专注模式保留的草稿');
 });
@@ -363,11 +364,11 @@ test('creates a project and connects a model without exposing credentials', asyn
   await page.getByRole('button', { name: '我的项目', exact: true }).click();
   await page.getByRole('button', { name: '新建项目', exact: true }).last().click();
   const dialog = page.getByRole('dialog', { name: '新建视频项目' });
-  await dialog.getByLabel('项目名称').fill('界面验收项目');
+  await dialog.getByLabel('项目名称', { exact: true }).fill('界面验收项目');
   await dialog.getByLabel('创意简报').fill('这是隔离数据目录中的编辑与恢复验证项目。');
   await dialog.getByRole('button', { name: '创建项目', exact: true }).click();
   await expect(dialog).toHaveCount(0);
-  await expect(page.getByLabel('项目名称')).toHaveValue('界面验收项目');
+  await expect(page.getByLabel('项目名称', { exact: true })).toHaveValue('界面验收项目');
 
   await page.getByRole('button', { name: '模型连接', exact: true }).click();
   await page.getByRole('button', { name: '添加模型', exact: true }).first().click();

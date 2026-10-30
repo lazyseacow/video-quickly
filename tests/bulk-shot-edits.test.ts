@@ -1,5 +1,5 @@
 import { expect, it } from 'vitest';
-import { createHistoryWorkflow, createSceneTemplate, DEFAULT_CAPTION_STYLE, DEFAULT_VIDEO_PROFILE, projectSchema, type Shot } from '@video-quickly/contracts';
+import { createHistoryWorkflow, createSceneTemplate, DEFAULT_AUDIO_PROCESSING, DEFAULT_CAPTION_STYLE, DEFAULT_VIDEO_PROFILE, projectSchema, type Shot } from '@video-quickly/contracts';
 import { applyBulkShotEdit, bulkDuplicateShots, bulkMoveShots, bulkRemoveShots, bulkReorderShots } from '../apps/desktop/src/lib/bulk-shot-edits';
 import { editContent, ProjectEditSession, type EditContent } from '../apps/desktop/src/lib/project-edits';
 
@@ -48,6 +48,16 @@ it('ignores dormant template video while still checking narration and allows a m
   const baseline = patch(fixture(), 'A', { sceneTemplate: createSceneTemplate('process'), videoAssetId: 'missing-dormant-video' });
   expect(applyBulkShotEdit(baseline, baseline, ['A'], { durationUs: 10_000_000 }, {}).shots[0].durationUs).toBe(10_000_000);
   const narrated = patch(baseline, 'A', { audioAssetId: 'voice' }); expect(() => applyBulkShotEdit(narrated, narrated, ['A'], { durationUs: 4_000_000 }, {})).toThrow('音频素材时长'); expect(() => applyBulkShotEdit(narrated, narrated, ['A'], { durationUs: 4_000_000 }, { voice: 3_000_000 })).toThrow('超出真实时长');
+});
+
+it('checks an explicitly audible template video and rejects a related original-source change during bulk trimming', () => {
+  const baseline = patch(fixture(), 'A', { durationUs: 1_000_000, sceneTemplate: createSceneTemplate('process'), videoAssetId: 'video', videoInUs: 500_000, audioProcessing: { ...DEFAULT_AUDIO_PROCESSING, version: 2, videoAudio: { enabled: true, gainDb: 0 } } });
+  expect(() => applyBulkShotEdit(baseline, baseline, ['A'], { durationUs: 1_500_000 }, {})).toThrow('视频素材时长');
+  expect(applyBulkShotEdit(baseline, baseline, ['A'], { durationUs: 1_500_000 }, { video: 2_000_000 }).shots[0].durationUs).toBe(1_500_000);
+  expect(() => applyBulkShotEdit(baseline, baseline, ['A'], { durationUs: 2_000_000 }, { video: 2_000_000 })).toThrow('超出真实时长');
+  const muted = patch(baseline, 'A', { audioProcessing: DEFAULT_AUDIO_PROCESSING });
+  expect(() => applyBulkShotEdit(muted, baseline, ['A'], { durationUs: 1_500_000 }, { video: 2_000_000 })).toThrow('素材区间已变化');
+  expect(applyBulkShotEdit(muted, muted, ['A'], { durationUs: 10_000_000 }, {}).shots[0].durationUs).toBe(10_000_000);
 });
 
 it('rejects stale timing or active media but preserves unrelated live edits during a duration command', () => {

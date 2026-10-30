@@ -1,11 +1,25 @@
 import { z } from 'zod';
 
-export const audioProcessingSchema = z.object({
+const voiceProcessingSchema = z.object({
   version: z.literal(1), gainDb: z.number().finite().min(-60).max(18),
   denoise: z.boolean(), noiseReductionDb: z.number().finite().min(3).max(40),
+  videoAudio: z.never().optional(),
 });
+export const videoAudioSettingsSchema = z.object({ enabled: z.boolean(), gainDb: z.number().finite().min(-60).max(18) });
+export type VideoAudioSettings = z.infer<typeof videoAudioSettingsSchema>;
+export const DEFAULT_VIDEO_AUDIO: VideoAudioSettings = { enabled: false, gainDb: 0 };
+// Version 2 makes the additional source explicit. Older readers reject it instead
+// of silently stripping an enabled video track when they save the project.
+export const audioProcessingSchema = z.discriminatedUnion('version', [
+  voiceProcessingSchema,
+  voiceProcessingSchema.extend({ version: z.literal(2), videoAudio: videoAudioSettingsSchema }),
+]);
 export type AudioProcessing = z.infer<typeof audioProcessingSchema>;
 export const DEFAULT_AUDIO_PROCESSING: AudioProcessing = { version: 1, gainDb: 0, denoise: false, noiseReductionDb: 12 };
+
+export function usesVideoAudio<T extends { videoAssetId?: string; audioProcessing?: AudioProcessing }>(shot: T): shot is T & { videoAssetId: string; audioProcessing: Extract<AudioProcessing, { version: 2 }> } {
+  return Boolean(shot.videoAssetId && shot.audioProcessing?.version === 2 && shot.audioProcessing.videoAudio.enabled);
+}
 
 export const audioMixSettingsSchema = z.object({
   version: z.literal(1),

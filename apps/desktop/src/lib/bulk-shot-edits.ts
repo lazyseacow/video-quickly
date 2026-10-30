@@ -1,4 +1,4 @@
-import { captionStyleSchema, effectiveCaptionStyle, shotSchema, type CaptionStyle, type Shot } from '@video-quickly/contracts';
+import { captionStyleSchema, effectiveCaptionStyle, shotSchema, usesVideoAudio, type CaptionStyle, type Shot } from '@video-quickly/contracts';
 import { commonSourceOutUs } from '@video-quickly/video/audio';
 import { trimShotInContext } from '@video-quickly/video/editing';
 import { clipEditPlan, clipEditSource, type ClipEditContext, type ClipEditIdFactory } from '@video-quickly/video/clip-edits';
@@ -29,9 +29,10 @@ function requireSame(current: unknown, before: unknown, label: string) {
 }
 const look = (shot: Shot) => shot.sceneTemplate ? { palette: shot.sceneTemplate.palette, motion: shot.sceneTemplate.motion } : undefined;
 function timingInputs(shot: Shot) {
+  const videoId = shot.sceneTemplate && !usesVideoAudio(shot) ? undefined : shot.videoAssetId;
   return { durationUs: shot.durationUs, sourceInUs: shot.sourceInUs, sceneInUs: shot.sceneInUs, sceneDurationUs: shot.sceneDurationUs,
     audioAssetId: shot.audioAssetId, audioInUs: shot.audioAssetId ? shot.audioInUs : undefined,
-    templateActive: Boolean(shot.sceneTemplate), videoAssetId: shot.sceneTemplate ? undefined : shot.videoAssetId, videoInUs: !shot.sceneTemplate && shot.videoAssetId ? shot.videoInUs : undefined, clipEdit: shot.clipEdit };
+    templateActive: Boolean(shot.sceneTemplate), videoAssetId: videoId, videoInUs: videoId ? shot.videoInUs : undefined, clipEdit: shot.clipEdit };
 }
 function sourceLimit(shot: Shot, durations: Readonly<Record<string, number>>, context: ClipEditContext): number | undefined {
   function duration(id: string | undefined, kind: string) {
@@ -40,7 +41,7 @@ function sourceLimit(shot: Shot, durations: Readonly<Record<string, number>>, co
     if (value === undefined || !Number.isFinite(value) || value <= 0) throw new Error(`镜头${names([shot])}的${kind}素材时长尚未读取或读取失败，请读取成功后重试。`);
     return value;
   }
-  return commonSourceOutUs(shot, { audioDurationUs: duration(shot.audioAssetId, '音频'), videoDurationUs: duration(shot.sceneTemplate ? undefined : shot.videoAssetId, '视频') }, context);
+  return commonSourceOutUs(shot, { audioDurationUs: duration(shot.audioAssetId, '音频'), videoDurationUs: duration(shot.sceneTemplate && !usesVideoAudio(shot) ? undefined : shot.videoAssetId, '视频') }, context);
 }
 
 /** Validate every target before returning a single immutable command payload. */

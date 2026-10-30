@@ -1,6 +1,6 @@
 import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type PointerEvent } from 'react';
-import { ArrowLeft, ArrowRight, Copy, Film, ListChecks, Magnet, Mic, Music2, ScanLine, Scissors, SlidersHorizontal, Trash2, X, ZoomIn, ZoomOut } from 'lucide-react';
-import { frameAtTime, timeAtFrame, type AssetRecord, type FrameRate, type ProjectDocument, type Shot } from '@video-quickly/contracts';
+import { ArrowLeft, ArrowRight, Copy, Film, ListChecks, Magnet, Mic, Music2, ScanLine, Scissors, SlidersHorizontal, Trash2, Volume2, VolumeX, X, ZoomIn, ZoomOut } from 'lucide-react';
+import { frameAtTime, timeAtFrame, usesVideoAudio, type AssetRecord, type FrameRate, type ProjectDocument, type Shot } from '@video-quickly/contracts';
 import type { TimelineClip } from '@video-quickly/video';
 import { canSplitShot, maximumSourceOutUs, minimumShotDurationUs, minimumSourceInUs, snapTimeUs } from '@video-quickly/video/editing';
 import { PlaybackClock, usePlayback } from '../lib/playback';
@@ -40,6 +40,8 @@ export default memo(function Timeline({ project, assets, shots, timeline, select
   const draggingIds = useMemo(() => new Set(drag?.ids), [drag?.ids]);
   const singleSelected = selected.size === 1 && Boolean(selectedId && selected.has(selectedId));
   const audioCount = shots.filter(shot => shot.audioAssetId).length;
+  const originalCount = shots.filter(usesVideoAudio).length;
+  const tracks = originalCount ? ['video', 'audio', 'original'] as const : ['video', 'audio'] as const;
   const assetById = useMemo(() => new Map(assets.map(asset => [asset.id, asset])), [assets]);
   const musicClips = project.musicClips ?? [];
   const trimmingDisabled = editingDisabled || !singleSelected || Boolean(shots[selectedIndex]?.locked) || sourceStatus === 'loading' || sourceStatus === 'error';
@@ -170,15 +172,16 @@ export default memo(function Timeline({ project, assets, shots, timeline, select
     </div>
     <div className="timeline-body">
       <div className="timeline-track-headers" aria-label="轨道信息">
-        <div className="track-header-ruler"><span>轨道</span><span>{musicClips.length ? 3 : 2}</span></div>
+        <div className="track-header-ruler"><span>轨道</span><span>{2 + (musicClips.length ? 1 : 0) + (originalCount ? 1 : 0)}</span></div>
         <div className="track-header track-header--video"><span className="track-header__type"><Film size={14} /><b>V1</b></span><strong>画面</strong><small>{shots.length} 个片段</small></div>
         <div className="track-header track-header--audio"><span className="track-header__type"><Mic size={14} /><b>A1</b></span><strong>旁白</strong><small>{audioCount ? `${audioCount} 段音频` : '待添加'}</small></div>
-        {musicClips.length > 0 && <div className="track-header track-header--audio"><span className="track-header__type"><Music2 size={14} /><b>A2</b></span><strong>背景音乐</strong><small>{musicClips.length} 段音频</small></div>}
+        {originalCount > 0 && <div className="track-header track-header--audio"><span className="track-header__type"><Volume2 size={14} /><b>A2</b></span><strong>原声</strong><small>{originalCount} 段</small></div>}
+        {musicClips.length > 0 && <div className="track-header track-header--audio"><span className="track-header__type"><Music2 size={14} /><b>{originalCount ? 'A3' : 'A2'}</b></span><strong>背景音乐</strong><small>{musicClips.length} 段音频</small></div>}
       </div>
       <div className="timeline-scroll" ref={scroller}><div className="timeline-content" style={{ width: `${zoom * 100}%` }}>
         <TimelinePosition clock={clock} rate={rate} totalUs={totalUs} zoom={zoom} />
         {drag?.markerUs !== undefined && <div className="timeline-drop-marker" aria-hidden="true" style={{ left: `calc(12px + (100% - 32px) * ${drag.markerUs / (totalUs || 1)})` }} />}
-        {(['video', 'audio'] as const).map(kind => <div className={`track track--${kind}`} key={kind} style={{ backgroundSize: `${100 / divisions}% 100%` }}><div className="track-clips" ref={kind === 'video' ? track : undefined}>
+        {tracks.map(kind => <div className={`track track--${kind} ${kind === 'original' ? 'track--audio' : ''}`} key={kind} style={{ backgroundSize: `${100 / divisions}% 100%` }}><div className="track-clips" ref={kind === 'video' ? track : undefined}>
           {shots.map((shot, index) => {
             const clip = timeline[index];
             const active = drag && (drag.mode === 'move' ? draggingIds.has(shot.id) : drag.id === shot.id) ? drag : undefined;
@@ -188,9 +191,11 @@ export default memo(function Timeline({ project, assets, shots, timeline, select
             // Keep the captured handle mounted until even a narrow trim gesture finishes.
             const trimming = active?.mode === 'in' || active?.mode === 'out';
             const handles = kind === 'video' && singleSelected && shot.id === selectedId && (trimming || trackWidth * durationUs / (totalUs || 1) > 84);
-            return <div className={`timeline-clip timeline-clip--${kind} ${kind === 'audio' && !shot.audioAssetId ? 'timeline-clip--pending' : ''} ${selected.has(shot.id) ? 'selected' : ''} ${active ? 'is-editing' : ''}`} key={shot.id} style={{ left: `${totalUs ? startUs / totalUs * 100 : 0}%`, width: `calc(${totalUs ? durationUs / totalUs * 100 : 0}% - 2px)`, transform: active?.mode === 'move' ? `translateX(${active.deltaPx}px)` : undefined }}>
-              <button type="button" className="timeline-clip__select" disabled={editingDisabled} onPointerDown={event => begin(event, shot, index, 'move')} onPointerMove={move} onPointerUp={finish} onPointerCancel={finish} onLostPointerCapture={finish} onClick={event => { if (suppressClick.current && event.detail) { suppressClick.current = false; return; } suppressClick.current = false; void onSelect(shot.id, { toggle: event.ctrlKey || event.metaKey, range: event.shiftKey, keepGroup: !event.ctrlKey && !event.metaKey && !event.shiftKey && selected.has(shot.id) }); }} aria-pressed={selected.has(shot.id)} aria-label={`${kind === 'video' ? '定位镜头' : '定位旁白'} ${index + 1}：${shot.title}`} title={`${shot.title} · ${(shot.durationUs / 1_000_000).toFixed(3)} 秒；Ctrl/⌘ 切换选择，Shift 连续选择；拖动调整顺序`}>
-                {kind === 'video' ? <><span className="timeline-clip__title"><span className="timeline-clip__index">{(index + 1).toString().padStart(2, '0')}</span><span>{shot.title}</span></span><span className="timeline-clip__media"><span className="timeline-clip__thumbnail"><ScenePreview project={project} shot={shot} shotIndex={index} assets={assets} thumbnail /></span><span className="timeline-clip__duration">{(durationUs / 1_000_000).toFixed(1)}s</span></span></> : shot.audioAssetId ? <ShotAudioWaveform project={project} shot={shot} asset={assetById.get(shot.audioAssetId)} active={active?.mode !== 'move' ? active : undefined} durationUs={durationUs} rate={rate} sourceDurationUs={sourceDurationUs} /> : <span className="timeline-clip__audio"><Mic size={15} /><span>待配音</span></span>}
+            const sounding = kind === 'audio' ? Boolean(shot.audioAssetId) : kind === 'original' && usesVideoAudio(shot);
+            const soundAsset = assetById.get((kind === 'original' ? shot.videoAssetId : shot.audioAssetId) ?? '');
+            return <div className={`timeline-clip timeline-clip--${kind} ${kind === 'original' ? 'timeline-clip--audio' : ''} ${kind !== 'video' && !sounding ? 'timeline-clip--pending' : ''} ${selected.has(shot.id) ? 'selected' : ''} ${active ? 'is-editing' : ''}`} key={shot.id} style={{ left: `${totalUs ? startUs / totalUs * 100 : 0}%`, width: `calc(${totalUs ? durationUs / totalUs * 100 : 0}% - 2px)`, transform: active?.mode === 'move' ? `translateX(${active.deltaPx}px)` : undefined }}>
+              <button type="button" className="timeline-clip__select" disabled={editingDisabled} onPointerDown={event => begin(event, shot, index, 'move')} onPointerMove={move} onPointerUp={finish} onPointerCancel={finish} onLostPointerCapture={finish} onClick={event => { if (suppressClick.current && event.detail) { suppressClick.current = false; return; } suppressClick.current = false; void onSelect(shot.id, { toggle: event.ctrlKey || event.metaKey, range: event.shiftKey, keepGroup: !event.ctrlKey && !event.metaKey && !event.shiftKey && selected.has(shot.id) }); }} aria-pressed={selected.has(shot.id)} aria-label={`${kind === 'video' ? '定位镜头' : kind === 'original' ? '定位原声' : '定位旁白'} ${index + 1}：${shot.title}`} title={`${shot.title} · ${(shot.durationUs / 1_000_000).toFixed(3)} 秒；Ctrl/⌘ 切换选择，Shift 连续选择；拖动调整顺序`}>
+                {kind === 'video' ? <><span className="timeline-clip__title"><span className="timeline-clip__index">{(index + 1).toString().padStart(2, '0')}</span><span>{shot.title}</span></span><span className="timeline-clip__media"><span className="timeline-clip__thumbnail"><ScenePreview project={project} shot={shot} shotIndex={index} assets={assets} thumbnail /></span><span className="timeline-clip__duration">{(durationUs / 1_000_000).toFixed(1)}s</span></span></> : sounding ? <ShotAudioWaveform project={project} shot={shot} kind={kind === 'original' ? 'video' : 'audio'} asset={soundAsset} active={active?.mode !== 'move' ? active : undefined} durationUs={durationUs} rate={rate} sourceDurationUs={sourceDurationUs} /> : <span className="timeline-clip__audio">{kind === 'original' ? <VolumeX size={15} /> : <Mic size={15} />}<span>{kind === 'original' ? (shot.videoAssetId ? '原声关闭' : '未关联视频') : '待配音'}</span></span>}
               </button>
               {handles && (['in', 'out'] as const).map(side => <button key={side} type="button" role="slider" className={`timeline-trim-handle timeline-trim-handle--${side}`} disabled={trimmingDisabled} aria-label={side === 'in' ? '镜头入点' : '镜头出点'} aria-valuemin={Math.round(minimumSourceInUs(shot) / 1000)} aria-valuemax={Math.round((sourceOutLimit ?? clipInUs + 600_000_000) / 1000)} aria-valuenow={Math.round((side === 'in' ? active?.inUs ?? clipInUs : active?.outUs ?? clipInUs + shot.durationUs) / 1000)} aria-valuetext="方向键逐帧调整，Shift 调整十帧" onPointerDown={event => begin(event, shot, index, side)} onPointerMove={move} onPointerUp={finish} onPointerCancel={finish} onLostPointerCapture={finish} onKeyDown={event => trimKey(event, shot, side)} />)}
             </div>;
@@ -212,12 +217,12 @@ export default memo(function Timeline({ project, assets, shots, timeline, select
   </section>;
 });
 
-const ShotAudioWaveform = memo(function ShotAudioWaveform({ project, shot, asset, active, durationUs, rate, sourceDurationUs }: { project: ProjectDocument; shot: Shot; asset?: AssetRecord; active?: DragView; durationUs: number; rate: FrameRate; sourceDurationUs?: number }) {
+const ShotAudioWaveform = memo(function ShotAudioWaveform({ project, shot, asset, active, durationUs, rate, sourceDurationUs, kind = 'audio' }: { project: ProjectDocument; shot: Shot; kind?: 'audio' | 'video'; asset?: AssetRecord; active?: DragView; durationUs: number; rate: FrameRate; sourceDurationUs?: number }) {
   const resolved = useMemo(() => {
-    try { return { spans: shotWaveformSpans(shot, project, active ? { inUs: active.inUs, outUs: active.outUs, rate, sourceDurationUs } : undefined), error: undefined }; }
+    try { return { spans: shotWaveformSpans(shot, project, active ? { inUs: active.inUs, outUs: active.outUs, rate, sourceDurationUs } : undefined, kind), error: undefined }; }
     catch (error) { return { spans: undefined, error: error instanceof Error ? error.message : String(error) }; }
-  }, [shot, project.clipEditSources, project.clipEditPlans, active?.inUs, active?.outUs, rate.numerator, rate.denominator, sourceDurationUs]);
-  return <AudioWaveform asset={asset} sourceInUs={resolved.spans?.[0]?.sourceInUs ?? shot.audioInUs ?? shot.sourceInUs ?? 0} durationUs={durationUs} spans={shot.clipEdit ? resolved.spans : undefined} mappingError={resolved.error} />;
+  }, [shot, project.clipEditSources, project.clipEditPlans, active?.inUs, active?.outUs, rate.numerator, rate.denominator, sourceDurationUs, kind]);
+  return <AudioWaveform asset={asset} sourceInUs={resolved.spans?.[0]?.sourceInUs ?? (kind === 'video' ? shot.videoInUs : shot.audioInUs) ?? shot.sourceInUs ?? 0} durationUs={durationUs} spans={shot.clipEdit ? resolved.spans : undefined} mappingError={resolved.error} label={kind === 'video' ? '视频原声' : '旁白'} />;
 });
 
 const SplitControl = memo(function SplitControl({ shot, clip, rate, clock, disabled, onSplit }: { shot?: Shot; clip?: TimelineClip; rate: FrameRate; clock: PlaybackClock; disabled: boolean; onSplit: () => Promise<void> }) {

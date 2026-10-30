@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { audioLevelWindowSchema, audioMixJobSchema, audioMixPrepareResultSchema, type AssetRecord, type AudioLevelWindow, type AudioMixJob, type PreparedAudioMix, type ProjectDocument } from '@video-quickly/contracts';
+import { audioLevelWindowSchema, audioMixJobSchema, audioMixPrepareResultSchema, usesVideoAudio, type AssetRecord, type AudioLevelWindow, type AudioMixJob, type PreparedAudioMix, type ProjectDocument } from '@video-quickly/contracts';
 import { audioMixProjection } from '@video-quickly/video/audio-projection';
 import { rpc } from './client';
 
@@ -111,7 +111,7 @@ export function usePreparedProjectMix(project: ProjectDocument, assets: readonly
   }, [project, assets]);
   const latest = useRef({ project, projection: projection.key, deferPreparation }); latest.current = { project, projection: projection.key, deferPreparation };
   const durationUs = project.shots.reduce((sum, shot) => sum + shot.durationUs, 0);
-  const audible = project.shots.some(shot => Boolean(shot.audioAssetId)) || Boolean(project.musicClips?.some(clip => clip.startUs < durationUs));
+  const audible = project.shots.some(shot => Boolean(shot.audioAssetId) || usesVideoAudio(shot)) || Boolean(project.musicClips?.some(clip => clip.startUs < durationUs));
   const active = enabled && project.shots.length > 0 && audible;
   const [attempt, setAttempt] = useState(0), retry = useCallback(() => setAttempt(value => value + 1), []);
   const [state, setState] = useState<{ projection: string; attempt: number; status: 'pending' | 'ready' | 'error'; mix?: PreparedAudioMix; error?: string }>();

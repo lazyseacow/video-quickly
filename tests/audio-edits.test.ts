@@ -9,6 +9,16 @@ const processing = { ...DEFAULT_AUDIO_PROCESSING, gainDb: -6, denoise: true };
 const shotEdit = (): AudioProcessingValue => ({ scope: 'shot', shot: { id: 'shot-1', processing } });
 const mixEdit = (): AudioProcessingValue => ({ scope: 'project', mix: { ...DEFAULT_AUDIO_MIX_SETTINGS, ducking: { ...DEFAULT_AUDIO_MIX_SETTINGS.ducking, enabled: true } } });
 
+it('protects the selected video source and source window while applying original audio settings', () => {
+  const baseline = project(); baseline.shots[0].videoAssetId = 'video'; baseline.shots[0].videoInUs = 200_000;
+  const value: AudioProcessingValue = { scope: 'shot', shot: { id: 'shot-1', processing: { ...DEFAULT_AUDIO_PROCESSING, version: 2, videoAudio: { enabled: true, gainDb: -3 } } } };
+  const current = editContent(baseline);
+  expect(applyAudioProcessingEdit({ ...current, title: 'Unrelated title' }, baseline, value).shots[0].audioProcessing).toEqual(value.shot.processing);
+  expect(() => applyAudioProcessingEdit({ ...current, shots: current.shots.map(shot => shot.id === 'shot-1' ? { ...shot, videoAssetId: 'replacement' } : shot) }, baseline, value)).toThrow('来源或剪辑范围');
+  expect(() => applyAudioProcessingEdit({ ...current, shots: current.shots.map(shot => shot.id === 'shot-1' ? { ...shot, videoInUs: 400_000 } : shot) }, baseline, value)).toThrow('来源或剪辑范围');
+  expect(baseline.shots[0].audioProcessing).toBeUndefined();
+});
+
 it('applies shot and project scopes independently while preserving unrelated current edits', () => {
   const baseline = project(), before = structuredClone(baseline);
   const current = { ...editContent(baseline), title: '后改项目名', shots: baseline.shots.map(shot => ({ ...shot, title: `后改${shot.title}`, videoInUs: 1_000_000 })) };
