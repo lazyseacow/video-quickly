@@ -102,9 +102,9 @@ function developmentBridge(browserTest: boolean): Plugin {
 }
 
 export default defineConfig(({ mode }) => ({
-  plugins: [react(), developmentBridge(mode === 'browser-test')],
+  plugins: [react(), ...(process.env.VIDEO_QUICKLY_NATIVE_DESKTOP === '1' ? [] : [developmentBridge(mode === 'browser-test')])],
   preview: { port: developmentPort, strictPort: true, host: '127.0.0.1' },
-  server: { port: developmentPort, strictPort: true, host: '127.0.0.1', watch: { ignored: ['**/src-tauri/target/**', '**/.generated/**', '**/.tools/**'] } },
+  server: { port: developmentPort, strictPort: true, host: '127.0.0.1', watch: { ignored: ['**/.generated/**', '**/.tools/**'] } },
   clearScreen: false,
   build: { target: 'es2022', chunkSizeWarningLimit: 1000, ...(mode === 'browser-test' ? {
     outDir: '.generated/browser-preview', manifest: true,

@@ -39,9 +39,12 @@ async function reopenLegacyRun(runtime: ReturnType<typeof createRuntime>, direct
 }
 async function serverFixture() {
   const requests: Array<{ path: string; body: string }> = [];
+  let requestReceived!: () => void;
+  const received = new Promise<void>(resolve => { requestReceived = resolve; });
   const server = createServer((request, response) => { void (async () => {
     let body = ''; for await (const chunk of request) body += chunk.toString();
     requests.push({ path: request.url ?? '', body });
+    requestReceived();
     // Keep the first real request pending until cancellation reaches the HTTP client.
     if (requests.length === 1) return;
     if (request.url?.endsWith('/images/generations')) response.end(JSON.stringify({ data: [{ b64_json: 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScLbtAAAAABJRU5ErkJggg==' }] }));
@@ -50,15 +53,16 @@ async function serverFixture() {
   })().catch(error => response.destroy(error instanceof Error ? error : undefined)); });
   servers.push(server); await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
   const address = server.address(); if (!address || typeof address === 'string') throw new Error('测试服务地址无效');
-  return { requests, baseUrl: `http://127.0.0.1:${address.port}/v1` };
+  return { requests, received, baseUrl: `http://127.0.0.1:${address.port}/v1` };
 }
 
 it('restarts a canceled shot candidate with its original target, model and instruction against the current revision', async () => {
-  const { requests, baseUrl } = await serverFixture();
+  const { requests, received, baseUrl } = await serverFixture();
   const { runtime, project } = await setup();
   const model = await runtime.dispatch('model.save', { model: { name: '原图像模型', provider: 'openai-compatible', baseUrl, model: 'original-image-model', capabilities: ['image'] } }) as ModelProfile;
   const parent = runSchema.parse(await runtime.dispatch('shot.regenerate', { projectId: project.id, shotId: 'shot-1', kind: 'image', modelId: model.id, instruction: '固定调整要求', revision: project.revision }));
-  await vi.waitFor(() => expect(requests).toHaveLength(1));
+  await received;
+  expect(requests).toHaveLength(1);
   await runtime.dispatch('run.cancel', { runId: parent.id }); await runtime.waitForIdle();
   const otherModel = await runtime.dispatch('model.save', { model: { name: '后改默认模型', provider: 'openai-compatible', baseUrl, model: 'different-image-model', capabilities: ['image'] } }) as ModelProfile;
   const afterWorkflow = projectSchema.parse(await runtime.dispatch('workflow.save', { projectId: project.id, revision: project.revision, workflow: { ...project.workflow, nodes: project.workflow.nodes.map(node => node.kind === 'assets' ? { ...node, modelId: otherModel.id } : node) } }));
@@ -78,14 +82,14 @@ it('restarts a canceled shot candidate with its original target, model and instr
 });
 
 it('restarts canceled transcription only for its original shot and ASR model without invoking the project workflow', async () => {
-  const { requests, baseUrl } = await serverFixture();
+  const { requests, received, baseUrl } = await serverFixture();
   const { runtime, directory, project } = await setup();
   const path = join(directory, 'voice.wav'); await writeFile(path, 'actual multipart fixture bytes');
   const audio = assetSchema.parse(await runtime.dispatch('asset.import', { projectId: project.id, shotId: 'shot-1', path, kind: 'audio' }));
   const linked = await current(runtime, project.id);
   const model = await runtime.dispatch('model.save', { model: { name: '原ASR模型', provider: 'openai-compatible', baseUrl, model: 'original-asr-model', capabilities: ['asr'] } }) as ModelProfile;
   const parent = runSchema.parse(await runtime.dispatch('caption.transcribe', { projectId: project.id, shotId: 'shot-1', modelId: model.id, revision: linked.revision }));
-  await vi.waitFor(() => expect(requests).toHaveLength(1)); await runtime.dispatch('run.cancel', { runId: parent.id }); await runtime.waitForIdle();
+  await received; expect(requests).toHaveLength(1); await runtime.dispatch('run.cancel', { runId: parent.id }); await runtime.waitForIdle();
   const edited = projectSchema.parse(await runtime.dispatch('project.update', { projectId: project.id, revision: linked.revision, patch: { title: '识别前的新项目标题' } }));
   const restarted = runSchema.parse(await runtime.dispatch('run.start', { projectId: project.id, parentRunId: parent.id })); await runtime.waitForIdle();
   expect(restarted).toMatchObject({ parentRunId: parent.id, projectRevision: edited.revision }); expect(requests).toHaveLength(2); expect(requests.every(request => request.path === '/v1/audio/transcriptions')).toBe(true);
@@ -118,16 +122,17 @@ it('restarts an older single-step task without executing the rest of the current
 });
 
 it('keeps a standalone export scope, exact fractional profile and destination after cancellation and project edits', async () => {
-  let hold = true, entered = false; const calls: Array<{ node: WorkflowNode; profile: ProjectDocument['profile']; title: string }> = [];
+  let hold = true, renderEntered!: () => void; const calls: Array<{ node: WorkflowNode; profile: ProjectDocument['profile']; title: string }> = [];
+  const entered = new Promise<void>(resolve => { renderEntered = resolve; });
   const executeActivity: NonNullable<RuntimeOptions['executeActivity']> = async context => {
     calls.push({ node: context.node, profile: context.project.profile, title: context.project.title });
-    if (hold) { entered = true; await new Promise<void>((_resolve, reject) => context.signal.addEventListener('abort', () => reject(new Error('canceled export')), { once: true })); }
+    if (hold) await new Promise<void>((_resolve, reject) => { context.signal.addEventListener('abort', () => reject(new Error('canceled export')), { once: true }); renderEntered(); });
     return localArtifacts(context);
   };
   const { runtime, directory, project } = await setup({ executeActivity });
   const profile = { ...project.profile, width: 320, height: 180, frameRate: { numerator: 30000, denominator: 1001 } }, destination = join(directory, 'chosen-output.mp4');
   const parent = runSchema.parse(await runtime.dispatch('run.start', { projectId: project.id, nodeId: 'export', profile, destination }));
-  await vi.waitFor(() => expect(entered).toBe(true)); await runtime.dispatch('run.cancel', { runId: parent.id }); await runtime.waitForIdle(); hold = false;
+  await entered; await runtime.dispatch('run.cancel', { runId: parent.id }); await runtime.waitForIdle(); hold = false;
   const edited = projectSchema.parse(await runtime.dispatch('project.update', { projectId: project.id, revision: project.revision, patch: { title: '重新导出的当前标题', profile: { ...project.profile, width: 640, height: 360 }, workflow: { ...project.workflow, nodes: project.workflow.nodes.map(node => node.id === 'export' ? { ...node, kind: 'agent', config: { destination: join(directory, 'changed-output.mp4') } } : node) } } }));
   await expect(runtime.dispatch('run.start', { projectId: project.id, parentRunId: parent.id, profile: edited.profile })).rejects.toThrow('保留原规格和路径');
   const restarted = runSchema.parse(await runtime.dispatch('run.start', { projectId: project.id, parentRunId: parent.id })); await runtime.waitForIdle();
@@ -160,14 +165,15 @@ it('keeps a full one-node workflow distinct from an older partial single-step ta
 });
 
 it('routes a canceled batch child restart back to the same frozen batch and never invokes models or charges', async () => {
-  let hold = true, entered = false; const calls: Array<{ width: number; title: string }> = [], provider = vi.fn(async () => 'must not call a text model');
+  let hold = true, renderEntered!: () => void; const calls: Array<{ width: number; title: string }> = [], provider = vi.fn(async () => 'must not call a text model');
+  const entered = new Promise<void>(resolve => { renderEntered = resolve; });
   const { runtime, project } = await setup({ provider, executeActivity: async context => {
     expect(context.node.kind).toBe('export'); expect(context.model).toBeUndefined(); calls.push({ width: context.project.profile.width, title: context.project.title });
-    if (hold && context.project.profile.width === 180) { entered = true; await new Promise<void>((_resolve, reject) => context.signal.addEventListener('abort', () => reject(new Error('canceled locally')), { once: true })); }
+    if (hold && context.project.profile.width === 180) await new Promise<void>((_resolve, reject) => { context.signal.addEventListener('abort', () => reject(new Error('canceled locally')), { once: true }); renderEntered(); });
     return localArtifacts(context);
   } });
   const batch = exportBatchSchema.parse(await runtime.dispatch('render.batch.start', { projectId: project.id, revision: project.revision, targets: [{ id: 'wide', label: '横屏', profile: { ...DEFAULT_VIDEO_PROFILE, width: 320, height: 180 } }, { id: 'portrait', label: '竖屏', profile: { ...DEFAULT_VIDEO_PROFILE, width: 180, height: 320 } }] }));
-  await vi.waitFor(() => expect(entered).toBe(true));
+  await entered;
   const pending = exportBatchSchema.parse(await runtime.dispatch('render.batch.get', { batchId: batch.id })), childId = pending.targets[1].runId!;
   const firstStat = await stat(pending.targets[0].videoPath!); await runtime.dispatch('run.cancel', { runId: childId });
   await runtime.dispatch('project.update', { projectId: project.id, revision: project.revision, patch: { title: '批量启动之后的新标题' } }); hold = false;
@@ -180,16 +186,17 @@ it('routes a canceled batch child restart back to the same frozen batch and neve
 });
 
 it('keeps ordinary canceled workflow restarts as new full runs and rejects cross-project parent reuse', async () => {
-  let hold = true, entered = false; const prompts: string[] = [];
+  let hold = true, providerEntered!: () => void; const prompts: string[] = [];
+  const entered = new Promise<void>(resolve => { providerEntered = resolve; });
   const { runtime, project } = await setup({ provider: async request => {
     prompts.push(request.prompt);
-    if (hold) { entered = true; await new Promise<void>((_resolve, reject) => request.signal?.addEventListener('abort', () => reject(new Error('cancel text request')), { once: true })); }
+    if (hold) await new Promise<void>((_resolve, reject) => { request.signal?.addEventListener('abort', () => reject(new Error('cancel text request')), { once: true }); providerEntered(); });
     return '普通工作流文本';
   } });
   const model = await runtime.dispatch('model.save', { model: { name: '本地注入模型', provider: 'openai-compatible', baseUrl: 'http://127.0.0.1:1/v1', model: 'text-fixture', capabilities: ['text'] } }) as ModelProfile;
   const nodes = project.workflow.nodes.filter(node => node.kind === 'brief' || node.kind === 'style').map(node => ({ ...node, modelId: model.id, requiresReview: false })); expect(nodes).toHaveLength(2);
   const ready = projectSchema.parse(await runtime.dispatch('workflow.save', { projectId: project.id, revision: project.revision, workflow: { ...project.workflow, nodes, edges: [{ id: 'brief-to-style', source: nodes[0].id, target: nodes[1].id }] } }));
-  const parent = runSchema.parse(await runtime.dispatch('run.start', { projectId: project.id })); await vi.waitFor(() => expect(entered).toBe(true));
+  const parent = runSchema.parse(await runtime.dispatch('run.start', { projectId: project.id })); await entered;
   await runtime.dispatch('run.cancel', { runId: parent.id }); await runtime.waitForIdle(); hold = false;
   const other = projectSchema.parse(await runtime.dispatch('project.create', { title: '其他项目' })); await expect(runtime.dispatch('run.start', { projectId: other.id, parentRunId: parent.id })).rejects.toThrow('不属于');
   const restarted = runSchema.parse(await runtime.dispatch('run.start', { projectId: project.id, parentRunId: parent.id })); await runtime.waitForIdle();

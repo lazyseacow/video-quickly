@@ -3,7 +3,7 @@ import { spawnSync } from 'node:child_process';
 import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join, relative } from 'node:path';
-import { afterEach, expect, it, vi } from 'vitest';
+import { afterEach, expect, it } from 'vitest';
 import { assetSchema, createSceneTemplate, DEFAULT_VIDEO_PROFILE, exportBatchSchema, projectSchema, runSchema, type AssetRecord, type ExportBatch, type ProjectDocument, type UsageRecord } from '@video-quickly/contracts';
 import { createActivityExecutor } from '../packages/integrations/src';
 import { createRuntime, type ActivityExecutionContext, type RuntimeOptions } from '../packages/runtime/src';
@@ -75,13 +75,13 @@ it('continues after one target fails and resumes only that target with the same 
 });
 
 it('settles cancellation before returning and supports an immediate concurrent resume without redoing completed targets', async () => {
-  let hold = true, portraitStarted = false; const calls: number[] = [];
+  let hold = true; const portraitStarted = deferred(), calls: number[] = [];
   const { runtime, project } = await fixture({ executeActivity: async context => {
     calls.push(context.project.profile.width);
-    if (hold && context.project.profile.width === 180) { portraitStarted = true; await new Promise<void>((_resolve, reject) => context.signal.addEventListener('abort', () => reject(new Error('local canceled')), { once: true })); }
+    if (hold && context.project.profile.width === 180) { context.signal.throwIfAborted(); portraitStarted.resolve(); await new Promise<void>((_resolve, reject) => context.signal.addEventListener('abort', () => reject(new Error('local canceled')), { once: true })); }
     return artifacts(context);
   } });
-  const batch = await start(runtime, project); await vi.waitFor(() => expect(portraitStarted).toBe(true));
+  const batch = await start(runtime, project); await portraitStarted.promise;
   expect((await get(runtime, batch.id)).targets[0].status).toBe('succeeded'); hold = false;
   const canceling = runtime.dispatch('render.batch.cancel', { batchId: batch.id }), resuming = runtime.dispatch('render.batch.resume', { batchId: batch.id });
   const canceled = exportBatchSchema.parse(await canceling); expect(canceled.targets.some(target => target.status === 'running')).toBe(false);
@@ -90,9 +90,9 @@ it('settles cancellation before returning and supports an immediate concurrent r
 });
 
 it('shows interrupted batches after restart without automatic rendering, then resumes the original snapshot', async () => {
-  let entered = false; const calls: string[] = [];
-  const { runtime: first, directory, project } = await fixture({ executeActivity: async context => { entered = true; calls.push(context.project.title); await new Promise<void>((_resolve, reject) => context.signal.addEventListener('abort', () => reject(new Error('interrupted')), { once: true })); return artifacts(context); } });
-  const batch = await start(first, project); await vi.waitFor(() => expect(entered).toBe(true));
+  const entered = deferred(), calls: string[] = [];
+  const { runtime: first, directory, project } = await fixture({ executeActivity: async context => { context.signal.throwIfAborted(); entered.resolve(); calls.push(context.project.title); await new Promise<void>((_resolve, reject) => context.signal.addEventListener('abort', () => reject(new Error('interrupted')), { once: true })); return artifacts(context); } });
+  const batch = await start(first, project); await entered.promise;
   await first.close(); runtimes.delete(first);
   const second = open(directory, { executeActivity: async context => { calls.push(context.project.title); return artifacts(context); } });
   const restored = await get(second, batch.id); expect(restored.status).toBe('interrupted'); expect(calls).toHaveLength(1);
@@ -138,24 +138,24 @@ it('uses bounded batch list pages, rejects stale starts, and shares the project 
 });
 
 it('fails changed frozen input hashes without silently consuming a later asset and resumes when the original is restored', async () => {
-  let calls = 0, source: AssetRecord | undefined; const gate = deferred();
-  const { runtime, project, directory } = await fixture({ executeActivity: async context => { calls++; if (calls === 1) await gate.promise; return artifacts(context); } });
+  let calls = 0, source: AssetRecord | undefined; const gate = deferred(), entered = deferred();
+  const { runtime, project, directory } = await fixture({ executeActivity: async context => { calls++; if (calls === 1) { entered.resolve(); await gate.promise; } return artifacts(context); } });
   const path = join(directory, 'source.png'); const original = Buffer.from('original frozen image'); await writeFile(path, original);
   source = assetSchema.parse(await runtime.dispatch('asset.import', { projectId: project.id, path, kind: 'image' }));
   const linked = projectSchema.parse(await runtime.dispatch('project.update', { projectId: project.id, revision: project.revision, patch: { shots: project.shots.map(shot => ({ ...shot, sceneTemplate: undefined, assetId: source!.id })) } }));
-  const batch = await start(runtime, linked, { targets: targets.slice(0, 2) }); await vi.waitFor(() => expect(calls).toBe(1));
+  const batch = await start(runtime, linked, { targets: targets.slice(0, 2) }); await entered.promise; expect(calls).toBe(1);
   await writeFile(source.path, Buffer.alloc(original.length, 1)); gate.resolve(); await runtime.waitForIdle();
   const partial = await get(runtime, batch.id); expect(partial.status).toBe('partial'); expect(partial.targets[1].error).toContain('校验失败'); expect(calls).toBe(1);
   await writeFile(source.path, original); await runtime.dispatch('render.batch.resume', { batchId: batch.id }); await runtime.waitForIdle(); expect((await get(runtime, batch.id)).status).toBe('succeeded'); expect(calls).toBe(2);
 });
 
 it('keeps run.resume and run.cancel responses as RunRecord while delegating batch scheduling', async () => {
-  let hold = true, entered = false;
+  let hold = true; const entered = deferred();
   const { runtime, project } = await fixture({ executeActivity: async context => {
-    if (hold) { entered = true; await new Promise<void>((_resolve, reject) => context.signal.addEventListener('abort', () => reject(new Error('canceled')), { once: true })); }
+    if (hold) { context.signal.throwIfAborted(); entered.resolve(); await new Promise<void>((_resolve, reject) => context.signal.addEventListener('abort', () => reject(new Error('canceled')), { once: true })); }
     return artifacts(context);
   } });
-  const batch = await start(runtime, project, { targets: [targets[0]] }); await vi.waitFor(() => expect(entered).toBe(true));
+  const batch = await start(runtime, project, { targets: [targets[0]] }); await entered.promise;
   const runId = (await get(runtime, batch.id)).targets[0].runId!;
   const canceled = runSchema.parse(await runtime.dispatch('run.cancel', { runId }));
   expect(canceled).toMatchObject({ id: runId, projectId: project.id, projectRevision: project.revision });

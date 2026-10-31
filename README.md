@@ -15,7 +15,7 @@ Video Quickly 是本地视频创作工作台，覆盖创意简报、资料整理
 
 ## 安装运行
 
-准备 Node.js 24、pnpm 10 和 Rust，具体版本以仓库配置为准。以下命令均在项目根目录执行。
+准备 Node.js 24 和 pnpm 10，具体版本以仓库配置为准。桌面外壳使用 Electron，自带 Chromium，无需 Rust 或系统 WebView。以下命令均在项目根目录执行。
 
 ```sh
 pnpm install
@@ -23,7 +23,7 @@ pnpm install
 
 ### Windows x64
 
-使用 Rust MSVC 工具链，并安装 Visual Studio C++ Build Tools 和 WebView2。
+安装锁定的项目依赖后准备媒体组件：
 
 ```powershell
 pnpm prepare:media
@@ -56,4 +56,8 @@ pnpm dev:desktop
 pnpm build:desktop
 ```
 
-安装包默认生成在 `apps/desktop/src-tauri/target/release/bundle/nsis/`。
+安装包默认生成在 `.generated/electron-release/`。打包命令固定 `--publish never`，不会自动发布。
+
+桌面专项验收：`pnpm test:desktop`；打包后使用 `pnpm test:desktop --packaged` 验证真实打包应用。验收使用独立临时工作区，不读取日常模型密钥或提交付费任务。
+
+Electron 使用独立的 `VideoQuickly-Electron` 数据目录；本轮按开发阶段要求不迁移旧 Tauri 数据，旧目录保持原样。详见 [Electron 架构与验收](docs/electron-migration.md)。

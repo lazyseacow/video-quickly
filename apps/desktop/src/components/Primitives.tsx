@@ -28,30 +28,32 @@ export function Dialog({ title, children, onClose, className = '' }: { title: st
   const surface = useRef<HTMLDivElement>(null);
   const dismiss = useRef<(() => void) | undefined>(undefined);
   const latestClose = useRef(onClose); latestClose.current = onClose;
-  useGSAP(() => {
+  useGSAP((_context, contextSafe) => {
     const dialog = ref.current;
     const content = surface.current;
     if (!dialog || !content) return;
     dialog.showModal();
     content.querySelector<HTMLElement>('input:not([disabled]):not([type="hidden"]), textarea:not([disabled]), select:not([disabled])')?.focus({ preventScroll: true });
-    const media = gsap.matchMedia();
-    media.add({ reduced: '(prefers-reduced-motion: reduce)', animated: '(prefers-reduced-motion: no-preference)' }, context => {
-      let closing = false;
-      content.inert = false;
-      // Keep the surface focusable throughout its entrance.
-      const tween = gsap.fromTo(content, { opacity: 0, y: 12, scale: .985 }, { opacity: 1, y: 0, scale: 1, duration: context.conditions?.reduced ? 0 : motion.enter, ease: motion.ease, clearProps: 'transform,opacity' });
-      const close = () => {
-        if (closing) return;
-        closing = true;
-        tween.kill();
-        content.inert = true;
-        gsap.to(content, { autoAlpha: 0, y: 6, scale: .995, duration: context.conditions?.reduced ? 0 : motion.exit, ease: motion.ease, overwrite: 'auto', onComplete: () => latestClose.current() });
-      };
-      const closeSafe = context.add('dismiss', close);
-      dismiss.current = () => closeSafe();
-      return () => { dismiss.current = undefined; content.inert = false; };
-    }, dialog);
-    return () => { media.revert(); if (dialog.open) dialog.close(); };
+    const preference = matchMedia('(prefers-reduced-motion: reduce)');
+    let closing = false;
+    let exit: gsap.core.Tween | undefined;
+    content.inert = false;
+    // Keep one lifecycle for the open dialog. Rebuilding a matchMedia context
+    // during dismissal would kill its onComplete and lose the close request.
+    const enter = gsap.fromTo(content, { opacity: 0, y: 12, scale: .985 }, { opacity: 1, y: 0, scale: 1, duration: preference.matches ? 0 : motion.enter, ease: motion.ease, clearProps: 'transform,opacity' });
+    const close = () => {
+      if (closing) return;
+      closing = true;
+      enter.kill();
+      content.inert = true;
+      exit = gsap.to(content, { autoAlpha: 0, y: 6, scale: .995, duration: preference.matches ? 0 : motion.exit, ease: motion.ease, overwrite: 'auto', onComplete: () => latestClose.current() });
+    };
+    dismiss.current = contextSafe?.(close) ?? close;
+    const updatePreference = () => {
+      if (preference.matches) (closing ? exit : enter)?.progress(1);
+    };
+    preference.addEventListener('change', updatePreference);
+    return () => { preference.removeEventListener('change', updatePreference); enter.kill(); exit?.kill(); dismiss.current = undefined; content.inert = false; if (dialog.open) dialog.close(); };
   }, { scope: ref });
   return <dialog ref={ref} className={`dialog ${className}`} aria-labelledby={titleId} onCancel={event => { event.preventDefault(); dismiss.current?.(); }} onClick={event => { if (event.target === event.currentTarget) dismiss.current?.(); }}><div ref={surface} className="dialog__surface"><div className="dialog__header"><h2 id={titleId}>{title}</h2><IconButton label="关闭对话框" onClick={() => dismiss.current?.()}><X size={18} /></IconButton></div>{children}</div></dialog>;
 }

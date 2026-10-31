@@ -77,11 +77,35 @@ it('preserves composition and parallel settings through incremental undo and rec
   expect(restored.state.present.workflow.execution).toEqual(execution); restored.undo(); expect(restored.state.present.workflow.execution).toBeUndefined(); restored.redo(); expect(restored.state.present.workflow.execution).toEqual(execution);
   restored.edit({ ...restored.state.present, workflow: { ...restored.state.present.workflow, nodes: [], edges: [], subflows: undefined } }, '移除子流程'); restored.undo(); expect(restored.state.present.workflow.subflows).toEqual(project.workflow.subflows);
 });
-it('backs up composition in format three independently of its library and rejects masquerading old manifests', async () => {
-  const { value, project } = await fixture(), { path } = await value.dispatch('project.backup', { projectId: project.id }) as { path: string };
+function animatedBackupShot() {
+  return { id: 'backup-shot', title: '关键帧备份', narration: '', visualPrompt: '', durationUs: 2_000_000, animation: { transition: 'cut', panX: .03, panY: -.04, zoom: 1.2, keyframes: [
+    { id: 'motion-first', timeUs: 100_000, panX: -.15, panY: .08, zoom: 1.05, easing: 'cubic-bezier', curve: [.16, .4, .83, .67] },
+    { id: 'motion-last', timeUs: 1_700_000, panX: .25, panY: -.12, zoom: 1.6, easing: 'linear' },
+  ] } };
+}
+it('backs up fixed composition and complete keyframes in format three independently of the template library', async () => {
+  const { value, project, template } = await fixture();
+  const configured = projectSchema.parse(await value.dispatch('project.update', { projectId: project.id, revision: project.revision, patch: { shots: [animatedBackupShot()] } }));
+  await value.dispatch('workflowTemplate.save', { templateId: template.id, revision: template.revision, name: '后续模板版本', workflow: workflowSchema.parse({ id: 'latest', name: 'latest', version: 1, nodes: [node('latest-only')], edges: [] }) });
+  const { path } = await value.dispatch('project.backup', { projectId: configured.id }) as { path: string };
   const manifestPath = join(path, 'project.json'), manifest = JSON.parse(await readFile(manifestPath, 'utf8')); expect(manifest.schemaVersion).toBe(3);
   const isolated = await runtime({ seed: false }); const restored = projectSchema.parse(await isolated.value.dispatch('project.importBackup', { path }));
-  expect(restored.workflow.subflows).toEqual(project.workflow.subflows); const run = await isolated.value.dispatch('run.start', { projectId: restored.id }) as RunRecord; await isolated.value.waitForIdle(); expect((await isolated.value.dispatch('run.inspect', { runId: run.id }) as RunInspection).run.status).toBe('succeeded');
+  expect(restored.id).not.toBe(configured.id); expect(restored.workflow).toEqual(configured.workflow);
+  expect(restored.shots[0].animation).toEqual(configured.shots[0].animation);
+  expect(projectDetailSchema.parse(await isolated.value.dispatch('project.get', { projectId: restored.id })).project?.shots[0].animation).toEqual(configured.shots[0].animation);
+  const run = await isolated.value.dispatch('run.start', { projectId: restored.id }) as RunRecord; await isolated.value.waitForIdle();
+  const inspection = await isolated.value.dispatch('run.inspect', { runId: run.id }) as RunInspection; expect(inspection.run.status).toBe('succeeded'); expect(inspection.steps.map(step => step.id)).toEqual(['call', 'call/subflow/first', 'call/subflow/last', 'after']);
+  expect(await isolated.value.dispatch('node.result', { runId: run.id, nodeId: 'call' })).toMatchObject({ version: 1, outputs: { brief: configured.brief } });
+  for (const schemaVersion of [1, 2]) { await writeFile(manifestPath, JSON.stringify({ ...manifest, schemaVersion })); await expect(isolated.value.dispatch('project.importBackup', { path })).rejects.toThrow('格式 3'); }
+});
+it('requires format three for keyframes alone and rejects downgraded manifests without subflows or parallel settings', async () => {
+  const { value } = await runtime({ seed: false }), created = projectSchema.parse(await value.dispatch('project.create', { title: '旧流程的关键帧备份' }));
+  const configured = projectSchema.parse(await value.dispatch('project.update', { projectId: created.id, revision: created.revision, patch: { shots: [animatedBackupShot()], workflow: { id: 'legacy', version: 1, name: 'legacy', nodes: [node('brief')], edges: [] } } }));
+  expect(configured.workflow.subflows).toBeUndefined(); expect(configured.workflow.execution).toBeUndefined(); expect(configured.workflow.nodes.some(node => node.kind === 'subflow' || node.subflow)).toBe(false);
+  const { path } = await value.dispatch('project.backup', { projectId: configured.id }) as { path: string }, manifestPath = join(path, 'project.json'), manifest = JSON.parse(await readFile(manifestPath, 'utf8'));
+  expect(manifest.schemaVersion).toBe(3);
+  const isolated = await runtime({ seed: false }), restored = projectSchema.parse(await isolated.value.dispatch('project.importBackup', { path }));
+  expect(restored.id).not.toBe(configured.id); expect(restored.shots[0].animation).toEqual(configured.shots[0].animation);
   for (const schemaVersion of [1, 2]) { await writeFile(manifestPath, JSON.stringify({ ...manifest, schemaVersion })); await expect(isolated.value.dispatch('project.importBackup', { path })).rejects.toThrow('格式 3'); }
 });
 it('stores an application receipt atomically and returns it after lost acknowledgement without overwriting later edits', async () => {

@@ -1,8 +1,9 @@
 import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
-import { mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { copyFileSync, readdirSync } from 'node:fs';
+import { cp, mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { dirname, join } from 'node:path';
+import { basename, dirname, join, resolve } from 'node:path';
 import { afterEach, expect, it } from 'vitest';
 import { createHistoryWorkflow, firstFrameAtUs, DEFAULT_AUDIO_MIX_SETTINGS, DEFAULT_AUDIO_PROCESSING, DEFAULT_CAPTION_STYLE, DEFAULT_VIDEO_PROFILE, projectSchema, shotSchema, timeAtFrame, type AssetRecord, type ProjectDocument } from '@video-quickly/contracts';
 import { captureClipEditSource } from '../src/clip-edits.js';
@@ -13,7 +14,22 @@ const ffmpeg = process.env.VIDEO_QUICKLY_FFMPEG ?? 'ffmpeg';
 const ffprobe = process.env.VIDEO_QUICKLY_FFPROBE ?? join(dirname(ffmpeg), process.platform === 'win32' ? 'ffprobe.exe' : 'ffprobe');
 const available = spawnSync(ffmpeg, ['-version'], { windowsHide: true }).status === 0 && spawnSync(ffprobe, ['-version'], { windowsHide: true }).status === 0;
 const directories: string[] = [];
-afterEach(async context => { const paths = directories.splice(0); if (context.task.result?.state === 'fail') { console.info('Retained audio fixture:', paths); return; } await Promise.all(paths.map(path => rm(path, { recursive: true, force: true }))); });
+afterEach(async context => {
+  const paths = directories.splice(0);
+  if (context.task.result?.state === 'fail') {
+    for (const path of paths.filter(path => basename(path).startsWith('vq-video-audio-ducking-'))) {
+      try {
+        if (dirname(resolve(path)) !== resolve(tmpdir())) throw new Error('Unexpected audio diagnostic fixture path');
+        const output = resolve('.generated/audio-failure-diagnostics', basename(path));
+        await mkdir(dirname(output), { recursive: true });
+        await cp(path, output, { recursive: true, force: false, errorOnExist: true });
+        console.info('Archived audio failure diagnostic:', output);
+      } catch (error) { console.info('Audio diagnostic archive failed:', error instanceof Error ? error.message : String(error)); }
+    }
+    console.info('Retained audio fixture:', paths); return;
+  }
+  await Promise.all(paths.map(path => rm(path, { recursive: true, force: true })));
+});
 
 async function asset(id: string, path: string, kind: 'audio' | 'video' = 'audio'): Promise<AssetRecord> {
   const bytes = await readFile(path);
@@ -38,9 +54,9 @@ async function embeddedVideo(directory: string, delay = 0, silent = false) {
 async function pcm(path: string, directory: string, name: string) {
   const output = join(directory, `${name}.f32`); await runMedia(ffmpeg, ['-v', 'error', '-y', '-i', path, '-ar', '48000', '-ac', '2', '-f', 'f32le', output]); return readFile(output);
 }
-function amplitude(bytes: Buffer, frequency: number, start: number, duration = .1) {
+function amplitude(bytes: Buffer, frequency: number, start: number, duration = .1, channel = 0) {
   const first = Math.round(start * 48000), count = Math.round(duration * 48000); let real = 0, imaginary = 0;
-  for (let index = 0; index < count; index++) { const value = bytes.readFloatLE((first + index) * 8); const angle = 2 * Math.PI * frequency * index / 48000; real += value * Math.cos(angle); imaginary += value * Math.sin(angle); }
+  for (let index = 0; index < count; index++) { const value = bytes.readFloatLE((first + index) * 8 + channel * 4); const angle = 2 * Math.PI * frequency * index / 48000; real += value * Math.cos(angle); imaginary += value * Math.sin(angle); }
   return 2 * Math.hypot(real, imaginary) / count;
 }
 function edited(original: ReturnType<typeof shotSchema.parse>, assets: AssetRecord[]) {
@@ -202,7 +218,36 @@ it.skipIf(!available)('mixes original sound separately so it does not trigger vo
   const music = await asset('music', musicPath), shot = shotSchema.parse({ id: 'original', title: 'Original with music', narration: '', visualPrompt: '', durationUs: 1_000_000, videoInUs: 800_000, videoAssetId: video.id, audioProcessing: { ...DEFAULT_AUDIO_PROCESSING, version: 2, videoAudio: { enabled: true, gainDb: 0 } } });
   const document = project([shot]); document.musicClips = [{ id: 'music-clip', assetId: music.id, startUs: 0, sourceInUs: 0, durationUs: 1_000_000, gainDb: 0, loop: false, fadeInUs: 0, fadeOutUs: 0 }];
   document.audioMix = { ...DEFAULT_AUDIO_MIX_SETTINGS, loudness: { ...DEFAULT_AUDIO_MIX_SETTINGS.loudness, enabled: false }, ducking: { ...DEFAULT_AUDIO_MIX_SETTINGS.ducking, enabled: true, thresholdDb: -40, ratio: 20 } };
-  const mix = await prepareAudioMix({ project: document, assets: [video, music], outputDirectory: join(directory, 'cache'), ffmpegPath: ffmpeg, ffprobePath: ffprobe }), actual = await pcm(mix.path, directory, 'original-with-music');
-  expect(amplitude(actual, 880, .1)).toBeGreaterThan(.17); expect(amplitude(actual, 660, .1)).toBeGreaterThan(.13);
-  expect(amplitude(actual, 660, .1)).toBeGreaterThan(amplitude(actual, 660, .75) * .9);
+  const cache = join(directory, 'cache'), raw = join(directory, 'raw-mix.wav');
+  let rawCaptureError: string | undefined;
+  const mix = await prepareAudioMix({ project: document, assets: [video, music], outputDirectory: cache, ffmpegPath: ffmpeg, ffprobePath: ffprobe, onProgress: value => {
+    if (value !== .55) return;
+    // The float mix is removed after preparation; retain this isolated fixture
+    // before loudness/PCM conversion so a Windows failure can locate its origin.
+    try {
+      const pending = readdirSync(cache, { withFileTypes: true }).filter(entry => entry.isDirectory() && entry.name.startsWith('.mix-'));
+      if (pending.length !== 1) throw new Error('Expected one isolated pending audio mix');
+      copyFileSync(join(cache, pending[0].name, 'raw.wav'), raw);
+    } catch (error) { rawCaptureError = error instanceof Error ? error.message : String(error); }
+  } }), actual = await pcm(mix.path, directory, 'original-with-music');
+  try {
+    expect(amplitude(actual, 880, .1)).toBeGreaterThan(.17); expect(amplitude(actual, 660, .1)).toBeGreaterThan(.13);
+    expect(amplitude(actual, 660, .1)).toBeGreaterThan(amplitude(actual, 660, .75) * .9);
+  } catch (error) {
+    try {
+      const paths = [music.path, video.path, ...(await readdir(cache)).filter(name => name.startsWith('source-') && name.endsWith('.wav')).map(name => join(cache, name)), raw, mix.path];
+      const stages = [];
+      for (const [index, path] of paths.entries()) {
+        try {
+          const probe = JSON.parse(await runMedia(ffprobe, ['-v', 'error', '-show_entries', 'stream=codec_name,channels,channel_layout,sample_rate', '-of', 'json', path]));
+          const samples = await pcm(path, directory, `diagnostic-${index}`);
+          stages.push({ path, probe, amplitudes: [.1, .75].map(start => ({ start, music660: [0, 1].map(channel => amplitude(samples, 660, start, .1, channel)), original880: [0, 1].map(channel => amplitude(samples, 880, start, .1, channel)) })) });
+        } catch (diagnosticError) { stages.push({ path, error: diagnosticError instanceof Error ? diagnosticError.message : String(diagnosticError) }); }
+      }
+      const diagnostic = { ffmpeg: (await runMedia(ffmpeg, ['-version'])).split('\n')[0], rawCaptureError, stages };
+      await writeFile(join(directory, 'audio-diagnostics.json'), JSON.stringify(diagnostic, null, 2));
+      console.info('Original-audio ducking failure stages:', JSON.stringify(diagnostic));
+    } catch (diagnosticError) { console.info('Audio stage diagnostic failed:', diagnosticError instanceof Error ? diagnosticError.message : String(diagnosticError)); }
+    throw error;
+  }
 }, 60_000);

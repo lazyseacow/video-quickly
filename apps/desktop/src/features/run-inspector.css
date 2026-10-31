@@ -1,4 +1,4 @@
-.run-inspector { --run-detail-gap: var(--space-4); --run-detail-font: var(--text-size-label); --run-detail-heading: var(--font-size-5); width: min(1180px, calc(100vw - var(--space-8))); }
+.run-inspector { --run-detail-gap: var(--space-4); --run-detail-font: var(--text-size-label); --run-detail-heading: var(--text-size-title); width: min(1180px, calc(100vw - var(--space-8))); }
 .run-inspector > .dialog__surface { display: flex; flex-direction: column; overflow: hidden; }
 .run-inspector .dialog__header, .run-inspector .dialog__footer { flex-shrink: 0; }
 .run-inspector .dialog__header h2 { font-size: var(--run-detail-heading); font-weight: var(--font-weight-semibold); letter-spacing: var(--letter-spacing-heading); }
