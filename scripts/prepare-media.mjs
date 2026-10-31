@@ -7,8 +7,13 @@ import { fileURLToPath } from 'node:url';
 import { Readable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 
-if (process.platform !== 'win32' || process.arch !== 'x64') throw new Error('固定媒体构建适用于 Windows x64');
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
+if (process.platform === 'darwin') {
+  const { prepareMacosMedia } = await import('./prepare-macos-media.mjs');
+  await prepareMacosMedia(root);
+  process.exit(0);
+}
+if (process.platform !== 'win32' || process.arch !== 'x64') throw new Error('固定媒体构建适用于 Windows x64 和 macOS arm64/x64');
 const manifest = JSON.parse(await readFile(join(root, 'scripts/media-manifest.json'), 'utf8'));
 const tools = join(root, '.tools');
 const archive = join(tools, `${manifest.directory}.zip`);

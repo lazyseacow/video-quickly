@@ -5,7 +5,9 @@
   "license": "MIT",
   "type": "module",
   "packageManager": "pnpm@10.33.0",
-  "engines": { "node": ">=24 <25" },
+  "engines": {
+    "node": ">=24 <25"
+  },
   "scripts": {
     "dev": "pnpm --filter @video-quickly/desktop dev",
     "dev:e2e": "pnpm --filter @video-quickly/desktop dev:e2e",
@@ -20,7 +22,8 @@
     "test:media": "node scripts/render-smoke.mjs",
     "prepare:media": "node scripts/prepare-media.mjs",
     "check": "pnpm typecheck && pnpm test && pnpm build",
-    "start:runtime": "pnpm --filter @video-quickly/runtime start"
+    "start:runtime": "pnpm --filter @video-quickly/runtime start",
+    "test:desktop": "node scripts/test-electron.mjs"
   },
   "devDependencies": {
     "@video-quickly/contracts": "workspace:*",

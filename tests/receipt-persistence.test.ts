@@ -1,5 +1,5 @@
 import { createServer, type Server } from 'node:http';
-import { mkdtemp, readFile, readdir, rename, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, readdir, rename, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { basename, dirname, join, resolve } from 'node:path';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
@@ -114,24 +114,44 @@ it('does not retry a non-locking file error or resubmit its prepared operation',
   expect(runInspectionSchema.parse(await recovered.dispatch('run.inspect', { runId: run.id })).run.status).toBe('failed'); expect(calls()).toEqual({ posts: 1, downloads: 0 });
 });
 
-it('keeps cancellation terminal while a known result is committing locally, without applying or resubmitting it', async () => {
-  let settled!: () => void; const activitySettled = new Promise<void>(resolve => { settled = resolve; }), execute = createActivityExecutor();
-  const { directory, runtime, project, calls } = await fixture(async context => { try { return await execute(context); } finally { settled(); } });
+it.each(['idle', 'close'])('drains a canceled known-result commit on %s, without applying or resubmitting it', async boundary => {
+  let settled = false; const execute = createActivityExecutor();
+  const { directory, runtime, project, calls } = await fixture(async context => { try { return await execute(context); } finally { settled = true; } });
   let failed = false, observed!: () => void; const blocked = new Promise<void>(resolve => { observed = resolve; });
   vi.mocked(rename).mockImplementation(async (from, to) => {
     if (!failed && String(to).endsWith('.receipt.json') && JSON.parse(await readFile(from, 'utf8')).state === 'download') { failed = true; observed(); throw locked('EPERM'); }
     return nativeFs.rename(from, to);
   });
   const run = runSchema.parse(await runtime.dispatch('run.start', { projectId: project.id })); await blocked;
-  await runtime.dispatch('run.cancel', { runId: run.id }); await runtime.waitForIdle();
-  // Native cancellation may finish its graph invocation before a local write
-  // settles. Observe the real leaf before reading it or removing the fixture.
-  await activitySettled;
-  expect(runInspectionSchema.parse(await runtime.dispatch('run.inspect', { runId: run.id })).run.status).toBe('canceled');
-  expect(projectDetailSchema.parse(await runtime.dispatch('project.get', { projectId: project.id })).project).toEqual(project);
+  await runtime.dispatch('run.cancel', { runId: run.id });
+  if (boundary === 'close') await close(runtime); else await runtime.waitForIdle();
+  expect(settled, 'idle/close must include the canceled leaf committing its known result').toBe(true);
+  const inspecting = boundary === 'close' ? open(directory) : runtime;
+  expect(runInspectionSchema.parse(await inspecting.dispatch('run.inspect', { runId: run.id })).run.status).toBe('canceled');
+  expect(projectDetailSchema.parse(await inspecting.dispatch('project.get', { projectId: project.id })).project).toEqual(project);
   expect((await receipt(directory, project.id)).value.providerUsage).toMatchObject({ source: 'provider', inputTokens: 3, outputTokens: 2, totalTokens: 5 });
-  expect(calls().posts).toBe(1); await close(runtime);
+  expect(calls().posts).toBe(1); await close(inspecting);
   const recovered = open(directory); await expect(recovered.dispatch('run.resume', { runId: run.id })).rejects.toThrow('已经结束');
   expect(runInspectionSchema.parse(await recovered.dispatch('run.inspect', { runId: run.id })).run.status).toBe('canceled');
   expect(projectDetailSchema.parse(await recovered.dispatch('project.get', { projectId: project.id })).project).toEqual(project); expect(calls().posts).toBe(1);
+});
+
+it('finishes an in-flight asset import before closing SQLite', async () => {
+  const { directory, runtime, project } = await fixture(), source = join(directory, 'fixture.png');
+  await writeFile(source, Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=', 'base64'));
+  let entered!: () => void, release!: () => void;
+  const blocked = new Promise<void>(resolve => { entered = resolve; }), gate = new Promise<void>(resolve => { release = resolve; });
+  vi.mocked(rename).mockImplementation(async (from, to) => { if (String(to).endsWith('.png')) { entered(); await gate; } return nativeFs.rename(from, to); });
+  const importing = runtime.dispatch('asset.import', { projectId: project.id, shotId: 'shot-0', kind: 'image', path: source });
+  await blocked;
+  let closed = false;
+  const stopping = close(runtime).then(() => { closed = true; });
+  const results = Promise.allSettled([importing, stopping]);
+  // Give already-resolved shutdown work a turn; the import is still gated.
+  await new Promise<void>(resolve => setImmediate(resolve));
+  expect.soft(closed, 'SQLite must remain open while its asset commit is pending').toBe(false);
+  release();
+  expect((await results)[0].status).toBe('fulfilled');
+  const recovered = open(directory);
+  expect(projectDetailSchema.parse(await recovered.dispatch('project.get', { projectId: project.id })).project.shots[0].assetId).toBeTruthy();
 });

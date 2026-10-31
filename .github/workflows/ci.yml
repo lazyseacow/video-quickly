@@ -1,16 +1,10 @@
-name: Windows verification
+name: Desktop verification
 
 on:
   push:
     branches: [main]
   pull_request:
   workflow_dispatch:
-    inputs:
-      verify_version_upgrade:
-        description: 'Verify pinned real 0.1.0 to current-version upgrade in a fresh Windows runner'
-        type: boolean
-        required: false
-        default: false
 
 permissions:
   contents: read
@@ -26,7 +20,6 @@ jobs:
     outputs:
       release-artifact-id: ${{ steps.verification-artifact.outputs.artifact-id }}
     env:
-      CARGO_TARGET_DIR: ${{ github.workspace }}\.generated\cargo-target
       PLAYWRIGHT_JSON_OUTPUT_NAME: ${{ github.workspace }}\.generated\browser-results.json
       PLAYWRIGHT_ARTIFACT_DIR: ${{ github.workspace }}\.generated\browser-artifacts
     steps:
@@ -40,8 +33,6 @@ jobs:
           cache: pnpm
       - name: Install locked dependencies
         run: pnpm install --frozen-lockfile
-      - name: Install pinned Rust toolchain
-        run: rustup show active-toolchain
       - name: Prepare verified media components
         run: node scripts/prepare-media.mjs
       - name: Check types
@@ -62,13 +53,12 @@ jobs:
         env:
           VIDEO_QUICKLY_RESEARCH_RUNTIME_STAGE: ${{ github.workspace }}\.generated\sidecar
         run: pnpm exec vitest run tests/research-packaging.test.ts --maxWorkers=1 --reporter=default --reporter=json --outputFile=.generated/packaged-runtime-results.json
-      - name: Test native runtime bridge
-        working-directory: apps/desktop/src-tauri
-        run: cargo test --locked --lib
+      - name: Test Electron desktop with real preload and runtime
+        run: pnpm test:desktop --packaged
       - name: Verify installation and overwrite upgrade in isolated runner
         shell: pwsh
         run: |
-          $taskInstallers = @(Get-ChildItem -LiteralPath "$env:CARGO_TARGET_DIR\release\bundle\nsis" -Filter '*-setup.exe')
+          $taskInstallers = @(Get-ChildItem -LiteralPath '.generated/electron-release' -Filter '*-setup.exe')
           if ($taskInstallers.Count -ne 1) { throw '应恰好有一个安装包' }
           ./scripts/install-smoke.ps1 -InstallerPath $taskInstallers[0].FullName
       - name: Collect verified artifacts
@@ -86,6 +76,8 @@ jobs:
             .generated/test-results.json
             .generated/audio-failure-diagnostics/
             .generated/packaged-runtime-results.json
+            .generated/electron-results.json
+            .generated/electron-artifacts/
             .generated/browser-results.json
             .generated/browser-artifacts/
             .generated/real-service-cli-regression/fixture-check.json
@@ -93,61 +85,83 @@ jobs:
             .generated/render-smoke/results.json
             .generated/install-smoke.json
 
-  version-upgrade:
-    if: ${{ github.event_name == 'workflow_dispatch' && inputs.verify_version_upgrade }}
-    needs: verify
-    runs-on: windows-2025
-    timeout-minutes: 15
-    permissions:
-      contents: read
-      actions: read
+  macos:
+    name: macOS ${{ matrix.arch }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-15
+            arch: arm64
+          - runner: macos-15-intel
+            arch: x64
+    env:
+      PLAYWRIGHT_JSON_OUTPUT_NAME: ${{ github.workspace }}/.generated/browser-results.json
+      PLAYWRIGHT_ARTIFACT_DIR: ${{ github.workspace }}/.generated/browser-artifacts
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           persist-credentials: false
+      - uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa # v4
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:
           node-version-file: .node-version
-      - name: Verify immutable historical artifact metadata
+          architecture: ${{ matrix.arch }}
+          cache: pnpm
+      - name: Verify native runner architecture
         env:
-          GITHUB_TOKEN: ${{ github.token }}
-        run: node scripts/verify-upgrade-artifact.mjs metadata .generated/previous-artifact-metadata.json
-      - name: Download verified real 0.1.0 build
-        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
-        with:
-          artifact-ids: '12969229961'
-          repository: lazyseacow/video-quickly
-          run-id: '41037906003'
-          github-token: ${{ github.token }}
-          path: .generated/previous-build
-          digest-mismatch: error
-      - name: Download current verified build
-        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
-        with:
-          artifact-ids: ${{ needs.verify.outputs.release-artifact-id }}
-          github-token: ${{ github.token }}
-          run-id: ${{ github.run_id }}
-          path: .generated/current-build
-          digest-mismatch: error
-      - name: Verify old installer manifest and SHA-256
-        run: node scripts/verify-upgrade-artifact.mjs legacy .generated/previous-build .generated/previous-artifact-metadata.json .generated/previous-installer.json
-      - name: Verify current installer manifest and SHA-256
-        run: node scripts/verify-upgrade-artifact.mjs current .generated/current-build ${{ github.sha }} .generated/current-installer.json
-      - name: Verify real cross-version upgrade and data retention
-        shell: pwsh
-        run: |
-          $taskPrevious = Get-Content -LiteralPath '.generated/previous-installer.json' -Raw | ConvertFrom-Json
-          $taskCurrent = Get-Content -LiteralPath '.generated/current-installer.json' -Raw | ConvertFrom-Json
-          ./scripts/install-smoke.ps1 -InstallerPath $taskCurrent.path -InstallerManifestPath $taskCurrent.manifestPath -PreviousInstallerPath $taskPrevious.path -PreviousInstallerManifestPath $taskPrevious.manifestPath
-      - name: Upload cross-version upgrade evidence
+          EXPECTED_ARCH: ${{ matrix.arch }}
+        run: node -e "if(process.platform!=='darwin'||process.arch!==process.env.EXPECTED_ARCH)throw Error('Runner architecture mismatch');console.log(process.platform,process.arch,process.version)"
+      - name: Install locked dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Prepare verified static macOS media and source notices
+        run: pnpm prepare:media
+      - name: Check types
+        run: pnpm typecheck
+      - name: Test runtime and contracts
+        run: pnpm exec vitest run --maxWorkers=2 --reporter=default --reporter=json --outputFile=.generated/test-results.json
+      - name: Install test browser
+        run: pnpm exec playwright install chromium
+      - name: Test workbench
+        run: pnpm test:e2e
+      - name: Test local HTTP CLI recovery
+        run: pnpm exec tsx scripts/check-real-service-cli.ts .generated/real-service-cli-regression
+      - name: Render actual media samples
+        run: pnpm test:media -- --4k
+      - name: Build portable macOS ZIP and app
+        run: pnpm build:desktop
+      - name: Verify Mach-O architecture, minimum OS and self-contained runtime
+        run: node scripts/verify-macos-bundle.mjs
+      - name: Test packaged PDF parsing outside repository
+        env:
+          VIDEO_QUICKLY_RESEARCH_RUNTIME_STAGE: ${{ github.workspace }}/.generated/sidecar
+        run: pnpm exec vitest run tests/research-packaging.test.ts --maxWorkers=1 --reporter=default --reporter=json --outputFile=.generated/packaged-runtime-results.json
+      - name: Test actual macOS desktop with real preload and runtime
+        run: pnpm test:desktop --packaged
+      - name: Verify macOS ZIP installation, overwrite and data retention
+        run: node scripts/install-macos-smoke.mjs
+      - name: Collect verified macOS artifacts
+        run: node scripts/collect-macos-artifacts.mjs
+      - name: Upload macOS package and verification evidence
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: video-quickly-version-upgrade-${{ github.sha }}
+          name: video-quickly-macos-${{ matrix.arch }}-${{ github.sha }}
           if-no-files-found: error
           retention-days: 14
           path: |
-            .generated/previous-artifact-metadata.json
-            .generated/previous-installer.json
-            .generated/current-installer.json
-            .generated/version-upgrade-smoke.json
+            .generated/release/
+            .generated/test-results.json
+            .generated/audio-failure-diagnostics/
+            .generated/browser-results.json
+            .generated/browser-artifacts/
+            .generated/real-service-cli-regression/fixture-check.json
+            .generated/real-service-cli-regression/run/evidence.json
+            .generated/render-smoke/results.json
+            .generated/packaged-runtime-results.json
+            .generated/electron-results.json
+            .generated/electron-artifacts/
+            .generated/macos-portability.json
+            .generated/macos-install-smoke.json

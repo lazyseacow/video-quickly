@@ -76,7 +76,12 @@ test('shows optional reference numbering in the real preview and restores its pr
   const errors = observe(page), project = await fixtureProject(request, '画面资料编号验收', true);
   await openProject(page, project.title);
   const canvas = page.locator('.preview-panel canvas'); await expect(canvas).toBeVisible();
-  const footerPixels = () => canvas.evaluate((element: HTMLCanvasElement) => { const top = Math.floor(element.height * .91); return Array.from(element.getContext('2d')!.getImageData(0, top, element.width, element.height - top).data).join(','); });
+  const footerPixels = async () => {
+    // A visible canvas may still be awaiting its first animation frame. Every
+    // rendered scene has an opaque background; never capture an empty baseline.
+    await expect.poll(() => canvas.evaluate((element: HTMLCanvasElement) => element.getContext('2d')!.getImageData(0, Math.floor(element.height * .91), 1, 1).data[3])).toBe(255);
+    return canvas.evaluate((element: HTMLCanvasElement) => { const top = Math.floor(element.height * .91); return Array.from(element.getContext('2d')!.getImageData(0, top, element.width, element.height - top).data).join(','); });
+  };
   const hidden = await footerPixels();
   await page.getByRole('button', { name: '项目设置', exact: true }).click();
   await (await projectSettingField(page, '画面引用编号', { exact: true })).selectOption('numbers');

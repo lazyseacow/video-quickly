@@ -1,5 +1,6 @@
 import { expect, test, type Page } from '@playwright/test';
 import { writeFile } from 'node:fs/promises';
+import { addModelConnection } from './settings';
 
 test.use({ storageState: { cookies: [], origins: [] } });
 
@@ -21,6 +22,107 @@ test('starts in light mode and preserves an explicit dark preference after reloa
   await page.getByRole('button', { name: '浅色外观', exact: true }).click();
   await expect(page.locator('html')).toHaveAttribute('data-theme', 'light');
 });
+
+test('shares typography and spacing roles across the workspace, navigation and dialogs', async ({ page }) => {
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  await openApp(page);
+  await page.evaluate(() => {
+    for (const [role, value] of Object.entries({ '--text-size-body': '15px', '--text-size-label': '14px', '--text-size-caption': '13px', '--text-size-project': '26px', '--text-size-title': '22px', '--space-2': '10px' })) document.documentElement.style.setProperty(role, value);
+  });
+  for (const theme of ['light', 'dark']) {
+    if (theme === 'dark') await page.getByRole('button', { name: '深色外观', exact: true }).click();
+    await expect(page.getByRole('button', { name: '我的项目', exact: true })).toHaveCSS('font-size', '15px');
+    await expect(page.getByLabel('项目名称', { exact: true })).toHaveCSS('font-size', '26px');
+    const create = page.getByRole('button', { name: '新建项目', exact: true });
+    await expect(create).toHaveCSS('font-size', '14px');
+    await create.click();
+    const dialog = page.getByRole('dialog', { name: '新建视频项目', exact: true });
+    await expect(dialog.getByRole('heading')).toHaveCSS('font-size', '22px');
+    await expect(dialog.locator('.field__label').first()).toHaveCSS('font-size', '13px');
+    await expect(dialog.getByLabel('项目名称', { exact: true })).toHaveCSS('font-size', '15px');
+    await expect(dialog.locator('.dialog__footer')).toHaveCSS('gap', '10px');
+    await page.keyboard.press('Escape');
+    await expect(dialog).toHaveCount(0);
+    await expect(create).toBeFocused();
+  }
+});
+
+test('reads dialog timing from shared CSS roles and responds to reduced motion', async ({ page }) => {
+  await page.emulateMedia({ reducedMotion: 'no-preference' });
+  // GSAP captures Date.now and its frame scheduler when the app loads.
+  // Install the clock first so pausing and advancing time drive that same ticker.
+  const clockOrigin = new Date('2026-01-01T00:00:00Z');
+  await page.clock.install({ time: clockOrigin });
+  await openApp(page);
+  // Ten percent speed makes the actual production entrance observable, without
+  // exporting a second GSAP instance or replacing its animation implementation.
+  await page.evaluate(() => document.documentElement.style.setProperty('--motion-enter', '2400ms'));
+  const create = page.getByRole('button', { name: '新建项目', exact: true });
+  // This target exceeds the entire test deadline. A delayed protocol command
+  // cannot arrive after it while this test is still allowed to run.
+  const pauseTime = new Date(clockOrigin.getTime() + 2 * test.info().timeout);
+  // Reproduce a slow protocol delivery without sleeping inside the fake clock.
+  await new Promise(resolve => setTimeout(resolve, 180));
+  await page.clock.pauseAt(pauseTime);
+  await create.click();
+  const dialog = page.getByRole('dialog', { name: '新建视频项目', exact: true });
+  await expect(dialog.locator('.dialog__surface')).toHaveCSS('opacity', '0');
+  await page.clock.runFor(240);
+  const opacity = await dialog.locator('.dialog__surface').evaluate(element => Number(getComputedStyle(element).opacity));
+  expect(opacity).toBeGreaterThan(0);
+  expect(opacity).toBeLessThan(.9);
+  await page.clock.runFor(2500);
+  await expect(dialog.locator('.dialog__surface')).toHaveCSS('opacity', '1');
+  // Repeated dismissal has one completion, even when the preference changes
+  // during its exit. A late completion must not close a newly opened dialog.
+  await page.evaluate(() => document.documentElement.style.setProperty('--motion-exit', '2400ms'));
+  await page.keyboard.press('Escape');
+  await page.keyboard.press('Escape');
+  // Exit content leaves the accessibility tree; a repeated Escape may also
+  // close the native modal before React's exit has finished. Observe unmount.
+  const mountedDialog = page.locator('dialog');
+  await expect(mountedDialog.locator('.dialog__surface')).toHaveAttribute('inert', '');
+  await expect(mountedDialog).toHaveCount(1);
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  await expect(mountedDialog).toHaveCount(0);
+  await create.click();
+  await expect(dialog.locator('.dialog__surface')).toHaveCSS('opacity', '1');
+  await page.clock.runFor(2500);
+  await expect(dialog).toHaveCount(1);
+  await page.keyboard.press('Escape');
+  await expect(create).toBeFocused();
+  await page.clock.resume();
+});
+
+for (const width of [1536, 600]) for (const theme of ['light', 'dark']) {
+  test(`keeps every page and shared dialog readable without overflow at ${width}px in ${theme} mode`, async ({ page }, info) => {
+    const errors: string[] = [];
+    page.on('pageerror', error => errors.push(error.message));
+    page.on('console', message => { if (message.type() === 'error') errors.push(message.text()); });
+    await page.setViewportSize({ width, height: 960 });
+    await page.emulateMedia({ reducedMotion: 'reduce' });
+    await page.addInitScript(value => localStorage.setItem('vq-theme', value), theme);
+    await openApp(page);
+    await page.screenshot({ path: info.outputPath(`unified-workspace-${theme}-${width}.png`) });
+    for (const name of ['我的项目', '素材库', '角色参考库', '系列模板', '模型连接', 'Skill 工作室', 'Token 消耗', '制作记录']) {
+      await page.getByRole('button', { name, exact: true }).click();
+      await expect(page.getByRole('heading', { level: 1, name, exact: true })).toBeVisible();
+      expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), name).toBe(true);
+      await expect(page.getByRole('heading', { level: 1, name, exact: true })).toHaveCSS('font-weight', '650');
+    }
+    await page.getByRole('button', { name: '模型连接', exact: true }).click();
+    const model = await addModelConnection(page);
+    await expect(model.getByRole('button', { name: '取消', exact: true })).toBeInViewport();
+    await expect(model.getByRole('button', { name: '保存连接', exact: true })).toBeInViewport();
+    const bounds = await model.boundingBox();
+    expect(bounds!.x).toBeGreaterThanOrEqual(0);
+    expect(bounds!.x + bounds!.width).toBeLessThanOrEqual(width);
+    await page.screenshot({ path: info.outputPath(`unified-model-${theme}-${width}.png`) });
+    await page.keyboard.press('Escape');
+    await expect(model).toHaveCount(0);
+    expect(errors).toEqual([]);
+  });
+}
 
 test('previews imported images automatically and keeps navigation typography stable', async ({ page, request }, info) => {
   const path = info.outputPath('library-preview.svg');

@@ -1,6 +1,7 @@
+import { primaryModifier } from '../lib/desktop';
 import { memo, useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
-import { Background, Controls, Handle, Panel, Position, ReactFlow, SelectionMode, addEdge, applyEdgeChanges, applyNodeChanges, type AriaLabelConfig, type Connection, type Edge, type IsValidConnection, type Node, type NodeProps, type NodeTypes, type OnEdgesChange, type OnInit, type OnNodesChange, type OnSelectionChangeFunc, type ReactFlowInstance } from '@xyflow/react';
-import { BookOpen, Check, GitBranch, Image, Layers, Mic, Plus, Sparkles, Trash2, Save } from 'lucide-react';
+import { Background, ControlButton, Controls, Handle, Panel, Position, ReactFlow, SelectionMode, addEdge, applyEdgeChanges, applyNodeChanges, type AriaLabelConfig, type Connection, type Edge, type IsValidConnection, type Node, type NodeProps, type NodeTypes, type OnEdgesChange, type OnInit, type OnNodesChange, type OnSelectionChangeFunc, type ReactFlowInstance } from '@xyflow/react';
+import { BookOpen, Check, GitBranch, Image, Layers, Maximize, Mic, Plus, Sparkles, Trash2, Save } from 'lucide-react';
 import { nodeKindSchema, type ModelProfile, type WorkflowDefinition, type WorkflowNode } from '@video-quickly/contracts';
 import { Button, Field, IconButton, Notice, Select } from '../components/Primitives';
 import ToolBindings from '../components/ToolBindings';
@@ -46,6 +47,19 @@ export default function WorkflowCanvas({ workflow, models, dirty, saving, confli
   const canvas = useRef<ReactFlowInstance<FlowNode> | null>(null);
   const container = useRef<HTMLDivElement>(null);
   const initializeCanvas = useCallback<OnInit<FlowNode>>(instance => { canvas.current = instance; }, []);
+  const fitCanvas = useCallback(() => {
+    const instance = canvas.current;
+    if (!instance) return;
+    const visibleNodes = instance.getNodes().filter(node => {
+      const measured = instance.getInternalNode(node.id)?.measured;
+      return !node.hidden && measured?.width && measured.height;
+    });
+    if (!visibleNodes.length) return;
+    // These nodes are already measured. fitView queues another node update and
+    // frame, which can arrive after a new pointer gesture and overwrite its pan.
+    // Keep the default Controls padding and the instance's zoom limits.
+    void instance.fitBounds(instance.getNodesBounds(visibleNodes), { padding: .1, duration: 0 });
+  }, []);
   const focusNode = useCallback((_: React.MouseEvent, node: FlowNode) => {
     void canvas.current?.fitView({ nodes: [{ id: node.id }], padding: .8, minZoom: .7, maxZoom: 1, duration: 0 });
   }, []);
@@ -153,9 +167,9 @@ export default function WorkflowCanvas({ workflow, models, dirty, saving, confli
     }
   }}>
     <div className="flow-container" ref={container}><div className="flow-viewport">
-      <ReactFlow<FlowNode> nodes={nodes} edges={edges} nodeTypes={nodeTypes} onInit={initializeCanvas} onNodeDoubleClick={focusNode} onNodeDragStart={onEndGroup} onNodeDragStop={onEndGroup} zoomOnDoubleClick={false} onNodesChange={changeNodes} onEdgesChange={changeEdges} onConnect={connect} onSelectionChange={changeSelection} onBeforeDelete={beforeDelete} isValidConnection={validConnection} fitView fitViewOptions={fitViewOptions} minZoom={.2} maxZoom={1.5} deleteKeyCode={deleteKeys} ariaLabelConfig={ariaLabels} panOnScroll selectionMode={SelectionMode.Partial} panOnDrag={panButtons} zoomOnScroll={false} connectionRadius={24} nodeDragThreshold={3}>
-        <Background gap={22} size={1} color="var(--border)" /><Controls showInteractive={false} />
-        <Panel position="top-left" className="flow-gestures">拖动空白处平移 · Ctrl + 滚轮缩放<span>Shift + 拖动框选 · 双击步骤聚焦</span></Panel>
+      <ReactFlow<FlowNode> nodes={nodes} edges={edges} nodeTypes={nodeTypes} onInit={initializeCanvas} onNodeDoubleClick={focusNode} onNodeDragStart={onEndGroup} onNodeDragStop={onEndGroup} zoomOnDoubleClick={false} onNodesChange={changeNodes} onEdgesChange={changeEdges} onConnect={connect} onSelectionChange={changeSelection} onBeforeDelete={beforeDelete} isValidConnection={validConnection} fitView fitViewOptions={fitViewOptions} minZoom={.2} maxZoom={1.5} deleteKeyCode={deleteKeys} ariaLabelConfig={ariaLabels} panOnScroll selectionMode={SelectionMode.Partial} panOnDrag={panButtons} zoomOnScroll={false} zoomActivationKeyCode={primaryModifier().key} multiSelectionKeyCode={primaryModifier().key} connectionRadius={24} nodeDragThreshold={3}>
+        <Background gap={22} size={1} color="var(--border)" /><Controls showInteractive={false} showFitView={false}><ControlButton className="react-flow__controls-fitview" title={ariaLabels['controls.fitView.ariaLabel']} aria-label={ariaLabels['controls.fitView.ariaLabel']} onClick={fitCanvas}><Maximize size={16} aria-hidden="true" /></ControlButton></Controls>
+        <Panel position="top-left" className="flow-gestures">拖动空白处平移 · {primaryModifier().label} + 滚轮缩放<span>Shift + 拖动框选 · 双击步骤聚焦</span></Panel>
       </ReactFlow>
     </div></div>
     <aside className="flow-inspector">

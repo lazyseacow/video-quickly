@@ -1,42 +1,32 @@
-param(
-  [Parameter(Mandatory=$true)][string]$InstallerPath,
-  [string]$InstallerManifestPath,
-  [string]$PreviousInstallerPath,
-  [string]$PreviousInstallerManifestPath
-)
+param([Parameter(Mandatory=$true)][string]$InstallerPath)
 $ErrorActionPreference = 'Stop'
 if ($env:GITHUB_ACTIONS -ne 'true' -or $env:RUNNER_OS -ne 'Windows') { throw '此脚本只允许在隔离 Windows CI 账号中执行，会修改安装注册项。' }
 $taskInstaller = (Resolve-Path -LiteralPath $InstallerPath).Path
-$taskUpgrade = -not [string]::IsNullOrWhiteSpace($PreviousInstallerPath)
-if ($taskUpgrade -ne (-not [string]::IsNullOrWhiteSpace($PreviousInstallerManifestPath))) { throw '真实升级需要旧安装包与对应清单' }
-if ($taskUpgrade -and [string]::IsNullOrWhiteSpace($InstallerManifestPath)) { throw '真实升级需要当前安装包清单' }
-$taskVersion = (Get-Content -LiteralPath 'apps/desktop/src-tauri/tauri.conf.json' -Raw | ConvertFrom-Json).version
-function Assert-InstallerManifest([string]$path, [string]$manifestPath, [string]$version) {
-  $hash = (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash.ToLowerInvariant()
-  if (-not [string]::IsNullOrWhiteSpace($manifestPath)) {
-    $manifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
-    if ($manifest.version -ne $version -or $manifest.platform -ne 'windows-x64' -or $manifest.installer.name -ne [IO.Path]::GetFileName($path)) { throw '安装包版本、平台或文件名与清单不一致' }
-    if ($manifest.installer.sha256 -ne $hash -or $manifest.installer.bytes -ne (Get-Item -LiteralPath $path).Length) { throw '安装包摘要或长度与清单不一致' }
-  }
-  return $hash
-}
-$taskCurrentHash = Assert-InstallerManifest $taskInstaller $InstallerManifestPath $taskVersion
-$taskPrevious = $null
-if ($taskUpgrade) {
-  $taskPreviousInstaller = (Resolve-Path -LiteralPath $PreviousInstallerPath).Path
-  $taskPrevious = Get-Content -LiteralPath $PreviousInstallerManifestPath -Raw | ConvertFrom-Json
-  if ([version]$taskPrevious.version -ge [version]$taskVersion) { throw '旧产品版本必须低于新版本，不能把同版本构建当作跨版本升级' }
-  $taskPreviousHash = Assert-InstallerManifest $taskPreviousInstaller $PreviousInstallerManifestPath $taskPrevious.version
-  if ($taskPreviousHash -eq $taskCurrentHash) { throw '新旧安装包不能相同' }
-}
+$taskInstallerSha256 = (Get-FileHash -LiteralPath $taskInstaller -Algorithm SHA256).Hash.ToLowerInvariant()
+$taskVersion = (Get-Content -LiteralPath 'package.json' -Raw | ConvertFrom-Json).version
 $taskRoot = [IO.Path]::GetFullPath($env:RUNNER_TEMP)
-$taskInstallName = if ($taskUpgrade) { 'Video Quickly 真实跨版本升级' } else { 'Video Quickly 中文安装验收' }
+$taskInstallName = 'Video Quickly 中文安装验收'
 $taskInstall = [IO.Path]::GetFullPath((Join-Path $taskRoot $taskInstallName))
 if (-not $taskInstall.StartsWith($taskRoot + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase)) { throw '验收安装目录超出 RUNNER_TEMP' }
-$taskData = Join-Path $env:APPDATA 'net.lazyseacow.video-quickly'
+$taskData = Join-Path $env:APPDATA 'VideoQuickly-Electron'
 if (Test-Path -LiteralPath $taskData) { throw '验收账号已有项目数据，停止安装操作。' }
 if (Test-Path -LiteralPath $taskInstall) { throw '验收安装目录已存在，停止操作。' }
-$taskEvidence = Join-Path $taskRoot $(if ($taskUpgrade) { 'vq-version-upgrade-fixture.json' } else { 'vq-installed-fixture.json' })
+# These exact aliases are removed by the builder's generic deletion flag. They
+# are not this application's workspace; only this fresh CI account owns fixtures.
+$taskRoamingRoot = [IO.Path]::GetFullPath($env:APPDATA)
+$taskLocalRoot = [IO.Path]::GetFullPath($env:LOCALAPPDATA)
+$taskNamespaceParent = Join-Path $taskRoamingRoot '@video-quickly'
+$taskProtectedDirectories = @((Join-Path $taskRoamingRoot 'video-quickly'), (Join-Path $taskNamespaceParent 'desktop'), (Join-Path $taskLocalRoot 'VideoQuickly-Electron'))
+$taskFixtureRoots = @($taskProtectedDirectories[0], $taskNamespaceParent, $taskProtectedDirectories[2])
+$taskOwnedRoots = [Collections.Generic.List[string]]::new()
+foreach ($taskDirectory in @($taskFixtureRoots + $taskProtectedDirectories)) {
+  if (Test-Path -LiteralPath $taskDirectory) { throw '验收账号已有受保护目录，停止操作。' }
+}
+foreach ($taskDirectory in @($taskRoamingRoot, $taskLocalRoot)) {
+  $taskInformation = Get-Item -LiteralPath $taskDirectory
+  if (-not $taskInformation.PSIsContainer -or ($taskInformation.Attributes -band [IO.FileAttributes]::ReparsePoint)) { throw '验收数据根目录必须是普通目录' }
+}
+$taskEvidence = Join-Path $taskRoot 'vq-installed-fixture.json'
 $taskDesktop = $null
 function Invoke-Installer([string]$path, [string]$extra, [string]$version) {
   $taskSetup = Start-Process -FilePath $path -ArgumentList "/S $extra /D=$taskInstall" -WindowStyle Hidden -PassThru -Wait
@@ -50,24 +40,9 @@ function Invoke-InstalledRuntime([string]$mode) {
   if ($LASTEXITCODE -ne 0) { throw "安装后运行时验收失败：$mode" }
 }
 function Test-NativeLaunch {
-  $script:taskDesktop = Start-Process -FilePath (Join-Path $taskInstall 'video-quickly.exe') -WindowStyle Hidden -PassThru
-  try {
-    $taskChildren = @()
-    for ($taskAttempt=0; $taskAttempt -lt 20; $taskAttempt++) {
-      Start-Sleep -Seconds 1
-      if ($script:taskDesktop.HasExited) { throw '安装后的原生客户端启动失败' }
-      $taskChildren = @(Get-CimInstance Win32_Process -Filter "ParentProcessId=$($script:taskDesktop.Id)" | Where-Object { $_.Name -eq 'node.exe' })
-      if ($taskChildren.Count -eq 1) { break }
-    }
-    if ($taskChildren.Count -ne 1) { throw '原生客户端应启动一个执行组件' }
-    Start-Sleep -Seconds 2
-    Invoke-InstalledRuntime 'inspect'
-  } finally {
-    if (-not $script:taskDesktop.HasExited) { Stop-Process -Id $script:taskDesktop.Id; $script:taskDesktop.WaitForExit() }
-    $script:taskDesktop = $null
-  }
-  Start-Sleep -Seconds 1
-  foreach ($taskChild in $taskChildren) { if (Get-Process -Id $taskChild.ProcessId -ErrorAction SilentlyContinue) { throw '客户端退出后执行组件仍在运行' } }
+  node scripts/check-installed-electron.mjs $taskInstall $taskData
+  if ($LASTEXITCODE -ne 0) { throw '安装后的 Electron 窗口、原生桥接或退出清理失败' }
+  Invoke-InstalledRuntime 'inspect'
 }
 function Get-DataRetentionSnapshot([object[]]$files) {
   foreach ($file in $files) {
@@ -83,40 +58,63 @@ function Get-DataRetentionSnapshot([object[]]$files) {
     [pscustomobject][ordered]@{ role=$file.role; path=$file.path; exists=[bool]$exists; bytes=$bytes; sha256=$sha256 }
   }
 }
-try {
-  if ($taskUpgrade) {
-    Invoke-Installer $taskPreviousInstaller '' $taskPrevious.version
-    Invoke-InstalledRuntime 'prepare-upgrade'
-  } else {
-    Invoke-Installer $taskInstaller '' $taskVersion
-    Invoke-InstalledRuntime 'prepare'
+function Assert-FixtureDirectory([string]$path) {
+  $full = [IO.Path]::GetFullPath($path)
+  if (@($taskFixtureRoots + $taskProtectedDirectories) -notcontains $full) { throw '哨兵目录不在本次夹具清单内' }
+  $parent = if ($full -eq $taskProtectedDirectories[2]) { $taskLocalRoot } else { $taskRoamingRoot }
+  if (-not $full.StartsWith($parent + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase) -or $full -eq $taskData) { throw '哨兵目录越界' }
+  if (Test-Path -LiteralPath $full) {
+    $info = Get-Item -LiteralPath $full
+    if (-not $info.PSIsContainer -or ($info.Attributes -band [IO.FileAttributes]::ReparsePoint)) { throw '哨兵目录必须是普通目录' }
   }
-  Invoke-Installer $taskInstaller '/UPDATE' $taskVersion
+}
+function Get-ProtectedSentinelSnapshot([string]$stage) {
+  foreach ($path in $taskProtectedDirectories) { Assert-FixtureDirectory $path }
+  $snapshot = @(Get-DataRetentionSnapshot $taskSentinelFiles)
+  for ($index=0; $index -lt $taskSentinelBefore.Count; $index++) {
+    foreach ($property in @('role', 'path', 'exists', 'bytes', 'sha256')) {
+      if ($taskSentinelBefore[$index].$property -cne $snapshot[$index].$property) { throw "$stage 改变了受保护哨兵：$($taskSentinelBefore[$index].role) / $property" }
+    }
+  }
+  return $snapshot
+}
+try {
+  foreach ($taskDirectory in $taskFixtureRoots) {
+    Assert-FixtureDirectory $taskDirectory
+    New-Item -ItemType Directory -Path $taskDirectory | Out-Null
+    $taskOwnedRoots.Add($taskDirectory)
+  }
+  New-Item -ItemType Directory -Path $taskProtectedDirectories[1] | Out-Null
+  $taskSentinelFiles = @()
+  for ($taskIndex=0; $taskIndex -lt $taskProtectedDirectories.Count; $taskIndex++) {
+    $taskSentinel = Join-Path $taskProtectedDirectories[$taskIndex] 'vq-uninstall-scope-fixture.bin'
+    [IO.File]::WriteAllBytes($taskSentinel, [Text.Encoding]::UTF8.GetBytes("isolated-uninstall-sentinel-$taskIndex-$([guid]::NewGuid())"))
+    $taskSentinelFiles += [pscustomobject]@{ role="protected-alias-$taskIndex"; path=$taskSentinel; optional=$false }
+  }
+  $taskSentinelBefore = @(Get-DataRetentionSnapshot $taskSentinelFiles)
+  Invoke-Installer $taskInstaller '/currentuser' $taskVersion
+  Invoke-InstalledRuntime 'prepare'
+  Invoke-Installer $taskInstaller '/currentuser' $taskVersion
   Test-NativeLaunch
-  Invoke-InstalledRuntime $(if ($taskUpgrade) { 'verify-upgrade' } else { 'verify' })
-  if ($taskUpgrade) { Invoke-Installer $taskInstaller '/UPDATE' $taskVersion }
+  Invoke-InstalledRuntime 'verify'
+  Invoke-Installer $taskInstaller '/currentuser' $taskVersion
   Test-NativeLaunch
   $taskRetainedFiles = @(
     [pscustomobject]@{ role='database'; path=[IO.Path]::GetFullPath((Join-Path $taskData 'workspace.sqlite')); optional=$false },
     [pscustomobject]@{ role='database-wal'; path=[IO.Path]::GetFullPath((Join-Path $taskData 'workspace.sqlite-wal')); optional=$true }
   )
-  if ($taskUpgrade) {
-    $taskSavedFixture = Get-Content -LiteralPath $taskEvidence -Raw | ConvertFrom-Json
-    $taskFixtureProjectId = [guid]::Empty
-    if (-not [guid]::TryParse([string]$taskSavedFixture.projectId, [ref]$taskFixtureProjectId) -or $taskSavedFixture.asset.projectId -cne $taskSavedFixture.projectId -or $taskSavedFixture.asset.kind -cne 'image') { throw '升级素材必须来自本次独立项目夹具' }
-    $taskFixtureAsset = [IO.Path]::GetFullPath([string]$taskSavedFixture.asset.path)
-    $taskFixtureAssetsRoot = [IO.Path]::GetFullPath((Join-Path $taskData "projects\$($taskFixtureProjectId.ToString())\assets"))
-    if (-not $taskFixtureAsset.StartsWith($taskFixtureAssetsRoot + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase) -or [IO.Path]::GetExtension($taskFixtureAsset) -ine '.png') { throw '升级素材超出本次项目的隔离素材目录' }
-    $taskRetainedFiles += [pscustomobject]@{ role='fixture-image'; path=$taskFixtureAsset; optional=$false }
-  }
+  $taskSavedFixture = Get-Content -LiteralPath $taskEvidence -Raw | ConvertFrom-Json
+  $taskFixtureAsset = [IO.Path]::GetFullPath([string]$taskSavedFixture.asset.path)
+  $taskAssetRoot = [IO.Path]::GetFullPath((Join-Path $taskData "projects\$($taskSavedFixture.projectId)\assets"))
+  if (-not $taskFixtureAsset.StartsWith($taskAssetRoot + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase)) { throw '素材不在隔离项目目录内' }
+  $taskRetainedFiles += [pscustomobject]@{ role='fixture-image'; path=$taskFixtureAsset; optional=$false }
   # No runtime is active here. Compare durable database/WAL bytes, rather than
   # opening SQLite after uninstall and potentially checkpointing its WAL.
   $taskDataBeforeUninstall = @(Get-DataRetentionSnapshot $taskRetainedFiles)
-  if ($taskUpgrade) {
-    $taskFixtureBefore = $taskDataBeforeUninstall | Where-Object { $_.role -eq 'fixture-image' }
-    if ($taskFixtureBefore.sha256 -cne $taskSavedFixture.asset.sha256 -or $taskFixtureBefore.bytes -ne $taskSavedFixture.asset.size) { throw '卸载前升级夹具素材已变化' }
-  }
-  $taskUninstall = Join-Path $taskInstall 'uninstall.exe'
+  $taskImageBefore = $taskDataBeforeUninstall | Where-Object { $_.role -eq 'fixture-image' }
+  if ($taskImageBefore.sha256 -cne $taskSavedFixture.asset.sha256 -or $taskImageBefore.bytes -ne $taskSavedFixture.asset.size) { throw '卸载前夹具素材已变化' }
+  $taskUninstall = Join-Path $taskInstall 'Uninstall video-quickly.exe'
+  if (-not (Test-Path -LiteralPath $taskUninstall)) { throw '安装后缺少卸载程序' }
   $taskRemoved = Start-Process -FilePath $taskUninstall -ArgumentList "/S _?=$taskInstall" -WindowStyle Hidden -PassThru -Wait
   if ($taskRemoved.ExitCode -ne 0) { throw '卸载失败' }
   if (Test-Path -LiteralPath (Join-Path $taskInstall 'video-quickly.exe')) { throw '卸载后客户端文件仍存在' }
@@ -128,15 +126,24 @@ try {
       if ($taskDataBeforeUninstall[$taskIndex].$taskProperty -cne $taskDataAfterUninstall[$taskIndex].$taskProperty) { throw "静默卸载改变了用户数据：$($taskDataBeforeUninstall[$taskIndex].role) / $taskProperty" }
     }
   }
-  $taskRetention = [ordered]@{ scope=$(if ($taskUpgrade) { 'database-wal-and-fixture-image' } else { 'database-and-wal' }); before=@($taskDataBeforeUninstall); after=@($taskDataAfterUninstall) }
-  $taskReport = @{ installed=$true; overwriteInstall=$true; legacyDatabaseMigration=(-not $taskUpgrade); nativeLaunch=$true; installedRuntime=$true; actualExport=$true; reviewResumed=$true; uninstall=$true; databaseFileRetained=$true; dataPreserved=$true; dataContentPreserved=$true; dataRetention=$taskRetention; systemFilePicker='manual-check-required' }
+  $taskRetention = [ordered]@{ scope='database-wal-and-fixture-image'; before=@($taskDataBeforeUninstall); after=@($taskDataAfterUninstall) }
+  $taskSentinelAfterDefault = @(Get-ProtectedSentinelSnapshot '默认卸载')
+  # Default uninstall has already proved byte-for-byte retention. Separately
+  # verify the user's explicit deletion choice on the same disposable fixture.
+  Invoke-Installer $taskInstaller '/currentuser' $taskVersion
+  Test-NativeLaunch
+  $taskDeleted = Start-Process -FilePath $taskUninstall -ArgumentList "/S --delete-electron-workspace _?=$taskInstall" -WindowStyle Hidden -PassThru -Wait
+  if ($taskDeleted.ExitCode -ne 0 -or (Test-Path -LiteralPath $taskData)) { throw '明确选择删除数据后工作区仍存在' }
+  $taskSentinelAfterExplicit = @(Get-ProtectedSentinelSnapshot '明确删除工作区')
+  $taskDeletionScope = @{ option='--delete-electron-workspace'; workspace=$taskData; protectedDirectoriesPreserved=$true; before=@($taskSentinelBefore); afterDefault=@($taskSentinelAfterDefault); afterExplicit=@($taskSentinelAfterExplicit) }
+  $taskReport = @{ installerSha256=$taskInstallerSha256; installed=$true; overwriteInstall=$true; framework='electron'; nativeLaunch=$true; installedRuntime=$true; actualExport=$true; reviewResumed=$true; uninstall=$true; databaseFileRetained=$true; dataPreserved=$true; dataContentPreserved=$true; explicitDataDeletion=$true; dataRetention=$taskRetention; deletionScope=$taskDeletionScope; systemFilePicker='manual-check-required' }
   $taskReportPath = '.generated/install-smoke.json'
-  if ($taskUpgrade) {
-    $verified = Get-Content -LiteralPath "$taskEvidence.verified.json" -Raw | ConvertFrom-Json
-    $taskReport.versionUpgrade = $true; $taskReport.previousVersion = $taskPrevious.version; $taskReport.version = $taskVersion
-    $taskReport.previousCommit = $taskPrevious.commit; $taskReport.previousInstallerSha256 = $taskPreviousHash; $taskReport.installerSha256 = $taskCurrentHash
-    $taskReport.schemaBefore = $verified.schemaBefore; $taskReport.schemaAfter = $verified.schemaAfter; $taskReport.preservation = $verified
-    $taskReportPath = '.generated/version-upgrade-smoke.json'
-  }
   $taskReport | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $taskReportPath -Encoding utf8
-} finally { if ($null -ne $taskDesktop -and -not $taskDesktop.HasExited) { Stop-Process -Id $taskDesktop.Id } }
+} finally {
+  if ($null -ne $taskDesktop -and -not $taskDesktop.HasExited) { Stop-Process -Id $taskDesktop.Id }
+  foreach ($taskDirectory in $taskOwnedRoots) {
+    foreach ($taskProtected in $taskProtectedDirectories) { Assert-FixtureDirectory $taskProtected }
+    Assert-FixtureDirectory $taskDirectory
+    if (Test-Path -LiteralPath $taskDirectory) { Remove-Item -LiteralPath $taskDirectory -Recurse -Force }
+  }
+}

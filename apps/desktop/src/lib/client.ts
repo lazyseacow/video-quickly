@@ -1,5 +1,5 @@
-import { Channel, convertFileSrc, invoke, isTauri } from '@tauri-apps/api/core';
 import { runtimeEventSchema, type RuntimeEvent } from '@video-quickly/contracts';
+import { desktopBridge } from './desktop';
 
 const listeners = new Set<(event: RuntimeEvent) => void>();
 let browserEvents: EventSource | undefined;
@@ -21,11 +21,8 @@ function previewEvents() {
 }
 
 export async function rpc<T = unknown>(method: string, params: unknown = {}): Promise<T> {
-  if (isTauri()) {
-    if (method === 'runtime.status') return invoke<T>('runtime_status');
-    if (method === 'runtime.reconnect') return invoke<T>('runtime_reconnect');
-    return invoke<T>('runtime_request', { method, params });
-  }
+  const desktop = desktopBridge();
+  if (desktop) return await desktop.rpc(method, params) as T;
   if (!import.meta.env.DEV && import.meta.env.MODE !== 'browser-test') throw new Error('请使用桌面客户端打开此项目');
   let response: Response;
   try { response = await fetch('/__desktop_rpc', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ method, params }) }); }
@@ -39,12 +36,22 @@ export async function rpc<T = unknown>(method: string, params: unknown = {}): Pr
 
 export function subscribe(listener: (event: RuntimeEvent) => void): () => void {
   listeners.add(listener);
-  if (isTauri()) {
-    const channel = new Channel<RuntimeEvent>();
+  const desktop = desktopBridge();
+  if (desktop) {
     let active = true;
-    channel.onmessage = event => { if (active) listener(event); };
-    void invoke('runtime_subscribe', { channel }).catch(() => listener({ type: 'runtime.connection', data: { state: 'disconnected', generation: 0, message: '执行组件订阅失败，请重新连接。' } }));
-    return () => { active = false; listeners.delete(listener); };
+    const stop = desktop.subscribe(event => {
+      const parsed = runtimeEventSchema.safeParse(event);
+      if (active && parsed.success) listener(parsed.data);
+    });
+    void desktop.rpc('runtime.status', {}).then(status => {
+      if (!active) return;
+      const event = runtimeEventSchema.safeParse({ type: 'runtime.connection', data: status });
+      if (event.success) {
+        listener(event.data);
+        if (status && typeof status === 'object' && 'state' in status && status.state === 'ready') listener({ type: 'runtime.ready' });
+      }
+    }).catch(() => { if (active) listener({ type: 'runtime.connection', data: { state: 'disconnected', generation: 0, message: '执行组件订阅失败，请重新连接。' } }); });
+    return () => { active = false; stop(); listeners.delete(listener); };
   }
   if (import.meta.env.MODE === 'browser-test') {
     previewEvents();
@@ -55,5 +62,5 @@ export function subscribe(listener: (event: RuntimeEvent) => void): () => void {
 }
 
 export async function getAssetUrl(path: string): Promise<string> {
-  return isTauri() ? convertFileSrc(path) : `/__desktop_asset?path=${encodeURIComponent(path)}`;
+  return desktopBridge()?.assetUrl(path) ?? `/__desktop_asset?path=${encodeURIComponent(path)}`;
 }

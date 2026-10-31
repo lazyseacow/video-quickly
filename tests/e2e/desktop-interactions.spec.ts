@@ -22,7 +22,7 @@ for (const viewport of [{ width: 1536, height: 960 }, { width: 1024, height: 720
     page.on('pageerror', error => errors.push(error.message));
     await openApp(page);
     // Emulate only the native surface marker, keeping the real browser runtime
-    // and isolated workspace instead of replacing Tauri's IPC transport.
+    // and isolated workspace instead of replacing Electron's IPC transport.
     await page.locator('html').evaluate(element => { element.dataset.nativePlatform = 'macos'; });
     await dragText(page, page.locator('.statusbar-right > span').first());
     expect(await page.evaluate(() => getSelection()?.toString())).toBe('');

@@ -15,15 +15,15 @@ Video Quickly 是本地视频创作工作台，覆盖创意简报、资料整理
 
 ## 安装运行
 
-准备 Node.js 24、pnpm 10 和 Rust，具体版本以仓库配置为准。以下命令均在项目根目录执行。
+准备 Node.js 24 和 pnpm 10，具体版本以仓库配置为准。桌面外壳使用 Electron，自带 Chromium，无需 Rust 或系统 WebView。以下命令均在项目根目录执行。
 
 ```sh
 pnpm install
 ```
 
-### Windows x64
+### Windows 10／11 x64
 
-使用 Rust MSVC 工具链，并安装 Visual Studio C++ Build Tools 和 WebView2。
+安装锁定的项目依赖后准备媒体组件：
 
 ```powershell
 pnpm prepare:media
@@ -32,17 +32,16 @@ pnpm dev:desktop
 
 首次运行时执行 `pnpm prepare:media`，准备 FFmpeg 和 FFprobe。
 
-### macOS
+### macOS 13.5 及以上（Apple Silicon／Intel）
 
-安装 Xcode Command Line Tools。音视频处理和导出需带字幕渲染支持的 FFmpeg，可通过 Homebrew 准备：
+分别支持 arm64 和 x64，依赖与执行器按当前 CPU 原生构建。
 
 ```sh
-brew install ffmpeg-full
-export PATH="$(brew --prefix ffmpeg-full)/bin:$PATH"
+pnpm prepare:media
 pnpm dev:desktop
 ```
 
-仅启动和编辑项目时，可跳过 FFmpeg 安装。
+`prepare:media` 下载经过固定 SHA-256 校验的独立 FFmpeg／FFprobe，包含字幕渲染与 H.264 编码，不依赖 Homebrew。生产打包自动准备官方独立 Node.js 24；开发模式也可使用 Homebrew Node。
 
 ### 浏览器预览
 
@@ -50,10 +49,14 @@ pnpm dev:desktop
 
 ## 打包说明
 
-当前支持 Windows x64 安装包；macOS 支持开发运行。在 Windows 完成环境准备后执行：
+Windows x64、macOS arm64／x64 均可在对应原生机器完成环境准备后执行：
 
 ```powershell
 pnpm build:desktop
 ```
 
-安装包默认生成在 `apps/desktop/src-tauri/target/release/bundle/nsis/`。
+产物在 `.generated/electron-release/`：Windows 为 NSIS 安装器，macOS 为可独立解压的 `.app` ZIP。每个 Mac 架构分别构建、验收，不将一个架构的本地结果代替另一个架构。打包命令固定 `--publish never`，不会自动发布。
+
+桌面专项验收：`pnpm test:desktop`；打包后使用 `pnpm test:desktop --packaged` 验证真实打包应用。验收使用独立临时工作区，不读取日常模型密钥或提交付费任务。
+
+Electron 使用独立的 `VideoQuickly-Electron` 数据目录；本轮按开发阶段要求不迁移旧 Tauri 数据，旧目录保持原样。详见 [Electron 架构与验收](docs/electron-migration.md)。

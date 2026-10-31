@@ -13,4 +13,6 @@ playwright-report/
 .env
 .env.*
 !.env.example
-apps/desktop/src-tauri/gen/schemas/
+
+# Retired framework cache left on developer machines; never ship it.
+apps/desktop/src-tauri/gen/
