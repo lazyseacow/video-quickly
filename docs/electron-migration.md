@@ -18,6 +18,8 @@
 
 默认工作区：Windows 为 `%APPDATA%\VideoQuickly-Electron`，macOS 为 `~/Library/Application Support/VideoQuickly-Electron`。Chromium 配置在该目录的 `electron-session` 中。`VIDEO_QUICKLY_DATA_DIR` 和 `VIDEO_QUICKLY_ELECTRON_USER_DATA` 可将测试工作区及浏览器配置隔离。
 
+Windows 卸载默认保留数据。交互勾选删除或明确传入 `--delete-electron-workspace` 时，仅删除默认 Roaming 工作区；不会把打包工具的应用名称别名目录、同名 LocalAppData 目录或旧 Tauri 目录作为清理目标。
+
 `pnpm dev:desktop` 构建执行器、准备开发执行组件，启动独占本机 1420 端口的 Vite 和 Electron。关闭客户端后同时关闭本次开发服务器。正式包只加载随附资源，忽略开发 URL。
 
 `pnpm build:desktop` 先构建前端与执行器，再准备带许可和来源的 Node／FFmpeg，使用 `electron-builder.yml` 打包。Windows 输出 NSIS x64 安装器；macOS arm64／x64 分别输出独立应用 ZIP，Linux 尚非正式交付目标。正式包的执行组件位于 `resources/sidecar`（macOS 为 `.app/Contents/Resources/sidecar`）。macOS 生产组件始终使用经固定 SHA-256 验证的官方独立 Node.js 24.22.1 和 Martin Riedl 静态 FFmpeg／FFprobe 9.0.2；不复制 Homebrew 的动态库依赖。两个架构分别在原生 CI 构建，包内 Mach-O 的架构、最低系统和依赖扫描通过后才能归档。

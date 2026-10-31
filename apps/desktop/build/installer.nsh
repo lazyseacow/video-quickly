@@ -13,7 +13,8 @@
   StrCpy $RemoveWorkspace ${BST_UNCHECKED}
   ${GetParameters} $R0
   ClearErrors
-  ${GetOptions} $R0 "--delete-app-data" $R1
+  # Do not reuse the builder's broader --delete-app-data cleanup option.
+  ${GetOptions} $R0 "--delete-electron-workspace" $R1
   ${IfNot} ${Errors}
     StrCpy $RemoveWorkspace ${BST_CHECKED}
   ${EndIf}
@@ -56,6 +57,5 @@ FunctionEnd
   ${AndIf} $RemoveWorkspace == ${BST_CHECKED}
     SetShellVarContext current
     RMDir /r "$APPDATA\VideoQuickly-Electron"
-    RMDir /r "$LOCALAPPDATA\VideoQuickly-Electron"
   ${EndIf}
 !macroend

@@ -14,14 +14,15 @@
 
 `scripts/install-smoke.ps1` 仅允许在隔离 Windows Actions 账号执行；它拒绝已有 `VideoQuickly-Electron` 数据和验收安装目录。它会：
 
-1. 在含中文／空格目录安装本次 NSIS 包，核对实际 EXE 产品版本。
+1. 在含中文／空格目录安装本次 NSIS 包，核对实际 EXE 产品版本，并记录实际安装包的 SHA-256，收集时与归档的 setup.exe 再次比对。
 2. 使用安装包自带的 Node 创建真实项目、素材和待审检查点。
 3. 重复安装本包，启动已安装的 Electron，验证默认数据目录、媒体组件、真实预加载通信及关闭后执行组件退出。
 4. 继续原待审任务并确认已完成活动复用，实际导出 MP4，再次覆盖安装并复核窗口启动。
 5. 在所有执行器退出后记录 DB、存在的 WAL 和夹具素材的长度／摘要；默认静默卸载后核对内容未变，不打开 SQLite 改变 WAL。
-6. 重装后明确传入 `--delete-app-data` 卸载，核对新 Electron 工作区被移除。交互卸载界面默认不选删除，只有用户明确勾选才删除。
+6. 重装后明确传入 `--delete-electron-workspace` 卸载，核对默认 `%APPDATA%\VideoQuickly-Electron` 工作区被移除。交互卸载界面默认不选删除，只有用户明确勾选才删除。
+7. 在全新隔离账号的两个打包工具名称别名目录及 `%LOCALAPPDATA%\VideoQuickly-Electron` 创建本次专用哨兵，核对默认卸载和明确删除工作区后其长度与 SHA-256 均保持不变；若任何目录已存在则停止，结束只清理本次创建的哨兵目录。
 
-数据选择仅针对新的 Electron 数据目录，不触碰旧 Tauri 目录。系统凭据不写入可提交文件，安装运行夹具不调用真实供应商。
+支持的删除参数仅为 `--delete-electron-workspace`，只针对默认 Roaming 工作区，不使用打包工具会额外清理应用名称别名的通用 `--delete-app-data` 参数，也不删除同名 LocalAppData 目录或旧 Tauri 目录。系统凭据不写入可提交文件，安装运行夹具不调用真实供应商。
 
 ## 对应提交核对
 
