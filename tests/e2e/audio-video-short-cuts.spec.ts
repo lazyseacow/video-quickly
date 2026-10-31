@@ -3,7 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { writeFile } from 'node:fs/promises';
 import { promisify } from 'node:util';
 import { expect, test, type APIRequestContext, type Page, type TestInfo } from '@playwright/test';
-import { DEFAULT_AUDIO_MIX_SETTINGS, type AssetRecord, type ProjectDocument } from '@video-quickly/contracts';
+import { DEFAULT_AUDIO_MIX_SETTINGS, timeAtFrame, type AssetRecord, type ProjectDocument } from '@video-quickly/contracts';
 import { deleteShotRanges } from '../../packages/video/src/clip-edits';
 
 const execute = promisify(execFile);
@@ -21,26 +21,26 @@ function color(rgb: readonly number[]): Color {
   return rgb[1] > 160 && rgb[0] < 80 && rgb[2] < 80 ? 'green' : rgb[0] > 160 && rgb[1] < 80 && rgb[2] < 80 ? 'red' : rgb[2] > 160 && rgb[0] < 80 && rgb[1] < 80 ? 'blue' : 'other';
 }
 
-async function fixture(request: APIRequestContext, info: TestInfo, sourceFps = 30) {
+async function fixture(request: APIRequestContext, info: TestInfo, sourceFps = 30, sourceSeconds = 1) {
   const ffmpeg = process.env.VIDEO_QUICKLY_FFMPEG ?? 'ffmpeg', videoPath = info.outputPath(`green-red-blue-${sourceFps}fps.mp4`), voicePath = info.outputPath('voice.wav');
-  const redFrame = sourceFps / 2;
-  await execute(ffmpeg, ['-hide_banner', '-loglevel', 'error', '-y', '-f', 'lavfi', '-i', `color=c=0x00ff00:s=320x180:r=${sourceFps}:d=1`, '-vf', `drawbox=x=0:y=0:w=iw:h=ih:color=0xff0000:t=fill:enable='eq(n,${redFrame})',drawbox=x=0:y=0:w=iw:h=ih:color=0x0000ff:t=fill:enable='gte(n,${redFrame + 1})'`, '-frames:v', String(sourceFps), '-an', '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '12', '-g', '1', '-bf', '0', '-pix_fmt', 'yuv420p', videoPath]);
+  const redFrame = sourceFps / 2, durationUs = sourceSeconds * 1_000_000;
+  await execute(ffmpeg, ['-hide_banner', '-loglevel', 'error', '-y', '-f', 'lavfi', '-i', `color=c=0x00ff00:s=320x180:r=${sourceFps}:d=${sourceSeconds}`, '-vf', `drawbox=x=0:y=0:w=iw:h=ih:color=0xff0000:t=fill:enable='eq(n,${redFrame})',drawbox=x=0:y=0:w=iw:h=ih:color=0x0000ff:t=fill:enable='gte(n,${redFrame + 1})'`, '-frames:v', String(sourceFps * sourceSeconds), '-an', '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '12', '-g', '1', '-bf', '0', '-pix_fmt', 'yuv420p', videoPath]);
   const decoded = await execute(ffmpeg, ['-hide_banner', '-loglevel', 'error', '-i', videoPath, '-vf', `select='between(n,${redFrame - 1},${redFrame + 1})',scale=1:1`, '-frames:v', '3', '-fps_mode', 'passthrough', '-pix_fmt', 'rgb24', '-f', 'rawvideo', 'pipe:1'], { encoding: 'buffer', maxBuffer: 1024 * 1024 });
   const pixels = Buffer.from(decoded.stdout);
   expect(pixels).toHaveLength(9); expect([0, 3, 6].map(offset => color([...pixels.subarray(offset, offset + 3)]))).toEqual(['green', 'red', 'blue']);
-  await info.attach('source-colors-around-deletion.json', { body: JSON.stringify({ sourceFps, firstFrame: redFrame - 1, pixels: [...pixels] }), contentType: 'application/json' });
-  const rate = 48_000, data = Buffer.alloc(44 + rate * 2);
-  data.write('RIFF'); data.writeUInt32LE(data.length - 8, 4); data.write('WAVEfmt ', 8); data.writeUInt32LE(16, 16); data.writeUInt16LE(1, 20); data.writeUInt16LE(1, 22); data.writeUInt32LE(rate, 24); data.writeUInt32LE(rate * 2, 28); data.writeUInt16LE(2, 32); data.writeUInt16LE(16, 34); data.write('data', 36); data.writeUInt32LE(rate * 2, 40);
-  for (let sample = 0; sample < rate; sample++) data.writeInt16LE(Math.round(Math.sin(sample * Math.PI * 2 * 880 / rate) * 6000), 44 + sample * 2);
+  await info.attach('source-colors-around-deletion.json', { body: JSON.stringify({ sourceFps, sourceFrames: sourceFps * sourceSeconds, durationUs, firstFrame: redFrame - 1, pixels: [...pixels] }), contentType: 'application/json' });
+  const rate = 48_000, samples = rate * sourceSeconds, data = Buffer.alloc(44 + samples * 2);
+  data.write('RIFF'); data.writeUInt32LE(data.length - 8, 4); data.write('WAVEfmt ', 8); data.writeUInt32LE(16, 16); data.writeUInt16LE(1, 20); data.writeUInt16LE(1, 22); data.writeUInt32LE(rate, 24); data.writeUInt32LE(rate * 2, 28); data.writeUInt16LE(2, 32); data.writeUInt16LE(16, 34); data.write('data', 36); data.writeUInt32LE(data.length - 44, 40);
+  for (let sample = 0; sample < samples; sample++) data.writeInt16LE(Math.round(Math.sin(sample * Math.PI * 2 * 880 / rate) * 6000), 44 + sample * 2);
   await writeFile(voicePath, data);
   let project = await rpc<ProjectDocument>(request, 'project.create', { title: `一帧视频跳切与真实混音验收 ${sourceFps}fps ${randomUUID().slice(0, 8)}` });
   const video = await rpc<AssetRecord>(request, 'asset.import', { projectId: project.id, path: videoPath, kind: 'video' });
   const voice = await rpc<AssetRecord>(request, 'asset.import', { projectId: project.id, path: voicePath, kind: 'audio' });
   project = (await rpc<{ project: ProjectDocument }>(request, 'project.get', { projectId: project.id })).project;
-  project = await rpc<ProjectDocument>(request, 'project.update', { projectId: project.id, revision: project.revision, patch: { profile: { ...project.profile, width: 640, height: 360, frameRate: { numerator: 30, denominator: 1 }, previewScale: 1 }, audioMix: { ...DEFAULT_AUDIO_MIX_SETTINGS, loudness: { ...DEFAULT_AUDIO_MIX_SETTINGS.loudness, enabled: false } }, shots: [{ id: 'short-cut', title: '删除红色一帧', narration: '', visualPrompt: '', durationUs: 1_000_000, sourceInUs: 0, audioInUs: 0, videoInUs: 0, sceneInUs: 0, sceneDurationUs: 1_000_000, audioAssetId: voice.id, videoAssetId: video.id, animation: { panX: 0, panY: 0, zoom: 1, transition: 'cut' }, captionTrack: { timeBase: 'source', alignment: 'manual', cues: [] } }] } });
+  project = await rpc<ProjectDocument>(request, 'project.update', { projectId: project.id, revision: project.revision, patch: { profile: { ...project.profile, width: 640, height: 360, frameRate: { numerator: 30, denominator: 1 }, previewScale: 1 }, audioMix: { ...DEFAULT_AUDIO_MIX_SETTINGS, loudness: { ...DEFAULT_AUDIO_MIX_SETTINGS.loudness, enabled: false } }, shots: [{ id: 'short-cut', title: '删除红色一帧', narration: '', visualPrompt: '', durationUs, sourceInUs: 0, audioInUs: 0, videoInUs: 0, sceneInUs: 0, sceneDurationUs: durationUs, audioAssetId: voice.id, videoAssetId: video.id, animation: { panX: 0, panY: 0, zoom: 1, transition: 'cut' }, captionTrack: { timeBase: 'source', alignment: 'manual', cues: [] } }] } });
   const edited = deleteShotRanges(project, 'short-cut', [{ startUs: 500_000, endUs: 533_333 }], project.profile.frameRate, [video, voice], () => randomUUID());
   project = await rpc<ProjectDocument>(request, 'project.update', { projectId: project.id, revision: project.revision, patch: { shots: edited.shots, clipEditSources: edited.clipEditSources, clipEditPlans: edited.clipEditPlans } });
-  expect(project.shots[0].durationUs).toBe(966_667); expect(project.clipEditPlans![0].spans.map(span => [span.durationUs, span.videoInUs])).toEqual([[500_000, 0], [466_667, 533_333]]);
+  expect(project.shots[0].durationUs).toBe(durationUs - 33_333); expect(project.clipEditPlans![0].spans.map(span => [span.durationUs, span.videoInUs])).toEqual([[500_000, 0], [durationUs - 533_333, 533_333]]);
   return { project, voice };
 }
 
@@ -68,7 +68,10 @@ for (const readbackDelayMs of [0, 180]) {
 test(`never paints a deleted one-frame video gap during real playback or scrubbing while the mixed WAV follows program time${readbackDelayMs ? ' with a slow Canvas readback' : ''}`, async ({ page, request }, info) => {
   test.setTimeout(60_000);
   const errors: string[] = []; page.on('pageerror', error => errors.push(error.message)); page.on('console', message => { if (message.type() === 'error') errors.push(message.text()); });
-  const { project, voice } = await fixture(request, info);
+  // The slow case needs real playback time for 20 observations even when a
+  // loaded runner presents far fewer than 30 frames per second.
+  const { project, voice } = await fixture(request, info, 30, readbackDelayMs ? 3 : 1);
+  const clockWindowEndMs = Math.round((project.shots[0].durationUs - timeAtFrame(5, project.profile.frameRate)) / 1000);
   await page.goto('/'); await expect(page).toHaveTitle(/Video Quickly/); await page.getByRole('button', { name: `打开项目：${project.title}`, exact: true }).click();
   await expect(page.getByLabel('镜头标题', { exact: true })).toHaveValue('删除红色一帧');
   await expect(page.locator('.preview-panel .prepared-mix-preview')).toHaveAttribute('data-status', 'ready', { timeout: 20_000 });
@@ -76,7 +79,7 @@ test(`never paints a deleted one-frame video gap during real playback or scrubbi
   const canvas = page.locator('.preview-frame canvas'), audio = page.locator('.preview-panel audio[data-audio-role="处理后混音"]');
   await expect(audio).toHaveCount(1);
   expect(await audio.evaluate((element: HTMLAudioElement) => new URL(element.src).searchParams.get('path'))).not.toBe(voice.path);
-  expect(await audio.evaluate((element: HTMLAudioElement) => element.duration)).toBeCloseTo(966_667 / 1_000_000, 3);
+  expect(await audio.evaluate((element: HTMLAudioElement) => element.duration)).toBeCloseTo(project.shots[0].durationUs / 1_000_000, 3);
   const pixel = () => canvas.evaluate((element: HTMLCanvasElement) => [...element.getContext('2d')!.getImageData(Math.floor(element.width / 2), Math.floor(element.height / 2), 1, 1).data].slice(0, 3));
   await expect.poll(async () => color(await pixel())).toBe('green');
   await seek(page, 14); await expect.poll(async () => color(await pixel())).toBe('green');
@@ -150,11 +153,11 @@ test(`never paints a deleted one-frame video gap during real playback or scrubbi
   expect(paints.filter(value => value.color === 'red'), 'A deleted source frame reached the production Canvas').toEqual([]);
   const transitions = paints.map(value => value.color).filter((value, index, values) => !index || value !== values[index - 1]);
   expect(transitions).toEqual(['green', 'blue']);
-  const playing = paints.filter(value => !value.paused && value.uiMs >= 100 && value.uiMs <= 800); expect(playing.length).toBeGreaterThanOrEqual(8);
+  const playing = paints.filter(value => !value.paused && value.uiMs >= 100 && value.uiMs <= clockWindowEndMs); expect(playing.length).toBeGreaterThanOrEqual(8);
   if (readbackDelayMs) expect(Math.max(...playing.map(value => value.readbackMs))).toBeGreaterThanOrEqual(readbackDelayMs);
   // Compare live audio with the frame position actually committed for display,
   // keeping every pre-producer Canvas/clock sample above as diagnostic evidence.
-  const committedPlaying = commits.filter(value => !value.paused && value.uiMs >= 100 && value.uiMs <= 800); expect(committedPlaying.length).toBeGreaterThanOrEqual(8);
+  const committedPlaying = commits.filter(value => !value.paused && value.uiMs >= 100 && value.uiMs <= clockWindowEndMs); expect(committedPlaying.length).toBeGreaterThanOrEqual(8);
   expect(Math.max(...committedPlaying.map(value => Math.abs(value.uiMs - value.audioMs)))).toBeLessThan(120);
   await expect.poll(async () => color(await pixel())).toBe('blue'); await page.screenshot({ path: info.outputPath('short-gap-playback-blue.png') });
   expect(await exportBoundaryColors(request, project, info)).toEqual(['green', 'blue', 'blue']);
