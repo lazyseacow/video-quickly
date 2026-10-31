@@ -75,7 +75,8 @@ for (const width of [1536, 600]) test(`pans from blank canvas with the left butt
 });
 
 test('keeps a new pointer pan when fitting finishes before the next animation frame', async ({ page, request }) => {
-  await page.clock.install();
+  const clockOrigin = new Date('2026-01-01T00:00:00Z');
+  await page.clock.install({ time: clockOrigin });
   await page.setViewportSize({ width: 1536, height: 960 });
   const project = await fixture(request, '适配与指针操作顺序'); await open(page, project.title);
   await page.setViewportSize({ width: 600, height: 960 });
@@ -89,7 +90,12 @@ test('keeps a new pointer pan when fitting finishes before the next animation fr
   await page.mouse.move(start.x, start.y); await page.mouse.down(); await page.mouse.move(start.x - 120, start.y - 50, { steps: 8 }); await page.mouse.up();
   // Pause the browser's real rendering boundary, without replacing fitView or
   // its node queue. Input events still arrive before that next frame.
-  await page.clock.pauseAt(new Date(await page.evaluate(() => Date.now()) + 100));
+  // This target exceeds the entire test deadline. A delayed protocol command
+  // cannot arrive after it while this test is still allowed to run.
+  const pauseTime = new Date(clockOrigin.getTime() + 2 * test.info().timeout);
+  // Reproduce a slow protocol delivery without sleeping inside the fake clock.
+  await new Promise(resolve => setTimeout(resolve, 180));
+  await page.clock.pauseAt(pauseTime);
   await fit.dispatchEvent('click');
   const before = await viewport();
   await page.mouse.move(start.x, start.y); await page.mouse.down(); await page.mouse.move(start.x + 90, start.y + 60, { steps: 8 }); await page.mouse.up();

@@ -8,7 +8,9 @@ import { deleteShotRanges } from '../../packages/video/src/clip-edits';
 
 const execute = promisify(execFile);
 type Color = 'green' | 'red' | 'blue' | 'other';
-interface PaintSample { wallMs: number; uiMs: number; audioMs: number; paused: boolean; color: Color; rgb: number[]; readbackMs: number }
+interface ClockSample { wallMs: number; uiMs: number; audioMs: number; paused: boolean }
+interface PaintSample extends ClockSample { color: Color; rgb: number[]; readbackMs: number; frameTimeMs: number }
+interface CommittedClockSample extends ClockSample { precedingPaintIndex: number }
 
 async function rpc<T>(request: APIRequestContext, method: string, params: unknown = {}): Promise<T> {
   const response = await request.post('/__desktop_rpc', { data: { method, params } }), payload = await response.json();
@@ -84,8 +86,19 @@ test(`never paints a deleted one-frame video gap during real playback or scrubbi
   await page.screenshot({ path: info.outputPath('short-gap-scrub-blue.png') });
   await seek(page, 0); await expect.poll(async () => color(await pixel())).toBe('green');
   const capture = await canvas.evaluateHandle((element: HTMLCanvasElement, readbackDelayMs) => {
-    const startedAt = performance.now(), state = { samples: [] as PaintSample[], redImage: '', active: true, request: 0, delayed: false };
+    const startedAt = performance.now(), state = { samples: [] as PaintSample[], commits: [] as CommittedClockSample[], redImage: '', active: true, request: 0, readbackRequest: 0, delayed: false };
     const context = element.getContext('2d')!, readPixel = context.getImageData.bind(context);
+    let framePixel = { rgb: [] as number[], readbackMs: 0, frameTimeMs: 0 };
+    const ruler = document.querySelector<HTMLElement>('[role="slider"][aria-label="预览播放位置"]');
+    if (!ruler) throw new Error('Preview position is missing');
+    function clocks(): ClockSample {
+      const audio = document.querySelector<HTMLAudioElement>('.preview-panel audio[data-audio-role="处理后混音"]');
+      return { wallMs: performance.now() - startedAt, uiMs: Number(ruler!.getAttribute('aria-valuenow')), audioMs: (audio?.currentTime ?? 0) * 1000, paused: audio?.paused ?? true };
+    }
+    // This observer runs after React commits the producer's new position.
+    // The RAF sampler was registered first and can still see the previous UI.
+    const observer = new MutationObserver(() => { if (state.active) state.commits.push({ ...clocks(), precedingPaintIndex: state.samples.length - 1 }); });
+    observer.observe(ruler, { attributes: true, attributeFilter: ['aria-valuenow'] });
     // Real GPU readback may block while the media clock keeps advancing. Delay
     // one observation to exercise that boundary without changing its clocks.
     function pixel() {
@@ -97,29 +110,38 @@ test(`never paints a deleted one-frame video gap during real playback or scrubbi
       }
       return readPixel(Math.floor(element.width / 2), Math.floor(element.height / 2), 1, 1);
     }
-    function sample() {
+    function readback(frameTimeMs: number) {
       if (!state.active) return;
-      const audio = document.querySelector<HTMLAudioElement>('.preview-panel audio[data-audio-role="处理后混音"]');
-      const ruler = document.querySelector<HTMLElement>('[role="slider"][aria-label="预览播放位置"]');
-      const wallMs = performance.now() - startedAt, uiMs = Number(ruler?.getAttribute('aria-valuenow')), audioMs = (audio?.currentTime ?? 0) * 1000, paused = audio?.paused ?? true;
       const readbackStartedAt = performance.now();
       const rgb = [...pixel().data].slice(0, 3), readbackMs = performance.now() - readbackStartedAt;
+      framePixel = { rgb, readbackMs, frameTimeMs };
+    }
+    function sample(frameTimeMs: number) {
+      if (!state.active) return;
+      if (framePixel.frameTimeMs !== frameTimeMs) throw new Error('Canvas and clock observations must belong to the same animation frame');
+      const { rgb, readbackMs } = framePixel;
+      const clock = clocks();
       const color: Color = rgb[1] > 160 && rgb[0] < 80 && rgb[2] < 80 ? 'green' : rgb[0] > 160 && rgb[1] < 80 && rgb[2] < 80 ? 'red' : rgb[2] > 160 && rgb[0] < 80 && rgb[1] < 80 ? 'blue' : 'other';
-      state.samples.push({ wallMs, color, rgb, uiMs, audioMs, paused, readbackMs });
+      state.samples.push({ ...clock, color, rgb, readbackMs, frameTimeMs });
       if (color === 'red' && !state.redImage) state.redImage = element.toDataURL('image/png');
+      // Separate the readback workload from the observation callback. One slow
+      // readback reproduces a frame gap before this pre-producer observation.
+      state.readbackRequest = requestAnimationFrame(readback);
       state.request = requestAnimationFrame(sample);
     }
+    state.readbackRequest = requestAnimationFrame(readback);
     state.request = requestAnimationFrame(sample);
-    return { state, stop() { state.active = false; cancelAnimationFrame(state.request); } };
+    return { state, stop() { state.active = false; cancelAnimationFrame(state.readbackRequest); cancelAnimationFrame(state.request); observer.disconnect(); } };
   }, readbackDelayMs);
-  let paints: PaintSample[] = [];
+  let paints: PaintSample[] = [], commits: CommittedClockSample[] = [];
   try {
     await page.getByRole('button', { name: '播放预览', exact: true }).click(); await expect(page.getByRole('button', { name: '暂停预览', exact: true })).toBeVisible();
     await expect.poll(() => audio.evaluate((element: HTMLAudioElement) => element.currentTime)).toBeGreaterThan(.05);
     await expect(page.getByRole('button', { name: '播放预览', exact: true })).toBeVisible({ timeout: 5000 });
   } finally {
-    const captured = await capture.evaluate(value => { value.stop(); return value.state; }); paints = captured.samples;
+    const captured = await capture.evaluate(value => { value.stop(); return value.state; }); paints = captured.samples; commits = captured.commits;
     await info.attach('actual-canvas-and-mixed-audio-clock.json', { body: JSON.stringify(paints, null, 2), contentType: 'application/json' });
+    await info.attach('committed-ui-and-mixed-audio-clock.json', { body: JSON.stringify(commits, null, 2), contentType: 'application/json' });
     if (captured.redImage) await info.attach('deleted-red-frame-painted.png', { body: Buffer.from(captured.redImage.split(',')[1], 'base64'), contentType: 'image/png' });
     await capture.dispose();
   }
@@ -130,7 +152,10 @@ test(`never paints a deleted one-frame video gap during real playback or scrubbi
   expect(transitions).toEqual(['green', 'blue']);
   const playing = paints.filter(value => !value.paused && value.uiMs >= 100 && value.uiMs <= 800); expect(playing.length).toBeGreaterThanOrEqual(8);
   if (readbackDelayMs) expect(Math.max(...playing.map(value => value.readbackMs))).toBeGreaterThanOrEqual(readbackDelayMs);
-  expect(Math.max(...playing.map(value => Math.abs(value.uiMs - value.audioMs)))).toBeLessThan(120);
+  // Compare live audio with the frame position actually committed for display,
+  // keeping every pre-producer Canvas/clock sample above as diagnostic evidence.
+  const committedPlaying = commits.filter(value => !value.paused && value.uiMs >= 100 && value.uiMs <= 800); expect(committedPlaying.length).toBeGreaterThanOrEqual(8);
+  expect(Math.max(...committedPlaying.map(value => Math.abs(value.uiMs - value.audioMs)))).toBeLessThan(120);
   await expect.poll(async () => color(await pixel())).toBe('blue'); await page.screenshot({ path: info.outputPath('short-gap-playback-blue.png') });
   expect(await exportBoundaryColors(request, project, info)).toEqual(['green', 'blue', 'blue']);
   expect(errors).toEqual([]); await expect(page.locator('vite-error-overlay')).toHaveCount(0);

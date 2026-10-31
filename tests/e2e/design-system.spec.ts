@@ -51,13 +51,19 @@ test('reads dialog timing from shared CSS roles and responds to reduced motion',
   await page.emulateMedia({ reducedMotion: 'no-preference' });
   // GSAP captures Date.now and its frame scheduler when the app loads.
   // Install the clock first so pausing and advancing time drive that same ticker.
-  await page.clock.install();
+  const clockOrigin = new Date('2026-01-01T00:00:00Z');
+  await page.clock.install({ time: clockOrigin });
   await openApp(page);
   // Ten percent speed makes the actual production entrance observable, without
   // exporting a second GSAP instance or replacing its animation implementation.
   await page.evaluate(() => document.documentElement.style.setProperty('--motion-enter', '2400ms'));
   const create = page.getByRole('button', { name: '新建项目', exact: true });
-  await page.clock.pauseAt(new Date(await page.evaluate(() => Date.now()) + 100));
+  // This target exceeds the entire test deadline. A delayed protocol command
+  // cannot arrive after it while this test is still allowed to run.
+  const pauseTime = new Date(clockOrigin.getTime() + 2 * test.info().timeout);
+  // Reproduce a slow protocol delivery without sleeping inside the fake clock.
+  await new Promise(resolve => setTimeout(resolve, 180));
+  await page.clock.pauseAt(pauseTime);
   await create.click();
   const dialog = page.getByRole('dialog', { name: '新建视频项目', exact: true });
   await expect(dialog.locator('.dialog__surface')).toHaveCSS('opacity', '0');
