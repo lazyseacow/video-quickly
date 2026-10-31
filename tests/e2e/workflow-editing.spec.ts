@@ -39,7 +39,11 @@ for (const width of [1536, 600]) test(`pans from blank canvas with the left butt
   await page.locator('.react-flow__pane').scrollIntoViewIfNeeded();
   await expect(node(page, 'b')).toBeVisible();
   const viewport = () => page.locator('.react-flow__viewport').evaluate(element => { const matrix = new DOMMatrixReadOnly(getComputedStyle(element).transform); return { x: matrix.e, y: matrix.f, zoom: matrix.a }; });
-  if (width === 600) { await page.getByRole('button', { name: '适应全部步骤', exact: true }).click(); await expect.poll(async () => (await viewport()).zoom).toBeLessThan(1); }
+  if (width === 600) {
+    await page.getByRole('button', { name: '适应全部步骤', exact: true }).click();
+    await expect(node(page, 'a')).toBeInViewport({ ratio: 1 }); await expect(node(page, 'b')).toBeInViewport({ ratio: 1 });
+    await expect.poll(async () => (await viewport()).zoom).toBeLessThan(1);
+  }
   const pane = await page.locator('.react-flow__pane').boundingBox(); if (!pane) throw new Error('流程画布不可见');
   const start = { x: pane.x + pane.width / 2, y: pane.y + 100 };
   const before = await viewport();
@@ -68,6 +72,35 @@ for (const width of [1536, 600]) test(`pans from blank canvas with the left butt
   await expect.poll(async () => (await viewport()).zoom).toBeLessThan(before.zoom);
   await expect(page.locator('vite-error-overlay')).toHaveCount(0);
   expect(errors).toEqual([]);
+});
+
+test('keeps a new pointer pan when fitting finishes before the next animation frame', async ({ page, request }) => {
+  await page.clock.install();
+  await page.setViewportSize({ width: 1536, height: 960 });
+  const project = await fixture(request, '适配与指针操作顺序'); await open(page, project.title);
+  await page.setViewportSize({ width: 600, height: 960 });
+  await page.locator('.react-flow__pane').scrollIntoViewIfNeeded();
+  const viewport = () => page.locator('.react-flow__viewport').evaluate(element => { const matrix = new DOMMatrixReadOnly(getComputedStyle(element).transform); return { x: matrix.e, y: matrix.f, zoom: matrix.a }; });
+  const fit = page.getByRole('button', { name: '适应全部步骤', exact: true });
+  await fit.click();
+  await expect(node(page, 'a')).toBeInViewport({ ratio: 1 }); await expect(node(page, 'b')).toBeInViewport({ ratio: 1 });
+  const pane = await page.locator('.react-flow__pane').boundingBox(); if (!pane) throw new Error('流程画布不可见');
+  const start = { x: pane.x + pane.width / 2, y: pane.y + 100 };
+  await page.mouse.move(start.x, start.y); await page.mouse.down(); await page.mouse.move(start.x - 120, start.y - 50, { steps: 8 }); await page.mouse.up();
+  // Pause the browser's real rendering boundary, without replacing fitView or
+  // its node queue. Input events still arrive before that next frame.
+  await page.clock.pauseAt(new Date(await page.evaluate(() => Date.now()) + 100));
+  await fit.dispatchEvent('click');
+  const before = await viewport();
+  await page.mouse.move(start.x, start.y); await page.mouse.down(); await page.mouse.move(start.x + 90, start.y + 60, { steps: 8 }); await page.mouse.up();
+  await page.clock.runFor(34);
+  await expect.poll(async () => Math.round((await viewport()).x - before.x)).toBe(90);
+  await expect.poll(async () => Math.round((await viewport()).y - before.y)).toBe(60);
+  expect((await viewport()).zoom).toBeCloseTo(before.zoom, 5);
+  expect((await current(request, project.id)).workflow).toEqual(project.workflow);
+  await fit.focus(); await expect(fit).toBeFocused(); await fit.press('Enter');
+  await expect(node(page, 'a')).toBeInViewport({ ratio: 1 }); await expect(node(page, 'b')).toBeInViewport({ ratio: 1 });
+  await expect(fit).toBeFocused();
 });
 
 test('recovers unfinished graph input without saving or starting an agent, then commits the corrected graph', async ({ page, request }) => {

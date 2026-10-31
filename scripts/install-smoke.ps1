@@ -64,7 +64,8 @@ try {
   $taskDataBeforeUninstall = @(Get-DataRetentionSnapshot $taskRetainedFiles)
   $taskImageBefore = $taskDataBeforeUninstall | Where-Object { $_.role -eq 'fixture-image' }
   if ($taskImageBefore.sha256 -cne $taskSavedFixture.asset.sha256 -or $taskImageBefore.bytes -ne $taskSavedFixture.asset.size) { throw '卸载前夹具素材已变化' }
-  $taskUninstall = Join-Path $taskInstall 'Uninstall Video Quickly.exe'
+  $taskUninstall = Join-Path $taskInstall 'Uninstall video-quickly.exe'
+  if (-not (Test-Path -LiteralPath $taskUninstall)) { throw '安装后缺少卸载程序' }
   $taskRemoved = Start-Process -FilePath $taskUninstall -ArgumentList "/S _?=$taskInstall" -WindowStyle Hidden -PassThru -Wait
   if ($taskRemoved.ExitCode -ne 0) { throw '卸载失败' }
   if (Test-Path -LiteralPath (Join-Path $taskInstall 'video-quickly.exe')) { throw '卸载后客户端文件仍存在' }

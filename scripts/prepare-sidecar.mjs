@@ -44,6 +44,7 @@ const fromPdf=await copyModule('pdf-parse',fromIntegrations);
 await copyModule('pdfjs-dist',fromPdf);
 await writeFile(join(stage,'package.json'),JSON.stringify({name:'video-quickly-runtime',version:'0.1.0',private:true,type:'module'}));
 await cp(runtime,join(stage,'runtime.mjs'));
+await cp(join(root,'packages/runtime/dist/pdf-worker.mjs'),join(stage,'pdf-worker.mjs'));
 const mediaRoot=process.env.VIDEO_QUICKLY_MEDIA_DIR;
 if(mediaRoot){
   const mediaSource=resolve(mediaRoot);

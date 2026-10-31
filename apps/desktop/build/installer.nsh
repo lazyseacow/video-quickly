@@ -2,8 +2,12 @@
 !include "LogicLib.nsh"
 !include "FileFunc.nsh"
 
-Var RemoveWorkspace
-Var RemoveWorkspaceCheckbox
+# electron-builder compiles the uninstaller and installer in separate passes.
+# These variables are only used by the uninstaller callbacks below.
+!ifdef BUILD_UNINSTALLER
+  Var RemoveWorkspace
+  Var RemoveWorkspaceCheckbox
+!endif
 
 !macro customUnInit
   StrCpy $RemoveWorkspace ${BST_UNCHECKED}

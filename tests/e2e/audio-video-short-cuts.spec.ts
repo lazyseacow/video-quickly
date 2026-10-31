@@ -8,7 +8,7 @@ import { deleteShotRanges } from '../../packages/video/src/clip-edits';
 
 const execute = promisify(execFile);
 type Color = 'green' | 'red' | 'blue' | 'other';
-interface PaintSample { wallMs: number; uiMs: number; audioMs: number; paused: boolean; color: Color; rgb: number[] }
+interface PaintSample { wallMs: number; uiMs: number; audioMs: number; paused: boolean; color: Color; rgb: number[]; readbackMs: number }
 
 async function rpc<T>(request: APIRequestContext, method: string, params: unknown = {}): Promise<T> {
   const response = await request.post('/__desktop_rpc', { data: { method, params } }), payload = await response.json();
@@ -62,7 +62,8 @@ async function seek(page: Page, frame: number) {
   await expect(ruler).toHaveAttribute('aria-valuenow', String(Math.round(frame * 1000 / 30)));
 }
 
-test('never paints a deleted one-frame video gap during real playback or scrubbing while the mixed WAV follows program time', async ({ page, request }, info) => {
+for (const readbackDelayMs of [0, 180]) {
+test(`never paints a deleted one-frame video gap during real playback or scrubbing while the mixed WAV follows program time${readbackDelayMs ? ' with a slow Canvas readback' : ''}`, async ({ page, request }, info) => {
   test.setTimeout(60_000);
   const errors: string[] = []; page.on('pageerror', error => errors.push(error.message)); page.on('console', message => { if (message.type() === 'error') errors.push(message.text()); });
   const { project, voice } = await fixture(request, info);
@@ -82,21 +83,35 @@ test('never paints a deleted one-frame video gap during real playback or scrubbi
   await expect.poll(() => audio.evaluate((element: HTMLAudioElement) => element.currentTime)).toBeCloseTo(.5, 2);
   await page.screenshot({ path: info.outputPath('short-gap-scrub-blue.png') });
   await seek(page, 0); await expect.poll(async () => color(await pixel())).toBe('green');
-  const capture = await canvas.evaluateHandle((element: HTMLCanvasElement) => {
-    const startedAt = performance.now(), state = { samples: [] as PaintSample[], redImage: '', active: true, request: 0 };
+  const capture = await canvas.evaluateHandle((element: HTMLCanvasElement, readbackDelayMs) => {
+    const startedAt = performance.now(), state = { samples: [] as PaintSample[], redImage: '', active: true, request: 0, delayed: false };
+    const context = element.getContext('2d')!, readPixel = context.getImageData.bind(context);
+    // Real GPU readback may block while the media clock keeps advancing. Delay
+    // one observation to exercise that boundary without changing its clocks.
+    function pixel() {
+      const audio = document.querySelector<HTMLAudioElement>('.preview-panel audio[data-audio-role="处理后混音"]');
+      if (readbackDelayMs && !state.delayed && audio && !audio.paused && audio.currentTime >= .3) {
+        state.delayed = true;
+        const until = performance.now() + readbackDelayMs;
+        while (performance.now() < until) { /* synchronous GPU readback boundary */ }
+      }
+      return readPixel(Math.floor(element.width / 2), Math.floor(element.height / 2), 1, 1);
+    }
     function sample() {
       if (!state.active) return;
-      const rgb = [...element.getContext('2d')!.getImageData(Math.floor(element.width / 2), Math.floor(element.height / 2), 1, 1).data].slice(0, 3);
-      const color: Color = rgb[1] > 160 && rgb[0] < 80 && rgb[2] < 80 ? 'green' : rgb[0] > 160 && rgb[1] < 80 && rgb[2] < 80 ? 'red' : rgb[2] > 160 && rgb[0] < 80 && rgb[1] < 80 ? 'blue' : 'other';
       const audio = document.querySelector<HTMLAudioElement>('.preview-panel audio[data-audio-role="处理后混音"]');
       const ruler = document.querySelector<HTMLElement>('[role="slider"][aria-label="预览播放位置"]');
-      state.samples.push({ wallMs: performance.now() - startedAt, color, rgb, uiMs: Number(ruler?.getAttribute('aria-valuenow')), audioMs: (audio?.currentTime ?? 0) * 1000, paused: audio?.paused ?? true });
+      const wallMs = performance.now() - startedAt, uiMs = Number(ruler?.getAttribute('aria-valuenow')), audioMs = (audio?.currentTime ?? 0) * 1000, paused = audio?.paused ?? true;
+      const readbackStartedAt = performance.now();
+      const rgb = [...pixel().data].slice(0, 3), readbackMs = performance.now() - readbackStartedAt;
+      const color: Color = rgb[1] > 160 && rgb[0] < 80 && rgb[2] < 80 ? 'green' : rgb[0] > 160 && rgb[1] < 80 && rgb[2] < 80 ? 'red' : rgb[2] > 160 && rgb[0] < 80 && rgb[1] < 80 ? 'blue' : 'other';
+      state.samples.push({ wallMs, color, rgb, uiMs, audioMs, paused, readbackMs });
       if (color === 'red' && !state.redImage) state.redImage = element.toDataURL('image/png');
       state.request = requestAnimationFrame(sample);
     }
     state.request = requestAnimationFrame(sample);
     return { state, stop() { state.active = false; cancelAnimationFrame(state.request); } };
-  });
+  }, readbackDelayMs);
   let paints: PaintSample[] = [];
   try {
     await page.getByRole('button', { name: '播放预览', exact: true }).click(); await expect(page.getByRole('button', { name: '暂停预览', exact: true })).toBeVisible();
@@ -114,11 +129,13 @@ test('never paints a deleted one-frame video gap during real playback or scrubbi
   const transitions = paints.map(value => value.color).filter((value, index, values) => !index || value !== values[index - 1]);
   expect(transitions).toEqual(['green', 'blue']);
   const playing = paints.filter(value => !value.paused && value.uiMs >= 100 && value.uiMs <= 800); expect(playing.length).toBeGreaterThanOrEqual(8);
+  if (readbackDelayMs) expect(Math.max(...playing.map(value => value.readbackMs))).toBeGreaterThanOrEqual(readbackDelayMs);
   expect(Math.max(...playing.map(value => Math.abs(value.uiMs - value.audioMs)))).toBeLessThan(120);
   await expect.poll(async () => color(await pixel())).toBe('blue'); await page.screenshot({ path: info.outputPath('short-gap-playback-blue.png') });
   expect(await exportBoundaryColors(request, project, info)).toEqual(['green', 'blue', 'blue']);
   expect(errors).toEqual([]); await expect(page.locator('vite-error-overlay')).toHaveCount(0);
 });
+}
 
 test('uses the containing native frame for a 24-to-30fps EDL start and matches actual export sampling', async ({ page, request }, info) => {
   test.setTimeout(60_000);
