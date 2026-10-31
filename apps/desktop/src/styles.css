@@ -38,7 +38,8 @@ button svg { stroke-width: 1.75px; }
 .app { height: 100%; display: grid; grid-template-columns: 174px minmax(0, 1fr); }
 .sidebar { background: var(--shell); border-right: 1px solid var(--border); display: flex; flex-direction: column; padding: var(--space-6) var(--space-3) var(--space-4); }
 .brand { display: flex; gap: var(--space-3); align-items: center; padding: 0 var(--space-2) var(--space-8); }
-.brand-mark { width: 31px; height: 31px; border-radius: var(--radius-icon); background: var(--accent); display: grid; place-items: center; color: var(--accent-contrast); }
+.brand-symbol { display: block; flex-shrink: 0; background: currentColor; mask: url('./assets/logo.svg') center / contain no-repeat; }
+.brand-mark { width: 31px; height: 31px; display: grid; place-items: center; color: var(--text); }
 .brand strong { display: block; font-weight: var(--font-weight-semibold); letter-spacing: var(--letter-spacing-heading); font-size: var(--text-size-body); line-height: var(--line-height-number); }
 .brand small { color: var(--text-subtle); letter-spacing: var(--letter-spacing-label); font-size: var(--text-size-badge); }
 .nav-group { display: grid; gap: var(--space-1); }
@@ -348,7 +349,7 @@ button svg { stroke-width: 1.75px; }
 .asset-card h3 { font-size: var(--text-size-label); margin-bottom: var(--space-2); }
 .asset-card p { font-size: var(--text-size-micro); color: var(--text-subtle); overflow-wrap: anywhere; line-height: var(--line-height-prose); }
 .welcome-loading { display: grid; place-content: center; height: 100vh; gap: var(--space-4); text-align: center; color: var(--text-secondary); }
-.welcome-loading svg { margin: auto; color: var(--accent); }
+.welcome-loading > .brand-symbol { margin: auto; color: var(--text); }
 .spin { animation: spin var(--motion-spinner) linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
 

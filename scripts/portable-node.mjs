@@ -2,7 +2,7 @@ import { execFileSync } from 'node:child_process';
 import { readFile, stat } from 'node:fs/promises';
 import { join } from 'node:path';
 import { assertDarwinNodeSelfContained } from './node-portability.mjs';
-import { verifiedDownload } from './verified-download.mjs';
+import { sha256File, verifiedDownload } from './verified-download.mjs';
 
 export async function preparePortableNode(root) {
   const manifest = JSON.parse(await readFile(join(root, 'scripts/node-manifest.json'), 'utf8'));
@@ -16,6 +16,7 @@ export async function preparePortableNode(root) {
   execFileSync('/usr/bin/tar', ['-xzf', archive, '-C', tools], { stdio: 'pipe' });
   const executable = join(directory, 'bin/node');
   await stat(executable); await stat(join(directory, 'LICENSE'));
+  if (await sha256File(executable) !== build.binarySha256) throw new Error('Node 实际二进制摘要不匹配');
   assertDarwinNodeSelfContained(execFileSync('/usr/bin/otool', ['-L', executable], { encoding: 'utf8' }));
   const actual = JSON.parse(execFileSync(executable, ['-p', 'JSON.stringify({version:process.version,architecture:process.arch})'], { encoding: 'utf8' }));
   if (actual.version !== manifest.version || actual.architecture !== process.arch) throw new Error('便携 Node 的实际版本或架构不匹配');

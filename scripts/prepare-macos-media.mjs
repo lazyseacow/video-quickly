@@ -17,6 +17,7 @@ export async function prepareMacosMedia(root) {
     if (entries.length !== 1 || entries[0] !== name) throw new Error('媒体归档包含预期二进制以外的文件');
     execFileSync('/usr/bin/unzip', ['-q', '-o', '-j', archive, '-d', bin]);
     const executable = join(bin, name); await chmod(executable, 0o755);
+    if (await sha256File(executable) !== build[name].binarySha256) throw new Error('媒体实际二进制摘要不匹配');
     const libraries = execFileSync('/usr/bin/otool', ['-L', executable], { encoding: 'utf8' });
     assertDarwinBinarySelfContained(libraries, name);
     const version = execFileSync(executable, ['-version'], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });

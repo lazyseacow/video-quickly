@@ -1,13 +1,12 @@
-import { app, BrowserWindow, dialog, ipcMain, Menu, protocol, session, shell } from 'electron';
+import { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, protocol, session, shell, Tray } from 'electron';
 import { AsyncEntry } from '@napi-rs/keyring';
-import { existsSync } from 'node:fs';
 import { mkdir, stat } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { RuntimeController } from './runtime-controller.mjs';
 import { createCredentialHost } from './credentials.mjs';
 import { windowsJobContainer } from './windows-job.mjs';
-import { applicationId, applicationOrigin, externalWebUrl, fileInside, pathDialogOptions, rendererIsTrusted, serveFile, validPath, validRuntimeRequest, workspaceDirectory } from './platform.mjs';
+import { applicationId, applicationOrigin, externalWebUrl, fileInside, pathDialogOptions, rendererIsTrusted, runtimeMediaEnvironment, serveFile, validPath, validRuntimeRequest, workspaceDirectory } from './platform.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const repository = resolve(here, '../../..');
@@ -24,6 +23,8 @@ let window;
 let controller;
 let exiting = false;
 let shutdown;
+export let tray;
+export let trayMenu;
 
 function sendEvent(event) {
   if (window && !window.isDestroyed() && !window.webContents.isDestroyed()) window.webContents.send('vq:runtime-event', event);
@@ -124,12 +125,10 @@ async function launch() {
   });
   const sidecar = app.isPackaged ? join(process.resourcesPath, 'sidecar') : join(repository, '.generated', 'sidecar');
   const media = join(sidecar, 'media');
-  const bundledFfmpeg = join(media, process.platform === 'win32' ? 'ffmpeg.exe' : 'ffmpeg');
-  const bundledFfprobe = join(media, process.platform === 'win32' ? 'ffprobe.exe' : 'ffprobe');
   controller = new RuntimeController({
     command: join(sidecar, process.platform === 'win32' ? 'node.exe' : 'node'),
     args: [join(sidecar, 'runtime.mjs'), '--data-dir', dataDirectory], cwd: sidecar,
-    env: { ...process.env, VIDEO_QUICKLY_MODE: 'desktop', ...(existsSync(bundledFfmpeg) ? { VIDEO_QUICKLY_FFMPEG: bundledFfmpeg, VIDEO_QUICKLY_FFPROBE: bundledFfprobe } : {}) },
+    env: runtimeMediaEnvironment(media, app.isPackaged),
     hostRequest: createCredentialHost(AsyncEntry), onEvent: sendEvent, onSpawn: await windowsJobContainer(),
   });
   installIpc();
@@ -142,6 +141,16 @@ async function launch() {
     { label: '视图', submenu: [{ role: 'togglefullscreen' }, ...(app.isPackaged ? [] : [{ role: 'reload' }, { role: 'toggleDevTools' }])] },
     { label: '窗口', submenu: [{ role: 'minimize' }, { role: 'zoom' }, ...(process.platform === 'darwin' ? [{ role: 'front' }] : [])] },
   ]));
+  const trayIcon = nativeImage.createFromPath(join(here, '../build/icons', process.platform === 'darwin' ? 'trayTemplate.png' : process.platform === 'win32' ? 'icon.ico' : '32x32.png'));
+  if (process.platform === 'darwin') trayIcon.setTemplateImage(true);
+  tray = new Tray(trayIcon);
+  trayMenu = Menu.buildFromTemplate([
+    { id: 'show-main', label: '显示主窗口', click: activateWindow },
+    { id: 'quit', label: '退出 Video Quickly', click: () => app.quit() },
+  ]);
+  tray.setToolTip('Video Quickly');
+  tray.setContextMenu(trayMenu);
+  if (process.platform !== 'darwin') tray.on('click', activateWindow);
   createWindow();
   // Show the window and recovery controls even when sidecar startup fails.
   try { await controller.start(); } catch { /* Connection state contains an actionable failure. */ }

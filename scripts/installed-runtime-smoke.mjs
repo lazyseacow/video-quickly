@@ -69,6 +69,17 @@ try {
     const run = await rpc('run.start', { projectId: project.id, nodeId: 'style' });
     const review = await runAt(run.id, 'waiting_review');
     assert.equal(review.activities.length, 1);
+    // waiting_review is visible before LangGraph necessarily commits its native
+    // interrupt. Observe the durable row before terminating this fixture process.
+    const fromSidecar = createRequire(join(sidecar, 'package.json'));
+    const Database = fromSidecar('better-sqlite3'), checkpoint = new Database(join(dataDirectory, 'workspace.sqlite'), { readonly: true });
+    try {
+      const deadline = Date.now() + 20_000;
+      while (!checkpoint.prepare("SELECT 1 FROM writes WHERE thread_id = ? AND channel = '__interrupt__' LIMIT 1").get(run.id)) {
+        if (Date.now() >= deadline) throw new Error('安装夹具的原生审阅检查点尚未提交');
+        await new Promise(resolveWait => setTimeout(resolveWait, 30));
+      }
+    } finally { checkpoint.close(); }
     const image = `${evidence}.png`;
     await writeFile(image, Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9ZlS8AAAAASUVORK5CYII=', 'base64'));
     const asset = await rpc('asset.import', { projectId: project.id, path: image, kind: 'image' });

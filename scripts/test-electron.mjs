@@ -7,7 +7,7 @@ import { createRequire } from 'node:module';
 import { existsSync } from 'node:fs';
 import { lstat, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { dirname, join, resolve } from 'node:path';
+import { dirname, isAbsolute, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import { _electron, expect } from '@playwright/test';
@@ -28,7 +28,8 @@ let application;
 let page;
 let runtimePid;
 let actualElectronVersion;
-let distributionScope = packaged ? 'bundled-runtime-and-media' : 'source-desktop';
+let distributionScope = packaged ? 'unverified-package' : 'source-desktop';
+let fixtureFfmpeg = process.env.VIDEO_QUICKLY_FFMPEG ?? 'ffmpeg';
 let credentialModel;
 const testSecret = `isolated-electron-fixture-${randomUUID()}`;
 let expectedSecret = testSecret;
@@ -45,9 +46,18 @@ await once(credentialServer, 'listening');
 const environment = { ...process.env, VIDEO_QUICKLY_DATA_DIR: workspace, VIDEO_QUICKLY_ELECTRON_USER_DATA: profile };
 delete environment.ELECTRON_RUN_AS_NODE;
 delete environment.VIDEO_QUICKLY_DEV_URL;
+if (packaged) {
+  for (const key of ['VIDEO_QUICKLY_FFMPEG', 'VIDEO_QUICKLY_FFPROBE', 'VIDEO_QUICKLY_MEDIA_DIR']) delete environment[key];
+  if (process.platform === 'darwin') environment.PATH = '/usr/bin:/bin:/usr/sbin:/sbin';
+}
 await mkdir(artifacts, { recursive: true });
 await mkdir(workspace, { recursive: true });
 function executablePath() {
+  if (process.env.VIDEO_QUICKLY_ELECTRON_EXECUTABLE) {
+    assert.equal(packaged, true, 'An executable override is only valid for packaged acceptance');
+    assert.ok(isAbsolute(process.env.VIDEO_QUICKLY_ELECTRON_EXECUTABLE), 'The packaged test executable must use an absolute path');
+    return process.env.VIDEO_QUICKLY_ELECTRON_EXECUTABLE;
+  }
   if (!packaged) return fromDesktop('electron');
   const directory = join(root, '.generated/electron-release');
   if (process.platform === 'win32') return join(directory, 'win-unpacked/video-quickly.exe');
@@ -62,10 +72,24 @@ async function launch() {
   assert.equal(actualElectronVersion, fromDesktop('electron/package.json').version);
   if (packaged) {
     const resources = await application.evaluate(() => process.resourcesPath);
-    const node = join(resources, 'sidecar', process.platform === 'win32' ? 'node.exe' : 'node');
-    const media = join(resources, 'sidecar/media', process.platform === 'win32' ? 'ffmpeg.exe' : 'ffmpeg');
-    if ((await lstat(node)).isSymbolicLink() || !existsSync(media)) distributionScope = 'development-directory-bundle';
-    if (['win32', 'darwin'].includes(process.platform)) assert.equal(distributionScope, 'bundled-runtime-and-media');
+    const sidecar = join(resources, 'sidecar'), suffix = process.platform === 'win32' ? '.exe' : '';
+    const node = join(sidecar, `node${suffix}`), media = join(sidecar, 'media');
+    for (const tool of [node, join(media, `ffmpeg${suffix}`), join(media, `ffprobe${suffix}`)]) {
+      const metadata = await lstat(tool);
+      assert.ok(metadata.isFile() && !metadata.isSymbolicLink(), 'Packaged Node, FFmpeg and FFprobe must be ordinary bundled files');
+    }
+    const info = JSON.parse(await readFile(join(sidecar, 'runtime-info.json'), 'utf8'));
+    const provenance = JSON.parse(await readFile(join(media, 'provenance.json'), 'utf8'));
+    assert.equal(info.portability, 'bundled'); assert.equal(info.platform, process.platform); assert.equal(info.architecture, process.arch);
+    assert.equal(provenance.verified, true);
+    assert.equal((await execute(node, ['--version'], { env: environment })).stdout.trim(), info.nodeVersion);
+    if (process.platform === 'darwin') {
+      assert.equal(info.nodeProvenance?.verified, true);
+      assert.equal(provenance.platform, 'darwin'); assert.equal(provenance.architecture, process.arch);
+    }
+    distributionScope = 'bundled-runtime-and-media';
+    fixtureFfmpeg = join(media, `ffmpeg${suffix}`);
+    checks.bundledTools = true;
   }
   observePage(await application.firstWindow());
   await expect(page).toHaveTitle(/Video Quickly/);
@@ -140,6 +164,18 @@ try {
   await assert.rejects(rpc('host.secret.get', { key: 'not-a-real-key' }), /桌面请求无效/);
   checks.nativeBridge = true;
   checks.sandbox = true;
+  const trayState = await application.evaluate(({ app, BrowserWindow, nativeImage }) => {
+    const load = process.getBuiltinModule('module').createRequire(app.getAppPath() + '/package.json');
+    const { tray, trayMenu } = load('./electron/main.mjs');
+    const window = BrowserWindow.getAllWindows()[0];
+    const iconName = process.platform === 'darwin' ? 'trayTemplate.png' : process.platform === 'win32' ? 'icon.ico' : '32x32.png';
+    const icon = nativeImage.createFromPath(app.getAppPath() + '/build/icons/' + iconName);
+    window.hide();
+    trayMenu.getMenuItemById('show-main').click();
+    return { alive: !tray.isDestroyed(), iconLoaded: !icon.isEmpty(), visible: window.isVisible(), labels: trayMenu.items.map(item => item.label) };
+  });
+  assert.deepEqual(trayState, { alive: true, iconLoaded: true, visible: true, labels: ['显示主窗口', '退出 Video Quickly'] });
+  checks.tray = true;
   const senderDenied = await application.evaluate(async ({ BrowserWindow, app }) => {
     const other = new BrowserWindow({ show: false, webPreferences: { preload: app.getAppPath() + '/electron/preload.cjs', contextIsolation: true, sandbox: true, nodeIntegration: false } });
     try {
@@ -188,9 +224,8 @@ try {
   assert.equal((await projectDocument(project.id)).shots[0].title, 'Electron 原生编辑');
   checks.nativeTextEditing = true;
 
-  const ffmpeg = process.env.VIDEO_QUICKLY_FFMPEG ?? 'ffmpeg';
   const video = join(fixture, '中文 原生媒体.mp4');
-  await execute(ffmpeg, ['-hide_banner', '-loglevel', 'error', '-f', 'lavfi', '-i', 'color=c=blue:s=160x90:r=30:d=1', '-an', '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-y', video]);
+  await execute(fixtureFfmpeg, ['-hide_banner', '-loglevel', 'error', '-f', 'lavfi', '-i', 'color=c=blue:s=160x90:r=30:d=1', '-an', '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-y', video], { env: packaged ? environment : process.env });
   // Native dialogs themselves are OS UI; this substitutes only the user's
   // selection, while exercising real preload -> IPC -> dialog argument handling.
   await application.evaluate(({ dialog }, path) => {
@@ -340,7 +375,7 @@ try {
   checks.consoleHealth = true;
   await close(1);
   await mkdir(dirname(reportPath), { recursive: true });
-  await writeFile(reportPath, JSON.stringify({ status: 'passed', platform: process.platform, architecture: process.arch, packaged, distributionScope, electron: actualElectronVersion, checks,
+  await writeFile(reportPath, JSON.stringify({ status: 'passed', platform: process.platform, architecture: process.arch, packaged, distributionScope, relocatedExecutable: Boolean(process.env.VIDEO_QUICKLY_ELECTRON_EXECUTABLE), electron: actualElectronVersion, checks,
     nativeDialogs: 'file/directory/save selection, cancellation and close decisions substituted; OS dialog UI requires manual verification',
     nativeShell: 'reveal invocation substituted; Finder/Explorer UI requires manual verification',
     screenshots: ['desktop-editor.png', 'desktop-restored-draft.png'],
@@ -349,7 +384,7 @@ try {
 } catch (error) {
   await page?.screenshot({ path: join(artifacts, 'failure.png') }).catch(() => {});
   await mkdir(dirname(reportPath), { recursive: true });
-  await writeFile(reportPath, JSON.stringify({ status: 'failed', platform: process.platform, packaged, checks, errors, failure: error instanceof Error ? error.message : String(error) }, null, 2));
+  await writeFile(reportPath, JSON.stringify({ status: 'failed', platform: process.platform, packaged, distributionScope, checks, errors, failure: error instanceof Error ? error.message : String(error) }, null, 2));
   throw error;
 } finally {
   if (credentialModel && application) await rpc('model.delete', { modelId: credentialModel.id }).catch(() => {});
