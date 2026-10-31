@@ -49,30 +49,43 @@ test('shares typography and spacing roles across the workspace, navigation and d
 
 test('reads dialog timing from shared CSS roles and responds to reduced motion', async ({ page }) => {
   await page.emulateMedia({ reducedMotion: 'no-preference' });
-  await openApp(page);
+  // GSAP captures Date.now and its frame scheduler when the app loads.
+  // Install the clock first so pausing and advancing time drive that same ticker.
   await page.clock.install();
+  await openApp(page);
   // Ten percent speed makes the actual production entrance observable, without
   // exporting a second GSAP instance or replacing its animation implementation.
   await page.evaluate(() => document.documentElement.style.setProperty('--motion-enter', '2400ms'));
   const create = page.getByRole('button', { name: '新建项目', exact: true });
+  await page.clock.pauseAt(new Date(await page.evaluate(() => Date.now()) + 100));
   await create.click();
   const dialog = page.getByRole('dialog', { name: '新建视频项目', exact: true });
+  await expect(dialog.locator('.dialog__surface')).toHaveCSS('opacity', '0');
   await page.clock.runFor(240);
   const opacity = await dialog.locator('.dialog__surface').evaluate(element => Number(getComputedStyle(element).opacity));
   expect(opacity).toBeGreaterThan(0);
   expect(opacity).toBeLessThan(.9);
   await page.clock.runFor(2500);
   await expect(dialog.locator('.dialog__surface')).toHaveCSS('opacity', '1');
-  // Resume real ticking before changing the media query: GSAP batches its
-  // matchMedia cleanup onto the animation ticker, which a paused clock stalls.
-  await page.clock.resume();
-  await page.emulateMedia({ reducedMotion: 'reduce' });
+  // Repeated dismissal has one completion, even when the preference changes
+  // during its exit. A late completion must not close a newly opened dialog.
+  await page.evaluate(() => document.documentElement.style.setProperty('--motion-exit', '2400ms'));
   await page.keyboard.press('Escape');
-  await expect(dialog).toHaveCount(0);
+  await page.keyboard.press('Escape');
+  // Exit content leaves the accessibility tree; a repeated Escape may also
+  // close the native modal before React's exit has finished. Observe unmount.
+  const mountedDialog = page.locator('dialog');
+  await expect(mountedDialog.locator('.dialog__surface')).toHaveAttribute('inert', '');
+  await expect(mountedDialog).toHaveCount(1);
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  await expect(mountedDialog).toHaveCount(0);
   await create.click();
   await expect(dialog.locator('.dialog__surface')).toHaveCSS('opacity', '1');
+  await page.clock.runFor(2500);
+  await expect(dialog).toHaveCount(1);
   await page.keyboard.press('Escape');
   await expect(create).toBeFocused();
+  await page.clock.resume();
 });
 
 for (const width of [1536, 600]) for (const theme of ['light', 'dark']) {

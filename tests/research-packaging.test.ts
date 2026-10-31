@@ -18,7 +18,7 @@ it.skipIf(!stage).each([
   const isolated = await mkdtemp(join(tmpdir(), 'video-quickly-isolated-research-'));
   let child: ReturnType<typeof spawn> | undefined;
   try {
-    for (const filename of ['runtime.mjs', 'pdf-worker.mjs', process.platform === 'win32' ? 'node.exe' : 'node', 'node_modules']) await cp(join(stage!, filename), join(isolated, filename), { recursive: true });
+    for (const filename of ['runtime.mjs', 'pdf-process.mjs', process.platform === 'win32' ? 'node.exe' : 'node', 'node_modules']) await cp(join(stage!, filename), join(isolated, filename), { recursive: true });
     const pdf = join(isolated, 'two-pages.pdf'); await writeFile(pdf, fixture.createPdf());
     const environment = { ...process.env }; delete environment.NODE_PATH; delete environment.NODE_OPTIONS;
     child = spawn(join(isolated, process.platform === 'win32' ? 'node.exe' : 'node'), ['runtime.mjs', '--data-dir', join(isolated, 'data'), '--ffmpeg', join(isolated, 'no-media-needed')], { cwd: isolated, env: environment, stdio: ['pipe', 'pipe', 'pipe'] });

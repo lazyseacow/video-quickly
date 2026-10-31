@@ -30,7 +30,7 @@ it('serves persisted run history while a cold PDF is being parsed and drains tha
         const listing = delay(20).then(() => runtime.dispatch('run.list', { projectId: project.id })).then(page => { order.push('history'); return page; });
         const [source, page] = await Promise.all([reading, listing]);
         // Start another real read and close immediately: runtime.close must
-        // drain the worker-backed dispatch rather than abandon its result.
+        // drain the process-backed dispatch rather than abandon its result.
         const finalRead = runtime.dispatch('research.source.read', { path: ${JSON.stringify(pdf)} });
         const closed = runtime.close();
         const finalSource = await finalRead; await closed;

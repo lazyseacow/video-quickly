@@ -1,7 +1,8 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { readFile, stat } from 'node:fs/promises';
 import { basename, extname } from 'node:path';
-import { Worker } from 'node:worker_threads';
+import { fork } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 import { z } from 'zod';
 import { researchResultSchema, researchSearchResultSchema, researchSourceSchema, type Claim, type ProjectDocument, type ResearchResult, type ResearchSource } from '@video-quickly/contracts';
 
@@ -56,23 +57,34 @@ function plainText(bytes: Uint8Array) {
   catch { throw new Error('资料不是有效的 UTF-8 文本，请另存为 UTF-8 后导入。'); }
 }
 async function pdfText(bytes: Uint8Array) {
-  const data = Uint8Array.from(bytes);
-  const worker = new Worker(new URL('./pdf-worker.mjs', import.meta.url), { workerData: data, transferList: [data.buffer], execArgv: [], stdout: true, stderr: true });
+  const child = fork(fileURLToPath(new URL('./pdf-process.mjs', import.meta.url)), [], { execPath: process.execPath, execArgv: [], serialization: 'advanced', windowsHide: true, stdio: ['ignore', 'pipe', 'pipe', 'ipc'] });
   // Third-party diagnostics must not enter the JSON-RPC stdout protocol.
-  worker.stdout.pipe(process.stderr, { end: false });
-  worker.stderr.pipe(process.stderr, { end: false });
+  child.stdout!.pipe(process.stderr, { end: false });
+  child.stderr!.pipe(process.stderr, { end: false });
   let timeout: ReturnType<typeof setTimeout> | undefined;
   try {
     return await new Promise<string>((resolve, reject) => {
-      timeout = setTimeout(() => reject(new Error('PDF 解析超过 20 秒，请拆分需要的页段后重试。')), 20_000);
-      worker.once('message', (message: unknown) => {
-        if (message && typeof message === 'object' && 'content' in message && typeof message.content === 'string') resolve(message.content);
-        else reject(new Error(message && typeof message === 'object' && 'error' in message && typeof message.error === 'string' ? message.error : 'PDF 解析未返回有效正文。'));
+      let content: string | undefined, failure: Error | undefined, terminating = false;
+      const fail = (error: Error) => { failure ??= error; if (!terminating) { terminating = true; child.kill('SIGKILL'); } };
+      timeout = setTimeout(() => fail(new Error('PDF 解析超过 20 秒，请拆分需要的页段后重试。')), 20_000);
+      child.once('message', (message: unknown) => {
+        if (message && typeof message === 'object' && 'content' in message && typeof message.content === 'string') content = message.content;
+        else failure = new Error(message && typeof message === 'object' && 'error' in message && typeof message.error === 'string' ? message.error : 'PDF 解析未返回有效正文。');
       });
-      worker.once('error', reject);
-      worker.once('exit', code => reject(new Error(`PDF 解析线程提前结束（${code}），请重试或拆分资料。`)));
+      child.on('error', fail);
+      child.once('close', (code, signal) => {
+        if (failure) reject(failure);
+        else if (code !== 0) reject(new Error(`PDF 解析子进程异常结束（${code ?? signal}），请重试或拆分资料。`));
+        else if (content === undefined) reject(new Error('PDF 解析未返回有效正文。'));
+        else resolve(content);
+      });
+      child.send(Uint8Array.from(bytes), error => { if (error) fail(error); });
     });
-  } finally { clearTimeout(timeout); await worker.terminate(); }
+  } finally {
+    clearTimeout(timeout);
+    child.stdout!.unpipe(process.stderr);
+    child.stderr!.unpipe(process.stderr);
+  }
 }
 function capturedSource(content: string, metadata: Omit<ResearchSource, 'id' | 'content' | 'sha256' | 'capturedAt'>) {
   if (!content.trim()) throw new Error('资料没有可读取的正文，请粘贴原文或换用可访问的页面。');

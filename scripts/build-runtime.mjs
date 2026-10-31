@@ -24,4 +24,4 @@ await build({
     },
   }],
 });
-await cp(resolve(root, 'packages/integrations/src/pdf-worker.mjs'), resolve(root, 'packages/runtime/dist/pdf-worker.mjs'));
+await cp(resolve(root, 'packages/integrations/src/pdf-process.mjs'), resolve(root, 'packages/runtime/dist/pdf-process.mjs'));
