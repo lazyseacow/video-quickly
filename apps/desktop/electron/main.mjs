@@ -1,13 +1,12 @@
 import { app, BrowserWindow, dialog, ipcMain, Menu, protocol, session, shell } from 'electron';
 import { AsyncEntry } from '@napi-rs/keyring';
-import { existsSync } from 'node:fs';
 import { mkdir, stat } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { RuntimeController } from './runtime-controller.mjs';
 import { createCredentialHost } from './credentials.mjs';
 import { windowsJobContainer } from './windows-job.mjs';
-import { applicationId, applicationOrigin, externalWebUrl, fileInside, pathDialogOptions, rendererIsTrusted, serveFile, validPath, validRuntimeRequest, workspaceDirectory } from './platform.mjs';
+import { applicationId, applicationOrigin, externalWebUrl, fileInside, pathDialogOptions, rendererIsTrusted, runtimeMediaEnvironment, serveFile, validPath, validRuntimeRequest, workspaceDirectory } from './platform.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const repository = resolve(here, '../../..');
@@ -90,10 +89,19 @@ function createWindow() {
     // Electron reverses the usual meaning here: preventDefault accepts unload.
     if (choice === 1) event.preventDefault();
   });
-  window.once('ready-to-show', () => window?.show());
-  window.on('closed', () => { window = undefined; });
-  void window.loadURL(developmentUrl ?? `${applicationOrigin}/`);
-  return window;
+  owner.once('ready-to-show', () => { if (!owner.isDestroyed()) owner.show(); });
+  owner.on('closed', () => { if (window === owner) window = undefined; });
+  void owner.loadURL(developmentUrl ?? `${applicationOrigin}/`);
+  return owner;
+}
+
+function activateWindow() {
+  if (shutdown) return;
+  if (!window && controller) createWindow();
+  if (window) {
+    if (window.isMinimized()) window.restore();
+    window.show(); window.focus();
+  }
 }
 
 async function launch() {
@@ -115,12 +123,10 @@ async function launch() {
   });
   const sidecar = app.isPackaged ? join(process.resourcesPath, 'sidecar') : join(repository, '.generated', 'sidecar');
   const media = join(sidecar, 'media');
-  const bundledFfmpeg = join(media, process.platform === 'win32' ? 'ffmpeg.exe' : 'ffmpeg');
-  const bundledFfprobe = join(media, process.platform === 'win32' ? 'ffprobe.exe' : 'ffprobe');
   controller = new RuntimeController({
     command: join(sidecar, process.platform === 'win32' ? 'node.exe' : 'node'),
     args: [join(sidecar, 'runtime.mjs'), '--data-dir', dataDirectory], cwd: sidecar,
-    env: { ...process.env, VIDEO_QUICKLY_MODE: 'desktop', ...(existsSync(bundledFfmpeg) ? { VIDEO_QUICKLY_FFMPEG: bundledFfmpeg, VIDEO_QUICKLY_FFPROBE: bundledFfprobe } : {}) },
+    env: runtimeMediaEnvironment(media, app.isPackaged),
     hostRequest: createCredentialHost(AsyncEntry), onEvent: sendEvent, onSpawn: await windowsJobContainer(),
   });
   installIpc();
@@ -140,8 +146,8 @@ async function launch() {
 
 if (!app.requestSingleInstanceLock()) app.quit();
 else {
-  app.on('second-instance', () => { if (window) { if (window.isMinimized()) window.restore(); window.show(); window.focus(); } });
-  app.on('activate', () => { if (!shutdown && !window && controller) createWindow(); });
+  app.on('second-instance', activateWindow);
+  app.on('activate', activateWindow);
   app.on('window-all-closed', () => { if (process.platform !== 'darwin') app.quit(); });
   // will-quit only runs after every window accepted beforeunload and closed.
   // A canceled quit must leave the runtime and all current work available.

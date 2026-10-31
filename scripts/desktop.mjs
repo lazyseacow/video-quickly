@@ -27,7 +27,7 @@ process.once('SIGINT', stop); process.once('SIGTERM', stop);
 try {
   if (command === 'build') {
     const cli = join(dirname(fromDesktop.resolve('electron-builder/package.json')), 'cli.js');
-    const target = process.platform === 'win32' ? ['--win', 'nsis', '--x64'] : process.platform === 'darwin' ? ['--mac', '--dir'] : ['--linux', '--dir'];
+    const target = process.platform === 'win32' ? ['--win', 'nsis', '--x64'] : process.platform === 'darwin' ? ['--mac', 'zip', `--${process.arch}`] : ['--linux', '--dir'];
     process.exitCode = await exited(launch(process.execPath, [cli, '--config', join(root, 'electron-builder.yml'), '--publish', 'never', ...target, ...options]));
   } else {
     const vite = join(dirname(fromDesktop.resolve('vite/package.json')), 'bin', 'vite.js');

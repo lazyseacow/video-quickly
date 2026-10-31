@@ -2,7 +2,7 @@ import { mkdtemp, mkdir, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { applicationId, externalWebUrl, fileInside, pathDialogOptions, rendererIsTrusted, serveFile, validRuntimeRequest, workspaceDirectory, workspaceName } from '../apps/desktop/electron/platform.mjs';
+import { applicationId, externalWebUrl, fileInside, pathDialogOptions, rendererIsTrusted, runtimeMediaEnvironment, serveFile, validRuntimeRequest, workspaceDirectory, workspaceName } from '../apps/desktop/electron/platform.mjs';
 import { createCredentialHost, credentialEntry } from '../apps/desktop/electron/credentials.mjs';
 
 const directories: string[] = [];
@@ -15,6 +15,17 @@ async function fixture() {
 }
 
 describe('Electron workspace and media boundary', () => {
+  it('never falls back to host media tools in a packaged application with missing bundled media', async () => {
+    const { root } = await fixture(), media = join(root, 'missing-media');
+    const host = { PATH: '/host/tools', VIDEO_QUICKLY_FFMPEG: 'host-ffmpeg', VIDEO_QUICKLY_FFPROBE: 'host-ffprobe' };
+    const actual = runtimeMediaEnvironment(media, true, host), suffix = process.platform === 'win32' ? '.exe' : '';
+    expect(actual.VIDEO_QUICKLY_FFMPEG).toBe(join(media, `ffmpeg${suffix}`));
+    expect(actual.VIDEO_QUICKLY_FFPROBE).toBe(join(media, `ffprobe${suffix}`));
+    expect(actual.PATH).toBe(host.PATH);
+    expect(runtimeMediaEnvironment(media, false, host)).toMatchObject(host);
+    await mkdir(media); await writeFile(join(media, `ffmpeg${suffix}`), 'fixture executable');
+    expect(runtimeMediaEnvironment(media, false, host).VIDEO_QUICKLY_FFMPEG).toBe(join(media, `ffmpeg${suffix}`));
+  });
   it('creates a separate workspace without reading or rewriting the former bundle-identifier directory', () => {
     const home = join(tmpdir(), '旧用户');
     expect(workspaceDirectory({ platform: 'darwin', home, environment: {} })).toBe(join(home, 'Library', 'Application Support', workspaceName));

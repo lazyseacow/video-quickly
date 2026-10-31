@@ -19,9 +19,9 @@
 
 `pnpm dev:desktop` 构建执行器、准备开发执行组件，启动独占本机 1420 端口的 Vite 和 Electron。关闭客户端后同时关闭本次开发服务器。正式包只加载随附资源，忽略开发 URL。
 
-`pnpm build:desktop` 先构建前端与执行器，再准备带许可和来源的 Node／FFmpeg，使用 `electron-builder.yml` 打包。Windows 输出 NSIS x64 安装器；macOS／Linux 当前输出本机未签名目录包。正式包的执行组件位于 `resources/sidecar`。macOS 发布检查拒绝依赖 Homebrew／开发机动态库的 Node，需以官方独立 Node.js 24 运行构建并提供对应平台的许可媒体组件。
+`pnpm build:desktop` 先构建前端与执行器，再准备带许可和来源的 Node／FFmpeg，使用 `electron-builder.yml` 打包。Windows 输出 NSIS x64 安装器；macOS arm64／x64 分别输出独立应用 ZIP，Linux 尚非正式交付目标。正式包的执行组件位于 `resources/sidecar`（macOS 为 `.app/Contents/Resources/sidecar`）。macOS 生产组件始终使用经固定 SHA-256 验证的官方独立 Node.js 24.22.1 和 Martin Riedl 静态 FFmpeg／FFprobe 9.0.2；不复制 Homebrew 的动态库依赖。两个架构分别在原生 CI 构建，包内 Mach-O 的架构、最低系统和依赖扫描通过后才能归档。
 
-本机 `--development` 执行组件使用 Homebrew Node 的绝对符号链接及系统 FFmpeg；基于它生成的 Mac 目录包只用于本机功能与资源布局验收，报告标记 `development-directory-bundle`，不算可移植分发包。Windows 正式 CI 必须是 `bundled-runtime-and-media`，发布清单拒绝开发目录包。
+早期 `--development` 符号链接目录包仅属于历史本机验证。本轮正式 Mac ZIP 必须报告 `bundled-runtime-and-media`；正式发布清单拒绝 `development-directory-bundle`。Node、FFmpeg／FFprobe、原生 SQLite／Canvas 均在仅保留系统 PATH 的环境验证，源码、许可与固定构建配方随媒体组件携带。详见 [macOS 正式验收](macos-verification.md)。
 
 ## 验收门槛
 
@@ -32,7 +32,7 @@
 5. 保留原四组实际 FFmpeg 编码、独立打包 PDF 和 HTTP 恢复测试。发布清单必须包含 Electron 原生报告，失败时不能生成成功交付清单。
 6. 明暗主题、1536／600px、减少动效和自定义主题由真实生产组件验证；界面静态约束避免新增硬编码主题值。
 
-原生专项脚本的文件选择结果由 Playwright 替代用户选择，覆盖真实预加载／IPC／对话框参数和取消处理；系统选择器的实际鼠标操作仍需对应桌面人工验证。Windows GPU、驱动与长时窗口进程采样、真实视频生成和供应商故障语义继续需要对应设备与服务。迁移 Electron 不会把这些项目自动变成已通过。
+Windows 与两个 Mac 架构均运行完整回归；原生专项脚本的文件选择结果由 Playwright 替代用户选择，覆盖真实预加载／IPC／对话框参数和取消处理；系统选择器的实际鼠标操作仍需对应桌面人工验证。Windows GPU、驱动与长时窗口进程采样、真实视频生成和供应商故障语义继续需要对应设备与服务。迁移 Electron 不会把这些项目自动变成已通过。
 
 当前安装包未签名，构建不发布 Release；签名与更新分发需独立配置。当前实现进度与实际通过记录以本轮命令产物和提交对应 CI 为准，旧 Tauri 的历史成功运行不能作为 Electron 的通过证据。
 

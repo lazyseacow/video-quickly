@@ -1,4 +1,4 @@
-import { createReadStream } from 'node:fs';
+import { createReadStream, existsSync } from 'node:fs';
 import { realpath, stat } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { extname, isAbsolute, join, relative, resolve } from 'node:path';
@@ -7,6 +7,12 @@ import { Readable } from 'node:stream';
 export const applicationId = 'net.lazyseacow.video-quickly';
 export const applicationOrigin = 'video-quickly://app';
 export const workspaceName = 'VideoQuickly-Electron';
+
+export function runtimeMediaEnvironment(mediaDirectory, packaged, environment = process.env) {
+  const suffix = process.platform === 'win32' ? '.exe' : '';
+  const ffmpeg = join(mediaDirectory, `ffmpeg${suffix}`), ffprobe = join(mediaDirectory, `ffprobe${suffix}`);
+  return { ...environment, VIDEO_QUICKLY_MODE: 'desktop', ...(packaged || existsSync(ffmpeg) ? { VIDEO_QUICKLY_FFMPEG: ffmpeg, VIDEO_QUICKLY_FFPROBE: ffprobe } : {}) };
+}
 
 export function workspaceDirectory({ platform = process.platform, home = homedir(), environment = process.env } = {}) {
   if (environment.VIDEO_QUICKLY_DATA_DIR) return resolve(environment.VIDEO_QUICKLY_DATA_DIR);

@@ -1,0 +1,48 @@
+{
+  "version": "9.0.2",
+  "license": "GPL-3.0-or-later",
+  "source": "https://git.martin-riedl.de/ffmpeg/build-script",
+  "correspondingSource": "https://github.com/FFmpeg/FFmpeg/tree/n9.0.2",
+  "arm64": {
+    "directory": "ffmpeg-9.0.2-darwin-arm64-1789931890",
+    "baseUrl": "https://ffmpeg.martin-riedl.de/download/macos/arm64/1789931890_9.0.2/",
+    "ffmpeg": {
+      "sha256": "c8ed4c4e6978a03c485edbfe4e0a5dc2380f8a30bba5150531b31b094492d924",
+      "binarySha256": "2e11c6f90993cdb79fff84d3f90044d28316b310e75b3e030cfc9a54f2c9d384"
+    },
+    "ffprobe": {
+      "sha256": "fcbe839537485eaee7a7a8bc5cbc0f90d53617e80943e8a5b2e31cb851197ea6",
+      "binarySha256": "2738aa46a7f9acbc8ab09a6715554c90f7de603171ac403726765685df6a0059"
+    }
+  },
+  "x64": {
+    "directory": "ffmpeg-9.0.2-darwin-x64-1789931006",
+    "baseUrl": "https://ffmpeg.martin-riedl.de/download/macos/amd64/1789931006_9.0.2/",
+    "ffmpeg": {
+      "sha256": "7c6b4125b191cbf773832dc51f424cf2b6bb7da43007d1e066f95909e47cacd4",
+      "binarySha256": "b25689cf2211c0582d317e849912769a1f1c93904fe102c485b5364a425633d1"
+    },
+    "ffprobe": {
+      "sha256": "2322438ed2f6319a691291b247d09c69dcaa3a982460d1f269a7e1af335cfdfd",
+      "binarySha256": "b5df9964b0c2048318fafedcd4e3bbafbc561033cee77de8da1840685d8a9d0d"
+    }
+  },
+  "buildRecipeCommit": "f63b8aab8f5ce1a067da86ba69e34a36a7e217e5",
+  "supportFiles": [
+    {
+      "name": "COPYING.GPLv3",
+      "url": "https://raw.githubusercontent.com/FFmpeg/FFmpeg/n9.0.2/COPYING.GPLv3",
+      "sha256": "8ceb4b9ee5adedde47b31e975c1d90c73ad27b6b165a1dcd80c7c545eb65b903"
+    },
+    {
+      "name": "ffmpeg-n9.0.2-source.tar.gz",
+      "url": "https://codeload.github.com/FFmpeg/FFmpeg/tar.gz/refs/tags/n9.0.2",
+      "sha256": "6e374ed621e48faa40639307dff48ba6fe574a509977956d2cce9669b7cc27e9"
+    },
+    {
+      "name": "build-recipes-f63b8aab.tar.gz",
+      "url": "https://git.martin-riedl.de/ffmpeg/build-script/archive/f63b8aab8f5ce1a067da86ba69e34a36a7e217e5.tar.gz",
+      "sha256": "025ae571e47d09bc7fe74fceae7f7b0b3b73bf304849133e24d5c4581e592473"
+    }
+  ]
+}

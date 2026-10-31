@@ -1,10 +1,10 @@
 # Windows Electron 交付与恢复验收
 
-本文件描述当前 Electron 路线。此前 Tauri 的安装及跨版本报告属于历史证据，不能作为 Electron 当前版本通过记录；本轮按用户明确要求不实施旧壳数据迁移。架构与功能门槛见 [Electron 桌面实现与验收](electron-migration.md)。
+本文件描述当前 Electron 路线。此前 Tauri 的安装及跨版本报告属于历史证据，不能作为 Electron 当前版本通过记录；本轮按用户明确要求不实施旧壳数据迁移。macOS 两架构的正式包另见 [macOS 验收](macos-verification.md)。架构与功能门槛见 [Electron 桌面实现与验收](electron-migration.md)。
 
 ## 自动检查
 
-`Windows verification` 工作流在隔离 `windows-2025` 运行器执行锁定依赖、类型检查、完整自动测试、浏览器流程、本地 HTTP CLI 恢复、四组实际媒体导出、Electron 构建、独立打包 PDF、真实 Electron 应用和安装卸载验收。Node 与 pnpm 版本由 `.node-version` 和根 `package.json` 固定；Electron 与构建器精确版本在桌面包清单及锁文件中固定。无需 Rust 或系统 WebView。
+`Desktop verification` 工作流的 Windows job在隔离 `windows-2025` 运行器执行锁定依赖、类型检查、完整自动测试、浏览器流程、本地 HTTP CLI 恢复、四组实际媒体导出、Electron 构建、独立打包 PDF、真实 Electron 应用和安装卸载验收。Node 与 pnpm 版本由 `.node-version` 和根 `package.json` 固定；Electron 与构建器精确版本在桌面包清单及锁文件中固定。无需 Rust 或系统 WebView。
 
 `pnpm prepare:media` 按 `scripts/media-manifest.json` 下载、核对 FFmpeg 来源及 SHA-256。许可、来源和 Node 版本随执行组件归档。Electron 产物位于 `.generated/electron-release`；命令使用 `--publish never`，不发布 Release。
 

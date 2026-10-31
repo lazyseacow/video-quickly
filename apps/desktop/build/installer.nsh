@@ -18,8 +18,9 @@ Var RemoveWorkspaceCheckbox
 !macro customUnWelcomePage
   !insertmacro MUI_UNPAGE_WELCOME
   UninstPage custom un.WorkspaceOptions un.WorkspaceOptionsLeave
-!macroend
 
+# Defer function compilation until the builder has registered StdUtils plugins
+# and loaded MUI2. Custom includes can precede that async-generated header.
 Function un.WorkspaceOptions
   ${If} ${isUpdated}
     Abort
@@ -44,6 +45,7 @@ FunctionEnd
 Function un.WorkspaceOptionsLeave
   ${NSD_GetState} $RemoveWorkspaceCheckbox $RemoveWorkspace
 FunctionEnd
+!macroend
 
 !macro customUnInstall
   ${IfNot} ${isUpdated}

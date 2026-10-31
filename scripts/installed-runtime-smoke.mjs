@@ -7,10 +7,11 @@ import assert from 'node:assert/strict';
 import { fixtureSecretCall } from './installed-upgrade-fixture.mjs';
 
 // This fixture writes only to the fresh CI account's application data directory.
-if (process.env.GITHUB_ACTIONS !== 'true' || process.env.RUNNER_OS !== 'Windows') throw new Error('安装验收只能在隔离的 Windows CI 环境执行');
+if (process.env.GITHUB_ACTIONS !== 'true' || !['Windows','macOS'].includes(process.env.RUNNER_OS)) throw new Error('安装验收只能在隔离的 Windows/macOS CI 环境执行');
 const [mode, installDirectory, dataDirectory, evidence] = process.argv.slice(2);
 if (!['prepare', 'verify', 'inspect'].includes(mode) || !installDirectory || !dataDirectory || !evidence) throw new Error('需要安装验收模式、安装目录、数据目录和证据文件路径');
-const sidecar = resolve(installDirectory, 'resources', 'sidecar');
+const sidecar = process.platform === 'darwin' ? resolve(installDirectory, 'Contents/Resources/sidecar') : resolve(installDirectory, 'resources', 'sidecar');
+const extension = process.platform === 'win32' ? '.exe' : '';
 if (mode === 'inspect') {
   const require = createRequire(join(sidecar, 'package.json'));
   const Database = require('better-sqlite3');
@@ -19,7 +20,7 @@ if (mode === 'inspect') {
   console.log('原生客户端已完成数据库迁移');
   process.exit(0);
 }
-const child = spawn(join(sidecar, 'node.exe'), [join(sidecar, 'runtime.mjs'), '--data-dir', dataDirectory], { cwd: sidecar, windowsHide: true, env: { ...process.env, VIDEO_QUICKLY_FFMPEG: join(sidecar, 'media', 'ffmpeg.exe'), VIDEO_QUICKLY_FFPROBE: join(sidecar, 'media', 'ffprobe.exe') } });
+const child = spawn(join(sidecar, `node${extension}`), [join(sidecar, 'runtime.mjs'), '--data-dir', dataDirectory], { cwd: sidecar, windowsHide: true, env: { ...process.env, VIDEO_QUICKLY_FFMPEG: join(sidecar, 'media', `ffmpeg${extension}`), VIDEO_QUICKLY_FFPROBE: join(sidecar, 'media', `ffprobe${extension}`) } });
 let sequence = 0;
 const pending = new Map();
 const fixtureSecrets = new Map();
@@ -68,6 +69,17 @@ try {
     const run = await rpc('run.start', { projectId: project.id, nodeId: 'style' });
     const review = await runAt(run.id, 'waiting_review');
     assert.equal(review.activities.length, 1);
+    // waiting_review is visible before LangGraph necessarily commits its native
+    // interrupt. Observe the durable row before terminating this fixture process.
+    const fromSidecar = createRequire(join(sidecar, 'package.json'));
+    const Database = fromSidecar('better-sqlite3'), checkpoint = new Database(join(dataDirectory, 'workspace.sqlite'), { readonly: true });
+    try {
+      const deadline = Date.now() + 20_000;
+      while (!checkpoint.prepare("SELECT 1 FROM writes WHERE thread_id = ? AND channel = '__interrupt__' LIMIT 1").get(run.id)) {
+        if (Date.now() >= deadline) throw new Error('安装夹具的原生审阅检查点尚未提交');
+        await new Promise(resolveWait => setTimeout(resolveWait, 30));
+      }
+    } finally { checkpoint.close(); }
     const image = `${evidence}.png`;
     await writeFile(image, Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9ZlS8AAAAASUVORK5CYII=', 'base64'));
     const asset = await rpc('asset.import', { projectId: project.id, path: image, kind: 'image' });

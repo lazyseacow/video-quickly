@@ -1,5 +1,6 @@
 import { execFileSync } from 'node:child_process';
-import { assertDarwinNodeSelfContained } from './node-portability.mjs';
+import { assertDarwinNodeSelfContained, assertDarwinBinarySelfContained } from './node-portability.mjs';
+import { preparePortableNode } from './portable-node.mjs';
 import { cp, mkdir, readdir, rename, rm, stat, writeFile, readFile, realpath, symlink } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
@@ -43,10 +44,6 @@ const fromPdf=await copyModule('pdf-parse',fromIntegrations);
 await copyModule('pdfjs-dist',fromPdf);
 await writeFile(join(stage,'package.json'),JSON.stringify({name:'video-quickly-runtime',version:'0.1.0',private:true,type:'module'}));
 await cp(runtime,join(stage,'runtime.mjs'));
-// Homebrew Node depends on libraries beside its original executable.
-// A development link preserves those paths; release bundles still copy Node.
-if(development&&process.platform!=='win32')await symlink(process.execPath,join(stage,'node'));
-else await cp(process.execPath,join(stage,process.platform==='win32'?'node.exe':'node'));
 const mediaRoot=process.env.VIDEO_QUICKLY_MEDIA_DIR;
 if(mediaRoot){
   const mediaSource=resolve(mediaRoot);
@@ -54,6 +51,7 @@ if(mediaRoot){
   await cp(hasBin?join(mediaSource,'bin'):mediaSource,join(stage,'media'),{recursive:true});
   if(hasBin)await cp(join(mediaSource,'LICENSE.txt'),join(stage,'media','LICENSE-FFmpeg.txt'));
   await cp(join(mediaSource,'provenance.json'),join(stage,'media','provenance.json'));
+  if(await stat(join(mediaSource,'source')).then(value=>value.isDirectory(),()=>false))await cp(join(mediaSource,'source'),join(stage,'media','source'),{recursive:true});
 }
 else if(process.platform==='win32'){
   const tools=join(root,'.tools');
@@ -68,8 +66,18 @@ else if(process.platform==='win32'){
     await cp(provenance,join(stage,'media','provenance.json'));
   }
 }
+else if(process.platform==='darwin'){
+  const lock=JSON.parse(await readFile(join(root,'scripts/macos-media-manifest.json'),'utf8'));
+  const mediaSource=join(root,'.tools',lock[process.arch]?.directory??'unsupported-architecture');
+  if(await stat(join(mediaSource,'provenance.json')).then(value=>value.isFile(),()=>false)){
+    await cp(join(mediaSource,'bin'),join(stage,'media'),{recursive:true});
+    await cp(join(mediaSource,'LICENSE.txt'),join(stage,'media','LICENSE-FFmpeg.txt'));
+    await cp(join(mediaSource,'provenance.json'),join(stage,'media','provenance.json'));
+    await cp(join(mediaSource,'source'),join(stage,'media','source'),{recursive:true});
+  }
+}
 const hasMedia=await stat(join(stage,'media')).then(value=>value.isDirectory(),()=>false);
-if(!hasMedia&&(!development||process.platform==='win32'))throw new Error('未找到 FFmpeg 媒体组件。Windows 请先运行 pnpm prepare:media；其他平台打包需通过 VIDEO_QUICKLY_MEDIA_DIR 提供对应平台的组件及许可来源。');
+if(!hasMedia&&(!development||process.platform==='win32'))throw new Error('未找到 FFmpeg 媒体组件。Windows 请先运行 pnpm prepare:media；macOS 也请先运行 pnpm prepare:media；其他平台需提供对应平台的组件及许可来源。');
 if(hasMedia){
   const extension=process.platform==='win32'?'.exe':'';
   for(const executable of ['ffmpeg','ffprobe'])await stat(join(stage,'media',`${executable}${extension}`));
@@ -82,11 +90,17 @@ if(hasMedia){
     'Exact build, download location and archive checksum are recorded in provenance.json.',
   ].join('\n'));
 }else console.log('开发模式使用系统 FFmpeg；媒体处理需在 PATH 中安装 ffmpeg/ffprobe，或设置 VIDEO_QUICKLY_FFMPEG 和 VIDEO_QUICKLY_FFPROBE。');
+const portableNode = !development && process.platform === 'darwin' ? await preparePortableNode(root) : undefined;
+const nodeSource = portableNode?.executable ?? process.execPath;
+if(development&&process.platform!=='win32')await symlink(nodeSource,join(stage,'node'));
+else await cp(nodeSource,join(stage,process.platform==='win32'?'node.exe':'node'));
 if (!development && process.platform === 'darwin') {
-  assertDarwinNodeSelfContained(execFileSync('/usr/bin/otool', ['-L', process.execPath], { encoding: 'utf8' }));
+  assertDarwinNodeSelfContained(execFileSync('/usr/bin/otool', ['-L', join(stage,'node')], { encoding: 'utf8' }));
+  for (const executable of ['ffmpeg','ffprobe']) assertDarwinBinarySelfContained(execFileSync('/usr/bin/otool', ['-L', join(stage,'media',executable)], { encoding: 'utf8' }), executable);
 }
+
 // Homebrew keeps the Node license one directory above bin/.
-const nodeLicenses=[join(dirname(process.execPath),'LICENSE'),resolve(dirname(process.execPath),'../LICENSE')];
+const nodeLicenses=[...(portableNode?[portableNode.license]:[]),join(dirname(process.execPath),'LICENSE'),resolve(dirname(process.execPath),'../LICENSE')];
 let nodeLicense;
 for(const candidate of nodeLicenses)if(await stat(candidate).then(value=>value.isFile(),()=>false)){nodeLicense=candidate;break;}
 if(nodeLicense)await cp(nodeLicense,join(stage,'LICENSE-Node.txt'));
@@ -116,7 +130,7 @@ for(const folder of await readdir(packageStore,{withFileTypes:true})){
 }
 await writeFile(join(notices,'manifest.json'),JSON.stringify(manifest,null,2));
 await cp(join(root,'apps/desktop/src/assets/platforms/LICENSE'),join(notices,'platform-icons-LICENSE.txt'));
-await writeFile(join(stage,'runtime-info.json'),JSON.stringify({nodeVersion:process.version,platform:process.platform,architecture:process.arch},null,2));
+await writeFile(join(stage,'runtime-info.json'),JSON.stringify({nodeVersion:portableNode?.version??process.version,platform:process.platform,architecture:process.arch,portability:development&&process.platform!=='win32'?'development-link':'bundled',nodeProvenance:portableNode?.provenance},null,2));
 if(resolve(sidecar)!==join(root,'.generated','sidecar'))throw new Error('非法执行组件目录');
 await rm(sidecar,{recursive:true,force:true});
 await rename(stage,sidecar);
