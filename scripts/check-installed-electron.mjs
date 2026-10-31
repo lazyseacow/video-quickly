@@ -26,7 +26,7 @@ try {
   const parent = application.process().pid;
   const execute = promisify(execFile);
   if (process.platform === 'win32') {
-  const { stdout } = await execute('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', `@(Get-CimInstance Win32_Process -Filter 'ParentProcessId=${parent}' | Where-Object { $_.Name -eq 'node.exe' } | Select-Object ProcessId,CommandLine) | ConvertTo-Json -Compress`]);
+    const { stdout } = await execute('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', `[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false); @(Get-CimInstance Win32_Process -Filter 'ParentProcessId=${parent}' | Where-Object { $_.Name -eq 'node.exe' } | Select-Object ProcessId,CommandLine) | ConvertTo-Json -Compress`]);
   const parsed = JSON.parse(stdout || '[]');
   const children = (Array.isArray(parsed) ? parsed : [parsed]).filter(child => child.CommandLine?.includes('runtime.mjs') && child.CommandLine.toLowerCase().includes(dataDirectory.toLowerCase()));
   assert.equal(children.length, 1, 'Installed Electron must own exactly one runtime');

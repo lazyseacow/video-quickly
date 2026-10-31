@@ -81,7 +81,21 @@ test('reads real two-second media and bounds the final frame while authored scen
   expect((await savedProject(request, project.id)).revision).toBe(bounded.revision);
   await page.screenshot({ path: info.outputPath('real-media-frame-bound.png') });
 
+  // Observe the first committed values for the new shot, before a later effect
+  // can reset the inputs and interrupt a user who has already started typing.
+  const firstShotTiming = await page.evaluateHandle(() => {
+    const result = { outPoint: '' };
+    const observer = new MutationObserver(() => {
+      if (document.querySelector<HTMLInputElement>('[aria-label="镜头标题"]')?.value !== '无媒体二维镜头') return;
+      observer.disconnect();
+      result.outPoint = document.querySelector<HTMLInputElement>('[aria-label="素材出点（秒）"]')?.value ?? 'missing';
+    });
+    observer.observe(document.body, { childList: true, subtree: true, attributes: true, characterData: true });
+    return result;
+  });
   await page.locator('.outline-shot').filter({ hasText: '无媒体二维镜头' }).click();
+  await expect.poll(() => firstShotTiming.evaluate(value => value.outPoint)).toBe('2');
+  await firstShotTiming.dispose();
   await expect(page.locator('.clip-timing')).toContainText('未关联音视频素材，可延长二维场景');
   await outPoint.fill('3');
   await expect(apply).toBeEnabled();

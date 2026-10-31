@@ -108,7 +108,7 @@ function rpc(method, params = {}) { return page.evaluate(({ method, params }) =>
 async function findRuntime() {
   const parent = application.process().pid;
   if (process.platform === 'win32') {
-    const { stdout } = await execute('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', `@(Get-CimInstance Win32_Process -Filter 'ParentProcessId=${parent}' | Where-Object { $_.Name -eq 'node.exe' } | Select-Object ProcessId,CommandLine) | ConvertTo-Json -Compress`]);
+    const { stdout } = await execute('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', `[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false); @(Get-CimInstance Win32_Process -Filter 'ParentProcessId=${parent}' | Where-Object { $_.Name -eq 'node.exe' } | Select-Object ProcessId,CommandLine) | ConvertTo-Json -Compress`]);
     const parsed = JSON.parse(stdout || '[]');
     const children = Array.isArray(parsed) ? parsed : [parsed];
     const candidates = children.filter(value => value.CommandLine?.includes('runtime.mjs') && value.CommandLine.includes(workspace));
@@ -188,11 +188,14 @@ try {
   await title.fill('Electron 原生编辑');
   await page.getByRole('button', { name: '保存镜头', exact: true }).click();
   await expect.poll(async () => (await projectDocument(project.id)).shots[0].title).toBe('Electron 原生编辑');
-  await page.getByRole('button', { name: '撤销', exact: true }).focus();
+  const undo = page.getByRole('button', { name: '撤销', exact: true }), redo = page.getByRole('button', { name: '重做', exact: true });
+  // A committed RPC may still be awaiting its reply in the renderer. History
+  // shortcuts must wait until the UI leaves that saving state and owns focus.
+  await expect(undo).toBeEnabled(); await undo.focus(); await expect(undo).toBeFocused();
   await page.keyboard.press('ControlOrMeta+z');
   await expect(title).toHaveValue('原生镜头');
   await expect.poll(async () => (await projectDocument(project.id)).shots[0].title).toBe('原生镜头');
-  await page.getByRole('button', { name: '重做', exact: true }).focus();
+  await expect(redo).toBeEnabled(); await redo.focus(); await expect(redo).toBeFocused();
   await page.keyboard.press('ControlOrMeta+Shift+z');
   await expect(title).toHaveValue('Electron 原生编辑');
   await expect.poll(async () => (await projectDocument(project.id)).shots[0].title).toBe('Electron 原生编辑');
