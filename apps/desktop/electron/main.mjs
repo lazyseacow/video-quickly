@@ -90,10 +90,19 @@ function createWindow() {
     // Electron reverses the usual meaning here: preventDefault accepts unload.
     if (choice === 1) event.preventDefault();
   });
-  window.once('ready-to-show', () => window?.show());
-  window.on('closed', () => { window = undefined; });
-  void window.loadURL(developmentUrl ?? `${applicationOrigin}/`);
-  return window;
+  owner.once('ready-to-show', () => { if (!owner.isDestroyed()) owner.show(); });
+  owner.on('closed', () => { if (window === owner) window = undefined; });
+  void owner.loadURL(developmentUrl ?? `${applicationOrigin}/`);
+  return owner;
+}
+
+function activateWindow() {
+  if (shutdown) return;
+  if (!window && controller) createWindow();
+  if (window) {
+    if (window.isMinimized()) window.restore();
+    window.show(); window.focus();
+  }
 }
 
 async function launch() {
@@ -140,8 +149,8 @@ async function launch() {
 
 if (!app.requestSingleInstanceLock()) app.quit();
 else {
-  app.on('second-instance', () => { if (window) { if (window.isMinimized()) window.restore(); window.show(); window.focus(); } });
-  app.on('activate', () => { if (!shutdown && !window && controller) createWindow(); });
+  app.on('second-instance', activateWindow);
+  app.on('activate', activateWindow);
   app.on('window-all-closed', () => { if (process.platform !== 'darwin') app.quit(); });
   // will-quit only runs after every window accepted beforeunload and closed.
   // A canceled quit must leave the runtime and all current work available.

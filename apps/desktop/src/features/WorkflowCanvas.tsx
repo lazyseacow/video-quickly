@@ -1,3 +1,4 @@
+import { primaryModifier } from '../lib/desktop';
 import { memo, useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { Background, Controls, Handle, Panel, Position, ReactFlow, SelectionMode, addEdge, applyEdgeChanges, applyNodeChanges, type AriaLabelConfig, type Connection, type Edge, type IsValidConnection, type Node, type NodeProps, type NodeTypes, type OnEdgesChange, type OnInit, type OnNodesChange, type OnSelectionChangeFunc, type ReactFlowInstance } from '@xyflow/react';
 import { BookOpen, Check, GitBranch, Image, Layers, Mic, Plus, Sparkles, Trash2, Save } from 'lucide-react';
@@ -153,9 +154,9 @@ export default function WorkflowCanvas({ workflow, models, dirty, saving, confli
     }
   }}>
     <div className="flow-container" ref={container}><div className="flow-viewport">
-      <ReactFlow<FlowNode> nodes={nodes} edges={edges} nodeTypes={nodeTypes} onInit={initializeCanvas} onNodeDoubleClick={focusNode} onNodeDragStart={onEndGroup} onNodeDragStop={onEndGroup} zoomOnDoubleClick={false} onNodesChange={changeNodes} onEdgesChange={changeEdges} onConnect={connect} onSelectionChange={changeSelection} onBeforeDelete={beforeDelete} isValidConnection={validConnection} fitView fitViewOptions={fitViewOptions} minZoom={.2} maxZoom={1.5} deleteKeyCode={deleteKeys} ariaLabelConfig={ariaLabels} panOnScroll selectionMode={SelectionMode.Partial} panOnDrag={panButtons} zoomOnScroll={false} connectionRadius={24} nodeDragThreshold={3}>
+      <ReactFlow<FlowNode> nodes={nodes} edges={edges} nodeTypes={nodeTypes} onInit={initializeCanvas} onNodeDoubleClick={focusNode} onNodeDragStart={onEndGroup} onNodeDragStop={onEndGroup} zoomOnDoubleClick={false} onNodesChange={changeNodes} onEdgesChange={changeEdges} onConnect={connect} onSelectionChange={changeSelection} onBeforeDelete={beforeDelete} isValidConnection={validConnection} fitView fitViewOptions={fitViewOptions} minZoom={.2} maxZoom={1.5} deleteKeyCode={deleteKeys} ariaLabelConfig={ariaLabels} panOnScroll selectionMode={SelectionMode.Partial} panOnDrag={panButtons} zoomOnScroll={false} zoomActivationKeyCode={primaryModifier().key} multiSelectionKeyCode={primaryModifier().key} connectionRadius={24} nodeDragThreshold={3}>
         <Background gap={22} size={1} color="var(--border)" /><Controls showInteractive={false} />
-        <Panel position="top-left" className="flow-gestures">拖动空白处平移 · Ctrl + 滚轮缩放<span>Shift + 拖动框选 · 双击步骤聚焦</span></Panel>
+        <Panel position="top-left" className="flow-gestures">拖动空白处平移 · {primaryModifier().label} + 滚轮缩放<span>Shift + 拖动框选 · 双击步骤聚焦</span></Panel>
       </ReactFlow>
     </div></div>
     <aside className="flow-inspector">

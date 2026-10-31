@@ -52,7 +52,9 @@ nsis:
     - en_US
   include: apps/desktop/build/installer.nsh
 mac:
-  target: dir
+  target: zip
+  artifactName: Video-Quickly-${version}-macos-${arch}.${ext}
+  minimumSystemVersion: 13.5.0
   category: public.app-category.video
   icon: apps/desktop/build/icons/icon.icns
   identity: null
