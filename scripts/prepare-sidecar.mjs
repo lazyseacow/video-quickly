@@ -1,3 +1,5 @@
+import { execFileSync } from 'node:child_process';
+import { assertDarwinNodeSelfContained } from './node-portability.mjs';
 import { cp, mkdir, readdir, rename, rm, stat, writeFile, readFile, realpath, symlink } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
@@ -80,6 +82,9 @@ if(hasMedia){
     'Exact build, download location and archive checksum are recorded in provenance.json.',
   ].join('\n'));
 }else console.log('开发模式使用系统 FFmpeg；媒体处理需在 PATH 中安装 ffmpeg/ffprobe，或设置 VIDEO_QUICKLY_FFMPEG 和 VIDEO_QUICKLY_FFPROBE。');
+if (!development && process.platform === 'darwin') {
+  assertDarwinNodeSelfContained(execFileSync('/usr/bin/otool', ['-L', process.execPath], { encoding: 'utf8' }));
+}
 // Homebrew keeps the Node license one directory above bin/.
 const nodeLicenses=[join(dirname(process.execPath),'LICENSE'),resolve(dirname(process.execPath),'../LICENSE')];
 let nodeLicense;

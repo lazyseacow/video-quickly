@@ -33,11 +33,14 @@ export function waveformColumns(waveform: AudioWaveform, sourceInUs: number, dur
   const widthUs = durationUs / columns;
   const loopPeak = loop && periodUs > 0 && widthUs >= periodUs ? peakBetween(sourceInUs, waveform.durationUs) : undefined;
   return Array.from({ length: columns }, (_, index) => {
-    if (!loop) return peakBetween(sourceInUs + index * widthUs, sourceInUs + (index + 1) * widthUs);
+    // Preserve exact split endpoints before ceil selects source peak buckets.
+    // Dividing first can move the final column into the next source window.
+    const fromUs = index * durationUs / columns, toUs = (index + 1) * durationUs / columns;
+    if (!loop) return peakBetween(sourceInUs + fromUs, sourceInUs + toUs);
     if (periodUs <= 0) return 0;
     if (loopPeak !== undefined) return loopPeak;
-    const start = sourceInUs + index * widthUs % periodUs;
-    const end = start + widthUs;
+    const cycleStartUs = Math.floor(fromUs / periodUs) * periodUs;
+    const start = sourceInUs + (fromUs - cycleStartUs), end = sourceInUs + (toUs - cycleStartUs);
     return Math.max(peakBetween(start, end), end > waveform.durationUs ? peakBetween(sourceInUs, sourceInUs + end - waveform.durationUs) : 0);
   });
 }

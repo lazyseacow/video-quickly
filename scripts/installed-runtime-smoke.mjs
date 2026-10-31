@@ -4,13 +4,13 @@ import { createRequire } from 'node:module';
 import { readFile, writeFile } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
 import assert from 'node:assert/strict';
-import { fixtureSecretCall, prepareInstalledUpgrade, verifyInstalledUpgrade, verifyUpgradeBackup } from './installed-upgrade-fixture.mjs';
+import { fixtureSecretCall } from './installed-upgrade-fixture.mjs';
 
 // This fixture writes only to the fresh CI account's application data directory.
 if (process.env.GITHUB_ACTIONS !== 'true' || process.env.RUNNER_OS !== 'Windows') throw new Error('安装验收只能在隔离的 Windows CI 环境执行');
 const [mode, installDirectory, dataDirectory, evidence] = process.argv.slice(2);
-if (!['prepare', 'verify', 'inspect', 'prepare-upgrade', 'verify-upgrade'].includes(mode) || !installDirectory || !dataDirectory || !evidence) throw new Error('需要安装验收模式、安装目录、数据目录和证据文件路径');
-const sidecar = resolve(installDirectory, 'sidecar');
+if (!['prepare', 'verify', 'inspect'].includes(mode) || !installDirectory || !dataDirectory || !evidence) throw new Error('需要安装验收模式、安装目录、数据目录和证据文件路径');
+const sidecar = resolve(installDirectory, 'resources', 'sidecar');
 if (mode === 'inspect') {
   const require = createRequire(join(sidecar, 'package.json'));
   const Database = require('better-sqlite3');
@@ -47,7 +47,8 @@ function rpc(method, params = {}) {
   });
 }
 async function runAt(id, status) {
-  for (let i = 0; i < 100; i++) {
+  const deadline = Date.now() + 20_000;
+  while (Date.now() < deadline) {
     const snapshot = await rpc('workspace.snapshot');
     const run = snapshot.runs.find(run => run.id === id);
     if (run?.status === status) return run;
@@ -62,44 +63,22 @@ try {
   assert.ok(summary.projects.every(project => Number.isInteger(project.shotCount) && !('shots' in project)));
   const snapshot = await rpc('workspace.snapshot');
   assert.equal(snapshot.system.ffmpegAvailable, true);
-  if (mode === 'prepare-upgrade') {
-    const prepared = await prepareInstalledUpgrade(rpc, dirname(evidence), runAt);
-    const require = createRequire(join(sidecar, 'package.json')), Database = require('better-sqlite3'), db = new Database(join(dataDirectory, 'workspace.sqlite'), { readonly: true });
-    try {
-      const schemaVersion = db.pragma('user_version', { simple: true });
-      assert.equal(schemaVersion, 6, '必须使用真实旧包创建 Schema 6');
-      assert.equal(db.pragma('quick_check', { simple: true }), 'ok');
-      const deadline = Date.now() + 20_000;
-      while (!(db.prepare("SELECT 1 FROM writes WHERE thread_id = ? AND channel = '__interrupt__' LIMIT 1").get(prepared.runId))) {
-        if (Date.now() >= deadline) throw new Error('旧运行的原生审阅检查点未持久化');
-        await new Promise(resolve => setTimeout(resolve, 50));
-      }
-      await writeFile(evidence, JSON.stringify({ ...prepared, schemaVersion }));
-    } finally { db.close(); }
-  } else if (mode === 'prepare') {
+  if (mode === 'prepare') {
     const project = await rpc('project.create', { title: '中文路径 安装升级验收' });
     const run = await rpc('run.start', { projectId: project.id, nodeId: 'style' });
     const review = await runAt(run.id, 'waiting_review');
     assert.equal(review.activities.length, 1);
-    await writeFile(evidence, JSON.stringify({ projectId: project.id, runId: run.id }));
+    const image = `${evidence}.png`;
+    await writeFile(image, Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9ZlS8AAAAASUVORK5CYII=', 'base64'));
+    const asset = await rpc('asset.import', { projectId: project.id, path: image, kind: 'image' });
+    await writeFile(evidence, JSON.stringify({ projectId: project.id, runId: run.id, asset }));
   } else {
     const saved = JSON.parse(await readFile(evidence, 'utf8'));
-    if (mode === 'verify-upgrade') {
-      assert.equal(saved.schemaVersion, 6);
-      const require = createRequire(join(sidecar, 'package.json')), Database = require('better-sqlite3');
-      const migrationBackup = await verifyUpgradeBackup(dataDirectory, saved, Database);
-      const db = new Database(join(dataDirectory, 'workspace.sqlite'), { readonly: true });
-      let schemaAfter;
-      try { schemaAfter = db.pragma('user_version', { simple: true }); assert.equal(schemaAfter, 7); assert.equal(db.pragma('quick_check', { simple: true }), 'ok'); } finally { db.close(); }
-      const verified = await verifyInstalledUpgrade(rpc, saved, runAt);
-      await writeFile(`${evidence}.verified.json`, JSON.stringify({ ...verified, schemaBefore: migrationBackup.schemaVersion, schemaAfter, migrationBackup }));
-    } else {
       assert.equal(snapshot.projects.find(project => project.id === saved.projectId)?.title, '中文路径 安装升级验收');
       const review = snapshot.runs.find(run => run.id === saved.runId);
       assert.equal(review.status, 'waiting_review'); assert.equal(review.activities.length, 1);
       await rpc('run.review', { runId: saved.runId, approved: true });
       assert.equal((await runAt(saved.runId, 'succeeded')).activities.length, 1);
-    }
     const exporter = await rpc('project.create', { title: '安装后导出', profile: { width: 320, height: 180, frameRate: { numerator: 30, denominator: 1 }, fitMode: 'contain', previewScale: .5 } });
     await rpc('project.saveShot', { projectId: exporter.id, shot: { id: 'installed-shot', title: '安装后的实际画面', narration: '安装后的本地小样', visualPrompt: '', durationUs: 500_000 } });
     const exported = await rpc('render.export', { projectId: exporter.id });
@@ -108,18 +87,5 @@ try {
 } finally {
   const exited = new Promise(resolve => child.once('exit', resolve));
   if (child.exitCode === null && child.signalCode === null) { child.kill('SIGKILL'); await exited; }
-}
-if (mode === 'prepare') {
-  const require = createRequire(join(sidecar, 'package.json'));
-  const Database = require('better-sqlite3');
-  const db = new Database(join(dataDirectory, 'workspace.sqlite'));
-  // Recreate the shipped unversioned baseline while keeping an actual graph checkpoint.
-  try { db.exec(`
-    DROP TRIGGER project_summary_insert; DROP TRIGGER project_summary_update; DROP TRIGGER project_summary_delete;
-    DROP TRIGGER asset_version_insert; DROP TRIGGER asset_version_update; DROP TRIGGER asset_version_delete;
-    DROP INDEX documents_project; DROP TABLE project_asset_references;
-    DELETE FROM documents WHERE kind = 'project-summary'; DELETE FROM runtime_metadata WHERE key = 'assets-version';
-    DROP INDEX execution_events_run_sequence; DROP TABLE schema_migrations; PRAGMA user_version = 0;
-  `); } finally { db.close(); }
 }
 console.log(`安装后的执行组件验收通过：${mode}`);

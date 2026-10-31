@@ -126,6 +126,17 @@ export function createRuntime(options: RuntimeOptions) {
   const reads = createReadModels(database, store);
   const listeners = new Set<(event: RuntimeEvent) => void>();
   const active = new Map<string, { promise: Promise<void>; controller: AbortController }>();
+  // Native graph cancellation can finish invoke before a node's local commit.
+  // Keep ownership of that work until it settles, before closing SQLite.
+  const pendingWork = new Set<Promise<unknown>>();
+  function trackWork<T>(work: () => Promise<T>): Promise<T> {
+    const promise = work(); pendingWork.add(promise);
+    void promise.then(() => pendingWork.delete(promise), () => pendingWork.delete(promise));
+    return promise;
+  }
+  async function drainWork() {
+    while (active.size || pendingWork.size) await Promise.allSettled([...Array.from(active.values(), value => value.promise), ...pendingWork]);
+  }
   const transientSecrets = new Set<string>();
   function rememberSecret(value: string | undefined) { if (value) transientSecrets.add(value); return value; }
   let closing = false;
@@ -529,7 +540,7 @@ export function createRuntime(options: RuntimeOptions) {
             execute: async shotId => {
               const shot = shots.find(shot => shot.id === shotId);
               if (!shot) throw new Error('运行快照缺少并行镜头。');
-              try { return await executeActivity({ ...activityContext, project: { ...executionProject, shots: [shot] }, queueSignal: scheduling.signal, onFailure: error => scheduling.abort(error) }); }
+              try { return await trackWork(() => executeActivity({ ...activityContext, project: { ...executionProject, shots: [shot] }, queueSignal: scheduling.signal, onFailure: error => scheduling.abort(error) })); }
               catch (error) { scheduling.abort(error); throw error; }
             } });
           const assets: AssetRecord[] = [], usages = [];
@@ -614,7 +625,7 @@ export function createRuntime(options: RuntimeOptions) {
     });
     const workflow: WorkflowDefinition = { id: definition.id, version: definition.version, name: definition.name, nodes: children, edges: definition.edges.map(edge => ({ ...edge, source: subflowNodeId(node.id, edge.source), target: subflowNodeId(node.id, edge.target) })) };
     const graph = createExecutionGraph(database, workflow, {
-      execute: child => executeNode(runId, child, saved, controller),
+      execute: child => trackWork(() => executeNode(runId, child, saved, controller)),
       waiting: child => { if (controller.signal.aborted) throw new Error('任务已停止。'); updateRun(runId, { status: 'waiting_review', currentNodeId: child.id }); recordEvent(runId, 'review.waiting', `等待审阅：${child.label}`, child.id); },
       reviewed: (child, approved) => { recordEvent(runId, 'review.completed', approved ? `已通过：${child.label}` : `需修改：${child.label}`, child.id); updateRun(runId, { status: approved ? 'running' : 'needs_attention', currentNodeId: child.id }); },
       advanced: child => recordEvent(runId, 'node.completed', `已完成：${child.label}`, child.id),
@@ -674,7 +685,7 @@ export function createRuntime(options: RuntimeOptions) {
       const nodeIds = new Set(saved.nodes.map(node => node.id));
       const workflow = { ...saved.project.workflow, nodes: saved.nodes, edges: saved.project.workflow.edges.filter(edge => nodeIds.has(edge.source) && nodeIds.has(edge.target)) };
       const graph = createExecutionGraph(database, workflow, {
-        execute: node => executeNode(runId, node, saved, controller),
+        execute: node => trackWork(() => executeNode(runId, node, saved, controller)),
         waiting: node => {
           if (controller.signal.aborted) throw new Error('任务已停止。');
           updateRun(runId, { status: 'waiting_review', currentNodeId: node.id });
@@ -768,9 +779,12 @@ export function createRuntime(options: RuntimeOptions) {
     },
   });
 
-  async function dispatch(method: string, rawParams: unknown = {}): Promise<unknown> {
-    if (method.startsWith('audio.mix.') || method === 'audio.silence') return audioPreview.dispatch(method, rawParams);
+  function dispatch(method: string, rawParams: unknown = {}): Promise<unknown> {
+    return trackWork(() => dispatchRequest(method, rawParams));
+  }
+  async function dispatchRequest(method: string, rawParams: unknown): Promise<unknown> {
     if (closing) throw new Error('运行环境正在关闭。');
+    if (method.startsWith('audio.mix.') || method === 'audio.silence') return audioPreview.dispatch(method, rawParams);
     switch (method) {
       case 'workspace.snapshot': return snapshot();
       case 'workspace.summary': return { projects: reads.projects(), models: availableModels(), skills: store.list<SkillPackage>('skill'), system, version: workspaceVersion, assetsVersion: reads.assetsVersion() };
@@ -1371,13 +1385,13 @@ export function createRuntime(options: RuntimeOptions) {
   return {
     dispatch,
     subscribe(listener: (event: RuntimeEvent) => void) { listeners.add(listener); return () => { listeners.delete(listener); }; },
-    async waitForIdle() { await audioPreview.waitForIdle(); await batches.waitForIdle(); await Promise.allSettled([...active.values()].map(value => value.promise)); },
+    async waitForIdle() { await audioPreview.waitForIdle(); await batches.waitForIdle(); await drainWork(); },
     async close() {
       closing = true;
       await audioPreview.close();
       await batches.close();
       for (const value of active.values()) value.controller.abort();
-      await Promise.allSettled([...active.values()].map(value => value.promise));
+      await drainWork();
       database.close(); listeners.clear(); transientSecrets.clear();
     },
   };

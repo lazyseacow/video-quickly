@@ -1,0 +1,63 @@
+appId: net.lazyseacow.video-quickly
+productName: Video Quickly
+electronVersion: 45.2.1
+asar: true
+npmRebuild: false
+nodeGypRebuild: false
+# The execution component keeps its own Node ABI. Electron only loads N-API keyring.
+directories:
+  app: apps/desktop
+  output: .generated/electron-release
+  buildResources: apps/desktop/build
+files:
+  - dist/**/*
+  - electron/**/*
+  - build/icons/icon.png
+  - package.json
+  - node_modules/@napi-rs/keyring/**/*
+  - node_modules/@napi-rs/keyring-*/**/*
+  - node_modules/koffi/**/*
+  - node_modules/@koromix/koffi-*/**/*
+  - '!electron/**/*.test.*'
+asarUnpack:
+  - node_modules/@napi-rs/**/*.node
+  - node_modules/koffi/**/*.node
+  - node_modules/@koromix/**/*.node
+extraResources:
+  - from: .generated/sidecar
+    to: sidecar
+  # The builder deliberately excludes a root node_modules while copying a
+  # resource directory. Map its contents separately to preserve the Node ABI.
+  - from: .generated/sidecar/node_modules
+    to: sidecar/node_modules
+win:
+  target:
+    - target: nsis
+      arch: x64
+  executableName: video-quickly
+  icon: apps/desktop/build/icons/icon.ico
+  artifactName: Video-Quickly-${version}-windows-${arch}-setup.${ext}
+  signAndEditExecutable: true
+nsis:
+  oneClick: false
+  perMachine: false
+  allowElevation: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  runAfterFinish: false
+  deleteAppDataOnUninstall: false
+  installerLanguages:
+    - zh_CN
+    - en_US
+  include: apps/desktop/build/installer.nsh
+mac:
+  target: dir
+  category: public.app-category.video
+  icon: apps/desktop/build/icons/icon.icns
+  identity: null
+linux:
+  target: dir
+  category: AudioVideo
+  executableName: video-quickly
+publish: null

@@ -1,9 +1,9 @@
-.music-editor { display: grid; gap: 16px; }
-.music-editor__add, .music-editor__import { display: grid; gap: 8px; }
-.music-editor__import summary { cursor: pointer; color: var(--text-secondary); margin-bottom: 10px; }
-.music-editor__clip { padding: 16px; border: 1px solid var(--border); border-radius: var(--radius-medium); background: var(--surface); }
-.music-editor__heading { display: flex; align-items: center; gap: 10px; margin-bottom: 14px; }
+.music-editor { display: grid; gap: var(--space-4); }
+.music-editor__add, .music-editor__import { display: grid; gap: var(--space-2); }
+.music-editor__import summary { cursor: pointer; color: var(--text-secondary); margin-bottom: var(--space-3); }
+.music-editor__clip { padding: var(--space-4); border: 1px solid var(--border); border-radius: var(--radius-medium); background: var(--surface); }
+.music-editor__heading { display: flex; align-items: center; gap: var(--space-3); margin-bottom: var(--space-4); }
 .music-editor__heading strong { flex: 1; min-width: 0; overflow-wrap: anywhere; }
-.music-editor__fields { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
-.music-editor__loop { display: flex; align-items: center; gap: 8px; margin-top: 10px; font-size: 12px; color: var(--text-secondary); }
+.music-editor__fields { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: var(--space-3); }
+.music-editor__loop { display: flex; align-items: center; gap: var(--space-2); margin-top: var(--space-3); font-size: var(--text-size-caption); color: var(--text-secondary); }
 @media (max-width: 700px) { .music-editor__fields { grid-template-columns: repeat(2, minmax(0, 1fr)); } }

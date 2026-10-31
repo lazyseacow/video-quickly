@@ -319,6 +319,14 @@ components:
 
 属性面板内连续的整宽操作按钮之间使用 8px 间距，与后续表单字段之间使用 16px 间距。时间轴工具条高 56px，紧凑控件高 40px；批量编辑按钮左右各留 8px，工具条内上下保持约 8px 留白。
 
+### 令牌契约与回归
+
+- `design-tokens.css` 将固定中性色板与明暗语义角色分层；生产组件引用背景、文字、状态、媒体占位和流程连线角色，不直接选用色板值。真实素材、字幕与场景配置的用户颜色属于内容数据，继续按原配置渲染。
+- 全部自有样式表的字号、字重、行高、字距、字体、圆角及正向内外间距使用公共角色。常规空间按 4px 网格，密集控件可使用 2px 的 `--space-tight`；负向光学校正、边框、图标尺寸、断点及媒体／时间轴业务几何保持各自语义，不机械替换为间距令牌。
+- 页面标题使用 `--text-size-heading`，项目标题使用 `--text-size-project`，弹窗标题使用 `--text-size-title`；正文、控件、说明与密集数字分别引用 body、label、caption、micro／badge 角色。导航选中前后不改变排版。
+- CSS 与 GSAP 共用 `--motion-enter`、`--motion-exit`、`--motion-switch` 等时长，GSAP 在交互开始时读取，不维护另一组数字。减少动态效果时保持即时状态反馈；播放、拖动及逐帧操作不增加装饰动画。
+- `tests/design-token-contract.test.ts` 扫描全部自有 CSS，阻止新增局部颜色及排版／空间／圆角硬编码，并核对引用角色存在。`tests/e2e/design-system.spec.ts` 验证公共角色覆盖、明暗主题、真实弹窗时长、减少动态效果和焦点恢复。视觉验收仍须检查实际页面，静态检查不能替代可读性和布局验证。
+
 ## Overview
 
 Mobbin is a reference library of real product interfaces, and its own interface is engineered to get out of the way. The system is strictly monochrome: near-black ink (`{colors.ink}` — #141414) on a pure white canvas (`{colors.canvas}`), with structure carried by a ladder of barely-perceptible neutral tints rather than by shadows or color. The thousands of app screenshots, icon tiles, and brand logos the site exists to show are the only saturated elements on any page — the chrome frames them the way a gallery wall frames paintings.
