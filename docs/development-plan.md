@@ -10,7 +10,7 @@
 
 - **界面统一已完成本机专项。** 全部 27 个自有 CSS 文件共用基础色板与语义角色；CSS 与 GSAP 共用动效时长。静态契约 2 项通过，生产组件浏览器专项 31 条通过，覆盖公共角色覆盖、明暗主题、1536／600px 全页面与弹窗、390／1024px 长弹窗、10% 动效速度、减少动效、焦点和原有制作操作。8 张代表性截图已目视检查。范围与规则见下方采用现状及根目录 `DESIGN.md`。
 - **Electron 原生外壳与正式打包已实现。** 保留独立 Node 24／LangGraph／SQLite／FFmpeg 执行组件，替换沙箱预加载、IPC、系统凭据、媒体协议及进程管理。Windows x64 生成 NSIS 安装器，macOS arm64／x64 分别生成包含独立 Node 和媒体组件的应用 ZIP，不依赖 Homebrew。正式报告必须为 `bundled-runtime-and-media`，拒绝早期 `development-directory-bundle` 进入交付清单。具体门槛见 [Electron 迁移](electron-migration.md)与 [macOS 正式验收](macos-verification.md)。
-- **三平台执行完整验收矩阵。** Windows JobObject、系统凭据、原生编辑与草稿恢复、包外 PDF、真实编码及安装数据保留均由对应平台实际包验证；[Desktop verification](https://github.com/lazyseacow/video-quickly/actions/workflows/ci.yml) 保存每次提交的结果、截图和产物摘要。Windows 明确删除仅清理新的 Roaming 工作区，默认卸载核对 DB／WAL／素材内容未变。原生 GPU、驱动、系统对话框及签名分发保留各自的人工或发布边界。以下旧 Tauri 的成功记录仅为历史证据，不计为 Electron 已通过。
+- **三平台执行完整验收矩阵。** CI 包含 Windows JobObject 真实进程树测试，并使用对应平台实际包验证系统凭据、原生编辑与草稿恢复、包外 PDF、真实编码及安装数据保留；[Desktop verification](https://github.com/lazyseacow/video-quickly/actions/workflows/ci.yml) 保存每次提交的结果、截图和产物摘要。Windows 明确删除仅清理新的 Roaming 工作区，默认卸载核对 DB／WAL／素材内容未变。原生 GPU、驱动、系统对话框及签名分发保留各自的人工或发布边界。以下旧 Tauri 的成功记录仅为历史证据，不计为 Electron 已通过。
 
 ## 迁移前的缺口收敛记录
 
