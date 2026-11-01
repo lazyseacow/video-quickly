@@ -1,6 +1,6 @@
 # Video Quickly 开发与优化计划
 
-更新日期：2026-10-31。当前目标为统一全局界面规范，将桌面外壳完整迁移至 Electron，保持最终编辑、生成、恢复及导出功能一致，正式兼容 Windows 与 macOS 并完成各平台测试验收。项目已包含大项目读取、编辑历史、草稿恢复、镜头剪辑、声音字幕制作、单镜头候选、角色／模型／费用、资料核验、科普模板与批量导出；这些能力继续复用，不重复开发。
+更新日期：2026-11-01。当前目标为统一全局界面规范，将桌面外壳完整迁移至 Electron，保持最终编辑、生成、恢复及导出功能一致，正式兼容 Windows 与 macOS 并完成各平台测试验收。项目已包含大项目读取、编辑历史、草稿恢复、镜头剪辑、声音字幕制作、单镜头候选、角色／模型／费用、资料核验、科普模板与批量导出；这些能力继续复用，不重复开发。
 
 ## 当前 Electron 迁移与界面统一
 
@@ -9,8 +9,8 @@
 用户随后明确项目仍处于开发阶段，取消旧 Tauri 数据兼容要求。Electron 使用独立的新工作区、浏览器配置和系统凭据服务，不附带旧 WebView／草稿／凭据迁移器，不修改或删除原目录。新的 Electron 会话内仍须验证项目、媒体、撤销重做、未保存草稿、面板布局及执行检查点的持久化与恢复。
 
 - **界面统一已完成本机专项。** 全部 27 个自有 CSS 文件共用基础色板与语义角色；CSS 与 GSAP 共用动效时长。静态契约 2 项通过，生产组件浏览器专项 31 条通过，覆盖公共角色覆盖、明暗主题、1536／600px 全页面与弹窗、390／1024px 长弹窗、10% 动效速度、减少动效、焦点和原有制作操作。8 张代表性截图已目视检查。范围与规则见下方采用现状及根目录 `DESIGN.md`。
-- **Electron 原生实现与验收推进中。** 保留独立 Node 24／LangGraph／SQLite／FFmpeg 执行组件，替换外壳、沙箱预加载、IPC、系统凭据、媒体协议、进程管理和打包。当前本机源代码运行和 Mac 开发目录包的真实 Electron 专项均已通过；后者报告明确标记 `development-directory-bundle`，依赖本机开发执行组件，不属于可独立分发的 Mac 包。正式打包、全量回归与最终安装记录分别验收，不能将源码运行或浏览器预览作为安装包通过证据。具体门槛见 [Electron 迁移](electron-migration.md)。
-- **Windows 交付待对应运行。** 新增 Windows JobObject 和 Electron NSIS 流程尚需本轮 Windows CI 证明，原生 GPU、驱动和系统交互仍保留实机边界。以下旧 Tauri 的 CI、安装与升级成功记录仅为历史证据，不计为 Electron 已通过。
+- **Electron 原生外壳与正式打包已实现。** 保留独立 Node 24／LangGraph／SQLite／FFmpeg 执行组件，替换沙箱预加载、IPC、系统凭据、媒体协议及进程管理。Windows x64 生成 NSIS 安装器，macOS arm64／x64 分别生成包含独立 Node 和媒体组件的应用 ZIP，不依赖 Homebrew。正式报告必须为 `bundled-runtime-and-media`，拒绝早期 `development-directory-bundle` 进入交付清单。具体门槛见 [Electron 迁移](electron-migration.md)与 [macOS 正式验收](macos-verification.md)。
+- **三平台执行完整验收矩阵。** Windows JobObject、系统凭据、原生编辑与草稿恢复、包外 PDF、真实编码及安装数据保留均由对应平台实际包验证；[Desktop verification](https://github.com/lazyseacow/video-quickly/actions/workflows/ci.yml) 保存每次提交的结果、截图和产物摘要。Windows 明确删除仅清理新的 Roaming 工作区，默认卸载核对 DB／WAL／素材内容未变。原生 GPU、驱动、系统对话框及签名分发保留各自的人工或发布边界。以下旧 Tauri 的成功记录仅为历史证据，不计为 Electron 已通过。
 
 ## 迁移前的缺口收敛记录
 
