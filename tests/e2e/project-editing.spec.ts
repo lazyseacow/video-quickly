@@ -86,6 +86,7 @@ test('restores an unsaved multi-field draft and resolves external edits without 
   await expect(page.getByLabel('画面要求')).toHaveValue('另一视图的画面');
   await page.getByRole('button', { name: '保存镜头', exact: true }).click();
   await expect(page.getByRole('button', { name: '保存镜头', exact: true })).toBeDisabled();
+  await expect.poll(async () => (await rpc(request, 'project.get', { projectId: project.id })).project.revision).toBe(remote.revision + 1);
   const saved = (await rpc(request, 'project.get', { projectId: project.id })).project;
   expect(saved.revision).toBe(remote.revision + 1);
   expect(saved.shots[0]).toMatchObject({ title: '另一视图的标题', narration: '重启后仍保留的旁白', visualPrompt: '另一视图的画面' });

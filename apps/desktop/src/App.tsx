@@ -261,7 +261,7 @@ function CreateProjectDialog({ action, onClose, onCreated }: { action: Action; o
 
 function Workbench({ project, workspace, action, notify, onRegisterSave, outputRequest, onOutputConsumed }: { outputRequest?: StepOutputSelection; onOutputConsumed: () => void; project: ProjectDocument; workspace: WorkspaceView; action: Action; notify: (message: string, error?: boolean) => void; onRegisterSave: (callback: (() => Promise<boolean>) | null) => void }) {
   const [view, setView] = useState<'steps' | 'flow'>('steps');
-  const { session, state: edits, ready, storageError } = useProjectEdits(project, workspace.system.dataDirectory);
+  const { session, state: edits, ready, storageError, checkpoint } = useProjectEdits(project, workspace.system.dataDirectory);
   const content = edits.present;
   const authoredProject = useMemo(() => ({ ...project, ...content, revision: edits.revision }), [project, content, edits.revision]);
   const audioMix = usePreparedProjectMix(authoredProject, workspace.assets, ready && view === 'steps', edits.busy);
@@ -445,6 +445,9 @@ function Workbench({ project, workspace, action, notify, onRegisterSave, outputR
           const captured = session.state.present;
           session.beginSave();
           try {
+            // A restart after the server commits must recover this save's
+            // intent. A reported storage failure still permits a project save.
+            await checkpoint();
             const result = await action<ProjectDocument>('project.update', { projectId: project.id, revision: session.state.revision, patch: captured });
             if (!result) return false;
             session.saved(result);
@@ -457,7 +460,7 @@ function Workbench({ project, workspace, action, notify, onRegisterSave, outputR
     };
     saveInFlight.current = operation();
     try { return await saveInFlight.current; } finally { saveInFlight.current = undefined; }
-  }, [action, notify, project.id, session, view]);
+  }, [action, checkpoint, notify, project.id, session, view]);
   useEffect(() => {
     onRegisterSave(save);
     return () => onRegisterSave(null);
