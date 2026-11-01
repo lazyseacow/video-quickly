@@ -34,7 +34,8 @@ export function createReadModels(database: Database.Database, store: DocumentSto
     const summary = store.get<ProjectSummary>('project-summary', id);
     if (!summary) throw new Error('项目不存在或已被移除。');
     const version = assetsVersion();
-    const latest = database.prepare("SELECT body FROM documents WHERE kind = 'run' AND json_extract(body, '$.projectId') = ? ORDER BY rowid DESC LIMIT 1").get(id) as { body: string } | undefined;
+    // Match the partial index predicate so latest-run reads seek the project without sorting its history.
+    const latest = database.prepare("SELECT body FROM documents WHERE kind IN ('run', 'asset') AND kind = 'run' AND json_extract(body, '$.projectId') = ? ORDER BY rowid DESC LIMIT 1").get(id) as { body: string } | undefined;
     const assets = knownAssetsVersion === version ? undefined : (database.prepare("SELECT body FROM documents WHERE kind = 'asset' AND (json_extract(body, '$.projectId') = ? OR json_extract(body, '$.projectId') IS NULL) ORDER BY rowid").all(id) as { body: string }[]).map(row => JSON.parse(row.body) as AssetRecord);
     return { id, revision: summary.revision, assetsVersion: version, project: revision === summary.revision ? undefined : store.get<ProjectDocument>('project', id), assets, latestRun: latest ? runSummary(JSON.parse(latest.body)) : undefined };
   }

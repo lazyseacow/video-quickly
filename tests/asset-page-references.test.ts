@@ -1,0 +1,95 @@
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { assetListItemSchema, characterProfileSchema, recordPageSchema, type AssetRecord, type CharacterProfile } from '@video-quickly/contracts';
+import { createRuntime } from '../packages/runtime/src';
+import { DocumentStore, openDatabase } from '../packages/runtime/src/database';
+import { seedLargeWorkspace } from './fixtures/large-workspace';
+
+const fixtures: Array<{ directory: string; database: ReturnType<typeof openDatabase>; runtime: ReturnType<typeof createRuntime> }> = [];
+afterEach(async () => {
+  for (const { directory, database, runtime } of fixtures.splice(0)) {
+    await runtime.close(); database.close(); await rm(directory, { recursive: true, force: true });
+  }
+});
+const assetsPageSchema = recordPageSchema(assetListItemSchema);
+async function fixture(count: number) {
+  const directory = await mkdtemp(join(tmpdir(), 'vq-asset-page-references-'));
+  const database = openDatabase(directory), store = new DocumentStore(database);
+  const project = seedLargeWorkspace(store, 10, { assets: 0, runs: 0, eventsPerRun: 0 });
+  const assets = Array.from({ length: count }, (_, index): AssetRecord => ({ id: `public-${index}`, name: `公共图片 ${index}`, kind: 'image', path: '/fixture/not-read-by-metadata.png', mimeType: 'image/png', size: 100, sha256: 'fixture-hash', version: 1, createdAt: '', provenance: 'fixture', retained: false, active: true }));
+  database.transaction(() => { for (const asset of assets) store.put('asset', asset.id, asset); })();
+  const runtime = createRuntime({ dataDirectory: directory, seed: false });
+  fixtures.push({ directory, database, runtime });
+  const save = async (name: string, referenceAssetIds: string[]) => characterProfileSchema.parse(await runtime.dispatch('character.save', { character: { name, description: `${name}的固定设定`, referenceAssetIds } }));
+  return { database, store, project, assets, runtime, save };
+}
+
+describe('asset-page character references', () => {
+  it('checks a full page against current and archived characters in one query', async () => {
+    const { database, runtime, assets, save } = await fixture(100);
+    await save('当前角色', [assets[0].id]);
+    const archived = await save('已归档角色', [assets[99].id]);
+    await runtime.dispatch('character.archive', { characterId: archived.id, revision: archived.revision });
+    const prepared = vi.spyOn(Object.getPrototypeOf(database) as Pick<typeof database, 'prepare'>, 'prepare');
+    try {
+      const page = assetsPageSchema.parse(await runtime.dispatch('asset.list', {}));
+      expect(page.items).toHaveLength(100); expect(page.nextCursor).toBeNull();
+      expect(page.items.filter(asset => asset.inUse).map(asset => asset.id)).toEqual([assets[99].id, assets[0].id]);
+      const queries = prepared.mock.calls.map(([sql]) => sql).filter(sql => sql.includes("json_each(profile.body, '$.referenceAssetIds')"));
+      expect(queries).toHaveLength(1);
+    } finally { prepared.mockRestore(); }
+  });
+
+  it('keeps references exact across pages and external changes while preserving deletion protection', async () => {
+    const { database, store, project, assets, runtime, save } = await fixture(105);
+    const local = { ...assets[0], id: 'project-image', projectId: project.id };
+    store.put('asset', local.id, local);
+    await runtime.dispatch('project.update', { projectId: project.id, revision: project.revision, patch: { shots: [{ ...project.shots[0], assetId: local.id }, ...project.shots.slice(1)] } });
+    store.put('asset', assets[102].id, { ...assets[102], active: false });
+    store.put('asset', assets[103].id, { ...assets[103], retained: true });
+    const current = await save('当前参考', [assets[104].id]);
+    const archived = await save('页外归档参考', [assets[0].id]);
+    await runtime.dispatch('character.archive', { characterId: archived.id, revision: archived.revision });
+
+    const first = assetsPageSchema.parse(await runtime.dispatch('asset.list', { kind: 'image' }));
+    expect(first.items).toHaveLength(100); expect(first.nextCursor).not.toBeNull();
+    expect(first.items.filter(asset => asset.inUse).map(asset => asset.id)).toEqual([local.id, assets[104].id]);
+    expect(first.items.some(asset => asset.id === assets[102].id)).toBe(false);
+    const next = assetsPageSchema.parse(await runtime.dispatch('asset.list', { kind: 'image', before: first.nextCursor }));
+    expect(next.items.map(asset => asset.id)).toEqual(assets.slice(0, 5).reverse().map(asset => asset.id));
+    expect(next.items.filter(asset => asset.inUse).map(asset => asset.id)).toEqual([assets[0].id]);
+    expect(next.nextCursor).toBeNull();
+    expect(new Set([...first.items, ...next.items].map(asset => asset.id)).size).toBe(105);
+    const prepared = vi.spyOn(Object.getPrototypeOf(database) as Pick<typeof database, 'prepare'>, 'prepare');
+    try {
+      for (const params of [{ kind: 'video' }, { before: 1 }]) expect(assetsPageSchema.parse(await runtime.dispatch('asset.list', params))).toEqual({ items: [], nextCursor: null });
+      expect(prepared.mock.calls.some(([sql]) => sql.includes("json_each(profile.body, '$.referenceAssetIds')"))).toBe(false);
+    } finally { prepared.mockRestore(); }
+
+    for (const assetId of [local.id, assets[104].id, assets[0].id, assets[103].id]) await expect(runtime.dispatch('asset.delete', { assetId })).rejects.toThrow('正在使用或已保留');
+    const external: CharacterProfile = { ...current, revision: current.revision + 1, referenceAssetIds: [assets[4].id] };
+    store.put('character', external.id, external);
+    const changed = assetsPageSchema.parse(await runtime.dispatch('asset.list', { kind: 'image' }));
+    expect(changed.items.find(asset => asset.id === assets[104].id)?.inUse).toBe(false);
+    const changedNext = assetsPageSchema.parse(await runtime.dispatch('asset.list', { kind: 'image', before: changed.nextCursor }));
+    expect(changedNext.items.filter(asset => asset.inUse).map(asset => asset.id)).toEqual([assets[4].id, assets[0].id]);
+    await expect(runtime.dispatch('asset.delete', { assetId: assets[4].id })).rejects.toThrow('正在使用');
+    await expect(runtime.dispatch('asset.delete', { assetId: assets[104].id })).resolves.toEqual({ deleted: true });
+    await expect(runtime.dispatch('asset.delete', { assetId: assets[3].id })).resolves.toEqual({ deleted: true });
+    expect(store.get<AssetRecord>('asset', assets[3].id)?.active).toBe(false);
+  });
+
+  it('continues to accept only active public images as character references', async () => {
+    const { assets, project, store, save } = await fixture(1);
+    const invalid = [
+      { ...assets[0], id: 'private-image', projectId: project.id },
+      { ...assets[0], id: 'inactive-image', active: false },
+      { ...assets[0], id: 'public-audio', kind: 'audio' as const },
+    ];
+    for (const asset of invalid) store.put('asset', asset.id, asset);
+    for (const id of [...invalid.map(asset => asset.id), 'missing-image']) await expect(save(id, [id])).rejects.toThrow('公共素材库');
+    await expect(save('有效参考', [assets[0].id])).resolves.toMatchObject({ referenceAssetIds: [assets[0].id] });
+  });
+});

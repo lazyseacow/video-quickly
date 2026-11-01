@@ -290,10 +290,11 @@ export function createRuntime(options: RuntimeOptions) {
     if (previous) validateClipEditHistory(value, previous);
   }
 
-  function saveProject(value: ProjectDocument) {
+  function saveProject(value: ProjectDocument, previous?: ProjectDocument) {
     const saved = projectSchema.parse({ ...value, revision: value.revision + 1, updatedAt: now() });
-    validateResearchProject(saved, project(value.id));
-    validateEdits(saved, project(value.id));
+    const baseline = previous ?? project(value.id);
+    validateResearchProject(saved, baseline);
+    validateEdits(saved, baseline);
     characters.profilesFor(saved);
     store.put('project', saved.id, saved);
     changed();
@@ -809,7 +810,8 @@ export function createRuntime(options: RuntimeOptions) {
       case 'asset.list': {
         const input = pageInputSchema.extend({ kind: assetSchema.shape.kind.optional() }).parse(rawParams);
         const result = reads.assets(input.before, input.limit, input.kind);
-        return { ...result, items: result.items.map(asset => ({ ...asset, inUse: asset.inUse || characters.assetInUse(asset.id) })) };
+        const characterReferences = characters.assetsInUse(result.items.filter(asset => !asset.inUse).map(asset => asset.id));
+        return { ...result, items: result.items.map(asset => ({ ...asset, inUse: asset.inUse || characterReferences.has(asset.id) })) };
       }
       case 'system.status': return system;
       case 'project.create': {
@@ -828,7 +830,7 @@ export function createRuntime(options: RuntimeOptions) {
           const asset = store.get<AssetRecord>('asset', clip.assetId);
           if (!asset?.active || asset.kind !== 'audio' || asset.projectId && asset.projectId !== value.id) throw new Error('背景音乐需要当前项目或公共素材库中的有效音频。');
         }
-        return saveProject({ ...value, ...input.patch, workflow });
+        return saveProject({ ...value, ...input.patch, workflow }, value);
       }
       case 'project.saveShot': {
         const input = entityId.extend({ revision: z.number().int().optional(), shot: shotSchema }).parse(rawParams);
