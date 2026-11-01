@@ -37,6 +37,8 @@ Windows 卸载默认保留数据。交互勾选删除或明确传入 `--delete-e
 
 Windows 与两个 Mac 架构均运行完整回归；原生专项脚本的文件选择结果由 Playwright 替代用户选择，覆盖真实预加载／IPC／对话框参数和取消处理；系统选择器的实际鼠标操作仍需对应桌面人工验证。Windows GPU、驱动与长时窗口进程采样、真实视频生成和供应商故障语义继续需要对应设备与服务。迁移 Electron 不会把这些项目自动变成已通过。
 
+浏览器验收固定 Playwright 1.64.1。Windows Chromium 的 [TCP 随机端口问题](https://github.com/microsoft/playwright/issues/43545)在 Windows Server 2025 测试环境加载本地资源时偶发报 `ERR_NO_BUFFER_SPACE`；通过 `pnpm patch` 精确回移[官方修复 #43605](https://github.com/microsoft/playwright/pull/43605)，在现有禁用列表中加入 `TcpPortRandomizationWin`。补丁只作用于测试依赖，保留原 Chromium、其余启动配置及网络健康断言。升级到包含此修复的稳定版后，移除对应补丁并重新运行三平台验收。
+
 当前安装包未签名，构建不发布 Release；签名与更新分发需独立配置。当前实现进度与实际通过记录以本轮命令产物和提交对应 CI 为准，旧 Tauri 的历史成功运行不能作为 Electron 的通过证据。
 
 ## 依赖核对
