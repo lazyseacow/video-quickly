@@ -22,6 +22,26 @@ interface ScenePreviewProps {
 }
 
 const NO_ASSETS: AssetRecord[] = [];
+type PreviewPropKey = Exclude<keyof ScenePreviewProps, 'project'>;
+type PreviewProjectKey = keyof ScenePreviewProps['project'];
+const previewPropKeys = Object.keys({
+  shot: true, shotIndex: true, timeUs: true, className: true, thumbnail: true, assets: true, playing: true, onRepair: true,
+} satisfies Record<PreviewPropKey, true>) as PreviewPropKey[];
+const previewProjectKeys = Object.keys({
+  profile: true, claims: true, researchSources: true, referenceDisplay: true, shots: true, captionStyle: true, clipEditSources: true, clipEditPlans: true,
+} satisfies Record<PreviewProjectKey, true>) as PreviewProjectKey[];
+
+function samePreviewProps(previous: ScenePreviewProps, next: ScenePreviewProps) {
+  for (const key of previewPropKeys) if (!Object.is(previous[key], next[key])) return false;
+  if (previous.project === next.project) return true;
+  for (const key of previewProjectKeys) {
+    // Numbered references reserve caption space across all shots. Otherwise an
+    // unrelated title edit does not change this preview's rendering context.
+    if (key === 'shots' && previous.project.referenceDisplay !== 'numbers' && next.project.referenceDisplay !== 'numbers') continue;
+    if (!Object.is(previous.project[key], next.project[key])) return false;
+  }
+  return true;
+}
 
 export const ScenePreview = memo(function ScenePreview({ project, shot, shotIndex, timeUs = 0, className = '', thumbnail = false, assets = NO_ASSETS, playing = false, onRepair }: ScenePreviewProps) {
   const canvas = useRef<HTMLCanvasElement>(null);
@@ -162,4 +182,4 @@ export const ScenePreview = memo(function ScenePreview({ project, shot, shotInde
   }, [requestRender]);
 
   return <span ref={container} className={`scene-preview ${thumbnail ? 'scene-preview--thumbnail' : ''}`} aria-busy={loading}><canvas ref={canvas} className={className} role="img" aria-label={`${shot.title} · 镜头预览`} style={error || loading ? { visibility: 'hidden' } : undefined} />{(error || loading) && <span className="scene-preview__state" role={error ? 'alert' : 'status'}>{error ? <CircleAlert size={thumbnail ? 18 : 27} /> : <LoaderCircle className="spin" size={thumbnail ? 18 : 27} />}<strong>{error || '正在读取素材…'}</strong>{error && !thumbnail && <><span>检查源文件，或为这个镜头重新导入素材。</span><span className="scene-preview__actions"><Button onClick={() => setRetry(value => value + 1)}><RefreshCw size={14} />重新读取</Button>{onRepair && <Button onClick={onRepair}><Upload size={14} />重新导入</Button>}</span></>}</span>}</span>;
-});
+}, samePreviewProps);

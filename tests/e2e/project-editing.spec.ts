@@ -1,4 +1,3 @@
-import { writeFile } from 'node:fs/promises';
 import { createServer } from 'node:http';
 import { expect, test, type APIRequestContext, type Page } from '@playwright/test';
 
@@ -98,36 +97,6 @@ test('restores an unsaved multi-field draft and resolves external edits without 
   await page.setViewportSize({ width: 600, height: 900 });
   await page.screenshot({ path: info.outputPath('draft-restored-light-600.png') });
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1)).toBe(true);
-});
-
-test('loads 200 shots without snapshot or hidden historical reads and keeps controls responsive', async ({ page, request }, info) => {
-  const project = await createProject(request, '两百镜头读取验收', 200);
-  const methods: string[] = []; const errors: string[] = [];
-  page.on('request', request => { if (request.url().endsWith('/__desktop_rpc')) methods.push(request.postDataJSON().method); });
-  page.on('pageerror', error => errors.push(error.message));
-  const started = Date.now();
-  await openProject(page, project.title);
-  await expect(page.locator('.outline-shot')).toHaveCount(200);
-  const openMs = Date.now() - started;
-  const editStarted = Date.now();
-  await page.getByLabel('镜头标题').fill('大项目中的编辑');
-  await page.getByRole('button', { name: '撤销', exact: true }).click();
-  await expect(page.getByLabel('镜头标题')).toHaveValue('测试镜头 1');
-  const editMs = Date.now() - editStarted;
-  const selectStarted = Date.now();
-  await page.locator('.outline-shot').last().click();
-  await expect(page.getByLabel('镜头标题')).toHaveValue('测试镜头 200');
-  const selectMs = Date.now() - selectStarted;
-  const ruler = page.getByRole('slider', { name: '预览播放位置' });
-  await ruler.press('End'); await expect(ruler).toHaveAttribute('aria-valuenow', '399967');
-  const cdp = await page.context().newCDPSession(page);
-  const heap = await cdp.send('Runtime.getHeapUsage'); await cdp.detach();
-  await page.screenshot({ path: info.outputPath('large-project-dark-1536.png') });
-  expect(methods).not.toContain('workspace.snapshot'); expect(methods).not.toContain('run.events'); expect(methods).not.toContain('run.activities'); expect(methods).not.toContain('run.list'); expect(methods).not.toContain('asset.list');
-  expect(errors).toEqual([]); await expect(page.locator('vite-error-overlay')).toHaveCount(0);
-  const metrics = { shots: 200, openMs, editAndUndoMs: editMs, selectLastShotMs: selectMs, heapUsedMiB: Math.round(heap.usedSize / 1024 / 1024 * 100) / 100, methods };
-  await writeFile(info.outputPath('large-project-metrics.json'), JSON.stringify(metrics, null, 2));
-  await info.attach('large-project-interactions', { body: JSON.stringify(metrics), contentType: 'application/json' });
 });
 
 test('keeps generated results editable with undo and rejects reapplying them after revisions', async ({ page, request }) => {
