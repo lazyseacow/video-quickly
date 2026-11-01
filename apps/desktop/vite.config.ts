@@ -6,6 +6,7 @@ import { resolve, relative, isAbsolute, extname } from 'node:path';
 import { createRuntime } from '../../packages/runtime/src/index.ts';
 import { createActivityExecutor, createWaveformReader, validateMediaActivity } from '../../packages/integrations/src/index.ts';
 import { readRpcRequest } from './dev/read-rpc-request.ts';
+import { createRpcDiagnostics } from './dev/rpc-diagnostics.ts';
 import { audioMixProjectionKey, prepareAudioMix, readAudioLevelWindow, detectAudioSilence } from '../../packages/video/src/audio-mix.ts';
 
 const developmentPort = Number(process.env.VIDEO_QUICKLY_PORT ?? 1420);
@@ -55,17 +56,23 @@ function developmentBridge(browserTest: boolean): Plugin {
       response.write(': connected\n\n'); peers.add(response);
       response.on('close', () => peers.delete(response));
     });
-    server.httpServer?.on('close', () => { unsubscribe(); void waveforms.close().then(() => runtime.close()); });
+    const diagnostics = browserTest && process.env.VIDEO_QUICKLY_RPC_DIAGNOSTICS ? createRpcDiagnostics(process.env.VIDEO_QUICKLY_RPC_DIAGNOSTICS) : undefined;
+    server.httpServer?.on('close', () => { unsubscribe(); void diagnostics?.close(); void waveforms.close().then(() => runtime.close()); });
     server.middlewares.use('/__desktop_rpc', async (request, response) => {
       response.setHeader('Content-Type', 'application/json; charset=utf-8');
       if (request.method !== 'POST') { response.statusCode = 405; response.end(JSON.stringify({ error: '只支持 POST' })); return; }
       if (request.headers.origin && request.headers.origin !== `http://127.0.0.1:${developmentPort}`) { response.statusCode = 403; response.end(JSON.stringify({ error: '不允许此来源' })); return; }
+      const diagnostic = diagnostics?.request(request, response);
       try {
         const parsed = await readRpcRequest(request);
+        diagnostic?.bodyDecoded(parsed && typeof parsed === 'object' && 'method' in parsed ? parsed.method : undefined);
         if (!parsed || typeof parsed !== 'object' || !('method' in parsed) || typeof parsed.method !== 'string') throw new Error('请求格式无效');
+        diagnostic?.dispatchStarted();
         const result = ['runtime.status', 'runtime.reconnect'].includes(parsed.method) ? { state: 'ready', generation: 0 } : await runtime.dispatch(parsed.method, 'params' in parsed ? parsed.params : {});
+        diagnostic?.dispatchCompleted();
         response.end(JSON.stringify({ result }));
       } catch (error) {
+        diagnostic?.failed();
         response.statusCode = 400;
         response.end(JSON.stringify({ error: error instanceof Error ? error.message : '操作失败' }));
       }

@@ -27,6 +27,7 @@ const profile = join(fixture, '中文 Chromium profile');
 const checks = {};
 const errors = [];
 const windows = [];
+let nativeTextInputTypes;
 let application;
 let page;
 let runtimePid;
@@ -218,9 +219,21 @@ try {
   await page.getByRole('button', { name: '导入画面', exact: true }).click();
   const importDialog = page.getByRole('dialog'), pathInput = importDialog.getByRole('textbox', { name: '图片文件路径', exact: true });
   await pathInput.fill('native-input');
-  await pathInput.press('End'); await pathInput.pressSequentially('-edited');
+  await pathInput.press('End'); await expect(pathInput).toBeFocused();
+  const inputEvents = await pathInput.evaluateHandle(input => {
+    const types = [];
+    input.addEventListener('input', event => { if (event instanceof InputEvent) types.push(event.inputType); });
+    return types;
+  });
+  // Sequential key events need not share one native undo group. Insert one
+  // editing transaction before checking the operating system's shortcuts.
+  await page.keyboard.insertText('-edited');
+  await expect(pathInput).toHaveValue('native-input-edited');
   await pathInput.press('ControlOrMeta+z'); await expect(pathInput).toHaveValue('native-input');
   await pathInput.press(process.platform === 'win32' ? 'Control+y' : 'ControlOrMeta+Shift+z'); await expect(pathInput).toHaveValue('native-input-edited');
+  await expect(pathInput).toBeFocused();
+  nativeTextInputTypes = await inputEvents.jsonValue(); await inputEvents.dispose();
+  assert.deepEqual(nativeTextInputTypes, ['insertText', 'historyUndo', 'historyRedo']);
   await pathInput.press('ControlOrMeta+a');
   assert.deepEqual(await pathInput.evaluate(element => [element.selectionStart, element.selectionEnd]), [0, 'native-input-edited'.length]);
   await importDialog.getByRole('button', { name: '取消', exact: true }).click();
@@ -380,6 +393,7 @@ try {
   await close(1);
   await mkdir(dirname(reportPath), { recursive: true });
   await writeFile(reportPath, JSON.stringify({ status: 'passed', platform: process.platform, architecture: process.arch, packaged, compact, windows, distributionScope, relocatedExecutable: Boolean(process.env.VIDEO_QUICKLY_ELECTRON_EXECUTABLE), electron: actualElectronVersion, checks,
+    nativeTextInputTypes,
     nativeDialogs: 'file/directory/save selection, cancellation and close decisions substituted; OS dialog UI requires manual verification',
     nativeShell: 'reveal invocation substituted; Finder/Explorer UI requires manual verification',
     screenshots: ['desktop-editor.png', 'desktop-restored-draft.png'],
