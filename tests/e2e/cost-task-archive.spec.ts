@@ -23,6 +23,7 @@ async function fixture(request: APIRequestContext, title: string, usage: Record<
   return { server, project, model, start, calls: () => calls };
 }
 async function close(server: Server) { server.closeAllConnections(); await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve())); }
+function gate() { let release!: () => void; const promise = new Promise<void>(resolve => { release = resolve; }); return { promise, release }; }
 async function openCosts(page: Page, projectId: string) {
   await page.goto('/'); await page.getByRole('button', { name: 'Token 消耗', exact: true }).click(); await page.getByLabel('用量项目', { exact: true }).selectOption(projectId);
 }
@@ -108,6 +109,91 @@ test('archives all four token counters with task and record pagination, retainin
     await expect(summary.locator('[data-metric="cachedInputTokens"] > .token-amount')).toHaveText('960');
     expect(source.calls()).toBe(53); expect(errors).toEqual([]);
   } finally { await close(source.server); }
+});
+
+test('retains a requested detail page when a workspace refresh supersedes its response', async ({ page, request }, info) => {
+  const source = await fixture(request, '翻页与后台刷新交错');
+  const nextPage = gate(), refreshPage = gate();
+  let pages = 0, refreshes = 0;
+  const limits: number[] = [];
+  try {
+    const run = await source.start(32); await openCosts(page, source.project.id);
+    await page.getByRole('button', { name: `查看任务用量详情：${run.id}`, exact: true }).click();
+    const records = page.locator('.cost-record-list');
+    await expect(page.locator('.cost-record')).toHaveCount(30); await expect(records).toHaveAttribute('aria-busy', 'false');
+    await page.route('**/__desktop_rpc', async route => {
+      const input = route.request().postDataJSON();
+      if (input.method !== 'cost.list' || input.params.runId !== run.id) { await route.continue(); return; }
+      const response = await route.fetch();
+      if (input.params.before !== undefined) { pages++; await nextPage.promise; }
+      else { refreshes++; limits.push(input.params.limit); await refreshPage.promise; }
+      await route.fulfill({ response });
+    });
+    await page.getByRole('button', { name: '加载更多明细', exact: true }).click(); await expect.poll(() => pages).toBe(1);
+    await rpc(request, 'project.create', { title: '触发同一列表的新鲜度检查' }); await expect.poll(() => refreshes).toBeGreaterThan(0);
+    nextPage.release(); refreshPage.release();
+    await expect(page.locator('.cost-record')).toHaveCount(32); await expect(records).toHaveAttribute('aria-busy', 'false');
+    await page.screenshot({ path: info.outputPath('detail-page-after-refresh.png') });
+    const before = refreshes; await page.getByRole('button', { name: '刷新详情', exact: true }).click();
+    await expect.poll(() => refreshes).toBeGreaterThan(before); await expect(records).toHaveAttribute('aria-busy', 'false');
+    expect(limits.at(-1)).toBe(32); await expect(page.locator('.cost-record')).toHaveCount(32);
+  } finally { nextPage.release(); refreshPage.release(); await page.unrouteAll({ behavior: 'wait' }); await close(source.server); }
+});
+
+test('keeps a pending task page scoped to its original project when the filter changes', async ({ page, request }) => {
+  const source = await fixture(request, '旧筛选分页范围'), target = await fixture(request, '新筛选独立范围');
+  const oldPage = gate(), newPage = gate();
+  let pages = 0, filtered = 0;
+  const newLimits: number[] = [];
+  try {
+    for (let index = 0; index < 41; index++) await source.start(1);
+    for (let index = 0; index < 24; index++) await target.start(1);
+    const newer = await target.start(1);
+    await openCosts(page, source.project.id); await expect(page.locator('.cost-task')).toHaveCount(20);
+    await page.getByRole('button', { name: '加载更多任务', exact: true }).click(); await expect(page.locator('.cost-task')).toHaveCount(40);
+    await expect(page.getByRole('button', { name: '加载更多任务', exact: true })).toBeEnabled();
+    await page.route('**/__desktop_rpc', async route => {
+      const input = route.request().postDataJSON();
+      if (input.method !== 'cost.tasks') { await route.continue(); return; }
+      const response = await route.fetch();
+      if (input.params.projectId === source.project.id && input.params.before !== undefined) { pages++; await oldPage.promise; }
+      else if (input.params.projectId === target.project.id) { filtered++; newLimits.push(input.params.limit); await newPage.promise; }
+      await route.fulfill({ response });
+    });
+    await page.getByRole('button', { name: '加载更多任务', exact: true }).click(); await expect.poll(() => pages).toBe(1);
+    await page.getByLabel('用量项目', { exact: true }).selectOption(target.project.id); await expect.poll(() => filtered).toBeGreaterThan(0);
+    await expect(page.locator('.cost-task')).toHaveCount(40); await expect(page.locator('.cost-task').getByRole('button').first()).toBeDisabled();
+    await rpc(request, 'project.create', { title: '新筛选读取期间的独立通知' }); await expect.poll(() => filtered).toBeGreaterThan(1);
+    oldPage.release(); newPage.release();
+    await expect(page.locator('.cost-task')).toHaveCount(20); await expect(page.locator(`.cost-task[data-task-id="${newer.id}"]`)).toBeVisible();
+    expect(newLimits.every(limit => limit === 20)).toBe(true);
+    await page.getByRole('button', { name: '加载更多任务', exact: true }).click(); await expect(page.locator('.cost-task')).toHaveCount(25);
+  } finally { oldPage.release(); newPage.release(); await page.unrouteAll({ behavior: 'wait' }); await Promise.all([close(source.server), close(target.server)]); }
+});
+
+test('retains the detail cursor after a failed page and retries only when requested', async ({ page, request }) => {
+  const source = await fixture(request, '分页失败显式重试'); const cursors: unknown[] = [];
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  const clockOrigin = new Date('2026-01-01T00:00:00Z'); await page.clock.install({ time: clockOrigin });
+  try {
+    const run = await source.start(32); await openCosts(page, source.project.id);
+    await page.getByRole('button', { name: `查看任务用量详情：${run.id}`, exact: true }).click();
+    await expect(page.locator('.cost-record')).toHaveCount(30);
+    // This case owns explicit retry; real notification interleavings are covered above.
+    await page.clock.pauseAt(new Date(clockOrigin.getTime() + 2 * test.info().timeout));
+    await expect(page.locator('.cost-record-list')).toHaveAttribute('aria-busy', 'false');
+    await page.route('**/__desktop_rpc', async route => {
+      const input = route.request().postDataJSON();
+      if (input.method !== 'cost.list' || input.params.runId !== run.id || input.params.before === undefined) { await route.continue(); return; }
+      cursors.push(input.params.before);
+      if (cursors.length === 1) await route.fulfill({ status: 500, json: { error: '分页夹具暂时拒绝读取' } }); else await route.continue();
+    });
+    const more = page.getByRole('button', { name: '加载更多明细', exact: true });
+    await more.click(); await expect(page.getByRole('alert')).toContainText('分页夹具暂时拒绝读取');
+    await expect(page.locator('.cost-record')).toHaveCount(30); await expect(more).toBeEnabled(); expect(cursors).toHaveLength(1);
+    await more.click(); await expect(page.locator('.cost-record')).toHaveCount(32);
+    expect(cursors).toHaveLength(2); expect(cursors[1]).toBe(cursors[0]); await expect(page.getByRole('alert')).toHaveCount(0);
+  } finally { await page.unrouteAll({ behavior: 'wait' }); await page.clock.resume(); await close(source.server); }
 });
 
 test('keeps task details scoped during delayed reads and distinguishes zero cache usage from absent counters', async ({ page, request }) => {
