@@ -27,6 +27,9 @@ test('undoes and redoes grouped input, ordering, duplication and deletion with m
   await title.press('ControlOrMeta+z'); await expect(title).toHaveValue('测试镜头 1');
   await title.press('ControlOrMeta+Shift+z'); await expect(title).toHaveValue('连续输入');
   await expect(page.getByRole('button', { name: '保存镜头', exact: true })).toBeDisabled();
+  // This header action has a different label while saving; a disabled shot
+  // button alone also matches the interval before its checkpoint completes.
+  await expect(page.getByRole('button', { name: '保存修改', exact: true })).toBeDisabled();
   let saved = (await rpc(request, 'project.get', { projectId: project.id })).project;
   expect(saved.revision).toBe(project.revision + 1);
   await page.getByRole('button', { name: '撤销', exact: true }).click();
@@ -50,6 +53,7 @@ test('undoes and redoes grouped input, ordering, duplication and deletion with m
   }
   await expect(page.locator('.outline-shot').first()).toContainText('连续输入');
   await expect(page.getByRole('button', { name: '保存镜头', exact: true })).toBeDisabled();
+  await expect(page.getByRole('button', { name: '保存修改', exact: true })).toBeDisabled();
   await page.reload();
   await page.getByRole('button', { name: `打开项目：${project.title}`, exact: true }).click();
   await expect(page.getByRole('button', { name: '重做', exact: true })).toBeEnabled();
