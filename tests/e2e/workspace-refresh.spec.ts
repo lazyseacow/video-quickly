@@ -98,18 +98,25 @@ test('shows a failed selected-project read and recovers only after an explicit n
   expectedHttpErrors = 1;
   await page.emulateMedia({ reducedMotion: 'reduce' });
   const target = await targetProject(request, '读取恢复的镜头');
+  const clockOrigin = new Date('2026-01-01T00:00:00Z');
+  await page.clock.install({ time: clockOrigin });
   await page.goto('/'); await expect(page.getByLabel('镜头标题', { exact: true })).toBeVisible();
-  let reads = 0;
-  await page.route('**/__desktop_rpc', async route => {
-    const input = route.request().postDataJSON();
-    if (input?.method !== 'project.get' || input.params?.projectId !== target.id) { await route.continue(); return; }
-    reads++; if (reads === 1) { await route.fulfill({ status: 500, json: { error: '隔离的项目读取失败' } }); return; } await route.continue();
-  });
-  await page.getByRole('button', { name: `打开项目：${target.title}`, exact: true }).click();
-  await expect(page.getByRole('alert')).toContainText('隔离的项目读取失败'); expect(reads).toBe(1);
-  await page.getByRole('button', { name: '重试项目', exact: true }).click();
-  await expect(page.getByLabel('镜头标题', { exact: true })).toHaveValue('读取恢复的镜头'); expect(reads).toBe(2);
-  await expect(page.locator('vite-error-overlay')).toHaveCount(0);
+  // Other workers can publish real workspace changes after recovery. Keep
+  // their debounce outside this explicit-read count; notifications are tested below.
+  await page.clock.pauseAt(new Date(clockOrigin.getTime() + 2 * test.info().timeout));
+  try {
+    let reads = 0;
+    await page.route('**/__desktop_rpc', async route => {
+      const input = route.request().postDataJSON();
+      if (input?.method !== 'project.get' || input.params?.projectId !== target.id) { await route.continue(); return; }
+      reads++; if (reads === 1) { await route.fulfill({ status: 500, json: { error: '隔离的项目读取失败' } }); return; } await route.continue();
+    });
+    await page.getByRole('button', { name: `打开项目：${target.title}`, exact: true }).click();
+    await expect(page.getByRole('alert')).toContainText('隔离的项目读取失败'); expect(reads).toBe(1);
+    await page.getByRole('button', { name: '重试项目', exact: true }).click();
+    await expect(page.getByLabel('镜头标题', { exact: true })).toHaveValue('读取恢复的镜头'); expect(reads).toBe(2);
+    await expect(page.locator('vite-error-overlay')).toHaveCount(0);
+  } finally { await page.clock.resume(); }
 });
 
 test('keeps a failed project read paused through actual workspace notifications until explicit retry', async ({ page, request }) => {
