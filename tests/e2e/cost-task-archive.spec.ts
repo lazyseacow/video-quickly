@@ -1,26 +1,61 @@
 import { createServer, type Server } from 'node:http';
 import { expect, test, type APIRequestContext, type Page } from '@playwright/test';
-import type { ModelProfile, ProjectDocument, RunRecord, UsageRecord } from '@video-quickly/contracts';
+import type { ModelProfile, ProjectDocument, RunInspection, RunRecord, UsageRecord } from '@video-quickly/contracts';
+import { costFailureEvidence, type ProviderCounts } from '../fixtures/cost-failure-evidence';
 
-async function rpc<T>(request: APIRequestContext, method: string, params: unknown = {}): Promise<T> {
-  const response = await request.post('/__desktop_rpc', { data: { method, params } });
+async function rpc<T>(request: APIRequestContext, method: string, params: unknown = {}, timeout?: number): Promise<T> {
+  const response = await request.post('/__desktop_rpc', { data: { method, params }, timeout });
   const body = await response.json(); expect(body.error).toBeUndefined(); return body.result;
 }
 async function fixture(request: APIRequestContext, title: string, usage: Record<string, unknown> = { prompt_tokens: 100, completion_tokens: 50, prompt_tokens_details: { cached_tokens: 30 }, completion_tokens_details: { cached_tokens: 2 } }) {
-  let calls = 0;
-  const server = createServer((_request, response) => { calls++; response.setHeader('content-type', 'application/json'); response.end(JSON.stringify({ choices: [{ message: { content: '归档测试结果' } }], usage })); });
+  const counts: ProviderCounts = { received: 0, finished: 0, closed: 0 }, receipts = new Map<string, ProviderCounts>();
+  const server = createServer((request, response) => {
+    const operationId = request.headers['x-client-request-id'];
+    const runId = typeof operationId === 'string' ? /^([0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}):archive-step-\d+$/i.exec(operationId)?.[1] : undefined;
+    const receipt = runId ? receipts.get(runId) ?? { received: 0, finished: 0, closed: 0 } : undefined;
+    if (runId && receipt) receipts.set(runId, receipt);
+    counts.received++; if (receipt) receipt.received++;
+    response.once('finish', () => { counts.finished++; if (receipt) receipt.finished++; });
+    response.once('close', () => { if (!response.writableFinished) { counts.closed++; if (receipt) receipt.closed++; } });
+    response.setHeader('content-type', 'application/json'); response.end(JSON.stringify({ choices: [{ message: { content: '归档测试结果' } }], usage }));
+  });
   await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
   const address = server.address(); if (!address || typeof address === 'string') throw new Error('夹具服务启动失败');
   const project = await rpc<ProjectDocument>(request, 'project.create', { title });
   const model = await rpc<ModelProfile>(request, 'model.save', { model: { name: title + '模型', model: 'archive-model', provider: 'openai-compatible', baseUrl: `http://127.0.0.1:${address.port}/v1`, capabilities: ['text'], parameters: { internal_fixture: 'do-not-expose-parameters' } } });
   async function start(count: number) {
-    const nodes = Array.from({ length: count }, (_, index) => ({ id: `archive-step-${index}`, kind: 'brief', label: `归档步骤 ${index + 1}`, modelId: model.id }));
-    await rpc(request, 'workflow.save', { projectId: project.id, workflow: { id: 'archive-workflow', version: 1, name: '归档制作流程', nodes, edges: [] } });
-    const run = await rpc<RunRecord>(request, 'run.start', { projectId: project.id });
-    await expect.poll(async () => (await rpc<{ items: RunRecord[] }>(request, 'run.list', { projectId: project.id })).items.find(item => item.id === run.id)?.status, { timeout: 30_000 }).toBe('succeeded');
-    return run;
+    let run: RunRecord | undefined, succeeded = false;
+    try {
+      const nodes = Array.from({ length: count }, (_, index) => ({ id: `archive-step-${index}`, kind: 'brief', label: `归档步骤 ${index + 1}`, modelId: model.id }));
+      await rpc(request, 'workflow.save', { projectId: project.id, workflow: { id: 'archive-workflow', version: 1, name: '归档制作流程', nodes, edges: [] } });
+      const created = await rpc<RunRecord>(request, 'run.start', { projectId: project.id });
+      run = created; const runId = created.id;
+      await expect.poll(async () => {
+        const latest = (await rpc<{ items: RunRecord[] }>(request, 'run.list', { projectId: project.id })).items.find(item => item.id === runId);
+        if (latest) run = latest;
+        return latest?.status;
+      }, { timeout: 30_000 }).toBe('succeeded');
+      succeeded = true; return created;
+    } finally {
+      if (!succeeded) {
+        // Read-only evidence is bounded and must never replace the original failure.
+        try {
+          let inspection: RunInspection | undefined, records: UsageRecord[] | undefined;
+          if (run) {
+            const [inspectionRead, receiptsRead] = await Promise.allSettled([
+              rpc<RunInspection>(request, 'run.inspect', { runId: run.id }, 2_000),
+              rpc<{ items: UsageRecord[] }>(request, 'cost.list', { runId: run.id, limit: 100 }, 2_000),
+            ]);
+            if (inspectionRead.status === 'fulfilled') inspection = inspectionRead.value;
+            if (receiptsRead.status === 'fulfilled') records = receiptsRead.value.items;
+          }
+          const evidence = costFailureEvidence(counts, run ? receipts.get(run.id) : undefined, run, inspection, records);
+          await test.info().attach('cost-fixture-failure', { body: Buffer.from(JSON.stringify(evidence)), contentType: 'application/json' });
+        } catch { console.warn('成本夹具失败证据记录未完成。'); }
+      }
+    }
   }
-  return { server, project, model, start, calls: () => calls };
+  return { server, project, model, start, calls: () => counts.received };
 }
 async function close(server: Server) { server.closeAllConnections(); await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve())); }
 function gate() { let release!: () => void; const promise = new Promise<void>(resolve => { release = resolve; }); return { promise, release }; }

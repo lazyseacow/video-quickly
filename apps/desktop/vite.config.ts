@@ -4,6 +4,7 @@ import react from '@vitejs/plugin-react';
 import { createReadStream, existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import { resolve, relative, isAbsolute, extname } from 'node:path';
 import { createRuntime } from '../../packages/runtime/src/index.ts';
+import { generateText } from '../../packages/runtime/src/providers.ts';
 import { createActivityExecutor, createWaveformReader, validateMediaActivity } from '../../packages/integrations/src/index.ts';
 import { readRpcRequest } from './dev/read-rpc-request.ts';
 import { createRpcDiagnostics } from './dev/rpc-diagnostics.ts';
@@ -35,14 +36,17 @@ function developmentBridge(browserTest: boolean): Plugin {
       .find(path => existsSync(path)) : undefined;
     const ffmpegPath = process.env.VIDEO_QUICKLY_FFMPEG ?? bundledMedia;
     const waveforms = createWaveformReader({ dataDirectory, ffmpegPath });
-    const runtime = await createRuntime({ dataDirectory, mode: 'development', ffmpegPath, readAudioWaveform: asset => waveforms.read(asset),
+    const diagnostics = browserTest && process.env.VIDEO_QUICKLY_RPC_DIAGNOSTICS ? createRpcDiagnostics(process.env.VIDEO_QUICKLY_RPC_DIAGNOSTICS) : undefined;
+    let runtime: ReturnType<typeof createRuntime>;
+    try { runtime = await createRuntime({ dataDirectory, mode: 'development', ffmpegPath, readAudioWaveform: asset => waveforms.read(asset),
+      provider: diagnostics?.textProvider(generateText),
       audioMix: { projectionKey: audioMixProjectionKey, prepare: options => prepareAudioMix({ ...options, ffmpegPath }), levels: readAudioLevelWindow, silence: options => detectAudioSilence({ ...options, ffmpegPath }) },
       preflightActivity: validateMediaActivity, executeActivity: createActivityExecutor({ ffmpegPath }), secretStore: {
       persistent: false,
       async get(key) { return temporarySecrets.get(key); },
       async set(key, value) { temporarySecrets.set(key, value); },
       async delete(key) { temporarySecrets.delete(key); },
-    }});
+    }}); } catch (error) { await diagnostics?.close(); throw error; }
     const peers = new Set<ServerResponse>();
     const unsubscribe = runtime.subscribe(event => {
       if ('ws' in server) server.ws.send({ type: 'custom', event: 'workspace-event', data: event });
@@ -56,7 +60,6 @@ function developmentBridge(browserTest: boolean): Plugin {
       response.write(': connected\n\n'); peers.add(response);
       response.on('close', () => peers.delete(response));
     });
-    const diagnostics = browserTest && process.env.VIDEO_QUICKLY_RPC_DIAGNOSTICS ? createRpcDiagnostics(process.env.VIDEO_QUICKLY_RPC_DIAGNOSTICS) : undefined;
     server.httpServer?.on('close', () => { unsubscribe(); void diagnostics?.close(); void waveforms.close().then(() => runtime.close()); });
     server.middlewares.use('/__desktop_rpc', async (request, response) => {
       response.setHeader('Content-Type', 'application/json; charset=utf-8');

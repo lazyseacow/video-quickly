@@ -80,6 +80,8 @@ test('offers branded platform presets and a persisted Gemini-compatible connecti
 });
 
 test('round-trips structured fields, common image sizes and custom dimensions while retaining advanced JSON', async ({ page, request }, info) => {
+  // The multiple save/reopen flow completed its assertions in 30.55s on Intel CI.
+  test.setTimeout(60_000);
   const errors = observe(page), name = '表单与高级参数往返'; await openModels(page); let dialog = await legacyModel(page, request, name);
   await expect(dialog.locator('.capability-grid')).toHaveCount(0);
   expect(await (await settingField(dialog, '图片与视频尺寸')).count()).toBe(1);

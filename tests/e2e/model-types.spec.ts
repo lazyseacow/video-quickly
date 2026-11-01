@@ -9,6 +9,8 @@ async function models(request: APIRequestContext) {
 
 for (const viewport of [{ width: 1536, height: 960, theme: 'dark' }, { width: 390, height: 844, theme: 'light' }]) {
   test(`adds and filters four model types with automatic audio roles at ${viewport.width}px`, async ({ page, request }, info) => {
+    // Five connections plus reload/filter checks completed in 32.48s on Intel CI.
+    test.setTimeout(60_000);
     const errors: string[] = []; page.on('pageerror', error => errors.push(error.message)); page.on('console', message => { if (message.type() === 'error') errors.push(message.text()); });
     await page.addInitScript(theme => localStorage.setItem('vq-theme', theme), viewport.theme); await page.setViewportSize(viewport); await page.goto('/');
     await page.getByRole('button', { name: '模型连接', exact: true }).click(); await page.locator('.page-heading').getByRole('button', { name: '添加模型', exact: true }).click();

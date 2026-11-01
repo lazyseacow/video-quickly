@@ -202,8 +202,10 @@ test('preserves a draft across disconnect and reconnect without retrying a mutat
   await expect(page.locator('.runtime-connection-notice')).toHaveCount(0);
   await expect(page.getByLabel('镜头标题')).toHaveValue('重连后保留的编辑草稿');
   expect(mutations).toBe(1);
+  const saved = page.waitForResponse(response => response.url().endsWith('/__desktop_rpc') && response.status() === 200 && response.request().postDataJSON()?.method === 'project.update' && response.request().postDataJSON()?.params.projectId === project.id);
   await page.getByRole('button', { name: '保存镜头', exact: true }).click();
   await expect(page.getByRole('button', { name: '保存镜头', exact: true })).toBeDisabled();
+  expect((await (await saved).json()).error).toBeUndefined();
   expect(mutations).toBe(2);
 });
 
@@ -277,8 +279,10 @@ test('edits real project state, output profiles, graph and theme', async ({ page
   await expect(page.locator('vite-error-overlay')).toHaveCount(0);
   await expect(page.getByLabel('镜头标题')).toHaveValue('一纸登科，改变了什么？');
   await page.getByLabel('镜头标题').fill('一纸登科 · 已编辑');
+  const shotSaved = page.waitForResponse(response => response.url().endsWith('/__desktop_rpc') && response.status() === 200 && response.request().postDataJSON()?.method === 'project.update' && response.request().postDataJSON()?.params.projectId === 'example-history');
   await page.getByRole('button', { name: '保存镜头', exact: true }).click();
   await expect(page.getByRole('button', { name: '保存镜头', exact: true })).toBeDisabled();
+  expect((await (await shotSaved).json()).error).toBeUndefined();
   await page.reload();
   await expect(page.getByLabel('镜头标题')).toHaveValue('一纸登科 · 已编辑');
 
@@ -287,7 +291,9 @@ test('edits real project state, output profiles, graph and theme', async ({ page
   await (await projectSettingField(page, '视频帧率')).selectOption('60');
   await expect((await projectSettingField(page, '视频宽度'))).toHaveValue('1080');
   await expect((await projectSettingField(page, '视频高度'))).toHaveValue('1920');
+  const profileSaved = page.waitForResponse(response => response.url().endsWith('/__desktop_rpc') && response.status() === 200 && response.request().postDataJSON()?.method === 'project.update' && response.request().postDataJSON()?.params.projectId === 'example-history');
   await page.getByRole('button', { name: '保存', exact: true }).click();
+  expect((await (await profileSaved).json()).error).toBeUndefined();
   await page.reload();
   await page.getByRole('button', { name: '项目设置', exact: true }).click();
   await expect((await projectSettingField(page, '视频帧率'))).toHaveValue('60');
@@ -337,12 +343,10 @@ test('keeps flow edits through background refresh and saves before switching vie
 });
 
 test('resizes and restores editor panels, and saves before opening a recent project', async ({ page, request }) => {
-  const created = await request.post('/__desktop_rpc', { data: { method: 'project.create', params: { title: '侧栏切换验收项目' } } });
-  const nextProject = (await created.json()).result;
   const snapshot = await request.post('/__desktop_rpc', { data: { method: 'workspace.snapshot' } });
   const original = (await snapshot.json()).result.projects.find((project: { id: string }) => project.id === 'example-history');
   await openApp(page);
-  await page.getByRole('button', { name: `打开项目：${original.title}`, exact: true }).click();
+  await expect(page.getByLabel('项目名称', { exact: true })).toHaveValue(original.title);
   const outline = page.getByRole('separator', { name: '调整镜头导航宽度' });
   await outline.press('ArrowRight'); await expect(outline).toHaveAttribute('aria-valuenow', '240');
   await outline.dblclick(); await expect(outline).toHaveAttribute('aria-valuenow', '224');
@@ -358,6 +362,8 @@ test('resizes and restores editor panels, and saves before opening a recent proj
   await expect(page.locator('#project-inspector')).toBeHidden();
   await page.getByRole('button', { name: '退出专注预览', exact: true }).click();
   await expect(page.getByLabel('镜头标题')).toHaveValue('专注模式保留的草稿');
+  const created = await request.post('/__desktop_rpc', { data: { method: 'project.create', params: { title: '侧栏切换验收项目' } } });
+  const nextProject = (await created.json()).result;
   await page.getByRole('button', { name: `打开项目：${nextProject.title}`, exact: true }).click();
   await expect(page.getByLabel('项目名称', { exact: true })).toHaveValue(nextProject.title);
   const saved = await request.post('/__desktop_rpc', { data: { method: 'workspace.snapshot' } });
