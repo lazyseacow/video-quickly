@@ -2,7 +2,7 @@ import { expect, test, type APIRequestContext, type Page } from '@playwright/tes
 import type { SeriesTemplate } from '@video-quickly/contracts';
 
 interface PageCommitProbe {
-  armed: boolean; holding: boolean; posted: number; expectedName: string;
+  armed: boolean; holding: boolean; deferred: number; expectedName: string;
   latest?: { items: Array<{ id: string }>; nextCursor: number | null };
   release(): void; restore(): void;
 }
@@ -127,16 +127,32 @@ test('drops a queued pagination intent on a filter change while ignoring the old
 test('uses the last successful page cursor when a real click precedes its React commit', async ({ page, request }) => {
   await page.addInitScript(() => {
     const callbacks: Array<() => void> = [];
-    const post = MessagePort.prototype.postMessage, fetch = window.fetch;
-    const probe: PageCommitProbe = { armed: false, holding: false, posted: 0, expectedName: '提交间隔新插入的模板',
+    const message = Object.getOwnPropertyDescriptor(MessagePort.prototype, 'onmessage');
+    if (!message?.get || !message.set) throw new Error('MessagePort message delivery is unavailable');
+    const read = message.get, write = message.set, fetch = window.fetch;
+    const listeners = new Map<MessagePort, NonNullable<MessagePort['onmessage']>>();
+    const probe: PageCommitProbe = { armed: false, holding: false, deferred: 0, expectedName: '提交间隔新插入的模板',
       release() { this.holding = false; for (const callback of callbacks.splice(0)) callback(); },
-      restore() { this.release(); MessagePort.prototype.postMessage = post; window.fetch = fetch; },
+      restore() {
+        this.release();
+        for (const [port, listener] of listeners) Reflect.apply(write, port, [listener]);
+        listeners.clear(); Object.defineProperty(MessagePort.prototype, 'onmessage', message); window.fetch = fetch;
+      },
     };
     window.__vqRecordPageCommit = probe;
-    MessagePort.prototype.postMessage = function(...args) {
-      if (probe.holding && args[0] === null) { probe.posted++; callbacks.push(() => Reflect.apply(post, this, args)); return; }
-      return Reflect.apply(post, this, args);
-    };
+    // Check at delivery: a null message can already be queued before the HTTP
+    // response activates the gate, so intercepting postMessage alone is too late.
+    Object.defineProperty(MessagePort.prototype, 'onmessage', { ...message,
+      get: function(this: MessagePort) { return listeners.get(this) ?? Reflect.apply(read, this, []); },
+      set: function(this: MessagePort, listener: MessagePort['onmessage']) {
+        if (typeof listener !== 'function') { listeners.delete(this); Reflect.apply(write, this, [listener]); return; }
+        listeners.set(this, listener);
+        Reflect.apply(write, this, [function(this: MessagePort, event: MessageEvent) {
+          if (probe.holding && event.data === null) { probe.deferred++; callbacks.push(() => Reflect.apply(listener, this, [event])); return; }
+          return Reflect.apply(listener, this, [event]);
+        }]);
+      },
+    });
     window.fetch = async (...args) => {
       const response = await fetch(...args);
       const body = typeof args[1]?.body === 'string' ? JSON.parse(args[1].body) : undefined;
@@ -151,14 +167,14 @@ test('uses the last successful page cursor when a real click precedes its React 
       return response;
     };
   });
-  const probe = () => page.evaluate(() => { const { posted, latest } = window.__vqRecordPageCommit; return { posted, latest }; });
+  const probe = () => page.evaluate(() => { const { deferred, latest } = window.__vqRecordPageCommit; return { deferred, latest }; });
   const library = await openLibrary(page, request, '提交间隔游标');
   const previous = await rpc<{ items: SeriesTemplate[]; nextCursor: unknown }>(request, 'seriesTemplate.list', { archived: false, limit: 20 });
   const boundary = previous.items.at(-1)!;
   try {
     await page.evaluate(() => { window.__vqRecordPageCommit.armed = true; });
     const inserted = await rpc<SeriesTemplate>(request, 'seriesTemplate.save', { template: { name: '提交间隔新插入的模板', description: '', settings: { style: '', captionStyle: null, scenePreset: null } } });
-    await expect.poll(async () => (await probe()).posted).toBeGreaterThan(0);
+    await expect.poll(async () => (await probe()).deferred).toBeGreaterThan(0);
     const accepted = (await probe()).latest!;
     expect(accepted.items.some(item => item.id === inserted.id)).toBe(true); expect(accepted.items.some(item => item.id === boundary.id)).toBe(false);
     await expect(page.getByRole('heading', { name: inserted.name, exact: true })).toHaveCount(0);
