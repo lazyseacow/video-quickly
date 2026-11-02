@@ -1,15 +1,38 @@
 import { lazy, Suspense, useRef, useState } from 'react';
 import { Check, ChevronRight, RefreshCw } from 'lucide-react';
-import { runInspectionSchema, type RunSummary } from '@video-quickly/contracts';
+import { runInspectionSchema, type RunStepSummary, type RunSummary, type WorkflowStage } from '@video-quickly/contracts';
 import { Button, Notice, Status, statusLabels } from '../components/Primitives';
 import { useRuntimeRead } from '../lib/use-runtime-read';
 import type { Action, StepOutputSelection } from '../lib/types';
 import { stepGuidance } from '../lib/workflow-guidance';
 import RunActions from './RunActions';
+import WorkbenchStepCard from './WorkbenchStepCard';
+import './workbench-guide.css';
 import './workbench-production.css';
 
 const RunInspector = lazy(() => import('./RunInspector'));
 const RunScopeDialog = lazy(() => import('../components/RunScopeDialog'));
+
+interface StageProgress { key: string; label: string; description: string; tasks: RunStepSummary[]; }
+const taskCompleted = (step: RunStepSummary) => step.status === 'succeeded' || step.status === 'skipped';
+function progressLabel(status: RunStepSummary['status'] | RunSummary['status']) {
+  if (status === 'waiting_review') return '等待审阅';
+  return statusLabels[status] ?? (status === 'skipped' ? '已跳过' : status === 'not_recorded' ? '未记录' : '待执行');
+}
+function groupProgress(stages: WorkflowStage[] | undefined, steps: RunStepSummary[]): StageProgress[] | undefined {
+  if (!stages?.length) return;
+  const assigned = new Set<string>();
+  const groups: StageProgress[] = [];
+  for (const stage of stages) {
+    const tasks = steps.filter(step => stage.nodeIds.includes(step.id) && !assigned.has(step.id));
+    if (!tasks.length) continue;
+    tasks.forEach(task => assigned.add(task.id));
+    groups.push({ key: `stage:${stage.id}`, label: stage.label, description: stage.description, tasks });
+  }
+  if (!groups.length) return;
+  for (const task of steps) if (!assigned.has(task.id)) groups.push({ key: `task:${task.id}`, label: task.label, description: task.description, tasks: [task] });
+  return groups;
+}
 
 export default function WorkbenchProduction({ run, version, action, onOpenOutput, onPausePreview }: {
   run: RunSummary; version: number; action: Action;
@@ -22,15 +45,19 @@ export default function WorkbenchProduction({ run, version, action, onOpenOutput
   const [error, setError] = useState('');
   const inFlight = useRef(false);
   const data = inspection.data;
+  const synchronized = Boolean(!inspection.error && data && data.run.id === run.id && data.run.status === run.status && data.run.updatedAt === run.updatedAt && data.run.currentNodeId === run.currentNodeId);
   const steps = data?.steps ?? [];
   const current = steps.find(step => step.id === run.currentNodeId);
+  const isCurrent = (step: RunStepSummary) => step.id === run.currentNodeId && !['succeeded', 'canceled'].includes(run.status);
+  const stages = groupProgress(data?.stages, steps);
+  const currentStage = stages?.find(stage => stage.tasks.some(task => task.id === current?.id));
   const usefulOutput = steps.findLast(step => step.outputAvailable && ['script', 'style', 'assets', 'voice', 'animation', 'research', 'export'].includes(step.kind));
   const output = current?.outputAvailable && !['review', 'brief', 'condition', 'join'].includes(current.kind) ? current : usefulOutput ?? steps.findLast(step => step.outputAvailable);
   const reviewHint = current?.kind === 'voice' ? '核对音频、文字内容和时间对齐。' : current ? stepGuidance({ kind: current.kind, config: {} }).review : '核对本步产物是否符合创作要求。';
-  const completed = steps.filter(step => step.status === 'succeeded' || step.status === 'skipped').length;
-  const synchronized = Boolean(data && data.run.status === run.status && data.run.updatedAt === run.updatedAt && data.run.currentNodeId === run.currentNodeId);
+  const completed = steps.filter(step => !isCurrent(step) && taskCompleted(step)).length;
+  const completedStages = stages?.filter(stage => !stage.tasks.some(isCurrent) && stage.tasks.every(taskCompleted)).length ?? 0;
   // A completed matching inspection stays actionable during a background read.
-  const blocked = Boolean(inspection.error) || !synchronized;
+  const blocked = !synchronized;
   function inspect(nodeId = run.currentNodeId ?? '') { onPausePreview(); setInspectedStep(nodeId); }
   async function perform(method: string, params: Record<string, unknown> = {}) {
     if (inFlight.current || blocked) return;
@@ -45,12 +72,22 @@ export default function WorkbenchProduction({ run, version, action, onOpenOutput
   }
   return <section className="workbench-production" aria-label="当前制作">
     <div className="workbench-production__summary">
-      <div className="workbench-production__heading"><span>当前制作</span><strong>{current?.label ?? (run.status === 'succeeded' ? '本次制作已完成' : '项目制作')}</strong><Status value={run.status} />{steps.length > 0 && <span className="workbench-production__count">{completed} / {steps.length} 步</span>}</div>
+      <div className="workbench-production__heading" aria-live="polite" aria-atomic="true"><span>当前制作</span><strong>{current && currentStage ? `${currentStage.label} · ${current.label}` : current?.label ?? (run.status === 'succeeded' ? '本次制作已完成' : '项目制作')}</strong><Status value={run.status} />{steps.length > 0 && <span className="workbench-production__count">{stages ? `${completedStages} / ${stages.length} 阶段 · ${completed} / ${steps.length} 任务` : `${completed} / ${steps.length} 步`}</span>}</div>
       <Button static variant="ghost" onClick={() => inspect()}>制作详情<ChevronRight size={14} /></Button>
     </div>
-    {steps.length > 0 && <ol className="workbench-production__steps" aria-label="制作步骤进度">{steps.map((step, index) => {
-      const state = step.id === run.currentNodeId && run.status === 'waiting_review' ? '等待审阅' : statusLabels[step.status] ?? (step.status === 'skipped' ? '已跳过' : step.status === 'not_recorded' ? '未记录' : '待执行');
-      return <li key={step.id}><button type="button" aria-current={step.id === run.currentNodeId ? 'step' : undefined} data-state={step.status} onClick={() => inspect(step.id)}><span>{step.status === 'succeeded' ? <Check size={12} aria-hidden="true" /> : index + 1}</span><span className="workbench-production__step-copy"><strong>{step.label}</strong><small>{state}</small></span></button></li>;
+    {stages ? <ol className="workbench-guide__steps workbench-guide__steps--stages workbench-production__stage-steps" aria-label="制作阶段进度">{stages.map((stage, index) => {
+      const active = synchronized && stage.tasks.some(isCurrent);
+      const finished = synchronized && !active && stage.tasks.every(taskCompleted);
+      const task = active && current ? current : stage.tasks.find(task => ['failed', 'needs_attention', 'waiting_review', 'running', 'waiting_external', 'retry_scheduled'].includes(task.status)) ?? stage.tasks.find(task => !taskCompleted(task)) ?? stage.tasks.at(-1);
+      if (!task) return null;
+      const status = !synchronized ? 'pending' : active ? run.status : finished ? stage.tasks.every(task => task.status === 'skipped') ? 'skipped' : 'succeeded' : task.status;
+      const state = synchronized ? progressLabel(status) : inspection.error ? '进度读取失败' : '正在同步进度';
+      return <WorkbenchStepCard key={stage.key} index={status === 'succeeded' ? <Check size={12} aria-hidden="true" /> : index + 1} label={stage.label} description={stage.description} current={active} status={status} onClick={() => inspect(task.id)}>{active ? `${task.label} · ${state}` : `${stage.tasks.filter(taskCompleted).length} / ${stage.tasks.length} 任务 · ${state}`}</WorkbenchStepCard>;
+    })}</ol> : steps.length > 0 && <ol className="workbench-production__steps" aria-label="制作步骤进度">{steps.map((step, index) => {
+      const active = synchronized && isCurrent(step);
+      const status = !synchronized ? 'pending' : active ? run.status : step.status;
+      const state = synchronized ? progressLabel(status) : inspection.error ? '进度读取失败' : '正在同步进度';
+      return <li key={step.id}><button type="button" aria-current={active ? 'step' : undefined} data-state={status} onClick={() => inspect(step.id)}><span>{status === 'succeeded' ? <Check size={12} aria-hidden="true" /> : index + 1}</span><span className="workbench-production__step-copy"><strong>{step.label}</strong><small>{state}</small></span></button></li>;
     })}</ol>}
     {(run.error || data?.recovery.reason) && <p className="workbench-production__reason">{run.error || data?.recovery.reason}</p>}
     {inspection.error && <Notice kind="error">{inspection.error}<Button static onClick={inspection.refresh}><RefreshCw size={14} />重试读取制作进度</Button></Notice>}

@@ -71,5 +71,5 @@ export const test = base.extend<{ isolatedWorkspace: { directory: string; origin
     }
   }, { timeout: 60_000 }],
   baseURL: async ({ isolatedWorkspace }, use) => { await use(isolatedWorkspace.origin); },
-  storageState: async ({ isolatedWorkspace }, use) => { await use({ cookies: [], origins: [{ origin: isolatedWorkspace.origin, localStorage: [{ name: 'vq-theme', value: 'dark' }] }] }); },
+  storageState: async ({ isolatedWorkspace }, use) => { await use({ cookies: [], origins: [{ origin: isolatedWorkspace.origin, localStorage: [{ name: 'vq-theme', value: 'dark' }, { name: 'vq-onboarding-v1', value: 'done' }] }] }); },
 });

@@ -22,8 +22,7 @@ async function open(page: Page, project: ProjectDocument) {
   await page.getByLabel('搜索项目', { exact: true }).fill(project.title);
   await page.locator('.project-card').filter({ hasText: project.title }).getByRole('button', { name: '继续创作', exact: true }).click();
   await expect(page.getByLabel('项目名称', { exact: true })).toHaveValue(project.title);
-  await page.getByRole('tab', { name: '制作步骤', exact: true }).click();
-  await page.locator('.step-list').getByRole('button').filter({ hasText: '条件起点' }).click();
+  await page.getByRole('button', { name: '配置步骤：条件起点', exact: true }).click();
   return page.getByRole('dialog', { name: '条件起点', exact: true });
 }
 const runs = (request: APIRequestContext, projectId: string) => rpc<{ items: RunRecord[] }>(request, 'run.list', { projectId });

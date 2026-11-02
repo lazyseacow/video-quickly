@@ -10,10 +10,46 @@ import { createHistoryWorkflow, DEFAULT_CAPTION_STYLE, DEFAULT_VIDEO_PROFILE, pr
 import { createReadModels } from '../src/read-models.js';
 
 const directories: string[] = [];
+const currentVersion = WORKSPACE_MIGRATIONS.at(-1)?.version;
 afterEach(async () => { for (const directory of directories.splice(0)) await rm(directory, { recursive: true, force: true }); });
 async function directory() { const path = await mkdtemp(join(tmpdir(), 'vq-migration-')); directories.push(path); return path; }
 
 describe('workspace database upgrades', () => {
+  it('adds the active-run index to v7 without changing documents, rowids or checkpoints', async () => {
+    const path = await directory(), previous = new Database(join(path, 'workspace.sqlite'));
+    previous.function('vq_thumbnail', { deterministic: true }, body => {
+      if (typeof body !== 'string') throw new Error('Expected a project document');
+      return JSON.stringify(thumbnailShot(JSON.parse(body)));
+    });
+    migrateDatabase(previous, path, WORKSPACE_MIGRATIONS.filter(migration => migration.version <= 7));
+    const store = new DocumentStore(previous);
+    const project = projectSchema.parse({ id: 'v7-project', title: '保留现有项目', brief: '', revision: 4, profile: DEFAULT_VIDEO_PROFILE, workflow: createHistoryWorkflow(), shots: [], createdAt: '', updatedAt: '' });
+    store.put('project', project.id, project);
+    store.put('model', 'saved-connection', { id: 'saved-connection', credentialRef: 'opaque-reference' });
+    store.put('asset', 'saved-asset', { id: 'saved-asset', projectId: project.id, path: '/isolated-fixture/keep.svg' });
+    store.put('run', 'active-run', { id: 'active-run', projectId: project.id, status: 'waiting_review' });
+    store.put('run', 'completed-run', { id: 'completed-run', projectId: project.id, status: 'succeeded' });
+    previous.exec("CREATE TABLE checkpoints (thread_id TEXT PRIMARY KEY, checkpoint BLOB); INSERT INTO checkpoints VALUES ('active-run', X'010203');");
+    const documents = previous.prepare('SELECT rowid, kind, id, body FROM documents ORDER BY rowid').all();
+    previous.close();
+    const upgraded = openDatabase(path);
+    try {
+      expect(upgraded.pragma('user_version', { simple: true })).toBe(currentVersion);
+      expect(upgraded.prepare('SELECT rowid, kind, id, body FROM documents ORDER BY rowid').all()).toEqual(documents);
+      expect(upgraded.prepare('SELECT hex(checkpoint) AS data FROM checkpoints').get()).toEqual({ data: '010203' });
+      expect(upgraded.prepare("SELECT name FROM sqlite_master WHERE type = 'index' AND name = 'documents_active_project_runs'").get()).toEqual({ name: 'documents_active_project_runs' });
+      expect(upgraded.prepare("SELECT id FROM documents INDEXED BY documents_active_project_runs WHERE kind = 'run' AND json_extract(body, '$.status') IN ('queued','running','waiting_review','waiting_external','retry_scheduled') AND json_extract(body, '$.projectId') = ? ORDER BY rowid DESC").all(project.id)).toEqual([{ id: 'active-run' }]);
+    } finally { upgraded.close(); }
+    const backups = await readdir(join(path, 'database-backups')); expect(backups).toHaveLength(1);
+    const backup = new Database(join(path, 'database-backups', backups[0]), { readonly: true });
+    try {
+      expect(backup.pragma('user_version', { simple: true })).toBe(7);
+      expect(backup.prepare('SELECT rowid, kind, id, body FROM documents ORDER BY rowid').all()).toEqual(documents);
+      expect(backup.prepare('SELECT hex(checkpoint) AS data FROM checkpoints').get()).toEqual({ data: '010203' });
+    } finally { backup.close(); }
+    openDatabase(path).close(); expect(await readdir(join(path, 'database-backups'))).toHaveLength(1);
+  });
+
   it('upgrades the actual v6 schema and prevents older clients from dropping new document capabilities', async () => {
     const path = await directory(), previous = new Database(join(path, 'workspace.sqlite'));
     previous.function('vq_thumbnail', { deterministic: true }, body => {
@@ -28,12 +64,12 @@ describe('workspace database upgrades', () => {
     previous.close();
     const upgraded = openDatabase(path);
     try {
-      expect(upgraded.pragma('user_version', { simple: true })).toBe(7);
+      expect(upgraded.pragma('user_version', { simple: true })).toBe(currentVersion);
       expect(new DocumentStore(upgraded).get('project', project.id)).toEqual(project);
       expect(new DocumentStore(upgraded).get('model', 'connection')).toEqual({ id: 'connection', credentialRef: 'opaque-reference' });
       expect(upgraded.prepare('SELECT hex(checkpoint) AS value FROM checkpoints').get()).toEqual({ value: '010203' });
       expect(() => migrateDatabase(upgraded, path, WORKSPACE_MIGRATIONS.filter(migration => migration.version <= 6))).toThrow('高于此客户端支持的版本');
-      expect(upgraded.pragma('user_version', { simple: true })).toBe(7);
+      expect(upgraded.pragma('user_version', { simple: true })).toBe(currentVersion);
     } finally { upgraded.close(); }
     const backups = await readdir(join(path, 'database-backups')); expect(backups).toHaveLength(1);
     const backup = new Database(join(path, 'database-backups', backups[0]), { readonly: true });
@@ -42,8 +78,8 @@ describe('workspace database upgrades', () => {
 
   it('creates a versioned database and does not back up on every reopen', async () => {
     const path = await directory(); const db = openDatabase(path);
-    expect(db.pragma('user_version', { simple: true })).toBe(7);
-    expect(db.prepare('SELECT name FROM schema_migrations ORDER BY version').all()).toEqual([{ name: 'workspace-baseline' }, { name: 'execution-event-index' }, { name: 'workspace-read-models' }, { name: 'audio-asset-references' }, { name: 'project-summary-caption-style' }, { name: 'clip-edit-references-and-first-frame' }, { name: 'workflow-composition-and-keyframe-capabilities' }]);
+    expect(db.pragma('user_version', { simple: true })).toBe(currentVersion);
+    expect(db.prepare('SELECT name FROM schema_migrations ORDER BY version').all()).toEqual([{ name: 'workspace-baseline' }, { name: 'execution-event-index' }, { name: 'workspace-read-models' }, { name: 'audio-asset-references' }, { name: 'project-summary-caption-style' }, { name: 'clip-edit-references-and-first-frame' }, { name: 'workflow-composition-and-keyframe-capabilities' }, { name: 'active-project-runs-index' }]);
     db.close(); openDatabase(path).close();
     expect(await readdir(path)).not.toContain('database-backups');
   });
@@ -97,7 +133,7 @@ describe('workspace database upgrades', () => {
       expect(new DocumentStore(upgraded).get('project', project.id)).toEqual(project);
       expect(new DocumentStore(upgraded).get('project-summary', project.id)).toMatchObject({ id: 'legacy', shotCount: 1, durationUs: 2_000_000, revision: 7, archived: false });
       expect(upgraded.prepare('SELECT asset_id FROM project_asset_references ORDER BY asset_id').all()).toEqual([{ asset_id: 'caption-origin-audio' }, { asset_id: 'used-audio' }, { asset_id: 'used-image' }, { asset_id: 'used-music' }]);
-      expect(upgraded.pragma('user_version', { simple: true })).toBe(7);
+      expect(upgraded.pragma('user_version', { simple: true })).toBe(currentVersion);
     } finally { upgraded.close(); }
     expect(await readdir(join(path, 'database-backups'))).toHaveLength(1);
   });
@@ -130,7 +166,7 @@ describe('workspace database upgrades', () => {
     previous.close();
     const upgraded = openDatabase(path), store = new DocumentStore(upgraded);
     try {
-      expect(upgraded.pragma('user_version', { simple: true })).toBe(7);
+      expect(upgraded.pragma('user_version', { simple: true })).toBe(currentVersion);
       expect(store.get('project', project.id)).toEqual(project);
       expect(store.get('run', 'review')).toEqual({ status: 'waiting_review' });
       expect(store.get('model', 'connection')).toEqual({ credentialRef: 'reference-only' });
@@ -169,7 +205,7 @@ describe('workspace database upgrades', () => {
     previous.close();
     const upgraded = openDatabase(path), store = new DocumentStore(upgraded);
     try {
-      expect(upgraded.pragma('user_version', { simple: true })).toBe(7); expect(store.get('project', project.id)).toEqual(project); expect(store.get('run', run.id)).toEqual(run); expect(store.list('asset')).toEqual(assets);
+      expect(upgraded.pragma('user_version', { simple: true })).toBe(currentVersion); expect(store.get('project', project.id)).toEqual(project); expect(store.get('run', run.id)).toEqual(run); expect(store.list('asset')).toEqual(assets);
       expect(upgraded.prepare('SELECT hex(checkpoint) AS data FROM checkpoints').get()).toEqual({ data: '010203' });
       expect(upgraded.prepare('SELECT asset_id FROM project_asset_references ORDER BY asset_id').all()).toEqual(originalReferences); expect(originalReferences).toEqual([{ asset_id: 'caption-origin-audio' }, { asset_id: 'used-audio' }, { asset_id: 'used-image' }, { asset_id: 'used-music' }]);
       expect(upgraded.prepare("SELECT rowid FROM documents WHERE kind = 'project-summary' AND id = ?").get(project.id)).toEqual(rowid);

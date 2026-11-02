@@ -165,10 +165,14 @@ test('keeps new live steps out of older runs and uses the frozen kind for a rena
   const source = await fixture(request);
   try {
     const run = await source.start(); await source.approve(run.id);
-    const live = await rpc<ProjectDocument>(request, 'project.update', { projectId: source.project.id, revision: source.project.revision, patch: { workflow: { ...source.project.workflow, nodes: [...source.project.workflow.nodes.map(node => node.id === 'style' ? { ...node, label: '改名后的步骤', kind: 'brief' } : node), { id: 'new-step', kind: 'brief', label: '后加步骤' }] } } });
+    const live = await rpc<ProjectDocument>(request, 'project.update', { projectId: source.project.id, revision: source.project.revision, patch: { workflow: { ...source.project.workflow, nodes: [...source.project.workflow.nodes.map(node => node.id === 'style' ? { ...node, label: '改名后的步骤', kind: 'brief' } : node), { id: 'new-step', kind: 'brief', label: '后加步骤', position: { x: 640, y: 0 } }] } } });
     await page.goto('/'); await page.getByRole('button', { name: `打开项目：${source.project.title}`, exact: true }).click();
     await expect(page.getByLabel('项目名称', { exact: true })).toHaveValue(source.project.title);
-    await page.getByRole('tab', { name: '制作步骤', exact: true }).click(); await page.locator('.step-item').filter({ hasText: '后加步骤' }).click();
+    await page.getByRole('button', { name: '流程', exact: true }).click();
+    await expect(page.locator('.react-flow')).toBeVisible();
+    await page.getByRole('button', { name: '适应全部步骤', exact: true }).click();
+    await page.locator('.react-flow__node[data-id="new-step"]').click();
+    await page.getByRole('button', { name: '配置与执行步骤', exact: true }).click();
     const missing = page.getByRole('dialog', { name: '后加步骤', exact: true });
     await expect(missing.getByLabel('提示词与补充要求', { exact: true })).toBeVisible();
     await expect(page.getByRole('dialog', { name: '步骤产物', exact: true })).toHaveCount(0);

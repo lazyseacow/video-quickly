@@ -20,10 +20,10 @@ afterEach(async () => {
   }));
 });
 
-async function setup(options: Partial<RuntimeOptions> = {}) {
+async function setup(options: Partial<RuntimeOptions> = {}, templateId?: 'history-handdrawn') {
   const directory = await mkdtemp(join(tmpdir(), 'video-quickly-run-restart-')); directories.push(directory);
   const runtime = createRuntime({ dataDirectory: directory, seed: false, ffmpegPath: '/unused-by-restart-tests', executeActivity: createActivityExecutor(), ...options }); runtimes.add(runtime);
-  const original = projectSchema.parse(await runtime.dispatch('project.create', { title: '原项目' }));
+  const original = projectSchema.parse(await runtime.dispatch('project.create', { title: '原项目', ...(templateId ? { templateId } : {}) }));
   const project = projectSchema.parse(await runtime.dispatch('project.update', { projectId: original.id, revision: original.revision, patch: { shots: [0, 1, 2].map(index => ({ id: `shot-${index}`, title: `镜头${index}`, narration: `旁白${index}`, visualPrompt: `画面${index}`, durationUs: 1_000_000 })) } }));
   return { directory, runtime, project };
 }
@@ -109,7 +109,7 @@ async function localArtifacts(context: ActivityExecutionContext) {
 }
 
 it('restarts an older single-step task without executing the rest of the current workflow', async () => {
-  const { runtime, directory, project } = await setup();
+  const { runtime, directory, project } = await setup({}, 'history-handdrawn');
   const parent = runSchema.parse(await runtime.dispatch('run.start', { projectId: project.id, nodeId: 'style' })); await runtime.waitForIdle();
   expect(await runtime.dispatch('run.get', { runId: parent.id })).toMatchObject({ status: 'waiting_review' });
   await runtime.dispatch('run.cancel', { runId: parent.id }); await runtime.waitForIdle();
@@ -144,7 +144,7 @@ it('keeps a standalone export scope, exact fractional profile and destination af
 });
 
 it.each(['removed', 'kind'] as const)('rejects an older single-step restart when the selected node was %s without creating a broader task', async change => {
-  const { runtime, directory, project } = await setup();
+  const { runtime, directory, project } = await setup({}, 'history-handdrawn');
   const parent = runSchema.parse(await runtime.dispatch('run.start', { projectId: project.id, nodeId: 'style' })); await runtime.waitForIdle(); await runtime.dispatch('run.cancel', { runId: parent.id });
   const restored = await reopenLegacyRun(runtime, directory, parent.id);
   const workflow = change === 'removed'

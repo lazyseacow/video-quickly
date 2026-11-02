@@ -18,7 +18,7 @@ test('shows pure run notifications for two seconds without replaying on refresh'
   const project = (await initial.json()).result.projects.find((value: { id: string }) => value.id === 'example-history');
   await openApp(page);
   await expect(page.getByLabel('项目名称', { exact: true })).toHaveValue(project.title);
-  const started = await request.post('/__desktop_rpc', { data: { method: 'run.start', params: { projectId: project.id, nodeId: 'style' } } });
+  const started = await request.post('/__desktop_rpc', { data: { method: 'run.start', params: { projectId: project.id, nodeId: 'script' } } });
   const run = (await started.json()).result;
   try {
     await expect.poll(async () => {
@@ -115,11 +115,10 @@ for (const reducedMotion of ['no-preference', 'reduce'] as const) {
     }
     await expect(page.getByRole('button', { name: '镜头属性', exact: true })).toHaveAttribute('aria-pressed', 'true');
     await expect(page.getByLabel('镜头标题')).toHaveValue('切换时保留的草稿');
-    await page.getByRole('tab', { name: '镜头列表', exact: true }).focus();
-    await page.keyboard.press('End');
-    await expect(page.getByRole('tab', { name: '制作步骤', exact: true })).toBeFocused();
-    await page.keyboard.press('Home');
-    await expect(page.getByRole('tab', { name: '镜头列表', exact: true })).toHaveAttribute('aria-selected', 'true');
+    const outline = page.locator('#project-outline'), shots = outline.getByRole('region', { name: '镜头列表', exact: true });
+    await expect(outline.locator('.outline-header')).toHaveCount(0); await expect(shots).toBeVisible();
+    await expect(outline.getByRole('tablist')).toHaveCount(0); await expect(outline.getByRole('tab')).toHaveCount(0); await expect(outline.getByRole('tabpanel')).toHaveCount(0); await expect(outline.locator('.step-list, .step-item')).toHaveCount(0);
+    await shots.focus(); await expect(shots).toBeFocused(); await expect(page.getByLabel('镜头标题')).toHaveValue('切换时保留的草稿');
 
     let rejectSave = true;
     await page.route('**/__desktop_rpc', async route => {
@@ -354,9 +353,11 @@ test('resizes and restores editor panels, and saves before opening a recent proj
   const inspector = page.getByRole('separator', { name: '调整属性面板宽度' });
   await inspector.press('ArrowLeft'); await expect(inspector).toHaveAttribute('aria-valuenow', '320');
   await inspector.dblclick(); await expect(inspector).toHaveAttribute('aria-valuenow', '304');
-  await page.getByRole('tab', { name: '制作步骤', exact: true }).click();
-  await expect(page.locator('.outline-list .step-item').first()).toBeVisible();
-  await page.getByRole('tab', { name: '镜头列表', exact: true }).click();
+  const shots = page.locator('#project-outline');
+  await expect(shots.getByRole('region', { name: '镜头列表', exact: true })).toBeVisible(); await expect(shots.locator('.outline-header')).toHaveCount(0); await expect(shots.getByRole('tab')).toHaveCount(0); await expect(shots.locator('.step-list, .step-item')).toHaveCount(0);
+  await shots.getByRole('button', { name: '添加镜头', exact: true }).click(); await expect(shots.locator('.outline-shot')).toHaveCount(original.shots.length + 1);
+  await page.getByRole('button', { name: '移除所选镜头', exact: true }).click(); await expect(shots.locator('.outline-shot')).toHaveCount(original.shots.length);
+  await shots.locator('.outline-shot').first().click();
   await page.getByLabel('镜头标题').fill('专注模式保留的草稿');
   await page.getByRole('button', { name: '专注预览', exact: true }).click();
   await expect(page.locator('#project-outline')).toBeHidden();
@@ -399,7 +400,7 @@ test('persists a review decision and supports read-only replay', async ({ page, 
   const initial = await request.post('/__desktop_rpc', { data: { method: 'workspace.snapshot' } });
   const payload = await initial.json();
   const project = payload.result.projects.find((value: { id: string }) => value.id === 'example-history');
-  const started = await request.post('/__desktop_rpc', { data: { method: 'run.start', params: { projectId: project.id, nodeId: 'style' } } });
+  const started = await request.post('/__desktop_rpc', { data: { method: 'run.start', params: { projectId: project.id, nodeId: 'script' } } });
   const { result: run } = await started.json();
   await openApp(page);
   await page.getByRole('button', { name: '制作记录', exact: true }).click();

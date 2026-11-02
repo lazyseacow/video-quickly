@@ -2,7 +2,10 @@ import { expect, test, type Page } from '@playwright/test';
 import { writeFile } from 'node:fs/promises';
 import { addModelConnection } from './settings';
 
-test.use({ storageState: { cookies: [], origins: [] } });
+test.use({ storageState: async ({ baseURL }, use) => {
+  if (!baseURL) throw new Error('Design-system tests require a local application origin');
+  await use({ cookies: [], origins: [{ origin: new URL(baseURL).origin, localStorage: [{ name: 'vq-onboarding-v1', value: 'done' }] }] });
+} });
 
 async function openApp(page: Page) {
   await page.goto('/');
@@ -197,7 +200,7 @@ test('keeps long project filter labels synchronized with keyboard and native sel
 });
 
 for (const viewport of [{ width: 1536, height: 960 }, { width: 1024, height: 720 }, { width: 390, height: 844 }]) {
-  test(`keeps a long dialog's actions visible and restores keyboard focus at ${viewport.width}px`, async ({ page }) => {
+  test(`keeps creation dialog fields and actions reachable and restores keyboard focus at ${viewport.width}px`, async ({ page }) => {
     await page.setViewportSize(viewport);
     await page.emulateMedia({ reducedMotion: 'reduce' });
     await openApp(page);
@@ -205,20 +208,20 @@ for (const viewport of [{ width: 1536, height: 960 }, { width: 1024, height: 720
     await trigger.click();
     const dialog = page.getByRole('dialog', { name: '新建视频项目', exact: true });
     await expect(dialog.getByLabel('项目名称', { exact: true })).toBeFocused();
-    await dialog.getByText(/^视频规格 ·/).click();
+    await dialog.getByText('更多设置', { exact: true }).click();
+    await dialog.getByLabel('素材适配', { exact: true }).scrollIntoViewIfNeeded();
+    await expect(dialog.getByLabel('素材适配', { exact: true })).toBeInViewport({ ratio: .95 });
     const footer = dialog.locator('.dialog__footer');
     await expect(footer).toBeInViewport({ ratio: 1 });
     for (const button of await footer.getByRole('button').all()) await expect(button).toBeInViewport({ ratio: 1 });
     const layout = await dialog.evaluate(element => {
       const bounds = element.getBoundingClientRect();
-      const body = element.querySelector('.dialog__body')!;
-      return { left: bounds.left, right: bounds.right, top: bounds.top, bottom: bounds.bottom, viewportWidth: innerWidth, viewportHeight: innerHeight, scrollable: body.scrollHeight > body.clientHeight };
+      return { left: bounds.left, right: bounds.right, top: bounds.top, bottom: bounds.bottom, viewportWidth: innerWidth, viewportHeight: innerHeight };
     });
     expect(layout.left).toBeGreaterThanOrEqual(0);
     expect(layout.right).toBeLessThanOrEqual(layout.viewportWidth);
     expect(layout.top).toBeGreaterThanOrEqual(0);
     expect(layout.bottom).toBeLessThanOrEqual(layout.viewportHeight);
-    if (viewport.height <= 844) expect(layout.scrollable).toBe(true);
     await page.keyboard.press('Escape');
     await expect(dialog).toHaveCount(0);
     await expect(trigger).toBeFocused();

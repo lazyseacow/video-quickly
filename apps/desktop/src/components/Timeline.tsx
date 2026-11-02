@@ -5,6 +5,7 @@ import { frameAtTime, timeAtFrame, type AssetRecord, type FrameRate, type Projec
 import type { TimelineClip } from '@video-quickly/video';
 import { canSplitShot, maximumSourceOutUs, minimumShotDurationUs, minimumSourceInUs, snapTimeUs } from '@video-quickly/video/editing';
 import { PlaybackClock, usePlayback } from '../lib/playback';
+import { beginGuideAction } from '../lib/guide-actions';
 import type { SelectionModifiers } from '../lib/shot-selection';
 import { Button, IconButton, formatTime } from './Primitives';
 import AudioWaveform from './AudioWaveform';
@@ -158,7 +159,7 @@ export default memo(function Timeline({ project, assets, shots, timeline, select
   const rowBegin = useCommittedCallback(begin), rowMove = useCommittedCallback(move), rowFinish = useCommittedCallback(finish);
   const rowSelect = useCommittedCallback(selectClip), rowTrimKey = useCommittedCallback(trimKey);
   const rowHandlers = useMemo<TimelineRowHandlers>(() => ({ begin: rowBegin, move: rowMove, finish: rowFinish, select: rowSelect, trimKey: rowTrimKey }), [rowBegin, rowMove, rowFinish, rowSelect, rowTrimKey]);
-  return <section className="timeline" aria-label="项目时间轴" onKeyDown={selectionKey}>
+  return <section data-guide="timeline" className="timeline" aria-label="项目时间轴" onKeyDown={selectionKey}>
     <div className="timeline-toolbar">
       <div className="timeline-heading"><h2>时间轴</h2><span className="timeline-summary">{shots.length} 个镜头</span><span className="timeline-selection-count" aria-live="polite">已选 {selected.size} 个镜头</span></div>
       <div className="timeline-edit-actions" role="group" aria-label="镜头操作">
@@ -236,7 +237,7 @@ const TimelineReadout = memo(function TimelineReadout({ clock, rate }: { clock: 
 function TimelinePosition({ clock, rate, totalUs, zoom }: { clock: PlaybackClock; rate: FrameRate; totalUs: number; zoom: number }) {
   const { timeUs, playing } = usePlayback(clock);
   const ruler = useRef<HTMLDivElement>(null);
-  const pointer = useRef<{ id: number; left: number; width: number } | undefined>(undefined);
+  const pointer = useRef<{ id: number; left: number; width: number; initialTimeUs: number; completed: () => void } | undefined>(undefined);
   const pending = useRef<number | undefined>(undefined);
   const request = useRef<number | undefined>(undefined);
   const [dragging, setDragging] = useState(false);
@@ -258,7 +259,7 @@ function TimelinePosition({ clock, rate, totalUs, zoom }: { clock: PlaybackClock
   function pointerDown(event: PointerEvent<HTMLDivElement>) {
     if (event.button !== 0 || !totalUs) return;
     const bounds = event.currentTarget.getBoundingClientRect();
-    pointer.current = { id: event.pointerId, left: bounds.left, width: bounds.width };
+    pointer.current = { id: event.pointerId, left: bounds.left, width: bounds.width, initialTimeUs: clock.getSnapshot().timeUs, completed: beginGuideAction('timeline-seeked') };
     event.currentTarget.setPointerCapture(event.pointerId); event.currentTarget.focus();
     setDragging(true); position(event.clientX); flush();
   }
@@ -268,19 +269,24 @@ function TimelinePosition({ clock, rate, totalUs, zoom }: { clock: PlaybackClock
     if (request.current === undefined) request.current = requestAnimationFrame(() => { request.current = undefined; flush(); });
   }
   function pointerEnd(event: PointerEvent<HTMLDivElement>) {
-    if (pointer.current?.id !== event.pointerId) return;
+    const gesture = pointer.current;
+    if (gesture?.id !== event.pointerId) return;
     if (event.type === 'pointerup') position(event.clientX);
     cancelRequest(); flush(); pointer.current = undefined; setDragging(false);
     if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
+    if (event.type === 'pointerup' && clock.getSnapshot().timeUs !== gesture.initialTimeUs) gesture.completed();
   }
   function keydown(event: KeyboardEvent<HTMLDivElement>) {
+    if (!['ArrowRight', 'ArrowUp', 'ArrowLeft', 'ArrowDown', 'Home', 'End'].includes(event.key)) return;
+    const initialTimeUs = clock.getSnapshot().timeUs;
+    const completed = beginGuideAction('timeline-seeked');
     const step = event.shiftKey ? 10 : 1;
     if (event.key === 'ArrowRight' || event.key === 'ArrowUp') clock.step(step);
     else if (event.key === 'ArrowLeft' || event.key === 'ArrowDown') clock.step(-step);
     else if (event.key === 'Home') clock.seek(0);
     else if (event.key === 'End') clock.seek(totalUs);
-    else return;
     event.preventDefault(); event.stopPropagation();
+    if (clock.getSnapshot().timeUs !== initialTimeUs) completed();
   }
   const divisions = Math.round(6 * zoom);
   return <><div ref={ruler} className={`timeline-ruler ${dragging ? 'is-scrubbing' : ''}`} style={{ backgroundSize: `${100 / (divisions * 5)}% 6px` }} role="slider" tabIndex={0} aria-label="预览播放位置" aria-disabled={!totalUs} aria-valuemin={0} aria-valuemax={Math.round(totalUs / 1000)} aria-valuenow={Math.round(timeUs / 1000)} aria-valuetext={`${formatTime(timeUs)}，第 ${frameAtTime(timeUs, rate) + 1} 帧`} aria-keyshortcuts="ArrowLeft ArrowRight Home End" onKeyDown={keydown} onPointerDown={pointerDown} onPointerMove={pointerMove} onPointerUp={pointerEnd} onPointerCancel={pointerEnd} onLostPointerCapture={pointerEnd}><TimelineRulerMarks divisions={divisions} totalUs={totalUs} /></div><div className="playhead-lane" aria-hidden="true"><div className={`playhead ${dragging ? 'is-scrubbing' : ''}`} style={{ transform: `translateX(${totalUs ? timeUs / totalUs * 100 : 0}%)` }} /></div></>;

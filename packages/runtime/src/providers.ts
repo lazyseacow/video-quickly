@@ -114,6 +114,10 @@ export const generateText: TextProvider = async ({ model, secret, prompt, operat
 };
 
 export async function testModelConnection(model: ModelProfile, secret?: string) {
+  if (model.provider === 'qwen-tts') {
+    const modelIds = (await discoverModels(model, secret)).items.map(item => item.id);
+    return { connected: true, models: modelIds, message: modelIds.includes(model.model) ? '连接正常，已找到配置的模型。' : '服务可连接，请确认模型 ID 与能力配置。' };
+  }
   if (model.provider === 'volcengine-tts' || model.provider === 'volcengine-asr') {
     validateModelParameters(model);
     if (!secret?.trim()) throw new Error('请先保存豆包语音 API Key 或 Access Token。');
@@ -135,10 +139,10 @@ export async function testModelConnection(model: ModelProfile, secret?: string) 
 }
 
 function discoveredModelTime(row: Record<string, unknown>): number {
-  for (const value of [row.created, row.created_at, row.modified_at]) {
+  for (const value of [row.created, row.created_at, row.modified_at, row.published_time]) {
     const numeric = typeof value === 'number' ? value : typeof value === 'string' && value.trim() ? Number(value) : NaN;
-    // Compatible endpoints use Unix seconds or milliseconds; Messages and
-    // Ollama use ISO timestamps. Normalize them before merging all pages.
+    // Endpoints use Unix seconds/milliseconds or date strings (including
+    // Qwen's published_time). Normalize them before merging all pages.
     let timestamp = typeof value === 'string' ? Date.parse(value) : NaN;
     if (Number.isFinite(numeric)) timestamp = Math.abs(numeric) < 1e12 ? numeric * 1000 : numeric;
     if (Number.isFinite(timestamp)) return timestamp;
@@ -166,29 +170,54 @@ export async function discoverModels(model: ModelProfile, secret?: string): Prom
   if (model.provider === 'volcengine-asr') return { source: 'preset', items: [{ id: 'volc.bigasr.auc_turbo', label: '豆包语音识别 · 极速版' }], message: '语音识别资源预设，需在豆包语音控制台开通。' };
   if (model.provider === 'comfyui') return { source: 'workflow', items: [{ id: 'workflow', label: '使用工作流中的模型' }], message: 'ComfyUI 的模型由所配置工作流指定。' };
   const filterOpenAI = model.provider === 'openai-compatible' && (model.platform === 'openai' || new URL(model.baseUrl).hostname === 'api.openai.com');
+  const qwenTts = model.provider === 'qwen-tts';
   const items = new Map<string, { id: string; label: string; timestamp: number; retired: boolean }>(); let after: string | undefined;
+  let qwenPageSize: number | undefined, qwenTotal: number | undefined;
   const now = Date.now();
   const signal = AbortSignal.timeout(15_000);
   for (let page = 0; page < 20; page++) {
     const url = new URL(modelEndpoint(model.baseUrl, model.provider === 'ollama' ? 'api/tags' : 'models'));
-    if (model.textProtocol === 'messages') { url.searchParams.set('limit', '1000'); if (after) url.searchParams.set('after_id', after); }
+    if (qwenTts) { url.searchParams.set('capabilities', 'TTS'); url.searchParams.set('page_no', String(page + 1)); url.searchParams.set('page_size', String(qwenPageSize ?? 100)); }
+    if (!qwenTts && model.textProtocol === 'messages') { url.searchParams.set('limit', '1000'); if (after) url.searchParams.set('after_id', after); }
     const response = await fetch(url, { headers: { ...modelHeaders(model, secret), ...(model.platform === 'anthropic' ? { 'anthropic-version': '2023-06-01', ...(secret ? { 'x-api-key': secret } : {}) } : {}) }, signal });
     if (!response.ok) { await response.body?.cancel(); throw new Error(`读取模型列表返回 HTTP ${response.status}`); }
     const data = await readModelResponse(response);
     if (!data || typeof data !== 'object') throw new Error('模型列表格式无效。');
-    const value = data as Record<string, unknown>, rows = Array.isArray(value.data) ? value.data : Array.isArray(value.models) ? value.models : undefined;
-    if (!rows) throw new Error('模型列表格式无效。');
-    for (const row of rows) {
-      if (!row || typeof row !== 'object') continue;
-      const id = row.id ?? row.name ?? row.model;
+    const value = data as Record<string, unknown>;
+    if (qwenTts && (value.success === false || value.code !== undefined && value.code !== null && value.code !== '')) throw new Error('模型列表读取失败，请核对服务地址与账号权限后重试。');
+    const native = qwenTts && value.output !== undefined;
+    const output = native && value.output && typeof value.output === 'object' && !Array.isArray(value.output) ? value.output as Record<string, unknown> : undefined;
+    const rows = native ? output?.models : Array.isArray(value.data) ? value.data : value.models;
+    let nativeHasMore = false;
+    if (native) {
+      const total = output?.total, pageNo = output?.page_no, pageSize = output?.page_size;
+      if (typeof total !== 'number' || !Number.isSafeInteger(total) || total < 0 || pageNo !== page + 1 || typeof pageSize !== 'number' || !Number.isSafeInteger(pageSize) || pageSize < 1 || qwenPageSize !== undefined && qwenPageSize !== pageSize || qwenTotal !== undefined && qwenTotal !== total) throw new Error('模型列表分页信息无效，请重新读取完整目录。');
+      qwenPageSize = pageSize; qwenTotal = total;
+      nativeHasMore = (page + 1) * pageSize < total;
+      if (!Array.isArray(rows) || rows.length !== Math.min(pageSize, Math.max(0, total - page * pageSize))) throw new Error('模型列表分页不完整，请重新读取完整目录。');
+    }
+    if (!Array.isArray(rows)) throw new Error('模型列表格式无效。');
+    for (const entry of rows) {
+      if (!entry || typeof entry !== 'object' || Array.isArray(entry)) continue;
+      const row = entry as Record<string, unknown>;
+      const id = qwenTts ? row.model ?? row.id ?? row.name : row.id ?? row.name ?? row.model;
       if (typeof id !== 'string' || !id.trim() || id.length > 500) continue;
+      // This adapter uses Qwen's HTTP multimodal-generation route. Realtime,
+      // qwen-audio and CosyVoice models require different synthesis protocols.
+      if (qwenTts && (!/^qwen(?:\d+(?:\.\d+)?)?-tts(?:-|$)/.test(id) || /(?:^|-)realtime(?:-|$)/.test(id) || row.capabilities !== undefined && (!Array.isArray(row.capabilities) || !row.capabilities.includes('TTS')))) continue;
       if (filterOpenAI && !matchesOpenAIConnection(id, model)) continue;
-      const label = typeof row.display_name === 'string' ? row.display_name : typeof row.displayName === 'string' ? row.displayName : id;
+      const label = typeof row.display_name === 'string' ? row.display_name : typeof row.displayName === 'string' ? row.displayName : qwenTts && typeof row.name === 'string' ? row.name : id;
       const timestamp = Math.max(discoveredModelTime(row), items.get(id)?.timestamp ?? Number.NEGATIVE_INFINITY);
       const shutdownAt = typeof row.shutdown_date === 'string' ? Date.parse(row.shutdown_date) : NaN;
       const retired = row.lifecycle === 'retired' || Number.isFinite(shutdownAt) && shutdownAt <= now;
       items.set(id, { id, label: label === id ? id : `${label} · ${id}`, timestamp, retired });
     }
+    if (native) {
+      if (!nativeHasMore) break;
+      if (page === 19) throw new Error('模型列表超过分页读取范围，请重试读取完整目录。');
+      continue;
+    }
+    if (qwenTts && value.has_more) throw new Error('模型列表分页信息无效，请重新读取完整目录。');
     if (!value.has_more || typeof value.last_id !== 'string' || value.last_id === after) break;
     after = value.last_id;
   }

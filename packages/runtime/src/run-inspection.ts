@@ -8,7 +8,7 @@ import type Database from 'better-sqlite3';
 import { SqliteSaver } from '@langchain/langgraph-checkpoint-sqlite';
 import { z } from 'zod';
 import {
-  jsonValueSchema, modelSchema, pageInputSchema, runInspectionSchema, runStepPayloadSchema, skillSchema, workflowNodeSchema,
+  jsonValueSchema, modelSchema, pageInputSchema, runInspectionSchema, runStepPayloadSchema, skillSchema, workflowNodeSchema, workflowSchema,
   type JsonValue, type ModelProfile, type ProjectDocument, type RecordPage, type RunInspection, type RunRecord, type RunStepSummary, type SkillPackage, type StepOutputVersion, type WorkflowNode,
 } from '@video-quickly/contracts';
 import { DocumentStore } from './database.js';
@@ -27,7 +27,7 @@ interface Snapshot {
   project: ProjectDocument; nodes: WorkflowNode[]; inspectionNodes?: WorkflowNode[]; inspectionThreads?: Record<string, string>; models: ModelProfile[]; skills: SkillPackage[]; handlerVersion: number;
   regeneration?: JsonValue; research?: JsonValue; exportBatch?: JsonValue;
 }
-interface SnapshotRow { title: string; nodes: string; models: string; skills: string; edges: string; handlerVersion: number; inspectionThreads: string | null }
+interface SnapshotRow { title: string; nodes: string; models: string; skills: string; edges: string; stages: string | null; handlerVersion: number; inspectionThreads: string | null }
 interface ActivitySummaryRow {
   node_id: string; count: number; unknown_count: number; started_at: string; completed_at: string | null; error: string | null;
 }
@@ -60,9 +60,9 @@ export function createRunInspector(options: {
 }) {
   const { database, store } = options, reads = createReadModels(database, store);
   function metadata(runId: string) {
-    const row = database.prepare("SELECT json_extract(body, '$.project.title') AS title, coalesce(json_extract(body, '$.inspectionNodes'), json_extract(body, '$.nodes')) AS nodes, json_extract(body, '$.models') AS models, json_extract(body, '$.skills') AS skills, coalesce(json_extract(body, '$.inspectionEdges'), json_extract(body, '$.project.workflow.edges')) AS edges, json_extract(body, '$.handlerVersion') AS handlerVersion, json_extract(body, '$.inspectionThreads') AS inspectionThreads FROM documents WHERE kind = 'run-snapshot' AND id = ?").get(runId) as SnapshotRow | undefined;
+    const row = database.prepare("SELECT json_extract(body, '$.project.title') AS title, coalesce(json_extract(body, '$.inspectionNodes'), json_extract(body, '$.nodes')) AS nodes, json_extract(body, '$.models') AS models, json_extract(body, '$.skills') AS skills, coalesce(json_extract(body, '$.inspectionEdges'), json_extract(body, '$.project.workflow.edges')) AS edges, json_extract(body, '$.project.workflow.stages') AS stages, json_extract(body, '$.handlerVersion') AS handlerVersion, json_extract(body, '$.inspectionThreads') AS inspectionThreads FROM documents WHERE kind = 'run-snapshot' AND id = ?").get(runId) as SnapshotRow | undefined;
     if (!row) return undefined;
-    return { title: row.title, nodes: z.array(workflowNodeSchema).parse(JSON.parse(row.nodes)), models: z.array(modelSchema).parse(JSON.parse(row.models)), skills: z.array(skillSchema).parse(JSON.parse(row.skills)), edges: z.array(z.object({ source: z.string(), target: z.string() })).parse(JSON.parse(row.edges)), handlerVersion: row.handlerVersion, inspectionThreads: row.inspectionThreads ? z.record(z.string(), z.string()).parse(JSON.parse(row.inspectionThreads)) : {} };
+    return { title: row.title, nodes: z.array(workflowNodeSchema).parse(JSON.parse(row.nodes)), models: z.array(modelSchema).parse(JSON.parse(row.models)), skills: z.array(skillSchema).parse(JSON.parse(row.skills)), edges: z.array(z.object({ source: z.string(), target: z.string() })).parse(JSON.parse(row.edges)), stages: row.stages ? workflowSchema.shape.stages.parse(JSON.parse(row.stages)) : undefined, handlerVersion: row.handlerVersion, inspectionThreads: row.inspectionThreads ? z.record(z.string(), z.string()).parse(JSON.parse(row.inspectionThreads)) : {} };
   }
   async function nativeState(runId: string) {
     const tuple = await new SqliteSaver(database).getTuple({ configurable: { thread_id: runId } });
@@ -125,7 +125,7 @@ export function createRunInspector(options: {
         unknownSubmission: unknown && Boolean(receipt?.unknown_count), startedAt: receipt?.started_at, completedAt: status === 'succeeded' ? receipt?.completed_at ?? undefined : undefined, error };
     });
     const selectedNode = nodeId ? store.get<WorkflowNode>('node-definition', `${runId}:${nodeId}`) ?? saved?.nodes.find(node => node.id === nodeId) : undefined, model = selectedNode?.modelId ? saved?.models.find(value => value.id === selectedNode.modelId) : undefined;
-    return runInspectionSchema.parse({ run: reads.runSummary(run), projectTitle: saved?.title ?? '历史制作', snapshotAvailable: !!saved, checkpointAvailable: state.available, steps,
+    return runInspectionSchema.parse({ run: reads.runSummary(run), projectTitle: saved?.title ?? '历史制作', snapshotAvailable: !!saved, checkpointAvailable: state.available, steps, stages: saved?.stages,
       recovery: { review: run.status === 'waiting_review', resume, cancel: ['running', 'queued', 'waiting_external', 'retry_scheduled', 'needs_attention'].includes(run.status), restart: run.status === 'canceled', reason: unknown ? '存在结果未确认的外部提交，请先核对原任务。' : '' },
       selected: selectedNode && saved ? { node: redact(json(selectedNode)), dependencies: saved.edges.filter(edge => edge.target === nodeId).map(edge => edge.source),
         model: model ? { id: model.id, name: model.name, provider: model.provider, model: model.model } : undefined,

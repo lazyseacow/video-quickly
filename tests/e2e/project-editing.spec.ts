@@ -22,6 +22,8 @@ test('undoes and redoes grouped input, ordering, duplication and deletion with m
   const project = await createProject(request, '统一编辑历史验收');
   await openProject(page, project.title);
   const title = page.getByLabel('镜头标题');
+  const outline = page.locator('#project-outline'); await expect(outline.getByRole('region', { name: '镜头列表', exact: true })).toBeVisible(); await expect(outline.locator('.outline-header')).toHaveCount(0); await expect(outline.getByRole('tab')).toHaveCount(0);
+  await outline.locator('.outline-shot').nth(1).click(); await expect(title).toHaveValue('测试镜头 2'); await outline.locator('.outline-shot').first().click(); await expect(title).toHaveValue('测试镜头 1');
   await title.fill('连续'); await title.pressSequentially('输入');
   await title.press('ControlOrMeta+z'); await expect(title).toHaveValue('测试镜头 1');
   await title.press('ControlOrMeta+Shift+z'); await expect(title).toHaveValue('连续输入');
@@ -118,13 +120,14 @@ test('keeps generated results editable with undo and rejects reapplying them aft
     await rpc(request, 'node.apply', { runId: run.id, nodeId: 'script', revision: project.revision });
     await openProject(page, project.title);
     await expect(page.getByLabel('镜头标题')).toHaveValue('已生成的分镜');
-    await page.getByRole('tab', { name: '制作步骤', exact: true }).click();
-    await page.locator('.step-item').filter({ hasText: '旁白与分镜' }).click();
+    await page.getByRole('button', { name: '流程', exact: true }).click(); await page.locator('.react-flow__node[data-id="script"]').click();
+    await page.getByRole('button', { name: '配置与执行步骤', exact: true }).click();
     const step = page.getByRole('dialog', { name: '旁白与分镜', exact: true });
     await expect(step.getByRole('button', { name: '保存', exact: true })).toBeVisible();
     await expect(step.getByRole('button', { name: '执行', exact: true })).toBeVisible();
     await expect(step.getByRole('button', { name: '查看最近产物', exact: true })).toHaveCount(0);
     await step.getByRole('button', { name: '取消', exact: true }).click();
+    await page.getByRole('button', { name: '分镜', exact: true }).click();
     await page.getByLabel('镜头标题').fill('人工修订的分镜');
     await page.getByRole('button', { name: '保存镜头', exact: true }).click();
     await page.getByRole('button', { name: '撤销', exact: true }).click();

@@ -10,8 +10,8 @@ export default defineConfig({
   reporter: process.env.PLAYWRIGHT_JSON_OUTPUT_NAME ? [['line'], ['json']] : 'list',
   outputDir: process.env.PLAYWRIGHT_ARTIFACT_DIR ?? join(tmpdir(), 'video-quickly-playwright-results'),
   use: { baseURL, viewport: { width: 1536, height: 960 }, screenshot: 'only-on-failure', trace: 'retain-on-failure',
-    // Existing editor scenarios exercise a saved preference; design-system.spec covers a fresh profile.
-    storageState: { cookies: [], origins: [{ origin: baseURL, localStorage: [{ name: 'vq-theme', value: 'dark' }] }] },
+    // Existing editor scenarios use a returning profile; getting-started.spec covers first use.
+    storageState: { cookies: [], origins: [{ origin: baseURL, localStorage: [{ name: 'vq-theme', value: 'dark' }, { name: 'vq-onboarding-v1', value: 'done' }] }] },
   },
   webServer: { command: 'pnpm dev:e2e', url: baseURL, reuseExistingServer: false, timeout: 60000,
     env: { VIDEO_QUICKLY_PORT: String(port), VIDEO_QUICKLY_DATA_DIR: join(tmpdir(), `video-quickly-e2e-${process.pid}-${Date.now()}`) } },

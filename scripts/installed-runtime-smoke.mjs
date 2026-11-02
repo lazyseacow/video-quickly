@@ -16,7 +16,7 @@ if (mode === 'inspect') {
   const require = createRequire(join(sidecar, 'package.json'));
   const Database = require('better-sqlite3');
   const db = new Database(join(dataDirectory, 'workspace.sqlite'), { readonly: true });
-  try { assert.equal(db.pragma('user_version', { simple: true }), 7); assert.equal(db.pragma('quick_check', { simple: true }), 'ok'); } finally { db.close(); }
+  try { assert.equal(db.pragma('user_version', { simple: true }), 8); assert.equal(db.pragma('quick_check', { simple: true }), 'ok'); } finally { db.close(); }
   console.log('原生客户端已完成数据库迁移');
   process.exit(0);
 }
@@ -65,7 +65,7 @@ try {
   const snapshot = await rpc('workspace.snapshot');
   assert.equal(snapshot.system.ffmpegAvailable, true);
   if (mode === 'prepare') {
-    const project = await rpc('project.create', { title: '中文路径 安装升级验收' });
+    const project = await rpc('project.create', { title: '中文路径 安装升级验收', templateId: 'history-handdrawn' });
     const run = await rpc('run.start', { projectId: project.id, nodeId: 'style' });
     const review = await runAt(run.id, 'waiting_review');
     assert.equal(review.activities.length, 1);

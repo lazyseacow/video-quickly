@@ -1,5 +1,6 @@
 import { createServer, type Server } from 'node:http';
 import { expect, test } from '@playwright/test';
+import type { ModelProfile } from '@video-quickly/contracts';
 import { addModelConnection, settingField } from './settings';
 
 let server: Server;
@@ -56,6 +57,66 @@ for (const viewport of [{ width: 1536, height: 960, theme: 'dark' }, { width: 39
     await retrySelector.selectOption('fixture-text-2');
     await reopened.getByRole('button', { name: '保存连接', exact: true }).click(); await expect(reopened).toHaveCount(0);
     expect(requests).toContain('/unsupported/models'); expect(errors).toEqual([]);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(viewport.width + 1);
+  });
+
+  test(`discovers paginated Qwen TTS model IDs and reopens saved credentials at ${viewport.width}px`, async ({ page, request }, info) => {
+    const errors: string[] = []; page.on('pageerror', error => errors.push(error.message));
+    const calls: Array<{ page: number; pageSize: number; capability: string | null; authorization?: string }> = [];
+    const selectedId = 'qwen3-tts-flash', selectedLabel = 'Second-page Qwen speech';
+    server = createServer((incoming, response) => {
+      const url = new URL(incoming.url ?? '/', 'http://localhost');
+      if (incoming.method !== 'GET' || url.pathname !== '/api/v1/models') { response.writeHead(404).end(); return; }
+      const pageNumber = Number(url.searchParams.get('page_no') ?? 1), pageSize = Number(url.searchParams.get('page_size') ?? 20);
+      calls.push({ page: pageNumber, pageSize, capability: url.searchParams.get('capabilities'), authorization: incoming.headers.authorization });
+      const models = pageNumber === 1
+        ? Array.from({ length: pageSize }, (_, index) => ({ model: `qwen-tts-first-page-${index}`, name: `First-page Qwen speech ${index}`, capabilities: ['TTS'] }))
+        : [{ model: selectedId, name: selectedLabel, capabilities: ['TTS'] }];
+      response.setHeader('Content-Type', 'application/json');
+      response.end(JSON.stringify({ success: true, output: { total: pageSize + 1, page_no: pageNumber, page_size: pageSize, models }, request_id: `qwen-page-${pageNumber}` }));
+    });
+    await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve)); const address = server.address(); if (!address || typeof address === 'string') throw new Error('无测试端口');
+    const baseUrl = `http://127.0.0.1:${address.port}/api/v1`, name = `Qwen 分页配音 ${viewport.width}`;
+    async function savedModel(name: string): Promise<ModelProfile | undefined> {
+      const response = await request.post('/__desktop_rpc', { data: { method: 'workspace.summary' } });
+      const payload = await response.json(); expect(payload.error).toBeUndefined();
+      return (payload.result.models as ModelProfile[]).find(model => model.name === name);
+    }
+    await page.addInitScript(theme => localStorage.setItem('vq-theme', theme), viewport.theme); await page.setViewportSize(viewport); await page.goto('/');
+    await page.getByRole('button', { name: '模型连接', exact: true }).click();
+    const dialog = await addModelConnection(page, '音频模型');
+    await (await settingField(dialog, '模型平台')).selectOption('qwen-tts');
+    await expect(dialog.getByLabel('API 协议', { exact: true })).toHaveValue('qwen-tts');
+    await (await settingField(dialog, '连接名称')).fill(name);
+    await (await settingField(dialog, 'API Key')).fill('qwen-pagination-fixture-key');
+    await (await settingField(dialog, '服务地址')).fill(baseUrl);
+    const selector = dialog.getByLabel('模型 ID', { exact: true });
+    await expect(selector).toBeEnabled();
+    await expect(selector.locator(`option[value="${selectedId}"]`)).toContainText(selectedLabel);
+    await expect(selector.locator(`option[value="${selectedLabel}"]`)).toHaveCount(0);
+    await selector.selectOption(selectedId);
+    await expect(dialog.getByRole('button', { name: '保存连接', exact: true })).toBeEnabled();
+    if (viewport.width < 650) await dialog.locator('.model-discovery').scrollIntoViewIfNeeded();
+    await expect(dialog.locator('.dialog__surface')).toHaveCSS('opacity', '1'); await page.screenshot({ path: info.outputPath('qwen-paginated-discovery.png') });
+    await dialog.getByRole('button', { name: '保存连接', exact: true }).click(); await expect(dialog).toHaveCount(0);
+    await expect.poll(() => savedModel(name)).toMatchObject({ model: selectedId, provider: 'qwen-tts', platform: 'qwen-tts', connectionType: 'audio', hasSecret: true });
+
+    const beforeReopen = calls.length;
+    await page.getByRole('button', { name: `编辑“${name}”`, exact: true }).click();
+    const reopened = page.getByRole('dialog', { name: '编辑模型连接', exact: true });
+    await expect(await settingField(reopened, 'API Key')).toHaveValue('');
+    const reopenedSelector = reopened.getByLabel('模型 ID', { exact: true });
+    await expect(reopenedSelector).toBeEnabled(); await expect(reopenedSelector).toHaveValue(selectedId);
+    expect(calls.slice(beforeReopen).map(call => call.page)).toEqual([1, 2]);
+    const renamed = `${name} 已更新`;
+    await (await settingField(reopened, '连接名称')).fill(renamed);
+    if (viewport.width < 650) await reopened.locator('.model-discovery').scrollIntoViewIfNeeded();
+    await expect(reopened.locator('.dialog__surface')).toHaveCSS('opacity', '1'); await page.screenshot({ path: info.outputPath('qwen-reopened-selection.png') });
+    await reopened.getByRole('button', { name: '保存连接', exact: true }).click(); await expect(reopened).toHaveCount(0);
+    await expect.poll(() => savedModel(renamed)).toMatchObject({ model: selectedId, baseUrl, hasSecret: true });
+    expect(calls.map(call => call.page)).toEqual([1, 2, 1, 2]);
+    expect(calls.every(call => call.capability === 'TTS' && Number.isInteger(call.pageSize) && call.pageSize > 0 && call.authorization === 'Bearer qwen-pagination-fixture-key')).toBe(true);
+    expect(errors).toEqual([]); await expect(page.locator('vite-error-overlay')).toHaveCount(0);
     expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(viewport.width + 1);
   });
 }

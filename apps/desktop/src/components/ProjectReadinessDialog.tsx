@@ -2,6 +2,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { RefreshCw } from 'lucide-react';
 import { projectReadinessSchema, type ProjectReadiness, type ReadinessIssue, type RunSelection } from '@video-quickly/contracts';
 import { rpc } from '../lib/client';
+import { beginGuideAction } from '../lib/guide-actions';
 import { Button, Dialog, Notice } from './Primitives';
 import './project-readiness.css';
 
@@ -23,14 +24,19 @@ export default function ProjectReadinessDialog({ projectId, selection, version, 
     request.cancelSent = true;
     void rpc('project.readiness.cancel', { projectId, requestId: request.id }).catch(() => errorHandler.current('停止本地检查尚未确认；执行器断开时会清理检查任务。'));
   }
+  function close() { cancel(current.current); onClose(); }
   async function check() {
     if (current.current?.pending) return;
     const request: Request = { id: crypto.randomUUID(), pending: true, cancelSent: false };
     current.current = request; setBusy(true); setError('');
     const requestedVersion = version;
+    const completed = beginGuideAction('check-completed');
     try {
       const result = projectReadinessSchema.parse(await rpc('project.readiness', { projectId, selection, requestId: request.id }));
-      if (mounted.current && current.current === request) { setReport(result); setCheckedVersion(requestedVersion); setIssueLimit(100); }
+      if (mounted.current && current.current === request) {
+        setReport(result); setCheckedVersion(requestedVersion); setIssueLimit(100);
+        if (!request.cancelSent) completed();
+      }
     } catch (failure) { if (mounted.current && current.current === request) setError(failure instanceof Error ? failure.message : '本地检查未完成，请重新检查。'); }
     finally { request.pending = false; if (mounted.current && current.current === request) setBusy(false); }
   }
@@ -42,7 +48,7 @@ export default function ProjectReadinessDialog({ projectId, selection, version, 
   }, [projectId, selection?.nodeId, selection?.mode]);
   const visible = report?.projectId === projectId && report.selection?.nodeId === selection?.nodeId && report.selection?.mode === selection?.mode ? report : undefined;
   const errors = visible?.issues.filter(issue => issue.severity === 'error') ?? [], warnings = visible?.issues.filter(issue => issue.severity === 'warning') ?? [];
-  return <Dialog title="制作前检查" className="dialog--wide project-readiness-dialog" onClose={onClose}>
+  return <Dialog title="制作前检查" className="dialog--wide project-readiness-dialog" onClose={close} onDismissStart={() => cancel(current.current)}>
     <div className="dialog__body">
       <p className="readiness-intro">核对已保存项目的本地配置与素材，不提交生成任务。供应商连通性和计费状态需单独验证。</p>
       {hasUnsavedChanges && <Notice>当前有未保存的修改，本次仅检查已保存内容。保存修改后请重新检查。</Notice>}
@@ -57,6 +63,6 @@ export default function ProjectReadinessDialog({ projectId, selection, version, 
         <p className="readiness-intro">检查时间：{new Date(visible.checkedAt).toLocaleString('zh-CN')}。制作时仍会按实际输入再次校验。</p>
       </>}
     </div>
-    <div className="dialog__footer"><Button onClick={onClose}>{hasUnsavedChanges ? '返回保存修改' : '关闭'}</Button><Button variant="primary" busy={busy} onClick={() => void check()}><RefreshCw size={14} />重新检查</Button></div>
+    <div className="dialog__footer"><Button onClick={close}>{hasUnsavedChanges ? '返回保存修改' : '关闭'}</Button><Button variant="primary" busy={busy} onClick={() => void check()}><RefreshCw size={14} />重新检查</Button></div>
   </Dialog>;
 }

@@ -1,7 +1,7 @@
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { createHash } from 'node:crypto';
-import { createHistoryWorkflow, DEFAULT_VIDEO_PROFILE, projectSchema, type AssetRecord, type ProjectDocument } from '@video-quickly/contracts';
+import { createVideoWorkflow, DEFAULT_VIDEO_PROFILE, projectSchema, type AssetRecord, type ProjectDocument } from '@video-quickly/contracts';
 
 export function seedHistoryProject(directory: string): { project: ProjectDocument; assets: AssetRecord[] } {
   const createdAt = new Date().toISOString();
@@ -23,7 +23,7 @@ export function seedHistoryProject(directory: string): { project: ProjectDocumen
   const project = projectSchema.parse({
     id: projectId, title: '一纸登科，改变了什么？', brief: '面向普通观众，解释唐代科举与社会流动的关系。先整理可靠来源，区分事实与示意复原，再制作手绘科普短片。本项目是可编辑示例，旁白和事实主张仍待核验。', templateId: 'history-handdrawn', revision: 1, profile: DEFAULT_VIDEO_PROFILE,
     shots: descriptions.map(([title, narration, visualPrompt], index) => ({ id: `shot-${index + 1}`, title, narration, visualPrompt, durationUs: [7_000_000, 8_000_000, 8_000_000, 7_000_000][index], assetId: assets[index].id, claimIds: index === 1 ? ['claim-access'] : index === 2 ? ['claim-process'] : [], locked: false, animation: { panX: index % 2 === 0 ? 0.035 : -0.035, panY: 0, zoom: 1.06, transition: 'fade' } })),
-    workflow: createHistoryWorkflow(), claims: [
+    workflow: createVideoWorkflow(), claims: [
       { id: 'claim-access', text: '唐代读书与赴考机会受到家庭及社会条件影响。', source: '', locator: '', status: 'pending' },
       { id: 'claim-process', text: '唐代考试与授官之间的具体关系需要查证。', source: '', locator: '', status: 'pending' },
     ], style: '深墨线条、淡赭与青绿、米色纸纹。固定人物和场景锚点；建筑与服饰均为待核对的示意复原。字幕在后期独立排版。', createdAt, updatedAt: createdAt, archived: false,

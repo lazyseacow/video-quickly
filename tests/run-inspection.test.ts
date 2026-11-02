@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { gunzipSync } from 'node:zlib';
 import { afterEach, expect, it } from 'vitest';
-import { activitySchema, assetSchema, jsonValueSchema, modelSchema, projectDetailSchema, projectSchema, recordPageSchema, runDiagnosticBundleSchema, runDiagnosticsSchema, runEventSchema, runInspectionSchema, runStepPayloadSchema, runSchema, stepOutputVersionSchema, workflowNodeSchema, type AssetRecord, type WorkflowNode } from '@video-quickly/contracts';
+import { activitySchema, assetSchema, jsonValueSchema, modelSchema, projectDetailSchema, projectSchema, recordPageSchema, runDiagnosticBundleSchema, runDiagnosticsSchema, runEventSchema, runInspectionSchema, runStepPayloadSchema, runSchema, stepOutputVersionSchema, workflowNodeSchema, type AssetRecord, type WorkflowNode, type WorkflowStage } from '@video-quickly/contracts';
 import { createRuntime, SimulatedProcessExit, type RuntimeOptions } from '../packages/runtime/src';
 import { ActivityJournal } from '../packages/runtime/src/activities';
 import { DocumentStore, openDatabase } from '../packages/runtime/src/database';
@@ -23,8 +23,8 @@ async function fixture(options: Partial<RuntimeOptions> = {}) {
   const project = projectSchema.parse(await runtime.dispatch('project.create', { title: '执行时的项目', brief: '冻结的创作要求' }));
   return { runtime, project, directory };
 }
-async function workflow(runtime: ReturnType<typeof createRuntime>, projectId: string, nodes: WorkflowNode[], edges: { id: string; source: string; target: string; condition?: string }[] = []) {
-  return projectSchema.parse(await runtime.dispatch('workflow.save', { projectId, workflow: { id: 'inspector-flow', version: 1, name: '步骤详情验收', nodes, edges } }));
+async function workflow(runtime: ReturnType<typeof createRuntime>, projectId: string, nodes: WorkflowNode[], edges: { id: string; source: string; target: string; condition?: string }[] = [], stages?: WorkflowStage[]) {
+  return projectSchema.parse(await runtime.dispatch('workflow.save', { projectId, workflow: { id: 'inspector-flow', version: 1, name: '步骤详情验收', nodes, edges, stages } }));
 }
 async function start(runtime: ReturnType<typeof createRuntime>, projectId: string) {
   const run = runSchema.parse(await runtime.dispatch('run.start', { projectId })); await runtime.waitForIdle(); return run;
@@ -38,19 +38,22 @@ it('inspects frozen labels, real effective inputs and native human review withou
   const model = modelSchema.parse(await runtime.dispatch('model.save', { model: { name: '冻结模型', provider: 'openai-compatible', baseUrl: 'http://localhost:1234/v1', model: 'fixture', capabilities: ['text'] } }));
   const first = workflowNodeSchema.parse({ id: 'style:one', kind: 'style', label: '原步骤名称', modelId: model.id, requiresReview: true });
   const second = workflowNodeSchema.parse({ id: 'brief:two', kind: 'brief', label: '读取上游风格', modelId: model.id });
-  const frozen = await workflow(runtime, project.id, [first, second], [{ id: 'next', source: first.id, target: second.id }]);
+  const stages = [{ id: 'planning', label: '原策划阶段', description: '冻结的阶段说明', nodeIds: [first.id, second.id] }];
+  const frozen = await workflow(runtime, project.id, [first, second], [{ id: 'next', source: first.id, target: second.id }], stages);
   const run = await start(runtime, project.id);
   let detail = await inspect(runtime, run.id, first.id);
   expect(detail.steps.map(step => step.status)).toEqual(['waiting_review', 'pending']);
   expect(detail.recovery).toMatchObject({ review: true, resume: false });
   expect(detail.steps[0]).toMatchObject({ inputAvailable: true, outputAvailable: true, unknownSubmission: false, activityCount: 1 });
   expect(detail.steps[1]).toMatchObject({ inputAvailable: false, outputAvailable: false });
-  await runtime.dispatch('project.update', { projectId: project.id, revision: frozen.revision, patch: { title: '现在的标题', style: '现在的人工风格', workflow: { ...frozen.workflow, nodes: [{ ...first, label: '现在的步骤名称' }, second] } } });
+  expect(detail.stages).toEqual(stages);
+  await runtime.dispatch('project.update', { projectId: project.id, revision: frozen.revision, patch: { title: '现在的标题', style: '现在的人工风格', workflow: { ...frozen.workflow, nodes: [{ ...first, label: '现在的步骤名称' }, second], stages: [{ ...stages[0], label: '现在的阶段名称', nodeIds: [first.id] }] } } });
   await runtime.dispatch('model.save', { model: { ...model, name: '现在的模型名称' } });
   const beforeDb = openDatabase(directory);
   const before = beforeDb.prepare('SELECT count(*) AS count FROM execution_events').get(); beforeDb.close();
   detail = await inspect(runtime, run.id, first.id);
   expect(detail.projectTitle).toBe('执行时的项目'); expect(detail.selected?.node.label).toBe('原步骤名称'); expect(detail.selected?.model?.name).toBe('冻结模型');
+  expect(detail.stages).toEqual(stages);
   const input = await payload(runtime, run.id, first.id, 'input');
   expect(input.resolvedPromptRecorded).toBe(true); expect(input.value).toMatchObject({ project: { title: '执行时的项目', style: frozen.style }, node: { label: '原步骤名称' }, model: { name: '冻结模型' } });
   expect(await payload(runtime, run.id, second.id, 'input')).toMatchObject({ available: false, value: null });
@@ -62,6 +65,17 @@ it('inspects frozen labels, real effective inputs and native human review withou
   expect((await inspect(runtime, run.id)).steps.every(step => step.status === 'succeeded')).toBe(true); expect(calls).toHaveLength(2);
   const current = projectDetailSchema.parse(await runtime.dispatch('project.get', { projectId: project.id })).project!;
   expect(current.title).toBe('现在的标题'); expect(current.style).toBe('现在的人工风格');
+});
+
+it('leaves stages absent for legacy snapshots and runs without a snapshot', async () => {
+  const { runtime, project, directory } = await fixture();
+  await workflow(runtime, project.id, [workflowNodeSchema.parse({ id: 'brief', kind: 'brief', label: '旧版步骤' })]);
+  const run = await start(runtime, project.id);
+  const legacy = await inspect(runtime, run.id);
+  expect(legacy.snapshotAvailable).toBe(true); expect(legacy.stages).toBeUndefined();
+  const db = openDatabase(directory); new DocumentStore(db).delete('run-snapshot', run.id); db.close();
+  const unavailable = await inspect(runtime, run.id);
+  expect(unavailable.snapshotAvailable).toBe(false); expect(unavailable.stages).toBeUndefined(); expect(unavailable.steps).toEqual([]);
 });
 
 it('uses the persisted branch state to distinguish skipped steps from completed and pending ones', async () => {

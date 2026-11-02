@@ -207,14 +207,14 @@ test('retains input added during a committed save and keeps the view open until 
 
 test('shares step-setting history with the graph and preserves input when the same step changes elsewhere', async ({ page, request }) => {
   const project = await fixture(request, '步骤设置统一历史'); await open(page, project.title, false);
-  await page.getByRole('tab', { name: '制作步骤', exact: true }).click(); await page.locator('.step-list').getByRole('button').filter({ hasText: '简报 A' }).click();
+  await page.getByRole('button', { name: '配置步骤：简报 A', exact: true }).click();
   const dialog = page.getByRole('dialog', { name: '简报 A', exact: true });
   await dialog.getByLabel('提示词与补充要求').fill('人工设置的提示词'); await dialog.getByRole('button', { name: '保存', exact: true }).click();
   await expect(dialog).toHaveCount(0); await history(page, '撤销');
   await expect.poll(async () => (await current(request, project.id)).workflow.nodes[0].prompt).toBe('');
   await history(page, '重做');
   await expect.poll(async () => (await current(request, project.id)).workflow.nodes[0].prompt).toBe('人工设置的提示词');
-  await page.locator('.step-list').getByRole('button').filter({ hasText: '简报 A' }).click(); await dialog.getByLabel('提示词与补充要求').fill('尚未应用的输入');
+  await page.getByRole('button', { name: '配置步骤：简报 A', exact: true }).click(); await dialog.getByLabel('提示词与补充要求').fill('尚未应用的输入');
   const saved = await current(request, project.id);
   const remote = await rpc<ProjectDocument>(request, 'project.update', { projectId: project.id, revision: saved.revision, patch: { workflow: { ...saved.workflow, nodes: saved.workflow.nodes.map(node => node.id === 'a' ? { ...node, prompt: '另一视图的提示词' } : node) } } });
   await expect(page.locator('.project-heading-copy')).toHaveAttribute('data-revision', String(remote.revision));
@@ -226,8 +226,7 @@ test('shares step-setting history with the graph and preserves input when the sa
 
 test('keeps newer step input after a committed save and requires confirmation before executing it', async ({ page, request }) => {
   const project = await fixture(request, '步骤保存期间继续输入'); await open(page, project.title, false);
-  await page.getByRole('tab', { name: '制作步骤', exact: true }).click();
-  await page.locator('.step-list').getByRole('button').filter({ hasText: '简报 A' }).click();
+  await page.getByRole('button', { name: '配置步骤：简报 A', exact: true }).click();
   const dialog = page.getByRole('dialog', { name: '简报 A', exact: true }), prompt = dialog.getByLabel('提示词与补充要求');
   await prompt.fill('先提交的步骤要求');
   let release!: () => void, entered!: () => void, held = false;

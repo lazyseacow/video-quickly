@@ -18,7 +18,7 @@ it('reconnects the actual Node runtime once and preserves project data and the o
   const path = await directory(), events: unknown[] = [];
   const controller = own({ command: process.execPath, args: ['--import', 'tsx', resolve('packages/runtime/src/main.ts'), '--data-dir', path], cwd: resolve('.'), onEvent: (event: unknown) => events.push(event) });
   expect(await controller.start()).toMatchObject({ state: 'ready', generation: 1 });
-  const project = await controller.request('project.create', { title: 'Electron工作区重启恢复' });
+  const project = await controller.request('project.create', { title: 'Electron工作区重启恢复', templateId: 'history-handdrawn' });
   const run = await controller.request('run.start', { projectId: project.id, nodeId: 'style' });
   await expect.poll(async () => (await controller.request('run.inspect', { runId: run.id })).run.status, { timeout: 15_000 }).toBe('waiting_review');
   const before = await controller.request('run.activities', { runId: run.id });

@@ -28,6 +28,7 @@ const checks = {};
 const errors = [];
 const windows = [];
 let nativeTextInputTypes;
+let gettingStartedHelpBounds;
 let application;
 let page;
 let runtimePid;
@@ -100,11 +101,141 @@ async function launch() {
   observePage(await application.firstWindow());
   await expect(page).toHaveTitle(/Video Quickly/);
   await expect(page.locator('.workspace-shell')).toBeVisible({ timeout: 30_000 });
-  await inspectWindow();
   await expect.poll(() => rpc('runtime.status'), { timeout: 20_000 }).toMatchObject({ state: 'ready' });
   assert.equal(new URL(page.url()).protocol, 'video-quickly:');
   assert.equal(new URL(page.url()).hostname, 'app');
+  await inspectWindow();
+  if (!checks.gettingStarted) { await verifyGettingStarted(); await verifyGenericWorkflow(); }
+  else {
+    assert.equal(await page.evaluate(() => localStorage.getItem('vq-onboarding-v1')), 'done');
+    await expect(page.getByRole('dialog', { name: '使用指南', exact: true })).toHaveCount(0);
+  }
   return page;
+}
+async function verifyGenericWorkflow() {
+  const snapshot = await rpc('workspace.snapshot');
+  const project = snapshot.projects.find(item => item.id === 'example-history');
+  assert.ok(project);
+  assert.equal(project.workflow.id, 'general-video');
+  assert.equal(project.workflow.nodes.some(node => node.kind === 'research'), false);
+  assert.equal(project.workflow.stages.length, 4);
+  const guidance = page.getByRole('region', { name: '制作指引', exact: true });
+  await expect(guidance.getByRole('button', { name: /^配置阶段：/ })).toHaveCount(4);
+  await guidance.getByRole('button', { name: '配置阶段：策划与分镜', exact: true }).click();
+  const dialog = page.getByRole('dialog', { name: '策划与分镜', exact: true });
+  for (const label of ['创意简报', '风格与角色', '旁白与分镜']) {
+    await dialog.getByRole('tab', { name: label, exact: true }).click();
+    await expect(dialog.getByLabel(`${label}使用模型`, { exact: true })).toHaveValue('');
+    await dialog.getByLabel(`${label}提示词与补充要求`, { exact: true }).fill(`未提交的${label}配置`);
+  }
+  await dialog.getByRole('tab', { name: '创意简报', exact: true }).click();
+  await expect(dialog.getByLabel('创意简报提示词与补充要求', { exact: true })).toHaveValue('未提交的创意简报配置');
+  await page.screenshot({ path: join(artifacts, 'desktop-workflow-stage.png') });
+  await dialog.getByRole('button', { name: '取消', exact: true }).click();
+  await expect(dialog).toHaveCount(0);
+  assert.deepEqual((await rpc('workspace.snapshot')).projects, snapshot.projects, 'Canceling grouped settings must preserve the project');
+  checks.genericWorkflow = true;
+}
+async function verifyGettingStarted() {
+  const guide = page.getByRole('dialog', { name: '使用指南', exact: true });
+  const heading = guide.getByRole('heading');
+  const highlighted = page.locator('.driver-active-element');
+  async function activeTarget() {
+    await expect(guide).toBeVisible();
+    await expect(guide).toBeInViewport({ ratio: 1 });
+    await expect(highlighted).toHaveCount(1);
+    await expect(highlighted).toBeVisible();
+    await expect(highlighted).toBeInViewport();
+    await expect(highlighted).not.toHaveAttribute('id', 'driver-dummy-element');
+    await expect(highlighted).toHaveAttribute('data-guide', /\S+/);
+    return highlighted.getAttribute('data-guide');
+  }
+  async function nextStep() {
+    const previousTitle = await heading.innerText();
+    await guide.getByRole('button', { name: '下一步', exact: true }).click();
+    await expect(heading).not.toHaveText(previousTitle);
+  }
+  await expect(heading).toHaveText('新建创作项目');
+  assert.equal(await activeTarget(), 'create-project');
+  assert.equal(await page.evaluate(() => localStorage.getItem('vq-onboarding-v1')), null);
+  const before = await rpc('workspace.snapshot');
+  await page.screenshot({ path: join(artifacts, 'desktop-getting-started.png') });
+
+  await highlighted.click();
+  const create = page.getByRole('dialog', { name: '新建视频项目', exact: true });
+  await expect(create).toBeVisible();
+  await expect(guide).toHaveCount(0);
+  await expect(page.locator('.driver-overlay')).toHaveCount(0);
+  await create.getByLabel('项目名称', { exact: true }).fill('取消原生导览中的项目');
+  await create.getByLabel('创意简报', { exact: true }).fill('确认高亮操作打开的表单可以正常输入。');
+  await page.keyboard.press('Escape');
+  await expect(create).toHaveCount(0);
+  await expect(heading).toHaveText('新建创作项目');
+  assert.equal(await activeTarget(), 'create-project');
+  assert.equal(await page.evaluate(() => localStorage.getItem('vq-onboarding-v1')), null);
+
+  let reachedEnd = false, contextCaptured = false;
+  for (let step = 0; step < 20; step++) {
+    const target = await activeTarget();
+    assert.equal(await page.evaluate(() => localStorage.getItem('vq-onboarding-v1')), null);
+    if (!contextCaptured && ['preview', 'timeline'].includes(target)) {
+      await page.screenshot({ path: join(artifacts, 'desktop-getting-started-context.png') });
+      contextCaptured = true;
+    }
+    if (!await guide.getByRole('button', { name: '下一步', exact: true }).count()) { reachedEnd = true; break; }
+    await nextStep();
+  }
+  assert.equal(reachedEnd, true, 'The getting started tour must finish within twenty steps');
+  assert.equal(contextCaptured, true, 'The native tour must highlight a real preview or timeline');
+  assert.equal(await activeTarget(), 'help');
+  await guide.getByRole('button', { name: '完成引导', exact: true }).click();
+  await expect(guide).toHaveCount(0);
+  assert.equal(await page.evaluate(() => localStorage.getItem('vq-onboarding-v1')), 'done');
+
+  await page.reload();
+  await expect(page.locator('.workspace-shell')).toBeVisible({ timeout: 30_000 });
+  await expect.poll(() => rpc('runtime.status'), { timeout: 20_000 }).toMatchObject({ state: 'ready' });
+  await expect(guide).toHaveCount(0);
+  const help = page.getByRole('button', { name: '使用指南', exact: true });
+  await expect(help).toBeVisible();
+  await expect(help).toBeInViewport({ ratio: 1 });
+  gettingStartedHelpBounds = await help.evaluate(element => {
+    const bounds = element.getBoundingClientRect();
+    return { left: bounds.left, top: bounds.top, right: bounds.right, bottom: bounds.bottom, width: bounds.width, height: bounds.height, viewportWidth: innerWidth, viewportHeight: innerHeight };
+  });
+  assert.ok(gettingStartedHelpBounds.left >= 0 && gettingStartedHelpBounds.top >= 0 && gettingStartedHelpBounds.right <= gettingStartedHelpBounds.viewportWidth && gettingStartedHelpBounds.bottom <= gettingStartedHelpBounds.viewportHeight, 'The getting started entry must fit inside the native viewport');
+  await help.click();
+  await expect(heading).toHaveText('新建创作项目');
+  assert.equal(await activeTarget(), 'create-project');
+  let reachedPreview = false;
+  for (let step = 0; step < 20; step++) {
+    if (await activeTarget() === 'preview') { reachedPreview = true; break; }
+    await nextStep();
+  }
+  assert.equal(reachedPreview, true, 'The manual tour must reach playback within twenty steps');
+  const play = highlighted.getByRole('button', { name: '播放预览', exact: true });
+  await expect(play).toBeEnabled({ timeout: 30_000 });
+  await play.click();
+  await expect(heading).toHaveText('安排镜头节奏');
+  assert.equal(await activeTarget(), 'timeline');
+  await expect(page.getByRole('button', { name: '暂停预览', exact: true })).toHaveAttribute('aria-pressed', 'true');
+  const ruler = highlighted.getByRole('slider', { name: '预览播放位置', exact: true });
+  await ruler.scrollIntoViewIfNeeded();
+  const beforeSeek = Number(await ruler.getAttribute('aria-valuenow'));
+  const maximum = Number(await ruler.getAttribute('aria-valuemax'));
+  const rulerBounds = await ruler.boundingBox();
+  assert.ok(maximum > 0 && rulerBounds?.width && rulerBounds.height, 'Interactive native acceptance requires a real seekable timeline');
+  await ruler.click({ position: { x: rulerBounds.width * (beforeSeek > maximum / 2 ? .2 : .8), y: rulerBounds.height / 2 } });
+  await expect.poll(async () => Number(await page.getByRole('slider', { name: '预览播放位置', exact: true }).getAttribute('aria-valuenow'))).not.toBe(beforeSeek);
+  await expect(heading).toHaveText(/^(展开属性面板|编辑属性)$/);
+  assert.ok(['inspector-toggle', 'inspector'].includes(await activeTarget()), 'A completed user seek must advance to the next available property step');
+  await page.keyboard.press('Escape');
+  await expect(guide).toHaveCount(0);
+  await expect(help).toBeFocused();
+  const after = await rpc('workspace.snapshot');
+  for (const field of ['projects', 'models', 'skills', 'runs', 'assets']) assert.deepEqual(after[field], before[field], `Getting started must not change workspace ${field}`);
+  checks.gettingStartedInteractive = true;
+  checks.gettingStarted = true;
 }
 function observePage(next) {
   page = next;
@@ -115,8 +246,9 @@ async function inspectWindow() {
   const native = await application.evaluate(({ BrowserWindow, screen }, compact) => {
     const window = BrowserWindow.getAllWindows()[0];
     if (compact) window.setContentSize(1024, 720);
-    return { bounds: window.getBounds(), contentBounds: window.getContentBounds(), workArea: screen.getDisplayMatching(window.getBounds()).workArea };
+    return { visible: window.isVisible(), bounds: window.getBounds(), contentBounds: window.getContentBounds(), workArea: screen.getDisplayMatching(window.getBounds()).workArea };
   }, compact);
+  assert.equal(native.visible, true, 'Native acceptance requires a shown Electron window');
   if (compact) {
     await expect.poll(() => page.evaluate(() => innerWidth)).toBe(1024);
     await expect(page.getByRole('button', { name: '展开工作空间导航', exact: true })).toBeVisible();
@@ -447,9 +579,10 @@ try {
   await mkdir(dirname(reportPath), { recursive: true });
   await writeFile(reportPath, JSON.stringify({ status: 'passed', platform: process.platform, architecture: process.arch, packaged, compact, windows, distributionScope, relocatedExecutable: Boolean(process.env.VIDEO_QUICKLY_ELECTRON_EXECUTABLE), electron: actualElectronVersion, checks,
     nativeTextInputTypes,
+    gettingStartedHelpBounds,
     nativeDialogs: 'file/directory/save selection, cancellation and close decisions substituted; OS dialog UI requires manual verification',
     nativeShell: 'reveal invocation substituted; Finder/Explorer UI requires manual verification',
-    screenshots: ['desktop-editor.png', 'desktop-restored-draft.png'],
+    screenshots: ['desktop-getting-started.png', 'desktop-getting-started-context.png', 'desktop-workflow-stage.png', 'desktop-editor.png', 'desktop-restored-draft.png'],
   }, null, 2));
   console.log('Electron 原生窗口、真实 IPC/Node、编辑历史、媒体 Range/导出、失联重连和重启草稿验收通过。');
 } catch (error) {

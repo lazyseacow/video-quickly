@@ -29,8 +29,9 @@
 .sidebar-project.active { background: var(--surface-hover); color: var(--text); }
 .sidebar-project.active svg { color: var(--accent); }
 .sidebar-project:hover { background: var(--surface-hover); }
-.workspace-shell .sidebar-bottom { gap: 0; margin-top: auto; }
-.sidebar-footer { display: flex; flex-direction: column; gap: var(--space-2); border-top: 1px solid var(--border); padding-top: var(--space-3); margin-top: var(--space-3); }
+.workspace-shell .sidebar-bottom { display: flex; flex-direction: column; min-height: 0; gap: 0; margin-top: auto; }
+.workspace-shell .sidebar-bottom > .nav-group { min-height: 0; overflow-y: auto; }
+.sidebar-footer { display: flex; flex-direction: column; flex-shrink: 0; gap: var(--space-2); border-top: 1px solid var(--border); padding-top: var(--space-3); margin-top: var(--space-3); }
 .theme-button .theme-icon { display: grid; width: 18px; height: 18px; flex-shrink: 0; }
 .theme-icon svg { grid-area: 1/1; opacity: 0; scale: .25; filter: blur(4px); transition: opacity var(--motion-icon) var(--motion-ease), scale var(--motion-icon) var(--motion-ease), filter var(--motion-icon) var(--motion-ease); }
 .theme-icon[data-theme='dark'] svg:first-child, .theme-icon[data-theme='light'] svg:last-child { opacity: 1; scale: 1; filter: blur(0); }
@@ -63,16 +64,11 @@
 .workspace-shell .inspector .panel-heading .tabs button.active { color: var(--text); box-shadow: none; background: transparent; }
 .workspace-shell .inspector-section { padding: var(--space-5) var(--space-4); }
 .workspace-shell .inspector .inspector-body { min-height: 0; overflow-y: auto; }
-.outline-header { min-height: 53px; display: flex; align-items: center; padding: 0 var(--space-3); gap: var(--space-2); border-bottom: 1px solid var(--border); }
-.outline-header > .count { margin-left: auto; color: var(--text-subtle); font-size: var(--text-size-micro); font-variant-numeric: tabular-nums; min-width: 24px; height: 24px; display: grid; place-items: center; background: var(--surface-raised); border-radius: var(--radius-pill); }
 .outline-selection { display: flex; align-items: center; gap: var(--space-tight); padding: var(--space-tight) var(--space-2); border-bottom: 1px solid var(--border); }
 .outline-selection > span { flex: 1; min-width: 0; padding-left: var(--space-1); color: var(--text-secondary); font-size: var(--text-size-badge); line-height: var(--line-height-label); font-variant-numeric: tabular-nums; }
 .outline-selection .icon-button { flex-shrink: 0; width: 40px; height: 40px; }
 .workspace-shell .outline-shot.selected { background: color-mix(in srgb, var(--accent) 8%, var(--surface)); border-color: color-mix(in srgb, var(--accent) 62%, var(--border)); }
 .outline-shot-selection { position: absolute; right: 3px; top: 3px; width: 16px; height: 16px; display: grid; place-items: center; border-radius: var(--radius-compact); color: var(--accent); background: var(--surface); border: 1px solid var(--accent); }
-.outline-tabs { background: transparent; padding: 0; gap: 0; }
-.outline-tabs button { padding: 0 var(--space-3); height: 53px; border-radius: 0; }
-.outline-tabs button.active { color: var(--text); background: transparent; box-shadow: none; }
 .workspace-shell .outline-list { overflow-y: auto; overflow-x: hidden; padding: var(--space-3) var(--space-2); min-height: 0; flex: 1; border: 0; display: block; }
 .workspace-shell .outline-shot { border-radius: var(--radius-small); display: flex; align-items: flex-start; gap: var(--space-3); padding: var(--space-2); margin: 0 0 var(--space-2); min-width: 0; max-width: none; min-height: 88px; width: 100%; }
 .workspace-shell .outline-shot .shot-thumbnail { width: 72px; flex-shrink: 0; aspect-ratio: 16/10; border-radius: var(--radius-track); margin-top: var(--space-tight); }

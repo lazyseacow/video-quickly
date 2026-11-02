@@ -7,6 +7,7 @@ import { Button, Dialog, EmptyState, Field, IconButton, Notice, Status, formatTi
 import { ScenePreview } from '../components/ScenePreview';
 import type { Action, WorkspaceView } from '../lib/types';
 import { useRecordPage } from '../lib/use-record-page';
+import { beginGuideAction } from '../lib/guide-actions';
 export { default as RunsPage } from './RunHistory';
 const assetsPageSchema = recordPageSchema(assetListItemSchema);
 import { getAssetUrl, rpc } from '../lib/client';
@@ -51,7 +52,7 @@ export function ModelsPage({ workspace, action, repairModelId, onRepairConsumed 
   const models = workspace.models.filter(model => filter === 'all' || getModelConnectionType(model) === filter);
   function addModel() { if (filter !== 'all') setEditing(filter); else setChoosingType(true); }
   return <div className="content-page">
-    <div className="page-heading"><div><h1>模型连接</h1><p>分别配置文本、图片、视频与音频服务。</p></div><Button aria-label="添加模型" variant="primary" onClick={addModel}><Plus size={16} />添加</Button></div>
+    <div className="page-heading"><div><h1>模型连接</h1><p>分别配置文本、图片、视频与音频服务。</p></div><Button data-guide="model-connection" aria-label="添加模型" variant="primary" onClick={addModel}><Plus size={16} />添加</Button></div>
     <div className="page-toolbar"><div className="tabs model-type-tabs" role="group" aria-label="模型类型筛选">
       <button type="button" className={filter === 'all' ? 'active' : ''} aria-pressed={filter === 'all'} onClick={() => setFilter('all')}>全部</button>
       {modelConnectionTypes.map(type => <button type="button" key={type.id} className={filter === type.id ? 'active' : ''} aria-pressed={filter === type.id} onClick={() => setFilter(type.id)}>{type.label}</button>)}
@@ -90,6 +91,9 @@ function ModelDialog({ model, connectionType: addingType = 'text', action, onClo
   const [busy, setBusy] = useState(false);
   const [parametersText, setParametersText] = useState(JSON.stringify(model?.parameters ?? {}, null, 2));
   const [saveError, setSaveError] = useState('');
+  const closed = useRef(false);
+  useEffect(() => { closed.current = false; return () => { closed.current = true; }; }, []);
+  function close() { closed.current = true; onClose(); }
   const [discoveryResult, setDiscoveryResult] = useState<{ key: string; catalog: ModelDiscovery }>();
   const [discovering, setDiscovering] = useState(false);
   const [discoveryRefresh, setDiscoveryRefresh] = useState(0);
@@ -145,10 +149,12 @@ function ModelDialog({ model, connectionType: addingType = 'text', action, onClo
   async function save(event: React.FormEvent) {
     event.preventDefault(); setSaveError('');
     if (jsonError || parameterError || !selectedModelId || discovering) return;
+    const completed = beginGuideAction('model-saved');
     setBusy(true);
     const result = await action('model.save', { model: { ...model, ...(savedConnectionType ? { connectionType: savedConnectionType } : {}), name, platform, provider, ...(capabilities.includes('text') ? { textProtocol } : {}), baseUrl, model: selectedModelId, capabilities, parameters }, ...(secret ? { secret } : {}) }, '模型连接已保存');
+    if (closed.current) return;
     setBusy(false);
-    if (result !== null) onClose(); else setSaveError('连接尚未保存，请核对提示后重试。');
+    if (result !== null) { completed(); onClose(); } else setSaveError('连接尚未保存，请核对提示后重试。');
   }
   const parameterFields = getModelParameterFields({ provider, capabilities, textProtocol });
   const changeParameters = (value: Record<string, JsonValue>) => { setParametersText(JSON.stringify(value, null, 2)); setSaveError(''); };
@@ -171,7 +177,7 @@ function ModelDialog({ model, connectionType: addingType = 'text', action, onClo
     { id: 'qwen-tts', label: 'Qwen TTS · 配音生成' }, { id: 'custom-http', label: '自定义 HTTP · 配音生成' },
   ].filter(protocol => platform === 'custom' || platform === 'volcengine' && protocol.id.startsWith('volcengine-') || platform !== 'volcengine' && provider === 'openai-compatible' && protocol.id.startsWith('openai-') || protocol.id === provider);
   const platforms = modelPlatforms.filter(item => legacyConfiguration || definition.platforms.includes(item.id) || model && item.id === getModelPlatform(model).id);
-  return <Dialog title={model ? '编辑模型连接' : `添加${definition!.label}`} onClose={onClose} className="model-connection-dialog settings-dialog"><form onSubmit={event => void save(event)}>
+  return <Dialog title={model ? '编辑模型连接' : `添加${definition!.label}`} onClose={close} onDismissStart={() => { closed.current = true; }} className="model-connection-dialog settings-dialog"><form onSubmit={event => void save(event)}>
     <div className="dialog__body"><SettingsSections label="模型连接设置" sections={[
       { id: 'connection', label: '基本连接', icon: Server, content: <><h3>基本连接</h3>
       {model && <div className="model-connection-type"><span className="pill">{definition!.label}</span><span>{definition.description}</span></div>}
@@ -201,7 +207,7 @@ function ModelDialog({ model, connectionType: addingType = 'text', action, onClo
       {(jsonError || parameterError) && <p role="alert" className="field-error">{jsonError || parameterError}</p>}
       {saveError && <p role="alert" className="field-error">{saveError}</p>}
     </>} /></div>
-    <div className="dialog__footer"><Button onClick={onClose}>取消</Button><Button aria-label="保存连接" variant="primary" type="submit" busy={busy} disabled={!selectedModelId || discovering || !capabilities.length || Boolean(jsonError || parameterError)}>保存</Button></div>
+    <div className="dialog__footer"><Button onClick={close}>取消</Button><Button aria-label="保存连接" variant="primary" type="submit" busy={busy} disabled={!selectedModelId || discovering || !capabilities.length || Boolean(jsonError || parameterError)}>保存</Button></div>
   </form></Dialog>;
 }
 

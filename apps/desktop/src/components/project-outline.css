@@ -1,7 +1,0 @@
-.workspace-shell .step-item { align-items: flex-start; min-height: 84px; height: auto; padding: var(--space-3) var(--space-2); border-radius: var(--radius-small); }
-.step-item .step-circle { flex-shrink: 0; margin-top: var(--space-1); }
-.step-item .step-item__copy { display: grid; gap: var(--space-1); min-width: 0; flex: 1; }
-.step-item__copy strong { font-size: var(--text-size-label); font-weight: var(--font-weight-medium); }
-.step-item__copy small { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; font-size: var(--text-size-caption); color: var(--text-secondary); line-height: var(--line-height-label); }
-.step-item__copy > span { font-size: var(--text-size-micro); color: var(--text-subtle); line-height: var(--line-height-label); overflow-wrap: anywhere; }
-.step-item .step-tail { flex-shrink: 0; margin-top: var(--space-1); }
