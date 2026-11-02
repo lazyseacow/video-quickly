@@ -22,6 +22,7 @@ async function rpc(request: APIRequestContext, method: string, params: unknown =
   expect(payload.error).toBeUndefined();
   return payload.result;
 }
+function gate() { let release!: () => void; const promise = new Promise<void>(resolve => { release = resolve; }); return { promise, release }; }
 async function createProject(request: APIRequestContext, title: string, shotCount = 2) {
   const project = await rpc(request, 'project.create', { title });
   return rpc(request, 'project.update', { projectId: project.id, revision: project.revision, patch: { shots: Array.from({ length: shotCount }, (_, index) => ({ id: `shot-${index}`, title: `测试镜头 ${index + 1}`, narration: '', visualPrompt: '', durationUs: 2_000_000 })) } });
@@ -75,9 +76,34 @@ for (const shotCount of [200, 1000]) test(`loads ${shotCount} shots without snap
   const recoveryMs = Date.now() - recoveryStarted;
   await page.getByRole('button', { name: '撤销', exact: true }).click();
   await expect(page.getByLabel('镜头标题', { exact: true })).toHaveValue(`测试镜头 ${shotCount}`);
-  await page.getByRole('button', { name: '重做', exact: true }).click();
-  await expect(page.getByLabel('镜头标题', { exact: true })).toHaveValue('待恢复的大项目草稿');
-  await expect(page.getByRole('button', { name: '保存修改', exact: true })).toBeDisabled();
+  const heldRedo = gate(), releaseRedo = gate();
+  const isRedoSave = (input: { method?: string; params?: { projectId?: string; patch?: { shots?: Array<{ id: string; title: string }> } } }) =>
+    input.method === 'project.update' && input.params?.projectId === project.id && input.params.patch?.shots?.at(-1)?.id === `shot-${shotCount - 1}` && input.params.patch.shots.at(-1)?.title === '待恢复的大项目草稿';
+  await page.route('**/__desktop_rpc', async route => {
+    if (!isRedoSave(route.request().postDataJSON())) { await route.continue(); return; }
+    const response = await route.fetch(); heldRedo.release(); await releaseRedo.promise; await route.fulfill({ response });
+  });
+  const savedRedo = page.waitForResponse(response => response.url().endsWith('/__desktop_rpc') && isRedoSave(response.request().postDataJSON()), { timeout: 0 })
+    .then(response => ({ response }), error => ({ error }));
+  try {
+    await page.getByRole('button', { name: '重做', exact: true }).click();
+    await expect(page.getByLabel('镜头标题', { exact: true })).toHaveValue('待恢复的大项目草稿');
+    await heldRedo.promise;
+    // History updates optimistically; its restored title does not acknowledge the save.
+    await expect(page.getByRole('button', { name: '正在保存修改', exact: true })).toBeDisabled();
+    releaseRedo.release();
+    const receipt = await savedRedo; if ('error' in receipt) throw receipt.error;
+    expect(receipt.response.ok()).toBe(true);
+    const body = await receipt.response.json(), submitted = receipt.response.request().postDataJSON();
+    expect(body.error).toBeUndefined(); expect(body.result.id).toBe(project.id);
+    expect(body.result.revision).toBe(submitted.params.revision + 1);
+    expect(body.result.shots.at(-1)).toMatchObject({ id: `shot-${shotCount - 1}`, title: '待恢复的大项目草稿' });
+    // Keep this wait within the case budget without repeatedly traversing the large accessibility tree.
+    await page.waitForFunction(title => [...document.querySelectorAll<HTMLElement>('.workbench')].some(root =>
+      root.querySelector<HTMLInputElement>('input[aria-label="项目名称"]')?.value === title && root.getClientRects().length > 0 && getComputedStyle(root).visibility === 'visible' &&
+      !root.querySelector('button[aria-label="正在保存修改"]') && root.querySelector<HTMLButtonElement>('button[aria-label="保存修改"]')?.disabled), project.title);
+    await expect(page.getByRole('button', { name: '保存修改', exact: true })).toBeDisabled();
+  } finally { releaseRedo.release(); await page.unrouteAll({ behavior: 'wait' }); }
   const cdp = await page.context().newCDPSession(page);
   const heap = await cdp.send('Runtime.getHeapUsage'); await cdp.detach();
   await page.screenshot({ path: info.outputPath('large-project-dark-1536.png') });

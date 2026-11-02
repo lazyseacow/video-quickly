@@ -134,7 +134,17 @@ test.describe('local calendar date filters', () => {
     const beforeInvalid = reads.length; await start.fill('2026-11-01');
     await expect(page.getByRole('alert')).toContainText('开始日期不能晚于结束日期'); await expect(page.locator('.run-card')).toHaveCount(0);
     await page.evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
-    expect(reads).toHaveLength(beforeInvalid);
+    const notifiedRead = page.waitForRequest(request => {
+      const input = request.postDataJSON();
+      return request.url().endsWith('/__desktop_rpc') && input?.method === 'run.list' && input.params.projectId === data.first.id && input.params.status === 'failed' && input.params.createdAfter === springTimes[1] && input.params.createdBefore === springTimes[3];
+    });
+    await rpc(request, 'project.create', { title: `无效日期期间真实通知 ${randomUUID().slice(0, 8)}` });
+    const response = await (await notifiedRead).response(); expect(response).not.toBeNull(); await response!.finished();
+    // Background notifications may refresh the last valid query while the invalid controls stay visible.
+    const refreshedReads = reads.slice(beforeInvalid); expect(refreshedReads.length).toBeGreaterThan(0);
+    for (const read of refreshedReads) expect(read).toEqual({ projectId: data.first.id, status: 'failed', createdAfter: springTimes[1], createdBefore: springTimes[3], limit: 100 });
+    await expect(start).toHaveValue('2026-11-01'); await expect(end).toHaveValue('2026-03-08');
+    await expect(page.getByRole('alert')).toContainText('开始日期不能晚于结束日期'); await expect(page.locator('.run-card')).toHaveCount(0);
     await end.fill('2026-11-01'); await expect.poll(() => visibleIds(page)).toEqual([fall[2], fall[1]]);
     expect(reads.at(-1)).toMatchObject({ status: 'failed', createdAfter: fallTimes[1], createdBefore: fallTimes[3] });
     await page.getByRole('button', { name: '清除制作记录筛选', exact: true }).click();
