@@ -1,3 +1,4 @@
+import { openProjectFromList } from './workspace-navigation';
 import { createServer, type Server } from 'node:http';
 import { randomUUID } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
@@ -132,12 +133,14 @@ test('recovers a failed detail read explicitly and keeps tabs, tokens and action
     await page.route('**/__desktop_rpc', async route => { const input = route.request().postDataJSON(); if (input.method === 'run.inspect' && !input.params.nodeId) inspectionReads++; if (!failures && input.method === 'run.inspect') { failures++; failureStarted(); await failureGate; await route.fulfill({ status: 500, json: { error: '隔离的步骤详情读取失败' } }); } else await route.continue(); });
     expectedErrors = ['Failed to load resource: the server responded with a status of 500 (Internal Server Error)']; await page.goto('/'); await page.getByRole('button', { name: '制作记录', exact: true }).click(); await page.locator(`.run-card[data-run-id="${run.id}"]`).getByRole('button', { name: '查看步骤', exact: true }).click();
     await started;
-    const queued = await rpc<ProjectDocument>(request, 'project.create', { title: `详情读取期间通知 ${randomUUID().slice(0, 8)}` });
-    await expect(page.locator('.sidebar-projects')).toContainText(queued.title);
+    const queuedTitle = `详情读取期间通知 ${randomUUID().slice(0, 8)}`;
+    const queuedRefresh = page.waitForResponse(async response => response.url().endsWith('/__desktop_rpc') && response.request().postDataJSON()?.method === 'workspace.summary' && (await response.json()).result.projects.some((project: ProjectDocument) => project.title === queuedTitle));
+    await rpc(request, 'project.create', { title: queuedTitle }); await queuedRefresh;
     releaseFailure();
     const dialog = page.getByRole('dialog', { name: '制作步骤详情', exact: true }); await expect(dialog.getByRole('alert')).toContainText('隔离的步骤详情读取失败');
-    const later = await rpc<ProjectDocument>(request, 'project.create', { title: `详情失败后通知 ${randomUUID().slice(0, 8)}` });
-    await expect(page.locator('.sidebar-projects')).toContainText(later.title);
+    const laterTitle = `详情失败后通知 ${randomUUID().slice(0, 8)}`;
+    const laterRefresh = page.waitForResponse(async response => response.url().endsWith('/__desktop_rpc') && response.request().postDataJSON()?.method === 'workspace.summary' && (await response.json()).result.projects.some((project: ProjectDocument) => project.title === laterTitle));
+    await rpc(request, 'project.create', { title: laterTitle }); await laterRefresh;
     await page.evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
     expect(inspectionReads).toBe(1); await expect(dialog.getByRole('alert')).toContainText('隔离的步骤详情读取失败');
     await dialog.getByRole('button', { name: '重试读取详情', exact: true }).click(); await expect(dialog.getByRole('navigation', { name: '冻结流程步骤' })).toBeVisible();
@@ -166,7 +169,7 @@ test('keeps new live steps out of older runs and uses the frozen kind for a rena
   try {
     const run = await source.start(); await source.approve(run.id);
     const live = await rpc<ProjectDocument>(request, 'project.update', { projectId: source.project.id, revision: source.project.revision, patch: { workflow: { ...source.project.workflow, nodes: [...source.project.workflow.nodes.map(node => node.id === 'style' ? { ...node, label: '改名后的步骤', kind: 'brief' } : node), { id: 'new-step', kind: 'brief', label: '后加步骤', position: { x: 640, y: 0 } }] } } });
-    await page.goto('/'); await page.getByRole('button', { name: `打开项目：${source.project.title}`, exact: true }).click();
+    await page.goto('/'); await openProjectFromList(page, source.project.title);
     await expect(page.getByLabel('项目名称', { exact: true })).toHaveValue(source.project.title);
     await page.getByRole('button', { name: '流程', exact: true }).click();
     await expect(page.locator('.react-flow')).toBeVisible();

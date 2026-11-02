@@ -1,8 +1,0 @@
-.workflow-step-help { padding: var(--space-4); margin-bottom: var(--space-5); border-radius: var(--radius-small); background: var(--surface-raised); color: var(--text-secondary); font-size: var(--text-size-caption); line-height: var(--line-height-body); }
-.workflow-step-help > p { margin: 0; }
-.workflow-step-help dl { display: grid; gap: var(--space-2); margin: var(--space-3) 0 0; }
-.workflow-step-help dl > div { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: var(--space-3); }
-.workflow-step-help dt { color: var(--text-subtle); }
-.workflow-step-help dd { margin: 0; color: var(--text); overflow-wrap: anywhere; }
-.workflow-step-help .workflow-step-help__review { padding-top: var(--space-3); margin-top: var(--space-3); border-top: 1px solid var(--border); }
-.step-model-help { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); font-size: var(--text-size-caption); color: var(--text-secondary); line-height: var(--line-height-body); margin-bottom: var(--space-4); }

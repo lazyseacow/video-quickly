@@ -11,7 +11,7 @@ const guidance: Record<WorkflowNode['kind'], StepGuidance> = {
   assets: { purpose: '为每个镜头准备图片与画面素材。', result: '与镜头对应的画面素材', review: '画面是否对应镜头，角色与风格是否一致。', local: '已有画面', capability: 'image' },
   voice: { purpose: '根据旁白生成配音，为字幕对齐准备音频。', result: '各镜头的旁白音频', review: '试听发音、语速、停顿和旁白内容。', local: '已有录音', capability: 'tts' },
   animation: { purpose: '生成镜头视频，或沿用已有画面的动画与运镜。', result: '镜头视频或动画设置', review: '预览动作、镜头运动、衔接和时长。', local: '已有运镜', capability: 'video' },
-  review: { purpose: '检查小样，确认画面、声音和字幕是否衔接。', result: '小样审阅结果', review: '检查完整叙事、画面、声音、字幕与资料引用。', local: '人工审阅' },
+  review: { purpose: '检查小样，确认画面、声音和字幕是否衔接。', result: '小样审阅结果', review: '检查完整叙事、画面、声音与字幕。', local: '人工审阅' },
   export: { purpose: '按视频规格组合画面、声音和字幕，导出成片。', result: '可播放的 MP4 文件', review: '检查成片内容、视频规格和输出位置。', local: '本地导出' },
   agent: { purpose: '由 AI 结合绑定的工具完成自定义创作任务。', result: '本步骤要求的创作结果', review: '任务结果是否符合要求，工具输出是否需要核验。', local: '请选择模型', capability: 'text', requiresModel: true },
   condition: { purpose: '按条件选择接下来执行的路线。', result: '条件判断结果', review: '确认条件和分支连接符合预期。', local: '条件判断' },
@@ -39,4 +39,10 @@ export function stepModelLabel(node: Pick<WorkflowNode, 'kind' | 'config' | 'mod
   if (!model) return '模型已移除';
   if (!model.enabled) return '模型已停用';
   return matchingStepModels(node, [model]).length ? model.name : '模型能力不匹配';
+}
+
+export function stepModelPlaceholder(node: Pick<WorkflowNode, 'kind' | 'config'>, models: readonly ModelProfile[]): string {
+  if (!models.length) return '无可用模型';
+  const help = stepGuidance(node);
+  return help.requiresModel ? '请选择模型' : `${help.local}（不调用模型）`;
 }

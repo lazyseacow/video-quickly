@@ -1,3 +1,5 @@
+import { openProjectFromList } from './workspace-navigation';
+import { setWorkspaceTheme } from './workspace-settings';
 import { execFileSync } from 'node:child_process';
 import { writeFile } from 'node:fs/promises';
 import { createServer } from 'node:http';
@@ -108,9 +110,9 @@ test('generates only the selected shot, compares chosen fields, and keeps the ap
     await expect.poll(async () => (await savedProject(request, project.id)).shots).toEqual(project.shots);
     await page.getByRole('button', { name: '重做', exact: true }).click();
     await expect.poll(async () => (await savedProject(request, project.id)).shots).toEqual(saved.shots);
-    await page.reload(); await page.getByRole('button', { name: `打开项目：${project.title}`, exact: true }).click();
+    await page.reload(); await openProjectFromList(page, project.title);
     await page.locator('.outline-shot').nth(1).click();
-    await page.getByRole('button', { name: '浅色外观', exact: true }).click();
+    await setWorkspaceTheme(page, 'light');
     await page.setViewportSize({ width: 600, height: 900 }); dialog = await openCandidates(page);
     await expect(dialog.locator('.shot-regeneration__history-item')).toHaveCount(1);
     await expect(dialog.locator('.shot-regeneration__comparison')).toContainText('候选旁白 1');

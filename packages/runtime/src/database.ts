@@ -5,6 +5,7 @@ import { migrateDatabase, type DatabaseMigration } from './migrations.js';
 import type { ProjectDocument, Shot } from '@video-quickly/contracts';
 import { clipEditSource, resolveShotTime } from '@video-quickly/video/clip-edits';
 import { projectCaptionCues } from '@video-quickly/video';
+import { upgradeBuiltinProject } from './builtin-workflows.js';
 
 export const INITIAL_SCHEMA = `
     CREATE TABLE IF NOT EXISTS documents (
@@ -170,6 +171,7 @@ export const WORKSPACE_MIGRATIONS: readonly DatabaseMigration[] = [
   // before storing these capabilities so opening it with such a client fails.
   { version: 7, name: 'workflow-composition-and-keyframe-capabilities', sql: `INSERT INTO runtime_metadata(key, value) VALUES ('document-capabilities', '["keyframes-v1","workflow-composition-v1","media-concurrency-v1"]') ON CONFLICT(key) DO UPDATE SET value = excluded.value;` },
   { version: 8, name: 'active-project-runs-index', sql: `CREATE INDEX documents_active_project_runs ON documents(json_extract(body, '$.projectId')) WHERE kind = 'run' AND json_extract(body, '$.status') IN ('queued','running','waiting_review','waiting_external','retry_scheduled');` },
+  { version: 9, name: 'compact-built-in-production-workflows', sql: `UPDATE documents SET body = vq_upgrade_builtin_project(body) WHERE kind = 'project' AND json_extract(body, '$.workflow.id') IN ('history-handdrawn', 'general-video') AND body != vq_upgrade_builtin_project(body);` },
 ];
 
 export function openDatabase(directory: string) {
@@ -182,6 +184,12 @@ export function openDatabase(directory: string) {
     database.function('vq_thumbnail', { deterministic: true }, (body: unknown) => {
       if (typeof body !== 'string') throw new TypeError('项目投影需要JSON正文。');
       return JSON.stringify(thumbnailShot(JSON.parse(body) as ProjectDocument));
+    });
+    database.function('vq_upgrade_builtin_project', { deterministic: true }, (body: unknown) => {
+      if (typeof body !== 'string') throw new TypeError('流程升级需要项目JSON正文。');
+      const project = JSON.parse(body) as ProjectDocument;
+      const upgraded = upgradeBuiltinProject(project);
+      return upgraded === project ? body : JSON.stringify(upgraded);
     });
     migrateDatabase(database, directory, WORKSPACE_MIGRATIONS);
     database.pragma('journal_mode = WAL');

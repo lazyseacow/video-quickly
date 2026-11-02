@@ -1,3 +1,4 @@
+import { openProjectFromList } from './workspace-navigation';
 import { expect, test, type APIRequestContext, type Locator, type Page } from '@playwright/test';
 import type { ProjectDocument } from '@video-quickly/contracts';
 
@@ -174,7 +175,7 @@ test('splits at 29.97 fps with continuous source ranges and restores undo/redo a
     });
   }, project.id)).toBe(true);
   await page.reload();
-  await page.getByRole('button', { name: `打开项目：${project.title}`, exact: true }).click();
+  await openProjectFromList(page, project.title);
   await expect(page.getByRole('button', { name: '重做', exact: true })).toBeEnabled();
   await page.getByRole('button', { name: '重做', exact: true }).click();
   await expect.poll(async () => (await savedProject(request, project.id)).shots).toEqual(divided.shots);

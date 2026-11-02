@@ -7,7 +7,7 @@ const project = () => projectSchema.parse({ id: 'p', title: '项目', brief: '',
 
 describe('unified project edit commands', () => {
   it('restores optional workflow stages and their removal through persisted deltas without losing other draft edits', () => {
-    const original = project(), session = new ProjectEditSession(original);
+    const original = project(); delete original.workflow.stages; const session = new ProjectEditSession(original);
     const stages = [{ id: 'planning', label: '策划', description: '制作前准备', nodeIds: ['brief', 'style', 'script'] }];
     session.edit({ ...session.state.present, title: '尚未保存的标题' }, '标题');
     session.edit({ ...session.state.present, workflow: { ...session.state.present.workflow, stages } }, '流程阶段');

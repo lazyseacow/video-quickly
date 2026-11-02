@@ -1,3 +1,4 @@
+import { openProjectFromList } from './workspace-navigation';
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
@@ -71,7 +72,7 @@ for (const shotCount of [200, 1000]) test(`loads ${shotCount} shots without snap
   }, { id: project.id, last: shotCount - 1 })).toBe(true);
   const recoveryStarted = Date.now();
   await page.reload();
-  await page.getByRole('button', { name: `打开项目：${project.title}`, exact: true }).click();
+  await openProjectFromList(page, project.title);
   await expect(page.getByLabel('镜头标题', { exact: true })).toHaveValue('待恢复的大项目草稿');
   const recoveryMs = Date.now() - recoveryStarted;
   await page.getByRole('button', { name: '撤销', exact: true }).click();

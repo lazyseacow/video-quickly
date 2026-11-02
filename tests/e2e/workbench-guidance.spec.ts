@@ -1,3 +1,4 @@
+import { closeProjectSettings } from './settings';
 import { randomUUID } from 'node:crypto';
 import { expect, test, type APIRequestContext, type Page } from '@playwright/test';
 import type { ModelProfile, ProjectDocument } from '@video-quickly/contracts';
@@ -33,10 +34,10 @@ for (const viewport of [{ width: 1536, height: 960, theme: 'dark' }, { width: 39
     await guide.getByRole('button', { name: '填写创意简报', exact: true }).click();
     const brief = page.getByLabel('主题与核心问题', { exact: true }); await expect(brief).toBeFocused();
     await brief.fill('为新观众介绍城市的变化，保持写实、简洁。');
+    await closeProjectSettings(page);
     await guide.getByRole('button', { name: '配置生成步骤', exact: true }).click();
     const dialog = page.getByRole('dialog', { name: '生成分镜', exact: true });
-    await expect(dialog.getByRole('region', { name: '步骤指引', exact: true })).toContainText('本步产出');
-    await expect(dialog).toContainText('确定主题'); await expect(dialog).toContainText('制作画面');
+    await expect(dialog.getByRole('region', { name: '步骤指引', exact: true })).toHaveCount(0); await expect(dialog.getByLabel('完成后等待人工审阅', { exact: true })).toHaveCount(0);
     const selector = dialog.getByLabel('使用模型', { exact: true });
     const text = models.find(model => model.capabilities.includes('text'))!;
     await expect(selector.locator(`option[value="${text.id}"]`)).toHaveCount(1);
@@ -71,11 +72,11 @@ test('retains an unavailable saved model until the user chooses a compatible rep
   await page.locator('.react-flow__node[data-id="script"]').click();
   const graphSelector = page.getByLabel('使用模型', { exact: true }); await expect(graphSelector).toHaveValue(text.id);
   for (const other of source.models.filter(model => model.id !== text.id)) await expect(graphSelector.locator(`option[value="${other.id}"]`)).toHaveCount(0);
-  await expect(page.getByRole('region', { name: '步骤指引', exact: true })).toContainText('旁白、画面要求和镜头时长');
+  await expect(page.getByRole('region', { name: '步骤指引', exact: true })).toHaveCount(0);
   expect((await rpc<{ items: unknown[] }>(request, 'run.list', { projectId: project.id })).items).toEqual([]);
 });
 
-test('explains required agent models and saves step input before opening model connections', async ({ page, request }) => {
+test('explains required agent models and saves step input without a model-connection shortcut', async ({ page, request }) => {
   const source = await fixture(request);
   const project = await rpc<ProjectDocument>(request, 'project.update', { projectId: source.project.id, revision: source.project.revision, patch: {
     brief: '说明城市的变化。', workflow: { ...source.project.workflow, nodes: source.project.workflow.nodes.map(node => node.id === 'script' ? { ...node, kind: 'agent', label: '自定义创作' } : node) },
@@ -87,8 +88,9 @@ test('explains required agent models and saves step input before opening model c
   await expect(dialog.getByRole('button', { name: '执行', exact: true })).toBeDisabled();
   await expect(dialog.getByRole('button', { name: '预览这步及后续', exact: true })).toBeDisabled();
   await dialog.getByLabel('提示词与补充要求', { exact: true }).fill('先核对资料，再准备视频提纲。');
-  await dialog.getByRole('button', { name: '添加模型连接', exact: true }).click();
-  await expect(dialog).toHaveCount(0); await expect(page.getByRole('heading', { name: '模型连接', exact: true })).toBeVisible();
+  await expect(dialog.getByRole('button', { name: '添加模型连接', exact: true })).toHaveCount(0);
+  await dialog.getByRole('button', { name: '保存', exact: true }).click(); await expect(dialog).toHaveCount(0);
+  await page.getByRole('button', { name: '模型连接', exact: true }).click(); await expect(page.getByRole('heading', { name: '模型连接', exact: true })).toBeVisible();
   const saved = (await rpc<{ project: ProjectDocument }>(request, 'project.get', { projectId: project.id })).project;
   expect(saved.workflow.nodes.find(node => node.id === 'script')?.prompt).toBe('先核对资料，再准备视频提纲。');
   expect((await rpc<{ items: unknown[] }>(request, 'run.list', { projectId: project.id })).items).toEqual([]);

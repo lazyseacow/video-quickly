@@ -1,3 +1,5 @@
+import { closeProjectSettings } from './settings';
+import { openProjectFromList } from './workspace-navigation';
 import { execFile } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { readFile, writeFile } from 'node:fs/promises';
@@ -37,11 +39,11 @@ async function healthy(page: Page, errors: string[], expected400 = 0) {
   expect(errors).toEqual(Array.from({ length: expected400 }, () => 'Failed to load resource: the server responded with a status of 400 (Bad Request)'));
 }
 async function open(page: Page, project: ProjectDocument) {
-  await page.goto('/'); await page.getByRole('button', { name: `打开项目：${project.title}`, exact: true }).click();
+  await page.goto('/'); await openProjectFromList(page, project.title);
   await expect(page.getByLabel('镜头标题', { exact: true })).toHaveValue('原声镜头');
 }
 async function dialog(page: Page) {
-  await page.getByRole('button', { name: '镜头属性', exact: true }).click(); await page.getByRole('button', { name: '镜头声音处理', exact: true }).click();
+  await closeProjectSettings(page); await page.getByRole('button', { name: '镜头声音处理', exact: true }).click();
   const panel = page.getByRole('dialog', { name: '镜头声音处理', exact: true }); await expect(panel).toBeVisible(); return panel;
 }
 async function apply(panel: Locator) { await panel.getByRole('button', { name: '应用声音设置', exact: true }).click(); await expect(panel).toHaveCount(0); }

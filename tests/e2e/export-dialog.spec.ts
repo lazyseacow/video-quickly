@@ -1,3 +1,4 @@
+import { openProjectFromList } from './workspace-navigation';
 import { readFile, stat } from 'node:fs/promises';
 import { spawnSync } from 'node:child_process';
 import { expect, test, type APIRequestContext } from '@playwright/test';
@@ -15,7 +16,7 @@ for (const viewport of [{ width: 1536, height: 960, theme: 'dark' }, { width: 39
     const project = await rpc<ProjectDocument>(request, 'project.update', { projectId: created.id, revision: created.revision, patch: { shots: [{ id: 'export-scene', title: '导出首镜头', narration: '分区导出测试字幕', visualPrompt: '', durationUs: 700_000 }] } });
     const errors: string[] = []; page.on('pageerror', error => errors.push(error.message));
     await page.addInitScript(theme => localStorage.setItem('vq-theme', theme), viewport.theme);
-    await page.goto('/'); await page.getByRole('button', { name: `打开项目：${project.title}`, exact: true }).click();
+    await page.goto('/'); await openProjectFromList(page, project.title);
     await expect(page.getByLabel('镜头标题', { exact: true })).toHaveValue('导出首镜头');
     await page.setViewportSize(viewport); await page.getByRole('button', { name: '导出', exact: true }).click();
     const dialog = page.getByRole('dialog', { name: '导出视频', exact: true });

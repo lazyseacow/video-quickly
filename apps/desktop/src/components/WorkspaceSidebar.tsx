@@ -1,24 +1,26 @@
-import { CircleHelp, FolderOpen, Moon, PanelLeftClose, PanelLeftOpen, Plus, Sun, type LucideIcon } from 'lucide-react';
-import type { ProjectSummary } from '@video-quickly/contracts';
-import { Button, IconButton } from './Primitives';
+import { Plus, Settings, type LucideIcon } from 'lucide-react';
+import type { Ref } from 'react';
+import { Button } from './Primitives';
 import BrandMark from './BrandMark';
+import SidebarNavigationButton from './SidebarNavigationButton';
 
 export type Page = 'workbench' | 'projects' | 'assets' | 'characters' | 'templates' | 'models' | 'skills' | 'runs' | 'costs';
+export interface SidebarNavigationItem { id: Page; label: string; icon: LucideIcon; group: 'main' | 'resources' | 'tools'; }
 interface Props {
-  page: Page; projectId?: string; projects: ProjectSummary[];
-  navigation: Array<{ id: Page; label: string; icon: LucideIcon }>;
-  collapsed: boolean; theme: string; onToggle: () => void; onTheme: () => void;
-  onNavigate: (page: Page) => void; onOpen: (id: string) => void; onCreate: () => void;
-  onGuide: () => void;
+  page: Page;
+  navigation: SidebarNavigationItem[];
+  settingsOpen: boolean; settingsRef: Ref<HTMLButtonElement>;
+  onNavigate: (page: Page) => void; onCreate: () => void;
+  onSettings: () => void;
 }
 
-export default function WorkspaceSidebar({ page, projectId, projects, navigation, collapsed, theme, onToggle, onTheme, onNavigate, onOpen, onCreate, onGuide }: Props) {
-  const recent = projects.filter(project => !project.archived).toSorted((a, b) => b.updatedAt.localeCompare(a.updatedAt)).slice(0, 8);
+export default function WorkspaceSidebar({ page, navigation, settingsOpen, settingsRef, onNavigate, onCreate, onSettings }: Props) {
   return <aside className="sidebar" aria-label="工作空间导航">
-    <div className="brand"><div className="brand-mark"><BrandMark /></div><strong className="brand-title">Video Quickly</strong><IconButton label={collapsed ? '展开工作空间导航' : '收起工作空间导航'} aria-expanded={!collapsed} className="brand-toggle" onClick={onToggle}>{collapsed ? <PanelLeftOpen size={16} /> : <PanelLeftClose size={16} />}</IconButton></div>
-    <Button variant="primary" className="sidebar-create" data-guide="create-project" aria-label="新建项目" title="新建项目" onClick={onCreate}><Plus size={17} /><span>新建项目</span></Button>
-    <nav aria-label="主导航" className="nav-group">{navigation.slice(0, 3).map(item => <button key={item.id} data-guide={item.id} className={`nav-item ${page === item.id ? 'active' : ''}`} aria-current={page === item.id ? 'page' : undefined} title={item.label} onClick={() => onNavigate(item.id)}><item.icon size={18} /><span>{item.label}</span></button>)}</nav>
-    <div className="sidebar-projects"><div className="sidebar-section-heading"><span>最近项目</span></div><div className="sidebar-project-list">{recent.map(project => <button key={project.id} className={`sidebar-project ${page === 'workbench' && projectId === project.id ? 'active' : ''}`} title={project.title} aria-label={`打开项目：${project.title}`} aria-current={page === 'workbench' && projectId === project.id ? 'page' : undefined} onClick={() => onOpen(project.id)}><FolderOpen size={14} /><span>{project.title}</span></button>)}</div></div>
-    <div className="sidebar-bottom"><div className="sidebar-section-heading"><span>资源与工具</span></div><nav aria-label="资源导航" className="nav-group">{navigation.slice(3).map(item => <button key={item.id} data-guide={item.id} className={`nav-item ${page === item.id ? 'active' : ''}`} aria-current={page === item.id ? 'page' : undefined} title={item.label} onClick={() => onNavigate(item.id)}><item.icon size={18} /><span>{item.label}</span></button>)}</nav><div className="sidebar-footer"><button className="nav-item" data-guide="help" aria-label="使用指南" title="使用指南" onClick={onGuide}><CircleHelp size={18} /><span>使用指南</span></button><button className="nav-item theme-button" title={theme === 'dark' ? '切换浅色主题' : '切换深色主题'} onClick={onTheme}><span className="theme-icon" data-theme={theme} aria-hidden="true"><Sun size={17} /><Moon size={17} /></span><span>{theme === 'dark' ? '浅色外观' : '深色外观'}</span></button></div></div>
+    <div className="sidebar-rail">
+      <div className="brand" title="Video Quickly"><div className="brand-mark"><BrandMark size={24} /></div></div>
+      <Button variant="primary" className="sidebar-create" data-guide="create-project" aria-label="新建项目" title="新建项目" onClick={onCreate}><Plus size={17} /></Button>
+      <div className="sidebar-rail__navigation">{(['main', 'resources', 'tools'] as const).map(group => <nav key={group} aria-label={group === 'main' ? '主导航' : group === 'resources' ? '资源导航' : '工具导航'} className="nav-group">{navigation.filter(item => item.group === group).map(item => <SidebarNavigationButton key={item.id} label={item.label} icon={item.icon} guide={item.id} current={page === item.id || item.id === 'projects' && page === 'workbench'} onClick={() => onNavigate(item.id)} />)}</nav>)}</div>
+      <div className="sidebar-footer"><button ref={settingsRef} type="button" className={`nav-item ${settingsOpen || page === 'costs' ? 'active' : ''}`} data-guide="help" aria-label="设置" title="设置" aria-haspopup="dialog" aria-expanded={settingsOpen} aria-current={page === 'costs' ? 'page' : undefined} onClick={onSettings}><Settings size={18} /></button></div>
+    </div>
   </aside>;
 }

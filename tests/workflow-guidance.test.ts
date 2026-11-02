@@ -1,6 +1,6 @@
 import { expect, it } from 'vitest';
 import { modelSchema, workflowNodeSchema, type ModelProfile } from '@video-quickly/contracts';
-import { matchingStepModels, stepGuidance, stepModelLabel } from '../apps/desktop/src/lib/workflow-guidance';
+import { matchingStepModels, stepGuidance, stepModelLabel, stepModelPlaceholder } from '../apps/desktop/src/lib/workflow-guidance';
 
 function model(id: string, capabilities: ModelProfile['capabilities'], provider: ModelProfile['provider'] = 'openai-compatible') {
   return modelSchema.parse({ id, name: id, provider, model: id, capabilities, baseUrl: 'http://localhost/v1', createdAt: '', updatedAt: '' });
@@ -29,4 +29,12 @@ it('keeps local production and unavailable saved model selections explicit', () 
   expect(stepModelLabel({ ...node, modelId: 'disabled' }, models)).toBe('模型已停用');
   expect(stepModelLabel({ ...node, modelId: 'removed' }, models)).toBe('模型已移除');
   expect(stepModelLabel({ ...node, modelId: 'image' }, models)).toBe('模型能力不匹配');
+});
+
+it('shows no available model for empty, disabled or incompatible model lists', () => {
+  const node = workflowNodeSchema.parse({ id: 'brief', kind: 'brief', label: '创意简报' });
+  for (const candidates of [[], [models[2]], [models.at(-1)!]]) {
+    expect(stepModelPlaceholder(node, matchingStepModels(node, candidates))).toBe('无可用模型');
+  }
+  expect(stepModelPlaceholder(node, matchingStepModels(node, models))).toBe('项目简报（不调用模型）');
 });

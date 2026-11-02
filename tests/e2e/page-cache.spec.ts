@@ -1,3 +1,4 @@
+import { openProjectFromList } from './workspace-navigation';
 import { expect, test, type APIRequestContext } from '@playwright/test';
 import type { CharacterProfile, ProjectDocument, RunRecord, SeriesTemplate } from '@video-quickly/contracts';
 
@@ -79,7 +80,7 @@ test('preserves project filtering and editor selection and undo while pausing th
   expect(await editor!.evaluate(element => element.isConnected)).toBe(true);
   await expect(page.locator('.workbench button[aria-label="播放预览"]')).toHaveAttribute('aria-pressed', 'false');
   await page.keyboard.press('ControlOrMeta+z');
-  await page.getByRole('button', { name: '创作工作台', exact: true }).click();
+  await openProjectFromList(page);
   await expect(page.getByLabel('镜头标题', { exact: true })).toHaveValue('保留的镜头修改');
   await expect(page.getByRole('button', { name: '播放预览', exact: true })).toHaveAttribute('aria-pressed', 'false');
   await page.getByRole('button', { name: '撤销', exact: true }).click();
@@ -119,7 +120,7 @@ test('reports voice task errors while the workbench is hidden without replaying 
   } });
   const pageRunMutations: string[] = [];
   page.on('request', request => { if (request.url().endsWith('/__desktop_rpc') && request.method() === 'POST') { const method = request.postDataJSON().method; if (/^run\.(start|resume|review|cancel)$/.test(method)) pageRunMutations.push(method); } });
-  await page.goto('/'); await page.getByRole('button', { name: `打开项目：${project.title}`, exact: true }).click();
+  await page.goto('/'); await openProjectFromList(page, project.title);
   await expect(page.getByLabel('镜头标题', { exact: true })).toHaveValue('待配音镜头');
   await page.getByRole('button', { name: '模型连接', exact: true }).click();
   await expect(page.getByRole('heading', { name: '模型连接', exact: true })).toBeVisible();
@@ -131,7 +132,7 @@ test('reports voice task errors while the workbench is hidden without replaying 
   for (const destination of ['模型连接', '素材库']) {
     await page.getByRole('button', { name: destination, exact: true }).click();
     await expect(page.getByRole('heading', { name: destination, exact: true })).toBeVisible();
-    await page.getByRole('button', { name: '创作工作台', exact: true }).click();
+    await openProjectFromList(page);
     await expect(page.getByLabel('镜头标题', { exact: true })).toBeVisible();
     await page.evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
     await page.waitForTimeout(250);
@@ -142,7 +143,7 @@ test('reports voice task errors while the workbench is hidden without replaying 
   await rpc(request, 'run.resume', { runId: run.id });
   await expect(page.locator('.toast[role="alert"]')).toContainText(message);
   await page.getByRole('button', { name: '关闭提示', exact: true }).click(); await expect(page.locator('.toast-anchor')).toHaveCount(0);
-  await page.getByRole('button', { name: '创作工作台', exact: true }).click();
+  await openProjectFromList(page);
   await expect(page.getByLabel('镜头标题', { exact: true })).toBeVisible();
   await page.waitForTimeout(250);
   await expect(page.locator('.toast-anchor')).toHaveCount(0);

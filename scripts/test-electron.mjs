@@ -121,15 +121,19 @@ async function verifyGenericWorkflow() {
   const project = snapshot.projects.find(item => item.id === 'example-history');
   assert.ok(project);
   assert.equal(project.workflow.id, 'general-video');
-  assert.equal(project.workflow.nodes.some(node => node.kind === 'research'), false);
+  assert.equal(project.workflow.nodes.some(node => ['research', 'review'].includes(node.kind) || node.requiresReview), false);
+  assert.equal(project.workflow.nodes.length, 7);
   assert.equal(project.workflow.stages.length, 4);
   const guidance = page.getByRole('region', { name: '制作指引', exact: true });
   await expect(guidance.getByRole('button', { name: /^配置阶段：/ })).toHaveCount(4);
   await guidance.getByRole('button', { name: '配置阶段：策划与分镜', exact: true }).click();
   const dialog = page.getByRole('dialog', { name: '策划与分镜', exact: true });
+  await expect(dialog.getByRole('region', { name: '步骤指引', exact: true })).toHaveCount(0);
+  await expect(dialog.getByRole('checkbox', { name: /人工审阅|人工审核/ })).toHaveCount(0);
   for (const label of ['创意简报', '风格与角色', '旁白与分镜']) {
     await dialog.getByRole('tab', { name: label, exact: true }).click();
-    await expect(dialog.getByLabel(`${label}使用模型`, { exact: true })).toHaveValue('');
+    const model = dialog.getByLabel(`${label}使用模型`, { exact: true });
+    await expect(model).toHaveValue(''); await expect(model).toBeDisabled(); await expect(model.locator('option:checked')).toHaveText('无可用模型');
     await dialog.getByLabel(`${label}提示词与补充要求`, { exact: true }).fill(`未提交的${label}配置`);
   }
   await dialog.getByRole('tab', { name: '创意简报', exact: true }).click();
@@ -138,6 +142,18 @@ async function verifyGenericWorkflow() {
   await dialog.getByRole('button', { name: '取消', exact: true }).click();
   await expect(dialog).toHaveCount(0);
   assert.deepEqual((await rpc('workspace.snapshot')).projects, snapshot.projects, 'Canceling grouped settings must preserve the project');
+  await expect(page.getByRole('button', { name: '添加模型连接', exact: true })).toHaveCount(0);
+  const settingsButton = page.getByRole('button', { name: '项目设置', exact: true });
+  await expect(settingsButton).toHaveCount(1); await settingsButton.click();
+  const settings = page.getByRole('dialog', { name: '项目设置', exact: true });
+  await expect(settings.getByRole('tab')).toHaveText(['创作', '画面', '声音']);
+  await expect(settings.getByLabel('画面引用编号', { exact: true })).toHaveCount(0);
+  await page.screenshot({ path: join(artifacts, 'desktop-project-settings.png') });
+  await settings.getByRole('button', { name: '关闭对话框', exact: true }).click(); await expect(settings).toHaveCount(0);
+  await expect(page.locator('.inspector').getByRole('heading', { name: '镜头属性', exact: true })).toBeVisible();
+  await expect(page.locator('.inspector')).not.toContainText(/待核验|已核验|引用已失效/);
+  assert.deepEqual((await rpc('workspace.snapshot')).projects, snapshot.projects, 'Inspecting global settings must preserve the project');
+  checks.projectSettings = true;
   checks.genericWorkflow = true;
 }
 async function verifyGettingStarted() {
@@ -200,7 +216,14 @@ async function verifyGettingStarted() {
   await expect(page.locator('.workspace-shell')).toBeVisible({ timeout: 30_000 });
   await expect.poll(() => rpc('runtime.status'), { timeout: 20_000 }).toMatchObject({ state: 'ready' });
   await expect(guide).toHaveCount(0);
-  const help = page.getByRole('button', { name: '使用指南', exact: true });
+  const help = page.getByRole('button', { name: '设置', exact: true });
+  async function reopenGuide() {
+    await help.click();
+    const settings = page.getByRole('dialog', { name: '设置', exact: true });
+    await expect(settings).toBeVisible();
+    await settings.getByRole('button', { name: '使用指南', exact: true }).click();
+    await expect(settings).toHaveCount(0);
+  }
   await expect(help).toBeVisible();
   await expect(help).toBeInViewport({ ratio: 1 });
   gettingStartedHelpBounds = await help.evaluate(element => {
@@ -208,7 +231,7 @@ async function verifyGettingStarted() {
     return { left: bounds.left, top: bounds.top, right: bounds.right, bottom: bounds.bottom, width: bounds.width, height: bounds.height, viewportWidth: innerWidth, viewportHeight: innerHeight };
   });
   assert.ok(gettingStartedHelpBounds.left >= 0 && gettingStartedHelpBounds.top >= 0 && gettingStartedHelpBounds.right <= gettingStartedHelpBounds.viewportWidth && gettingStartedHelpBounds.bottom <= gettingStartedHelpBounds.viewportHeight, 'The getting started entry must fit inside the native viewport');
-  await help.click();
+  await reopenGuide();
   await expect(heading).toHaveText('新建创作项目');
   assert.equal(await activeTarget(), 'create-project');
   let reachedPreview = false;
@@ -255,18 +278,18 @@ async function inspectWindow() {
   assert.equal(native.visible, true, 'Native acceptance requires a shown Electron window');
   if (compact) {
     await expect.poll(() => page.evaluate(() => innerWidth)).toBe(1024);
-    await expect(page.getByRole('button', { name: '展开工作空间导航', exact: true })).toBeVisible();
+    assert.equal((await page.getByRole('complementary', { name: '工作空间导航', exact: true }).boundingBox()).width, 52);
   }
   windows.push({ ...native, viewport: await page.evaluate(() => ({ width: innerWidth, height: innerHeight })) });
 }
 async function openProject(title) {
   const navigation = page.getByRole('complementary', { name: '工作空间导航', exact: true });
-  const expand = navigation.getByRole('button', { name: '展开工作空间导航', exact: true });
-  if (await expand.isVisible()) await expand.click();
-  await expect(navigation.getByRole('button', { name: '收起工作空间导航', exact: true })).toHaveAttribute('aria-expanded', 'true');
-  const project = navigation.getByRole('button', { name: `打开项目：${title}`, exact: true });
+  await navigation.getByRole('button', { name: '我的项目', exact: true }).click();
+  await page.getByLabel('搜索项目', { exact: true }).fill('');
+  await page.getByRole('button', { name: '全部项目', exact: true }).click();
+  const project = page.locator('.project-card').filter({ has: page.getByRole('heading', { name: title, exact: true }) });
   await expect(project).toBeVisible();
-  await project.click();
+  await project.getByRole('button', { name: '继续创作', exact: true }).click();
 }
 function rpc(method, params = {}) { return page.evaluate(({ method, params }) => window.videoQuickly.rpc(method, params), { method, params }); }
 async function findRuntime() {

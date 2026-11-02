@@ -37,7 +37,8 @@ export async function showSettingsPreview(dialog: Locator) {
 
 export async function projectSettingField(page: Page, name: string, options?: Parameters<Locator['getByLabel']>[1]) {
   const panel = page.locator('.project-settings-panel');
-  if (await panel.count() && !await page.getByRole('dialog').count()) {
+  if (!await panel.count() && !await page.getByRole('dialog').count()) await page.getByRole('button', { name: '项目设置', exact: true }).click();
+  if (await panel.count()) {
     const field = panel.getByLabel(name, options);
     if (await field.count()) return revealSetting(panel, field);
   }
@@ -46,9 +47,19 @@ export async function projectSettingField(page: Page, name: string, options?: Pa
 
 export async function projectSettingAction(page: Page, name: string, options?: Parameters<Locator['getByRole']>[1]) {
   const panel = page.locator('.project-settings-panel');
-  if (await panel.count() && !await page.getByRole('dialog').count()) {
+  const projectActions = ['背景音乐', '项目混音设置', '项目字幕样式', '应用系列模板', '保存当前系列为模板', '备份项目与素材'];
+  if (!await panel.count() && projectActions.includes(name)) await page.getByRole('button', { name: '项目设置', exact: true }).click();
+  if (await panel.count()) {
     const button = panel.getByRole('button', { ...options, name, includeHidden: true });
     if (await button.count()) return revealSetting(panel, button);
   }
   return page.getByRole('button', { ...options, name });
+}
+
+export async function closeProjectSettings(page: Page) {
+  const dialog = page.getByRole('dialog', { name: '项目设置', exact: true });
+  if (await dialog.count()) {
+    await dialog.getByRole('button', { name: '关闭对话框', exact: true }).click();
+    await expect(dialog).toHaveCount(0);
+  }
 }

@@ -12,7 +12,7 @@ it('rejects an approval for an older review without approving the next checkpoin
   try {
     const project = projectSchema.parse(await runtime.dispatch('project.create', { title: '按实际审阅版本批准' }));
     const model = modelSchema.parse(await runtime.dispatch('model.save', { model: { name: '隔离文本连接', provider: 'openai-compatible', baseUrl: 'https://example.invalid/v1', model: 'fixture', capabilities: ['text'] } }));
-    await runtime.dispatch('workflow.save', { projectId: project.id, revision: project.revision, workflow: { ...project.workflow,
+    await runtime.dispatch('workflow.save', { projectId: project.id, revision: project.revision, workflow: { ...project.workflow, id: 'identity-custom-review',
       nodes: ['style', 'script'].map(kind => workflowNodeSchema.parse({ id: kind, kind, label: kind, modelId: model.id, requiresReview: true })),
       edges: [{ id: 'next', source: 'style', target: 'script' }],
     } });

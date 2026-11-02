@@ -6,6 +6,8 @@
 
 | 范围 | 当前能力 | 契约与验证入口 |
 | --- | --- | --- |
+| 制作指引与进度 | 内置流程统一显示策划与分镜、素材与配音、剪辑与动画、审阅与导出四阶段；阶段内集中配置，局部运行保留完整卡片，实际运行／审阅阶段高亮，详情与产物在工作台打开 | [四阶段进度](workspace-editing.md#制作指引与四阶段进度)、`workbench-stages.test.ts`、`workbench-guide-progress.spec.ts`、`workflow-stages.spec.ts`、`workbench-production.spec.ts` |
+| 导航与设置 | 52px 单列图标栏统一项目、制作记录、资源与工具入口并提供悬停名称；项目列表进入工作台；左下角设置浮层集中提供胶囊外观切换、Token 消耗与使用指南；首次指南按实际操作推进 | [桌面工作区](electron-desktop.md#工作区与持久化)、`workspace-settings.spec.ts`、`getting-started.spec.ts` |
 | 桌面与交付 | Windows x64、macOS arm64／x64；沙箱预加载、独立 Node 执行器、系统凭据、原生路径选择、媒体协议、进程退出与重连；独立媒体组件和安装数据保留 | [Electron 架构](electron-desktop.md)、[Windows](windows-verification.md)、[macOS](macos-verification.md) |
 | 大项目读取 | 轻量工作区摘要、条件项目详情、服务端分页、后台刷新合并、迟到结果隔离；镜头与轨道按行复用，保持最新操作及全片引用上下文；只为可见缩略图读取真实帧，限制并发与缓存 | [读取与编辑契约](workspace-editing.md#读取契约)、`benchmark:workspace`、`editor-row-rendering.spec.ts`、`media-performance.spec.ts` |
 | 编辑与恢复 | 统一增量命令、连续输入合并、最多 50 步撤销／重做、IndexedDB 草稿；保存前意图落盘、保存期间新输入、外部修订冲突与重启恢复 | [编辑与恢复](workspace-editing.md#编辑与恢复)、`project-editing.spec.ts`、`draft-save-ordering.spec.ts` |
@@ -14,12 +16,13 @@
 | 模型与候选 | 文本、图片、视频和音频连接；协议参数与高级 JSON；单镜头生成候选、对比、按字段应用、修订与素材保护 | [角色、参数与费用](workspace-editing.md#角色模型参数与费用)、`model-protocols.spec.ts`、`shot-regeneration.spec.ts` |
 | 制作前检查 | 已保存项目的模型、步骤、角色、素材及引擎检查，错误聚合与修复入口；可取消、显式重新检查，独立标识供应商尚未联系 | [制作前检查](workspace-editing.md#制作前检查)、`project-readiness.spec.ts` |
 | 素材恢复 | 当前项目或整个工作区的缺失清单、目录扫描、完整摘要匹配、候选确认、分页批量恢复与取消；保留冻结身份并自动刷新媒体 | [批量素材恢复](workspace-editing.md#批量素材恢复)、`asset-recovery.spec.ts` |
-| 角色、费用与资料 | 角色参考图、镜头绑定、价格快照、服务用量与实付登记、任务归档；正文／PDF 读取、精确摘录、事实核验及镜头引用 | [工作区功能契约](workspace-editing.md)、`cost-task-archive.spec.ts`、`research-review.spec.ts` |
+| 角色与费用 | 角色参考图、镜头绑定、价格快照、服务用量与实付登记、任务归档；旧资料数据仅保留兼容，已移除编辑与引用展示 | [工作区功能契约](workspace-editing.md)、`cost-task-archive.spec.ts` |
 | 画面与导出 | 流程讲解／对比／数据图模板、字幕样式、系列模板、位置与缩放关键帧曲线；MP4／SRT／分镜导出，多比例冻结批次、部分失败恢复和取消 | [模板与批量导出](workspace-editing.md#科普模板与批量导出)、`template-batch-export.spec.ts`、`keyframe-editing.spec.ts` |
 | 工作流与审阅 | 节点／连接编辑、条件分支、局部执行范围预览、固定版本子流程、受控镜头并行、逐层人工审阅、历史产物比较与脱敏诊断；制作记录支持项目、状态和本地日期组合筛选 | [持久化执行契约](durable-execution.md)、`workflow-composition.spec.ts`、`run-history-filter.spec.ts`、`run-inspection.spec.ts` |
 | 项目备份 | 按内容选择格式 1／2／3；子流程、并行配置和关键帧要求格式 3，恢复时重新映射素材和角色引用 | [持久化执行契约](durable-execution.md)、Runtime 备份回归 |
+| 运行日志 | 桌面与执行器分别保存 JSON 行日志，按大小轮转；请求和任务可关联，字段白名单与错误分类控制内容 | [日志规范](logging.md)、`logging.test.ts`、`runtime-logging.test.ts`、`browser-rpc-diagnostics.test.ts` |
 
-表中测试位于 `tests/e2e`；Runtime、契约及媒体单元回归同时覆盖各自的数据与副作用边界。模型连接列表、协议夹具或自动化通过不能代替某个供应商的实际可用性和计费验证。
+表中单元测试位于 `tests`，浏览器流程位于 `tests/e2e`；Runtime、契约及媒体回归覆盖各自的数据与副作用边界。模型连接列表、协议夹具或自动化通过不能代替某个供应商的实际可用性和计费验证。
 
 ## 界面规范
 
@@ -41,16 +44,3 @@ Windows 和 macOS 共享同一套组件，通过 `lib/desktop.ts` 适配快捷�
 - 当前构建不发布 Release，安装包未签名／公证，签名和更新分发需独立配置。
 
 验收方法与证据要求见[外部服务与性能验收](release-validation.md)。后续功能扩展应由实际内容需求或可重复瓶颈驱动，不将列表虚拟化、代理媒体或更多模板预先视为当前缺陷。
-
-## 下一阶段执行计划
-
-以下批次共同支持 Windows x64、macOS arm64／x64。每批复用既有契约、分页、编辑会话和文件边界；先完成对应行为回归，再验证类型、构建及受影响的实际应用包。当前本地通过结果不替代同一提交的其他平台证据。
-
-| 批次 | 范围 | 验收门槛 |
-| --- | --- | --- |
-| P0：交付收敛 | 将已验收变更整理为可审阅提交，更新现有 PR，补齐三平台 CI | 同一源码提交的类型、Runtime、浏览器、实际包、原生与安装报告通过，源码及包摘要可追踪 |
-| P1：大项目交互 | 先测真实保存后的 1000／5000 镜头输入、选择、撤销及恢复；优化行级更新，并按测量收益处理 dirty 比较与空闲音频投影 | 无关行避免重复渲染，最新回调和绘制依赖正确；范围选择、拖动、焦点及恢复回归通过，保留原始性能样本 |
-| P2：制作效率 | 并行推进制作记录项目筛选，再补状态与时间筛选；复用执行计划和预检提供制作前就绪摘要及修复入口 | 筛选、分页、刷新及迟到响应不串项；本地就绪检查不提交生成请求，阻断项可定位，真实服务连通性单独标识 |
-| P3：批量素材恢复 | 缺失素材清单、指定目录扫描、哈希匹配、候选确认和批量修复 | 扫描可取消，同名不同内容不误替换，跨盘路径和共享引用正确；修复不破坏原运行快照，失败后原数据保持可恢复 |
-
-虚拟列表及代理媒体由行级优化后的 DOM、解码和真实长时播放数据决定。真实视频服务、Windows 实机 GPU 和系统对话框属于条件验收，分别保留缺少环境及已完成的证据；不以其他平台或本地替代服务补记通过。上述批次不包含合并主分支或发布 Release。

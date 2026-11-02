@@ -27,7 +27,7 @@ pnpm test:desktop --packaged
 
 ## 原生 CI 与安装验证
 
-[GitHub 官方 runner 表](https://docs.github.com/en/actions/reference/runners/github-hosted-runners)明确 `macos-15` 为 arm64，`macos-15-intel` 为 Intel x64；工作流启动时再次核对 Node 的实际架构。两个 job 均执行类型、全部自动测试、全部浏览器流程、本地 HTTP 恢复、四组实际编码（含 4K）、生产 ZIP、包内 portability、独立打包 PDF 和真实 Electron 专项。
+[CI 配置](../.github/workflows/ci.yml) 使用 `macos-15` 执行 arm64 验收，`macos-15-intel` 执行 Intel x64 验收；工作流启动时再次核对 Node 的实际架构。两个 job 均执行类型、全部自动测试、全部浏览器流程、本地 HTTP 恢复、四组实际编码（含 4K）、生产 ZIP、包内 portability、独立打包 PDF 和真实 Electron 专项。
 
 `scripts/install-macos-smoke.mjs` 只在全新隔离 macOS CI 账号执行，拒绝已有 Electron 数据。它实际解压本次 ZIP、复制到中文／空格路径，创建真实项目、素材和待审检查点；覆盖应用后验证默认工作区、原任务继续和实际导出；移除应用前后比较数据库、WAL 和媒体摘要，证明移除 `.app` 默认保留项目数据。自动化提供系统交互的选择结果，Finder 的实际鼠标操作另验；结束仅清理本次创建的隔离账号数据。
 

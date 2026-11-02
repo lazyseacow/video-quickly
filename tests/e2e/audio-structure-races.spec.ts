@@ -1,3 +1,4 @@
+import { openProjectFromList } from './workspace-navigation';
 import { writeFile } from 'node:fs/promises';
 import { expect, test, type APIRequestContext, type Page, type TestInfo } from '@playwright/test';
 import { DEFAULT_AUDIO_MIX_SETTINGS, type AssetRecord, type ProjectDocument } from '@video-quickly/contracts';
@@ -30,7 +31,7 @@ async function fixture(request: APIRequestContext, info: TestInfo, title: string
 }
 async function open(page: Page, project: ProjectDocument) {
   await page.goto('/'); await expect(page).toHaveTitle(/Video Quickly/);
-  await page.getByRole('button', { name: `打开项目：${project.title}`, exact: true }).click();
+  await openProjectFromList(page, project.title);
   await expect(page.getByLabel('镜头标题', { exact: true })).toHaveValue('前置完整旁白 A'); await ready(page);
 }
 async function ready(page: Page) {

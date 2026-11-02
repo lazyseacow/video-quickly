@@ -10,7 +10,7 @@ async function fixture(request: APIRequestContext) {
   const created = await rpc<ProjectDocument>(request, 'project.create', { title: `审阅指针归属 ${randomUUID().slice(0, 8)}` });
   const project = await rpc<ProjectDocument>(request, 'project.update', { projectId: created.id, revision: created.revision, patch: {
     shots: [{ id: 'shot', title: '保留镜头', narration: '', visualPrompt: '', durationUs: 1_000_000 }],
-    workflow: { ...created.workflow, nodes: [
+    workflow: { ...created.workflow, id: 'custom-pointer-review', stages: undefined, nodes: [
       { id: 'first', kind: 'brief', label: '第一步审阅', requiresReview: true },
       { id: 'second', kind: 'brief', label: '第二步审阅', requiresReview: true },
     ], edges: [{ id: 'next', source: 'first', target: 'second' }] },
@@ -38,7 +38,7 @@ for (const surface of ['workbench', 'history'] as const) {
     const panel = surface === 'workbench' ? page.getByRole('region', { name: '当前制作', exact: true }) : page.locator(`.run-card[data-run-id="${source.run.id}"]`);
     const approve = panel.getByRole('button', { name: surface === 'workbench' ? '通过审阅并继续' : '通过审阅', exact: true });
     await expect(approve).toBeEnabled();
-    if (surface === 'workbench') await expect(panel.locator('.workbench-production__heading strong')).toHaveText('第一步审阅');
+    if (surface === 'workbench') await expect(panel.locator('.workbench-guide__step[aria-current="step"]')).toContainText('第一步审阅');
     let releaseReads!: () => void;
     const advanced = new Promise<void>(resolve => { releaseReads = resolve; });
     const reviews: unknown[] = [];
@@ -55,7 +55,7 @@ for (const surface of ['workbench', 'history'] as const) {
       await rpc(request, 'run.review', { runId: source.run.id, approved: true, expectedNodeId: source.run.currentNodeId, expectedUpdatedAt: source.run.updatedAt });
       await expect.poll(async () => { const value = await source.current(); return [value.currentNodeId, value.status]; }).toEqual(['second', 'waiting_review']);
       const second = await source.current(); releaseReads();
-      if (surface === 'workbench') await expect(panel.locator('.workbench-production__heading strong')).toHaveText('第二步审阅');
+      if (surface === 'workbench') await expect(panel.locator('.workbench-guide__step[aria-current="step"]')).toContainText('第二步审阅');
       else await expect(panel.locator('.run-card__meta')).toContainText(`${second.completedNodeIds.length} 个步骤已完成`);
       await expect(approve).toBeEnabled(); await page.mouse.up();
       await page.evaluate(() => new Promise<void>(done => requestAnimationFrame(() => requestAnimationFrame(() => done()))));

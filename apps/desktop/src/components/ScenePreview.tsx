@@ -1,5 +1,5 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { citationOverlayForShot, createCitationManifest, drawSceneFrame } from '@video-quickly/video';
+import { drawSceneFrame } from '@video-quickly/video';
 import { resolveShotSpans, resolveShotTime } from '@video-quickly/video/clip-edits';
 import { effectiveCaptionStyle, type AssetRecord, type ProjectDocument, type Shot } from '@video-quickly/contracts';
 import { getAssetUrl } from '../lib/client';
@@ -10,7 +10,7 @@ import { videoThumbnails, type ThumbnailFrame } from './preview-thumbnails';
 import { useThumbnailVisibility } from './thumbnail-visibility';
 import { assetAvailabilityUrl, useAssetAvailabilityKey } from '../lib/asset-availability';
 
-export type ScenePreviewProject = Pick<ProjectDocument, 'profile'> & Partial<Pick<ProjectDocument, 'claims' | 'researchSources' | 'referenceDisplay' | 'shots' | 'captionStyle' | 'clipEditSources' | 'clipEditPlans'>> & { referenceFooter?: boolean };
+export type ScenePreviewProject = Pick<ProjectDocument, 'profile'> & Partial<Pick<ProjectDocument, 'captionStyle' | 'clipEditSources' | 'clipEditPlans'>>;
 
 interface ScenePreviewProps {
   project: ScenePreviewProject;
@@ -31,16 +31,13 @@ const previewPropKeys = Object.keys({
   shot: true, shotIndex: true, timeUs: true, className: true, thumbnail: true, assets: true, playing: true, onRepair: true,
 } satisfies Record<PreviewPropKey, true>) as PreviewPropKey[];
 const previewProjectKeys = Object.keys({
-  profile: true, claims: true, researchSources: true, referenceDisplay: true, shots: true, captionStyle: true, clipEditSources: true, clipEditPlans: true, referenceFooter: true,
+  profile: true, captionStyle: true, clipEditSources: true, clipEditPlans: true,
 } satisfies Record<PreviewProjectKey, true>) as PreviewProjectKey[];
 
 function samePreviewProps(previous: ScenePreviewProps, next: ScenePreviewProps) {
   for (const key of previewPropKeys) if (!Object.is(previous[key], next[key])) return false;
   if (previous.project === next.project) return true;
   for (const key of previewProjectKeys) {
-    // Numbered references reserve caption space across all shots. Otherwise an
-    // unrelated title edit does not change this preview's rendering context.
-    if (key === 'shots' && previous.project.referenceDisplay !== 'numbers' && next.project.referenceDisplay !== 'numbers') continue;
     if (!Object.is(previous.project[key], next.project[key])) return false;
   }
   return true;
@@ -80,8 +77,6 @@ export const ScenePreview = memo(function ScenePreview({ project, shot, shotInde
   }, [shot.clipEdit, shot.durationUs, project.clipEditSources, project.clipEditPlans]);
   const videoSpan = videoSpans.find(span => span.spanIndex === resolvedTime.spanIndex);
   const videoRange = videoSpan ? { startUs: videoSpan.videoInUs, endUs: videoSpan.videoInUs + videoSpan.durationUs } : undefined;
-  const citation = useMemo(() => project.referenceDisplay === 'numbers' ? citationOverlayForShot(createCitationManifest({ claims: project.claims ?? [], researchSources: project.researchSources, referenceDisplay: project.referenceDisplay, shots: [shot] }), shot.id) : undefined, [project.claims, project.researchSources, project.referenceDisplay, shot.id, shot.claimIds]);
-  const referenceFooter = project.referenceDisplay === 'numbers' && (project.referenceFooter ?? (project.shots ?? [shot]).some(shot => shot.claimIds.length > 0));
   const captionStyle = effectiveCaptionStyle(project, shot);
   const profile = useMemo(() => {
     const scale = Math.min(project.profile.previewScale, (thumbnail ? 420 : 1280) / project.profile.width);
@@ -171,10 +166,10 @@ export const ScenePreview = memo(function ScenePreview({ project, shot, shotInde
       if (hasVideo && !videoFrame) return;
       if (target.width !== profile.width) target.width = profile.width;
       if (target.height !== profile.height) target.height = profile.height;
-      drawSceneFrame(target, { title: shot.title, narration: shot.narration, sceneTemplate: shot.sceneTemplate, captionTrack: shot.captionTrack, clipEdit: shot.clipEdit, clipEditContext: project, sourceInUs: shot.sourceInUs, audioInUs: shot.audioInUs, videoInUs: shot.videoInUs, shotIndex, sceneIndex: shot.sceneIndex, profile, durationUs: shot.durationUs, sceneInUs: shot.sceneInUs, sceneDurationUs: shot.sceneDurationUs, animation: shot.animation, image: videoFrame ?? activeImage, citation, referenceFooter, captionStyle }, timeUs);
+      drawSceneFrame(target, { title: shot.title, narration: shot.narration, sceneTemplate: shot.sceneTemplate, captionTrack: shot.captionTrack, clipEdit: shot.clipEdit, clipEditContext: project, sourceInUs: shot.sourceInUs, audioInUs: shot.audioInUs, videoInUs: shot.videoInUs, shotIndex, sceneIndex: shot.sceneIndex, profile, durationUs: shot.durationUs, sceneInUs: shot.sceneInUs, sceneDurationUs: shot.sceneDurationUs, animation: shot.animation, image: videoFrame ?? activeImage, captionStyle }, timeUs);
     };
     requestRender();
-  }, [profile, shot.title, shot.narration, shot.sceneTemplate, shot.captionTrack, shot.clipEdit, project.clipEditSources, project.clipEditPlans, shot.sourceInUs, shot.audioInUs, shot.videoInUs, shot.durationUs, shot.sceneInUs, shot.sceneDurationUs, hasVideo, shot.animation, shotIndex, shot.sceneIndex, timeUs, activeImage, activeVideo, activeStill, thumbnail, visible, videoRange?.startUs, videoRange?.endUs, error, loading, citation, referenceFooter, captionStyle, requestRender]);
+  }, [profile, shot.title, shot.narration, shot.sceneTemplate, shot.captionTrack, shot.clipEdit, project.clipEditSources, project.clipEditPlans, shot.sourceInUs, shot.audioInUs, shot.videoInUs, shot.durationUs, shot.sceneInUs, shot.sceneDurationUs, hasVideo, shot.animation, shotIndex, shot.sceneIndex, timeUs, activeImage, activeVideo, activeStill, thumbnail, visible, videoRange?.startUs, videoRange?.endUs, error, loading, captionStyle, requestRender]);
 
   useEffect(() => {
     document.addEventListener('visibilitychange', requestRender);

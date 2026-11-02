@@ -12,20 +12,20 @@ function open(directory: string) {
 }
 async function fixture() { const directory = await mkdtemp(join(tmpdir(), 'vq-default-workflow-')); directories.push(directory); return { directory, runtime: open(directory) }; }
 async function current(runtime: ReturnType<typeof createRuntime>, projectId: string) { return (await runtime.dispatch('project.get', { projectId }) as { project: ProjectDocument }).project; }
-const leafIds = ['brief', 'style', 'script', 'assets', 'voice', 'animation', 'review', 'export'];
+const leafIds = ['brief', 'style', 'script', 'assets', 'voice', 'animation', 'export'];
 const stageLayout = [
   { id: 'planning', label: '策划与分镜', nodeIds: ['brief', 'style', 'script'] },
   { id: 'materials', label: '素材与配音', nodeIds: ['assets', 'voice'] },
   { id: 'editing', label: '剪辑与动画', nodeIds: ['animation'] },
-  { id: 'delivery', label: '审阅与导出', nodeIds: ['review', 'export'] },
+  { id: 'delivery', label: '审阅与导出', nodeIds: ['export'] },
 ];
 
-it('groups the eight independently configurable tasks into four ordered generic production stages', () => {
+it('groups the seven independently configurable tasks into four ordered generic production stages', () => {
   const workflow = workflowSchema.parse(createVideoWorkflow());
   expect(workflow).toMatchObject({ id: 'general-video', name: '通用视频制作' });
   expect(workflow.nodes.map(node => node.id)).toEqual(leafIds); expect(workflow.nodes.map(node => node.kind)).toEqual(leafIds);
   expect(workflow.stages?.map(({ id, label, nodeIds }) => ({ id, label, nodeIds }))).toEqual(stageLayout);
-  expect(workflow.nodes.filter(node => node.requiresReview).map(node => node.id)).toEqual(['script', 'review']);
+  expect(workflow.nodes.filter(node => node.requiresReview).map(node => node.id)).toEqual([]);
   expect(workflow.edges.map(edge => [edge.source, edge.target])).toEqual(leafIds.slice(1).map((id, index) => [leafIds[index], id]));
   expect(() => validateWorkflowComposition(workflow)).not.toThrow();
   const resolved = resolveWorkflowStages(workflow);
@@ -33,12 +33,11 @@ it('groups the eight independently configurable tasks into four ordered generic 
   for (const stage of resolved) expect(stage.nodes).toEqual(stage.nodeIds.map(id => workflow.nodes.find(node => node.id === id)));
 });
 
-it('keeps the legacy factory, research task and ungrouped project payload intact when resolving stages', () => {
-  const workflow = createHistoryWorkflow(), before = structuredClone(workflow);
-  expect(workflow.stages).toBeUndefined(); expect(workflow.nodes.map(node => node.id)).toEqual(['brief', 'research', 'style', 'script', 'assets', 'voice', 'animation', 'review', 'export']);
-  expect(workflow.nodes.filter(node => node.requiresReview).map(node => node.id)).toEqual(['style', 'script', 'review']);
-  expect(resolveWorkflowStages(workflow).flatMap(stage => stage.nodes.map(node => node.id))).toEqual(workflow.nodes.map(node => node.id));
-  expect(workflow).toEqual(before); expect(workflowSchema.parse(workflow)).toEqual(before);
+it('uses the same four-stage tasks without research or review waits for historical projects', () => {
+  const workflow = createHistoryWorkflow();
+  expect(workflow.nodes.map(node => node.id)).toEqual(leafIds);
+  expect(workflow.nodes.every(node => !node.requiresReview)).toBe(true);
+  expect(workflow.stages).toEqual(createVideoWorkflow().stages);
 });
 
 it('creates empty generic projects with the same default workflow when copying series display settings', async () => {
@@ -52,9 +51,10 @@ it('creates empty generic projects with the same default workflow when copying s
   }
 });
 
-it('reopens a legacy project and its active review without replacing either with the new default', async () => {
+it('reopens an explicit custom workflow and its active review without replacing either with the built-in default', async () => {
   const { directory, runtime } = await fixture();
-  const legacy = projectSchema.parse(await runtime.dispatch('project.create', { title: '保留的历史项目', templateId: 'history-handdrawn' })); expect(legacy.workflow).toEqual(createHistoryWorkflow());
+  const created = projectSchema.parse(await runtime.dispatch('project.create', { title: '保留的自定义审核流程' }));
+  const legacy = projectSchema.parse(await runtime.dispatch('project.update', { projectId: created.id, revision: created.revision, patch: { workflow: { ...created.workflow, id: 'custom-reviewed-workflow', nodes: created.workflow.nodes.map(node => node.id === 'style' ? { ...node, requiresReview: true } : node) } } }));
   const run = runSchema.parse(await runtime.dispatch('run.start', { projectId: legacy.id, nodeId: 'style' })); await runtime.waitForIdle();
   const before = runSchema.parse(await runtime.dispatch('run.get', { runId: run.id })); expect(before.status).toBe('waiting_review');
   await runtime.close(); runtimes.delete(runtime); const reopened = open(directory);

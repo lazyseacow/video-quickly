@@ -24,7 +24,7 @@ async function setup(options: Partial<RuntimeOptions> = {}, templateId?: 'histor
   const directory = await mkdtemp(join(tmpdir(), 'video-quickly-run-restart-')); directories.push(directory);
   const runtime = createRuntime({ dataDirectory: directory, seed: false, ffmpegPath: '/unused-by-restart-tests', executeActivity: createActivityExecutor(), ...options }); runtimes.add(runtime);
   const original = projectSchema.parse(await runtime.dispatch('project.create', { title: '原项目', ...(templateId ? { templateId } : {}) }));
-  const project = projectSchema.parse(await runtime.dispatch('project.update', { projectId: original.id, revision: original.revision, patch: { shots: [0, 1, 2].map(index => ({ id: `shot-${index}`, title: `镜头${index}`, narration: `旁白${index}`, visualPrompt: `画面${index}`, durationUs: 1_000_000 })) } }));
+  const project = projectSchema.parse(await runtime.dispatch('project.update', { projectId: original.id, revision: original.revision, patch: { ...(templateId ? { workflow: { ...original.workflow, id: 'restart-custom-review', nodes: original.workflow.nodes.map(node => node.id === 'style' ? { ...node, requiresReview: true } : node) } } : {}), shots: [0, 1, 2].map(index => ({ id: `shot-${index}`, title: `镜头${index}`, narration: `旁白${index}`, visualPrompt: `画面${index}`, durationUs: 1_000_000 })) } }));
   return { directory, runtime, project };
 }
 async function current(runtime: ReturnType<typeof createRuntime>, projectId: string) { return (await runtime.dispatch('project.get', { projectId }) as { project: ProjectDocument }).project; }

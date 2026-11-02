@@ -6,7 +6,7 @@ import { dirname, join } from 'node:path';
 import { createCanvas } from '@napi-rs/canvas';
 import { afterEach, expect, it } from 'vitest';
 import { createHistoryWorkflow, createSceneTemplate, DEFAULT_CAPTION_STYLE, DEFAULT_VIDEO_PROFILE, effectiveCaptionStyle, projectSchema, shotSchema, timeAtFrame, type AssetRecord, type CaptionStyle } from '@video-quickly/contracts';
-import { captionAtTime, captionBox, captionPages, citationOverlayForShot, createCitationManifest, createTimedSrt, drawSceneFrame, resolveCaptionLayout } from '../src/index.js';
+import { captionAtTime, captionBox, captionPages, createTimedSrt, drawSceneFrame, resolveCaptionLayout } from '../src/index.js';
 import { splitShot } from '../src/editing.js';
 import { probeMedia, renderProject, runMedia } from '../src/node.js';
 
@@ -49,14 +49,13 @@ it.skipIf(!mediaAvailable)('burns inherited and per-shot font/color/opacity/posi
     const timeline = JSON.parse(await readFile(result.timelinePath, 'utf8')); expect(timeline.captionLayouts[0].layout.style.fontId).toBe('sans'); expect(timeline.captionLayouts[1].layout.style.fontId).toBe('serif'); expect(timeline.captionLayouts[0].fontName).not.toBe(timeline.captionLayouts[1].fontName);
     const measure = createCanvas(width, height).getContext('2d');
     const resolved = project.shots.map(shot => ({ ...shot, captionStyle: effectiveCaptionStyle(project, shot) }));
-    expect(await readFile(result.subtitlePath, 'utf8')).toBe(createTimedSrt(resolved, (text, shot) => { const layout = resolveCaptionLayout(width, height, shot.captionStyle, { referenceFooter: true, template: Boolean(shot.sceneTemplate) }); measure.font = layout.font; return captionPages(text, line => measure.measureText(line).width, layout.textWidth, layout.maxLines); }));
-    const citations = createCitationManifest(project);
+    expect(await readFile(result.subtitlePath, 'utf8')).toBe(createTimedSrt(resolved, (text, shot) => { const layout = resolveCaptionLayout(width, height, shot.captionStyle, { template: Boolean(shot.sceneTemplate) }); measure.font = layout.font; return captionPages(text, line => measure.measureText(line).width, layout.textWidth, layout.maxLines); }));
     for (const [index, frame, test] of [[0, 15, 'green'], [1, 75, 'yellow']] as const) {
-      const shot = resolved[index], layout = resolveCaptionLayout(width, height, shot.captionStyle, { referenceFooter: true, template: Boolean(shot.sceneTemplate) });
+      const shot = resolved[index], layout = resolveCaptionLayout(width, height, shot.captionStyle, { template: Boolean(shot.sceneTemplate) });
       const encoded = await framePixels(result.videoPath, frame, `${width}-${test}`), preview = createCanvas(width, height), image = createCanvas(640, 360);
       image.getContext('2d').fillStyle = '#0000FF'; image.getContext('2d').fillRect(0, 0, 640, 360);
       const localTime = timeAtFrame(frame - index * 60, rate);
-      drawSceneFrame(preview as unknown as HTMLCanvasElement, { ...shot, profile, shotIndex: index, image: image as unknown as CanvasImageSource, referenceFooter: true, citation: citationOverlayForShot(citations, shot.id) }, localTime);
+      drawSceneFrame(preview as unknown as HTMLCanvasElement, { ...shot, profile, shotIndex: index, image: image as unknown as CanvasImageSource }, localTime);
       const direct = preview.getContext('2d').getImageData(0, 0, width, height).data;
       function bounds(values: Uint8Array | Uint8ClampedArray, stride: number) {
         let count = 0, top = height, bottom = -1;
@@ -73,7 +72,7 @@ it.skipIf(!mediaAvailable)('burns inherited and per-shot font/color/opacity/posi
       const visible=captionAtTime(shot,localTime,text=>captionPages(text,line=>measure.measureText(line).width,layout.textWidth,layout.maxLines));
       const box = captionBox(layout, visible?.text.split('\n').length??layout.maxLines), sampleX = Math.ceil(box.x + 4), sampleY = Math.floor(box.y+box.height/2), offset = (sampleY * width + sampleX) * 3;
       const underlay=createCanvas(width,height);
-      drawSceneFrame(underlay as unknown as HTMLCanvasElement,{...shot,captionTrack:{...shot.captionTrack!,cues:[]},profile,shotIndex:index,image:image as unknown as CanvasImageSource,referenceFooter:true,citation:citationOverlayForShot(citations,shot.id)},localTime);
+      drawSceneFrame(underlay as unknown as HTMLCanvasElement,{...shot,captionTrack:{...shot.captionTrack!,cues:[]},profile,shotIndex:index,image:image as unknown as CanvasImageSource},localTime);
       const base=underlay.getContext('2d').getImageData(sampleX,sampleY,1,1).data;
       const target=[1,3,5].map((start,channel)=>parseInt(layout.backgroundColor.slice(start,start+2),16)*layout.backgroundOpacity+base[channel]*(1-layout.backgroundOpacity));
       target.forEach((value, channel) => expect(Math.abs(encoded[offset + channel] - value)).toBeLessThan(25));
@@ -93,10 +92,10 @@ it.skipIf(!mediaAvailable)('burns inherited and per-shot font/color/opacity/posi
       const legacy = shotSchema.parse({ id: 'legacy', title: ' ', narration: 'Legacy caption', visualPrompt: '', durationUs: 1_000_000, sourceInUs: 0, videoAssetId: 'video', audioAssetId: 'voice', animation: { transition: 'cut' } });
       const mixed = await renderProject({ project: { ...project, captionStyle: undefined, shots: [{ ...left, captionStyle: inherited }, right, legacy] }, assets, outputDirectory, ffmpegPath: ffmpeg, ffprobePath: ffprobe });
       const legacyPixels = await framePixels(mixed.videoPath, 135, 'mixed-legacy');
-      const layout = resolveCaptionLayout(width, height, undefined, { referenceFooter: true }), box = captionBox(layout, 1);
+      const layout = resolveCaptionLayout(width, height, undefined, {}), box = captionBox(layout, 1);
       const preview = createCanvas(width, height), image = createCanvas(width, height);
       image.getContext('2d').fillStyle = '#0000FF'; image.getContext('2d').fillRect(0, 0, width, height);
-      drawSceneFrame(preview as unknown as HTMLCanvasElement, { ...legacy, profile, shotIndex: 2, referenceFooter: true, image: image as unknown as CanvasImageSource }, 500_000);
+      drawSceneFrame(preview as unknown as HTMLCanvasElement, { ...legacy, profile, shotIndex: 2, image: image as unknown as CanvasImageSource }, 500_000);
       // Small antialiased glyphs blend with the dark box, especially after YUV420 chroma subsampling.
       // Compare visible ink and its preview bounds rather than requiring opaque cream-colored pixels.
       function ink(values: Uint8Array | Uint8ClampedArray, stride: number) {

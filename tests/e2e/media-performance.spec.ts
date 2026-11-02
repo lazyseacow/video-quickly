@@ -114,7 +114,8 @@ for (const count of [50, 200]) test(`bounds real 1080p video resources and measu
   const project = await fixture(request, info, count);
   const timing: Record<string, unknown> = {};
   try {
-    const trigger = page.getByRole('button', { name: `打开项目：${project.title}`, exact: true }); await expect(trigger).toBeVisible();
+    await page.getByRole('button', { name: '我的项目', exact: true }).click();
+    const trigger = page.locator('.project-card').filter({ has: page.getByRole('heading', { name: project.title, exact: true }) }).getByRole('button', { name: '继续创作', exact: true }); await expect(trigger).toBeVisible();
     const begin = performance.now(); await trigger.click(); await expect(page.getByLabel('镜头标题', { exact: true })).toHaveValue('真实镜头 1'); await firstFrame(page);
     timing.openToPreviewReadyMs = performance.now() - begin;
     const selections = [], seeks = [];

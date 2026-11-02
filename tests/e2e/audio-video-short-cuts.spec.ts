@@ -1,3 +1,4 @@
+import { openProjectFromList } from './workspace-navigation';
 import { execFile } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { writeFile } from 'node:fs/promises';
@@ -72,7 +73,7 @@ test(`never paints a deleted one-frame video gap during real playback or scrubbi
   // loaded runner presents far fewer than 30 frames per second.
   const { project, voice } = await fixture(request, info, 30, readbackDelayMs ? 3 : 1);
   const clockWindowEndMs = Math.round((project.shots[0].durationUs - timeAtFrame(5, project.profile.frameRate)) / 1000);
-  await page.goto('/'); await expect(page).toHaveTitle(/Video Quickly/); await page.getByRole('button', { name: `打开项目：${project.title}`, exact: true }).click();
+  await page.goto('/'); await expect(page).toHaveTitle(/Video Quickly/); await openProjectFromList(page, project.title);
   await expect(page.getByLabel('镜头标题', { exact: true })).toHaveValue('删除红色一帧');
   await expect(page.locator('.preview-panel .prepared-mix-preview')).toHaveAttribute('data-status', 'ready', { timeout: 20_000 });
   await expect(page.getByRole('button', { name: '播放预览', exact: true })).toBeEnabled();
@@ -169,7 +170,7 @@ test('uses the containing native frame for a 24-to-30fps EDL start and matches a
   test.setTimeout(60_000);
   const errors: string[] = []; page.on('pageerror', error => errors.push(error.message));
   const { project } = await fixture(request, info, 24);
-  await page.goto('/'); await page.getByRole('button', { name: `打开项目：${project.title}`, exact: true }).click();
+  await page.goto('/'); await openProjectFromList(page, project.title);
   await expect(page.locator('.preview-panel .prepared-mix-preview')).toHaveAttribute('data-status', 'ready', { timeout: 20_000 });
   const canvas = page.locator('.preview-frame canvas');
   const pixel = () => canvas.evaluate((element: HTMLCanvasElement) => [...element.getContext('2d')!.getImageData(element.width / 2, element.height / 2, 1, 1).data].slice(0, 3));
@@ -192,7 +193,7 @@ test('uses the containing native frame for a 24-to-30fps EDL start and matches a
 test('keeps EDL playback advancing across the short gap without decoded-frame callbacks', async ({ page, request }, info) => {
   await page.addInitScript(() => { Object.defineProperty(HTMLVideoElement.prototype, 'requestVideoFrameCallback', { value: undefined }); });
   const { project } = await fixture(request, info);
-  await page.goto('/'); await page.getByRole('button', { name: `打开项目：${project.title}`, exact: true }).click();
+  await page.goto('/'); await openProjectFromList(page, project.title);
   await expect(page.locator('.preview-panel .prepared-mix-preview')).toHaveAttribute('data-status', 'ready', { timeout: 20_000 });
   const canvas = page.locator('.preview-frame canvas');
   const pixel = () => canvas.evaluate((element: HTMLCanvasElement) => [...element.getContext('2d')!.getImageData(element.width / 2, element.height / 2, 1, 1).data].slice(0, 3));

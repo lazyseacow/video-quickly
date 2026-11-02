@@ -1,3 +1,5 @@
+import { openProjectFromList } from './workspace-navigation';
+import { setWorkspaceTheme } from './workspace-settings';
 import { createServer } from 'node:http';
 import { expect, test, type APIRequestContext, type Page } from '@playwright/test';
 
@@ -56,7 +58,7 @@ test('undoes and redoes grouped input, ordering, duplication and deletion with m
   await expect(page.getByRole('button', { name: '保存镜头', exact: true })).toBeDisabled();
   await expect(page.getByRole('button', { name: '保存修改', exact: true })).toBeDisabled();
   await page.reload();
-  await page.getByRole('button', { name: `打开项目：${project.title}`, exact: true }).click();
+  await openProjectFromList(page, project.title);
   await expect(page.getByRole('button', { name: '重做', exact: true })).toBeEnabled();
   saved = (await rpc(request, 'project.get', { projectId: project.id })).project;
   await page.getByRole('button', { name: '重做', exact: true }).click();
@@ -74,7 +76,7 @@ test('restores an unsaved multi-field draft and resolves external edits without 
     return new Promise<boolean>(resolve => { const query = db.transaction('projects').objectStore('projects').getAll(); query.onsuccess = () => { resolve(query.result.some(value => value.present.shots[0]?.narration === '重启后仍保留的旁白')); db.close(); }; });
   })).toBe(true);
   page.once('dialog', dialog => dialog.accept()); await page.reload();
-  await page.getByRole('button', { name: `打开项目：${project.title}`, exact: true }).click();
+  await openProjectFromList(page, project.title);
   await expect(page.getByLabel('镜头标题')).toHaveValue('草稿标题');
   await expect(page.getByLabel('旁白', { exact: true })).toHaveValue('重启后仍保留的旁白');
   await expect(page.getByText('已恢复未保存的本地草稿，含撤销与重做历史。')).toBeVisible();
@@ -95,7 +97,7 @@ test('restores an unsaved multi-field draft and resolves external edits without 
   const saved = (await rpc(request, 'project.get', { projectId: project.id })).project;
   expect(saved.revision).toBe(remote.revision + 1);
   expect(saved.shots[0]).toMatchObject({ title: '另一视图的标题', narration: '重启后仍保留的旁白', visualPrompt: '另一视图的画面' });
-  await page.getByRole('button', { name: '浅色外观', exact: true }).click();
+  await setWorkspaceTheme(page, 'light');
   await page.setViewportSize({ width: 600, height: 900 });
   await page.screenshot({ path: info.outputPath('draft-restored-light-600.png') });
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1)).toBe(true);
@@ -116,7 +118,7 @@ test('keeps generated results editable with undo and rejects reapplying them aft
     const workflow = { ...original.workflow, nodes: original.workflow.nodes.map((node: { kind: string }) => node.kind === 'script' ? { ...node, modelId: model.id } : node) };
     const project = await rpc(request, 'workflow.save', { projectId: original.id, revision: original.revision, workflow });
     const run = await rpc(request, 'run.start', { projectId: project.id, nodeId: 'script' });
-    await expect.poll(async () => (await rpc(request, 'project.get', { projectId: project.id })).latestRun.status).toBe('waiting_review');
+    await expect.poll(async () => (await rpc(request, 'project.get', { projectId: project.id })).latestRun.status).toBe('succeeded');
     await rpc(request, 'node.apply', { runId: run.id, nodeId: 'script', revision: project.revision });
     await openProject(page, project.title);
     await expect(page.getByLabel('镜头标题')).toHaveValue('已生成的分镜');
@@ -150,7 +152,7 @@ test('separates adjacent layout controls and keeps both monochrome themes usable
   await openProject(page, project.title);
   await expect(page).toHaveTitle(/Video Quickly/);
   for (const theme of ['dark', 'light'] as const) {
-    if (theme === 'light') await page.getByRole('button', { name: '浅色外观', exact: true }).click();
+    if (theme === 'light') await setWorkspaceTheme(page, 'light');
     await expect(page.locator('html')).toHaveAttribute('data-theme', theme);
     const controls = page.locator('.editor-layout-actions > button');
     const first = await controls.nth(0).boundingBox(); const second = await controls.nth(1).boundingBox();

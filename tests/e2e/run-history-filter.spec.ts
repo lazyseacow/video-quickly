@@ -1,3 +1,4 @@
+import { setWorkspaceTheme } from './workspace-settings';
 import { randomUUID } from 'node:crypto';
 import { expect, test, type APIRequestContext, type Page } from '@playwright/test';
 import type { ProjectDocument, RunRecord } from '@video-quickly/contracts';
@@ -108,7 +109,7 @@ test('keeps the project control keyboard accessible in dark desktop and light na
   const clear = page.getByRole('button', { name: '清除制作记录筛选', exact: true }); await clear.focus(); await clear.press('Enter'); await expect(filter).toHaveValue('');
   await filter.selectOption(data.first.id); await expect.poll(() => visibleIds(page)).toEqual(data.firstIds);
   await page.screenshot({ path: info.outputPath('run-project-filter-dark-1536.png') });
-  await page.getByRole('button', { name: '浅色外观', exact: true }).click(); await page.setViewportSize({ width: 600, height: 900 });
+  await setWorkspaceTheme(page, 'light'); await page.setViewportSize({ width: 600, height: 900 });
   await expect(filter).toBeVisible(); await filter.focus(); await expect(filter).toBeFocused();
   await filter.selectOption(data.empty.id); await expect(page.getByText('这个项目还没有制作记录', { exact: true })).toBeVisible();
   await expect(page.getByRole('button', { name: '清除制作记录筛选', exact: true })).toBeVisible();

@@ -1,3 +1,4 @@
+import { openProjectFromList } from './workspace-navigation';
 import { expect, test, type APIRequestContext } from '@playwright/test';
 import type { ProjectDocument } from '@video-quickly/contracts';
 
@@ -18,9 +19,8 @@ for (const platform of [
   const created = await rpc<ProjectDocument>(request, 'project.create', { title: `平台适配 ${platform.browser}` });
   const project = await rpc<ProjectDocument>(request, 'project.update', { projectId: created.id, revision: created.revision, patch: { shots: [{ id: 'platform-shot', title: '平台原镜头', narration: '', visualPrompt: '', durationUs: 1_000_000 }] } });
   await page.goto('/');
-  await page.getByRole('button', { name: `打开项目：${project.title}`, exact: true }).click();
+  await openProjectFromList(page, project.title);
   await expect(page.getByLabel('镜头标题', { exact: true })).toHaveValue('平台原镜头');
-  await expect(page.locator('.statusbar .shortcut').filter({ hasText: '保存' })).toContainText(platform.label);
   await expect(page.getByRole('button', { name: '撤销', exact: true })).toHaveAttribute('title', `撤销（${platform.label} Z）`);
   await expect(page.locator('.outline-shot').first()).toHaveAttribute('title', new RegExp(`${platform.label} 切换选择`));
   const field = page.getByLabel('镜头标题', { exact: true });

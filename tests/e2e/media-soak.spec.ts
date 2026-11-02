@@ -1,3 +1,4 @@
+import { openProjectFromList } from './workspace-navigation';
 import { execFile } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { writeFile } from 'node:fs/promises';
@@ -83,7 +84,7 @@ if (requested !== undefined) {
     const observed = new Map<string, Set<string>>(); let maxLiveVideos = 0, presentedFrames = 0, openToPreviewMs: number | undefined;
     try {
       const started = performance.now();
-      await page.getByRole('button', { name: `打开项目：${project.title}`, exact: true }).click();
+      await openProjectFromList(page, project.title);
       await expect(page.locator('.preview-panel .scene-preview')).toHaveAttribute('aria-busy', 'false'); openToPreviewMs = performance.now() - started;
       const play = page.getByRole('button', { name: '播放预览', exact: true }); await expect(play).toBeEnabled({ timeout: 90_000 }); await play.click();
       const ruler = page.getByRole('slider', { name: '预览播放位置', exact: true }), beginning = Number(await ruler.getAttribute('aria-valuenow')), clockStart = performance.now();

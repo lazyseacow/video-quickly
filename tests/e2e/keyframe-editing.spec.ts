@@ -1,3 +1,5 @@
+import { openProjectFromList } from './workspace-navigation';
+import { setWorkspaceTheme } from './workspace-settings';
 import { expect, test, type APIRequestContext, type Page } from '@playwright/test';
 import type { ProjectDocument } from '@video-quickly/contracts';
 import { writeFile } from 'node:fs/promises';
@@ -29,7 +31,7 @@ test('edits original-time keyframes and custom curves as one recoverable command
   expect((await saved(request, project.id)).shots[0].animation.keyframes).toBeUndefined();
   await expect(dialog.locator('.scene-preview canvas')).toBeVisible(); await expect(dialog.locator('.dialog__surface')).toHaveCSS('opacity', '1'); await expect(dialog.locator('.dialog__surface')).toHaveCSS('transform', 'none'); await page.screenshot({ path: info.outputPath('keyframes-dark-1536.png') });
   await dialog.getByRole('button', { name: '取消', exact: true }).click(); await expect(dialog).toHaveCount(0); expect((await saved(request, project.id)).shots).toEqual(project.shots);
-  await page.getByRole('button', { name: '浅色外观', exact: true }).click(); await page.setViewportSize({ width: 600, height: 900 });
+  await setWorkspaceTheme(page, 'light'); await page.setViewportSize({ width: 600, height: 900 });
   await page.getByRole('button', { name: '关键帧与曲线', exact: true }).click(); dialog = page.getByRole('dialog', { name: '关键帧与曲线', exact: true });
   await dialog.getByRole('checkbox', { name: '使用关键帧运镜', exact: true }).check(); await dialog.getByRole('button', { name: '添加当前时刻', exact: true }).click();
   await dialog.getByLabel('关键帧缩放（倍）', { exact: true }).fill('1.4'); await dialog.getByLabel('到下一关键帧的曲线', { exact: true }).selectOption('cubic-bezier');
@@ -69,7 +71,7 @@ test('authors the complete measured legacy voice window without persisting a new
   const asset = await rpc<{ id: string }>(request, 'asset.import', { projectId: project.id, path, kind: 'audio' });
   project = await saved(request, project.id);
   project = await rpc<ProjectDocument>(request, 'project.update', { projectId: project.id, revision: project.revision, patch: { shots: [{ id: 'keyframe-shot', title: '源窗口关键帧镜头', narration: '', visualPrompt: '', durationUs: 1_000_000, audioAssetId: asset.id }] } });
-  await page.goto('/'); await page.getByRole('button', { name: `打开项目：${project.title}`, exact: true }).click();
+  await page.goto('/'); await openProjectFromList(page, project.title);
   await expect(page.locator('.preview-panel .prepared-mix-preview')).toHaveAttribute('data-status', 'ready', { timeout: 20000 });
   await page.getByRole('button', { name: '关键帧与曲线', exact: true }).click(); const dialog = page.getByRole('dialog', { name: '关键帧与曲线', exact: true });
   await dialog.getByRole('checkbox', { name: '使用关键帧运镜', exact: true }).check(); await dialog.getByRole('button', { name: '编辑关键帧 2', exact: true }).click();

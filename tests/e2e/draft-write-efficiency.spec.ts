@@ -1,3 +1,4 @@
+import { openProjectFromList } from './workspace-navigation';
 import { expect, test, type APIRequestContext, type Page } from '@playwright/test';
 import type { ProjectDocument } from '@video-quickly/contracts';
 
@@ -24,7 +25,7 @@ async function fixture(request: APIRequestContext, title: string, count = 2) {
 }
 async function openProject(page: Page, project: ProjectDocument) {
   await page.goto('/'); await expect(page).toHaveTitle(/Video Quickly/);
-  await page.getByRole('button', { name: `打开项目：${project.title}`, exact: true }).click();
+  await openProjectFromList(page, project.title);
   await page.waitForFunction(({ title, count }) => [...document.querySelectorAll<HTMLElement>('.workbench')].some(root =>
     root.querySelector<HTMLInputElement>('input[aria-label="项目名称"]')?.value === title && root.querySelectorAll('.outline-shot').length === count &&
     root.getClientRects().length > 0 && getComputedStyle(root).visibility === 'visible'), { title: project.title, count: project.shots.length });
@@ -152,13 +153,13 @@ test('keeps pending writes owned by their project through A to B to A remounts',
     await holdWrites(page); await page.locator('.outline-shot').nth(1).click();
     await expect(page.getByLabel('镜头标题', { exact: true })).toHaveValue('原始镜头 1');
     await expect.poll(async () => (await records(page)).length).toBeGreaterThan(0);
-    await page.getByRole('button', { name: `打开项目：${second.title}`, exact: true }).click();
+    await openProjectFromList(page, second.title);
     await expect(page.getByText('正在读取项目与本地草稿…', { exact: true })).toBeVisible();
-    await page.getByRole('button', { name: `打开项目：${first.title}`, exact: true }).click();
+    await openProjectFromList(page, first.title);
     await expect(page.getByText('正在读取项目与本地草稿…', { exact: true })).toBeVisible();
     await page.evaluate(() => window.__vqDraftWriteGate!.release());
     await expect(page.getByLabel('镜头标题', { exact: true })).toHaveValue('原始镜头 1'); await clean(page);
-    await page.getByRole('button', { name: `打开项目：${second.title}`, exact: true }).click();
+    await openProjectFromList(page, second.title);
     await expect(page.getByLabel('镜头标题', { exact: true })).toHaveValue('原始镜头 0'); await clean(page);
     const writes = await evidence(page);
     expect(writes.every(write => write.key.endsWith(`:${write.projectId}`))).toBe(true);

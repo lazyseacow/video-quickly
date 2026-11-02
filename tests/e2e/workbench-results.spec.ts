@@ -64,7 +64,7 @@ for (const viewport of [{ width: 1536, height: 960, theme: 'dark' }, { width: 39
       await page.setViewportSize(viewport); await page.addInitScript(theme => localStorage.setItem('vq-theme', theme), viewport.theme); await open(page, source.project);
       await page.getByRole('button', { name: '开始制作', exact: true }).click();
       const panel = page.getByRole('region', { name: '当前制作', exact: true }); await expect(panel.getByRole('button', { name: '通过审阅并继续', exact: true })).toBeEnabled({ timeout: 30_000 });
-      await panel.getByRole('button', { name: '制作详情', exact: true }).click();
+      await panel.locator('.workbench-guide__step[aria-current="step"]').click();
       const detail = page.getByRole('dialog', { name: '制作步骤详情', exact: true }), steps = detail.getByRole('navigation', { name: '冻结流程步骤' });
       await expect(steps.getByRole('button')).toHaveCount(7); await expect(detail.getByRole('tab', { name: '执行输入', exact: true })).toHaveCount(0);
       await steps.getByRole('button', { name: /准备分镜/ }).click(); const storyboard = detail.getByRole('region', { name: '分镜预览', exact: true });
@@ -72,7 +72,7 @@ for (const viewport of [{ width: 1536, height: 960, theme: 'dark' }, { width: 39
       await detail.getByRole('button', { name: '在项目中查看与应用', exact: true }).click();
       const output = page.getByRole('dialog', { name: '步骤产物', exact: true }); await expect(output.getByRole('region', { name: '分镜预览', exact: true })).toContainText('城市清晨'); await expect(output.locator('pre')).toHaveCount(0);
       await expect(output.locator('.dialog__surface')).toHaveCSS('opacity', '1'); await page.screenshot({ path: info.outputPath('storyboard-results.png') });
-      await output.getByRole('button', { name: '关闭', exact: true }).click(); await panel.getByRole('button', { name: '制作详情', exact: true }).click();
+      await output.getByRole('button', { name: '关闭', exact: true }).click(); await panel.locator('.workbench-guide__step[aria-current="step"]').click();
       if (viewport.width === 1536) await page.route('**/__desktop_asset**', async route => {
         if (!imageFailed && new URL(route.request().url()).searchParams.get('path') === source.images[0].path) { imageFailed = true; await route.fulfill({ status: 404, body: 'unavailable fixture' }); } else await route.continue();
       });
@@ -90,7 +90,7 @@ for (const viewport of [{ width: 1536, height: 960, theme: 'dark' }, { width: 39
       await expect(detail.locator('.dialog__surface')).toHaveCSS('opacity', '1'); await page.screenshot({ path: info.outputPath('caption-results.png') });
       await detail.getByRole('button', { name: '关闭', exact: true }).click();
       await panel.getByRole('button', { name: '通过审阅并继续', exact: true }).click();
-      await expect(panel.locator('.status')).toContainText('已完成', { timeout: 30_000 }); await expect(panel.getByRole('list', { name: '制作步骤进度', exact: true }).locator('li')).toHaveCount(7);
+      await expect(panel.locator('.workbench-guide__step[data-state="succeeded"]')).toHaveCount(7, { timeout: 30_000 }); await expect(panel.getByRole('list', { name: '制作步骤进度', exact: true }).locator('li')).toHaveCount(7);
       await panel.getByRole('button', { name: '查看产物', exact: true }).click(); const video = output.locator('video');
       await expect.poll(() => video.evaluate((video: HTMLVideoElement) => video.videoWidth)).toBe(320);
       await expect(video).toHaveAttribute('controls', ''); await expect(output.getByRole('button', { name: '应用到项目', exact: true })).toHaveCount(0);

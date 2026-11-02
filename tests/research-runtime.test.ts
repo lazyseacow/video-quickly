@@ -1,3 +1,4 @@
+import { legacyHistoryWorkflow } from './fixtures/legacy-workflow';
 import { createHash } from 'node:crypto';
 import { createServer, type Server } from 'node:http';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
@@ -38,7 +39,7 @@ it('keeps real model evidence pending until explicit human application, review a
   const result = researchResultSchema.parse(await runtime.dispatch('node.result', { runId: run.id, nodeId: 'research' }));
   expect(requests).toHaveLength(1); expect(requests[0].messages[0].content).toContain(JSON.stringify(source.content)); expect(requests[0].messages[0].content.length).toBeLessThanOrEqual(120_000);
   expect(result.claims[0].status).toBe('pending'); expect(result.claims[0].evidence?.[0].quote).toBe('纸张由植物纤维构成。'); expect(await current(runtime, project.id)).toEqual(project);
-  await expect(runtime.dispatch('node.apply', { runId: run.id, nodeId: 'research', revision: project.revision })).rejects.toThrow('比较证据候选');
+  await expect(runtime.dispatch('node.apply', { runId: run.id, nodeId: 'research', revision: project.revision })).rejects.toThrow('仅支持查看');
   const draft = applyResearchClaims(project, result, result.claims, result.shotSuggestions);
   const applied = projectSchema.parse(await runtime.dispatch('project.update', { projectId: project.id, revision: project.revision, patch: { claims: draft.claims, shots: draft.shots } }));
   expect(applied.shots[0].claimIds).toEqual([result.claims[0].id]); expect(applied.shots[1].claimIds).toEqual([]);
@@ -91,9 +92,9 @@ it('round-trips captured sources and references in backups, rejecting corrupted 
   const path = join(backup.path, 'project.json'), manifest = JSON.parse(await readFile(path, 'utf8')) as { project: ProjectDocument }; manifest.project.researchSources![0].content += '破坏正文'; await writeFile(path, JSON.stringify(manifest)); await expect(runtime.dispatch('project.importBackup', { path: backup.path })).rejects.toThrow('校验失败');
 });
 
-it('keeps an explicit legacy research step read-only and retains claim bindings in generated scripts', async () => {
-  const { runtime, project, source, model } = await fixture({ provider: async request => { expect(request.prompt).toContain('已核对主张'); expect(request.prompt).toContain('verified'); return JSON.stringify({ shots: [{ title: '模型新标题', narration: '新旁白', visualPrompt: '新画面', claimIds: ['model-invented'] }] }); } });
-  const linked = projectSchema.parse(await runtime.dispatch('project.update', { projectId: project.id, revision: project.revision, patch: { workflow: createHistoryWorkflow(), claims: [{ id: 'manual-claim', text: '已核对主张', source: source.title, locator: '', status: 'verified' }], shots: project.shots.map((shot, index) => index ? shot : { ...shot, claimIds: ['manual-claim'] }) } }));
+it('preserves legacy data while excluding citations from new script prompts', async () => {
+  const { runtime, project, source, model } = await fixture({ provider: async request => { expect(request.prompt).not.toContain('已核对主张'); expect(request.prompt).not.toContain('claimIds'); return JSON.stringify({ shots: [{ title: '模型新标题', narration: '新旁白', visualPrompt: '新画面', claimIds: ['model-invented'] }] }); } });
+  const linked = projectSchema.parse(await runtime.dispatch('project.update', { projectId: project.id, revision: project.revision, patch: { workflow: { ...legacyHistoryWorkflow(), id: 'custom-research' }, claims: [{ id: 'manual-claim', text: '已核对主张', source: source.title, locator: '', status: 'verified' }], shots: project.shots.map((shot, index) => index ? shot : { ...shot, claimIds: ['manual-claim'] }) } }));
   const local = runSchema.parse(await runtime.dispatch('run.start', { projectId: project.id, nodeId: 'research' })); await runtime.waitForIdle(); expect(await runtime.dispatch('node.result', { runId: local.id, nodeId: 'research' })).toMatchObject({ kind: 'research-summary', readonly: true, claims: [{ status: 'verified' }] });
   const ready = projectSchema.parse(await runtime.dispatch('workflow.save', { projectId: project.id, revision: linked.revision, workflow: { ...linked.workflow, nodes: linked.workflow.nodes.map(node => node.kind === 'script' ? { ...node, modelId: model.id, requiresReview: false } : node) } }));
   const scripted = runSchema.parse(await runtime.dispatch('run.start', { projectId: project.id, nodeId: 'script' })); await runtime.waitForIdle(); const output = await runtime.dispatch('node.result', { runId: scripted.id, nodeId: 'script' }) as { shots: ProjectDocument['shots'] }; expect(output.shots[0].claimIds).toEqual(['manual-claim']);

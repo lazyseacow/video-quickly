@@ -1,3 +1,4 @@
+import { openProjectFromList } from './workspace-navigation';
 import { projectSettingAction } from './settings';
 import { writeFile } from 'node:fs/promises';
 import { expect, test, type APIRequestContext, type Page } from '@playwright/test';
@@ -152,7 +153,7 @@ test('retries its own unsaved caption edit after a rejected save and restores bo
   expect(rejectedWrites).toBe(1);
   await waitForStoredCommands(page, project.id, 'caption', '重试后字幕');
   await page.reload();
-  await page.getByRole('button', { name: `打开项目：${project.title}`, exact: true }).click();
+  await openProjectFromList(page, project.title);
   await page.getByRole('button', { name: '撤销', exact: true }).click();
   await expect.poll(async () => (await savedProject(request, project.id)).shots[0].captionTrack?.cues[0].text).toBe('首次提交字幕');
   await page.getByRole('button', { name: '撤销', exact: true }).click();
@@ -190,7 +191,7 @@ test('retries its own unsaved music edit after a rejected save and restores both
   expect(rejectedWrites).toBe(1);
   await waitForStoredCommands(page, project.id, 'music', -9);
   await page.reload();
-  await page.getByRole('button', { name: `打开项目：${project.title}`, exact: true }).click();
+  await openProjectFromList(page, project.title);
   await page.getByRole('button', { name: '撤销', exact: true }).click();
   await expect.poll(async () => (await savedProject(request, project.id)).musicClips?.[0].gainDb).toBe(-6);
   await page.getByRole('button', { name: '撤销', exact: true }).click();

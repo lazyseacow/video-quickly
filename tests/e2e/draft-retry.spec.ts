@@ -1,3 +1,5 @@
+import { openProjectFromList } from './workspace-navigation';
+import { setWorkspaceTheme } from './workspace-settings';
 import { randomUUID } from 'node:crypto';
 import { expect, test, type APIRequestContext, type Page } from '@playwright/test';
 import type { ProjectDocument } from '@video-quickly/contracts';
@@ -16,7 +18,7 @@ async function fixture(request: APIRequestContext) {
 }
 async function openProject(page: Page, project: ProjectDocument, navigate = true) {
   if (navigate) await page.goto('/');
-  await page.getByRole('button', { name: `打开项目：${project.title}`, exact: true }).click();
+  await openProjectFromList(page, project.title);
   await expect(page.getByLabel('镜头标题', { exact: true })).toHaveValue('原始镜头 0');
 }
 async function stored(page: Page, projectId: string) {
@@ -79,13 +81,13 @@ test('retries a clean selection draft explicitly, keeps a repeated failure visib
     expect(calls).toHaveLength(0); expect((await rpc<{ project: ProjectDocument }>(request, 'project.get', { projectId: project.id })).project.revision).toBe(project.revision);
     await expect(page.getByRole('button', { name: '撤销', exact: true })).toBeDisabled(); await expect(page.getByRole('button', { name: '重做', exact: true })).toBeDisabled();
   } finally { await page.evaluate(() => window.__vqDraftRetryGate?.release()); }
-  await page.reload(); await page.getByRole('button', { name: `打开项目：${project.title}`, exact: true }).click();
+  await page.reload(); await openProjectFromList(page, project.title);
   await expect(page.getByLabel('镜头标题', { exact: true })).toHaveValue('原始镜头 1'); expect(calls).toHaveLength(0);
 });
 
 test('retries the clean saved baseline without another project revision and remains usable in a narrow light window', async ({ page, request }, info) => {
   const project = await fixture(request), calls = updates(page, project.id); await openProject(page, project); await probe(page, project);
-  await page.getByRole('button', { name: '浅色外观', exact: true }).click();
+  await setWorkspaceTheme(page, 'light');
   await page.evaluate(revision => { window.__vqDraftRetry!.abortRevision = revision; }, project.revision + 1);
   await page.getByLabel('镜头标题', { exact: true }).fill('已提交项目的镜头'); await page.getByRole('button', { name: '保存镜头', exact: true }).click();
   await expect(page.getByRole('button', { name: '保存修改', exact: true })).toBeDisabled(); await expect(page.getByRole('alert')).toContainText('草稿未能写入本机存储。');

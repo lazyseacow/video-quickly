@@ -79,7 +79,7 @@ describe('workspace database upgrades', () => {
   it('creates a versioned database and does not back up on every reopen', async () => {
     const path = await directory(); const db = openDatabase(path);
     expect(db.pragma('user_version', { simple: true })).toBe(currentVersion);
-    expect(db.prepare('SELECT name FROM schema_migrations ORDER BY version').all()).toEqual([{ name: 'workspace-baseline' }, { name: 'execution-event-index' }, { name: 'workspace-read-models' }, { name: 'audio-asset-references' }, { name: 'project-summary-caption-style' }, { name: 'clip-edit-references-and-first-frame' }, { name: 'workflow-composition-and-keyframe-capabilities' }, { name: 'active-project-runs-index' }]);
+    expect(db.prepare('SELECT name FROM schema_migrations ORDER BY version').all()).toEqual([{ name: 'workspace-baseline' }, { name: 'execution-event-index' }, { name: 'workspace-read-models' }, { name: 'audio-asset-references' }, { name: 'project-summary-caption-style' }, { name: 'clip-edit-references-and-first-frame' }, { name: 'workflow-composition-and-keyframe-capabilities' }, { name: 'active-project-runs-index' }, { name: 'compact-built-in-production-workflows' }]);
     db.close(); openDatabase(path).close();
     expect(await readdir(path)).not.toContain('database-backups');
   });

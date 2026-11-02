@@ -1,10 +1,11 @@
+import { openProjectFromList } from './workspace-navigation';
 import { createServer } from 'node:http';
 import { expect, test, type APIRequestContext, type Page } from '@playwright/test';
 
 async function openModels(page: Page, request: APIRequestContext, title: string) {
   const created = await request.post('/__desktop_rpc', { data: { method: 'project.create', params: { title } } });
   expect(created.ok()).toBe(true);
-  await page.goto('/'); await page.getByRole('button', { name: `打开项目：${title}`, exact: true }).click();
+  await page.goto('/'); await openProjectFromList(page, title);
   await expect(page.getByLabel('项目名称', { exact: true })).toHaveValue(title);
   await page.getByRole('button', { name: '模型连接', exact: true }).click();
   await expect(page.getByRole('heading', { name: '模型连接', exact: true })).toBeVisible();

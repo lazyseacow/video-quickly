@@ -1,3 +1,5 @@
+import { openProjectFromList } from './workspace-navigation';
+import { setWorkspaceTheme } from './workspace-settings';
 import { readFile, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:http';
 import { expect, test, type APIRequestContext, type Page } from '@playwright/test';
@@ -87,12 +89,12 @@ test('edits estimated captions through the production dialog as one undo command
   await page.getByRole('button', { name: '重做', exact: true }).click();
   await expect.poll(async () => (await savedProject(request, project.id)).shots[0].captionTrack).toEqual(saved.shots[0].captionTrack);
   await page.reload();
-  await page.getByRole('button', { name: `打开项目：${project.title}`, exact: true }).click();
+  await openProjectFromList(page, project.title);
   dialog = await editor(page);
   await expect(dialog.getByLabel('字幕 1 文字', { exact: true })).toHaveValue('校订后的第一句。');
   await expect(dialog.getByLabel('字幕 2 出点（秒）', { exact: true })).toHaveValue('3.5');
   await dialog.getByRole('button', { name: '取消', exact: true }).click();
-  await page.getByRole('button', { name: '浅色外观', exact: true }).click();
+  await setWorkspaceTheme(page, 'light');
   await page.setViewportSize({ width: 600, height: 900 });
   await editor(page);
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1)).toBe(true);

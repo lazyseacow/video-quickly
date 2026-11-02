@@ -12,11 +12,13 @@
 .workbench-guide__steps--stages li { min-width: 0; }
 .workbench-guide__card { display: grid; grid-template-columns: minmax(0, 1fr) auto; border: 1px solid var(--border); border-radius: var(--radius-small); background: var(--surface); color: var(--text); }
 .workbench-guide__step { display: flex; align-items: flex-start; gap: var(--space-2); width: 100%; height: 100%; min-width: 0; min-height: var(--control-hit-size); padding: var(--space-3); border: 0; border-radius: inherit; background: transparent; color: inherit; text-align: left; }
+.workbench-guide__card:has(> .workbench-guide__step:focus-visible) { outline: 2px solid var(--accent); outline-offset: 3px; }
+.workbench-guide__step:focus-visible { outline: none; }
 .workbench-guide__card:hover { background: var(--surface-hover); }
 .workbench-guide__card[data-current] { border-color: var(--text); background: var(--surface-selected); box-shadow: inset 0 0 0 1px var(--text); }
 .workbench-guide__card[data-current] .workbench-guide__index { background: var(--text); color: var(--surface); }
 .workbench-guide__card[data-current] .workbench-guide__step-copy > span { color: var(--text); font-weight: var(--font-weight-semibold); }
-.workbench-guide__card[data-state='succeeded'] .workbench-guide__index { color: var(--success); }
+.workbench-guide__card[data-state='succeeded']:not([data-current]) .workbench-guide__index { color: var(--success); }
 .workbench-guide__card[data-current][data-state='failed'], .workbench-guide__card[data-current][data-state='needs_attention'] { border-color: var(--warning); box-shadow: inset 0 0 0 1px var(--warning); }
 .workbench-guide__help { align-self: start; margin: var(--space-1) var(--space-1) 0 0; }
 .workbench-guide__index { flex-shrink: 0; display: grid; place-items: center; width: var(--space-5); height: var(--space-5); border-radius: var(--radius-pill); background: var(--surface-raised); font-size: var(--text-size-micro); font-variant-numeric: tabular-nums; }

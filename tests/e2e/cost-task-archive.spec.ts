@@ -1,3 +1,4 @@
+import { openCosts as openCostsPage, setWorkspaceTheme } from './workspace-settings';
 import { createServer, type Server } from 'node:http';
 import { expect, test, type APIRequestContext, type Page } from '@playwright/test';
 import type { ModelProfile, ProjectDocument, RunInspection, RunRecord, UsageRecord } from '@video-quickly/contracts';
@@ -60,7 +61,7 @@ async function fixture(request: APIRequestContext, title: string, usage: Record<
 async function close(server: Server) { server.closeAllConnections(); await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve())); }
 function gate() { let release!: () => void; const promise = new Promise<void>(resolve => { release = resolve; }); return { promise, release }; }
 async function openCosts(page: Page, projectId: string) {
-  await page.goto('/'); await page.getByRole('button', { name: 'Token 消耗', exact: true }).click(); await page.getByLabel('用量项目', { exact: true }).selectOption(projectId);
+  await page.goto('/'); await openCostsPage(page); await page.getByLabel('用量项目', { exact: true }).selectOption(projectId);
 }
 
 for (const width of [1536, 390]) {
@@ -138,7 +139,7 @@ test('archives all four token counters with task and record pagination, retainin
     await expect(page.locator('body')).not.toContainText('do-not-expose-parameters');
     await page.getByRole('button', { name: '返回任务归档', exact: true }).click();
     await expect(card.getByRole('button')).toBeFocused(); await expect(card).toContainText('3,200');
-    await page.reload(); await page.getByRole('button', { name: 'Token 消耗', exact: true }).click(); await page.getByLabel('用量项目').selectOption(source.project.id);
+    await page.reload(); await openCostsPage(page); await page.getByLabel('用量项目').selectOption(source.project.id);
     await page.getByRole('button', { name: '加载更多任务', exact: true }).click();
     await page.getByRole('button', { name: `查看任务用量详情：${older.id}`, exact: true }).click();
     await expect(summary.locator('[data-metric="cachedInputTokens"] > .token-amount')).toHaveText('960');
@@ -273,7 +274,7 @@ test('keeps task details scoped during delayed reads and distinguishes zero cach
     await expect(summary.locator('[data-metric="inputTokens"] > .token-amount')).toHaveText('100');
     await expect(summary.locator('[data-metric="cachedInputTokens"] > .token-amount')).toHaveText('0');
     await expect(summary.locator('[data-metric="cachedOutputTokens"] > .token-amount')).toHaveText('—');
-    await page.getByRole('button', { name: '浅色外观', exact: true }).click();
+    await setWorkspaceTheme(page, 'light');
     for (const width of [600, 390]) { await page.setViewportSize({ width, height: 900 }); expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1)).toBe(true); }
     expect(source.calls()).toBe(2); expect(errors).toEqual([]);
   } finally { release?.(); await close(source.server); }

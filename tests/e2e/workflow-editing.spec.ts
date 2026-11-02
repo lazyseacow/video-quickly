@@ -1,3 +1,4 @@
+import { openProjectFromList } from './workspace-navigation';
 import { expect, test, type APIRequestContext, type Locator, type Page } from '@playwright/test';
 import { randomUUID } from 'node:crypto';
 import type { ProjectDocument } from '@video-quickly/contracts';
@@ -16,7 +17,7 @@ async function fixture(request: APIRequestContext, title: string) {
 async function current(request: APIRequestContext, projectId: string) { return (await rpc<{ project: ProjectDocument }>(request, 'project.get', { projectId })).project; }
 async function open(page: Page, title: string, flow = true) {
   await page.goto('/'); await expect(page.getByRole('navigation', { name: '主导航', exact: true })).toBeVisible();
-  await page.getByRole('button', { name: `打开项目：${title}`, exact: true }).click();
+  await openProjectFromList(page, title);
   await expect(page.getByLabel('项目名称', { exact: true })).toHaveValue(title);
   if (flow) { await page.getByRole('button', { name: '流程', exact: true }).click(); await expect(page.locator('.react-flow')).toBeVisible(); }
 }

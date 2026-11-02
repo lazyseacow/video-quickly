@@ -1,3 +1,4 @@
+import { openProjectFromList } from './workspace-navigation';
 import { writeFile } from 'node:fs/promises';
 import { expect, test, type APIRequestContext, type Page, type TestInfo } from '@playwright/test';
 import { DEFAULT_AUDIO_MIX_SETTINGS, type AssetRecord, type ProjectDocument } from '@video-quickly/contracts';
@@ -17,7 +18,7 @@ async function fixture(request: APIRequestContext, info: TestInfo, title: string
   project = await rpc<ProjectDocument>(request, 'project.update', { projectId: project.id, revision: project.revision, patch: { profile: { ...project.profile, width: 640, height: 360, frameRate: { numerator: 30, denominator: 1 } }, audioMix: { ...DEFAULT_AUDIO_MIX_SETTINGS, loudness: { ...DEFAULT_AUDIO_MIX_SETTINGS.loudness, enabled: false } }, shots: [{ id: 'long-voice', title: '完整旧旁白', narration: '', visualPrompt: '', durationUs: 1000000, audioAssetId: asset.id, captionTrack: { timeBase: 'source', alignment: 'manual', cues: [{ id: 'tail', text: '录音末尾字幕', startUs: 2500000, endUs: 3000000 }] } }, { id: 'next', title: '后续镜头', narration: '', visualPrompt: '', durationUs: 1000000 }] } });
   return { project, asset };
 }
-async function open(page: Page, project: ProjectDocument) { await page.goto('/'); await expect(page).toHaveTitle(/Video Quickly/); await page.getByRole('button', { name: `打开项目：${project.title}`, exact: true }).click(); await expect(page.getByLabel('镜头标题', { exact: true })).toHaveValue('完整旧旁白'); }
+async function open(page: Page, project: ProjectDocument) { await page.goto('/'); await expect(page).toHaveTitle(/Video Quickly/); await openProjectFromList(page, project.title); await expect(page.getByLabel('镜头标题', { exact: true })).toHaveValue('完整旧旁白'); }
 async function ready(page: Page) { const preview = page.locator('.preview-panel .prepared-mix-preview'); await expect(preview).toHaveAttribute('data-status', 'ready', { timeout: 20000 }); await expect(page.getByRole('button', { name: '播放预览', exact: true })).toBeEnabled(); return preview; }
 async function seek(page: Page, frames: number) { const ruler = page.getByRole('slider', { name: '预览播放位置', exact: true }); await ruler.press('Home'); for (let index = 0; index < Math.floor(frames / 10); index++) await ruler.press('Shift+ArrowRight'); for (let index = 0; index < frames % 10; index++) await ruler.press('ArrowRight'); await expect(ruler).toHaveAttribute('aria-valuenow', String(Math.round(frames * 1000 / 30))); }
 

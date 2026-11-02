@@ -24,7 +24,7 @@ for (const viewport of [{ width: 1536, height: 960 }, { width: 1024, height: 720
     // Emulate only the native surface marker, keeping the real browser runtime
     // and isolated workspace instead of replacing Electron's IPC transport.
     await page.locator('html').evaluate(element => { element.dataset.nativePlatform = 'macos'; });
-    await dragText(page, page.locator('.statusbar-right > span').first());
+    await dragText(page, page.locator('.preview-toolbar > span').first());
     expect(await page.evaluate(() => getSelection()?.toString())).toBe('');
     await expect(page.locator('html')).toHaveCSS('overscroll-behavior-x', 'none');
     await expect(page.locator('.page-body')).toHaveCSS('overscroll-behavior-x', 'none');
@@ -59,6 +59,6 @@ for (const viewport of [{ width: 1536, height: 960 }, { width: 1024, height: 720
 test('browser preview keeps ordinary page text selectable', async ({ page }) => {
   await openApp(page);
   await expect(page.locator('html')).not.toHaveAttribute('data-native-platform', 'macos');
-  await dragText(page, page.locator('.statusbar-right > span').first());
+  await dragText(page, page.locator('.preview-toolbar > span').first());
   expect(await page.evaluate(() => getSelection()?.toString())).not.toBe('');
 });

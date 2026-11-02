@@ -23,7 +23,7 @@ export async function prepareInstalledUpgrade(rpc, directory, waitRun) {
   const model = await rpc('model.save', { model: { name: '升级夹具：不发起网络请求', provider: 'openai-compatible', baseUrl: 'http://127.0.0.1:1/v1', model: 'unused-upgrade-fixture', capabilities: ['image'] }, secret: upgradeFixtureSecret });
   assert.equal(model.hasSecret, true); assert.ok(model.credentialRef);
   project = (await rpc('project.get', { projectId: project.id })).project;
-  await rpc('workflow.save', { projectId: project.id, revision: project.revision, workflow: { ...project.workflow, nodes: project.workflow.nodes.map(node => node.kind === 'assets' ? { ...node, modelId: model.id } : node) } });
+  await rpc('workflow.save', { projectId: project.id, revision: project.revision, workflow: { ...project.workflow, id: 'installed-upgrade-review-fixture', nodes: project.workflow.nodes.map(node => node.kind === 'style' ? { ...node, requiresReview: true } : node.kind === 'assets' ? { ...node, modelId: model.id } : node) } });
   project = (await rpc('project.get', { projectId: project.id })).project;
   const run = await rpc('run.start', { projectId: project.id, nodeId: 'style' }), review = await waitRun(run.id, 'waiting_review');
   assert.equal(review.activities.length, 1);
@@ -48,7 +48,7 @@ export async function verifyInstalledUpgrade(rpc, saved, waitRun) {
 
 export async function verifyUpgradeBackup(dataDirectory, saved, Database) {
   const directory = join(dataDirectory, 'database-backups');
-  const names = (await readdir(directory)).filter(name => /^workspace-v6-to-v8-[a-f0-9-]+\.sqlite$/.test(name));
+  const names = (await readdir(directory)).filter(name => /^workspace-v6-to-v9-[a-f0-9-]+\.sqlite$/.test(name));
   assert.equal(names.length, 1, '真实升级必须恰有一份 Schema 6 的迁移前快照');
   const path = join(directory, names[0]);
   assert.ok((await lstat(path)).isFile(), '迁移快照须为普通文件');

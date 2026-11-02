@@ -1,3 +1,4 @@
+import { openProjectFromList } from './workspace-navigation';
 import { randomUUID } from 'node:crypto';
 import { expect, test, type APIRequestContext } from '@playwright/test';
 import { projectDetailSchema, type ProjectDetail, type ProjectDocument } from '@video-quickly/contracts';
@@ -85,8 +86,8 @@ test('keeps the newer selection when the previous project response arrives late'
     const response = await route.fetch(); requested.release(); await hold.promise; await route.fulfill({ response }); finished.release();
   });
   try {
-    await page.getByRole('button', { name: `打开项目：${first.title}`, exact: true }).click(); await requested.promise;
-    await page.getByRole('button', { name: `打开项目：${second.title}`, exact: true }).click();
+    await openProjectFromList(page, first.title); await requested.promise;
+    await openProjectFromList(page, second.title);
     await expect(page.getByLabel('镜头标题', { exact: true })).toHaveValue('后选择的镜头');
     hold.release(); await finished.promise;
     await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
@@ -111,7 +112,7 @@ test('shows a failed selected-project read and recovers only after an explicit n
       if (input?.method !== 'project.get' || input.params?.projectId !== target.id) { await route.continue(); return; }
       reads++; if (reads === 1) { await route.fulfill({ status: 500, json: { error: '隔离的项目读取失败' } }); return; } await route.continue();
     });
-    await page.getByRole('button', { name: `打开项目：${target.title}`, exact: true }).click();
+    await openProjectFromList(page, target.title);
     await expect(page.getByRole('alert')).toContainText('隔离的项目读取失败'); expect(reads).toBe(1);
     await page.getByRole('button', { name: '重试项目', exact: true }).click();
     await expect(page.getByLabel('镜头标题', { exact: true })).toHaveValue('读取恢复的镜头'); expect(reads).toBe(2);
@@ -152,7 +153,7 @@ test('keeps a failed project read paused through actual workspace notifications 
     if (number > 2) conditionalRead.release();
   });
   try {
-    await page.getByRole('button', { name: `打开项目：${target.title}`, exact: true }).click();
+    await openProjectFromList(page, target.title);
     await expect(page.getByRole('alert')).toContainText('通知不能自动重试的项目读取失败');
     const before = notifications;
     const notified = await rpc<ProjectDocument>(request, 'project.update', { projectId: unrelated.id, revision: unrelated.revision, patch: { title: '实际通知已发出' } });

@@ -96,10 +96,10 @@ for (const references of [false, true]) test(`skips unchanged outline and timeli
   expect((await measure(page)).reads['shot-1']).toBeGreaterThan(0); expect(errors).toEqual([]);
 });
 
-test('refreshes every affected canvas when global numbered-reference spacing appears and disappears', async ({ page }) => {
+test('keeps legacy references inert while refreshing changed caption styles in outline and timeline', async ({ page }) => {
   const errors = await openFixture(page); await change(page, 'numbers'); const empty = await measure(page);
   await change(page, 'last-reference'); const footer = await measure(page);
-  expect(footer.outlinePixels).not.toBe(empty.outlinePixels); expect(footer.timelinePixels).not.toBe(empty.timelinePixels);
+  expect(footer.outlinePixels).toBe(empty.outlinePixels); expect(footer.timelinePixels).toBe(empty.timelinePixels);
   await change(page, 'no-last-reference'); const cleared = await measure(page);
   expect(cleared.outlinePixels).toBe(empty.outlinePixels); expect(cleared.timelinePixels).toBe(empty.timelinePixels);
   await change(page, 'caption-style'); const styled = await measure(page);

@@ -1,3 +1,5 @@
+import { openProjectFromList } from './workspace-navigation';
+import { openCosts, openGuide, openWorkspaceSettings } from './workspace-settings';
 import { randomUUID } from 'node:crypto';
 import { createServer } from 'node:http';
 import { stat } from 'node:fs/promises';
@@ -8,7 +10,7 @@ import { settingField } from './settings';
 
 const preference = 'vq-onboarding-v1';
 const targets: Record<string, string[]> = {
-  '新建创作项目': ['create-project'], '打开模型连接': ['models'], '添加模型连接': ['model-connection'], '进入创作工作台': ['workbench'],
+  '新建创作项目': ['create-project'], '打开模型连接': ['models'], '添加模型连接': ['model-connection'], '打开我的项目': ['projects'], '进入创作工作台': ['project-open'],
   '分镜与流程': ['view'], '展开镜头导航': ['outline-toggle'], '整理镜头': ['shots'], '预览画面': ['preview'],
   '安排镜头节奏': ['timeline'], '展开属性面板': ['inspector-toggle'], '编辑属性': ['inspector'], '当前流程画布': ['workflow'],
   '制作前检查': ['check'], '制作与人工审阅': ['produce'], '导出成片': ['export'], '随时重开指引': ['help'],
@@ -22,7 +24,7 @@ test.use({ storageState: async ({ baseURL }, use) => {
 } });
 
 function guide(page: Page) { return page.locator('[data-guide-popover]'); }
-function help(page: Page) { return page.getByRole('button', { name: '使用指南', exact: true }); }
+function settings(page: Page) { return page.getByRole('button', { name: '设置', exact: true }); }
 function active(page: Page) { return page.locator('.driver-active-element'); }
 async function nextStep(page: Page) {
   const previous = await guide(page).getByRole('heading').innerText();
@@ -99,7 +101,7 @@ async function reach(page: Page, heading: string) {
 async function remembered(page: Page) {
   await expect(guide(page)).toHaveCount(0); await expect(page.locator('.driver-overlay')).toHaveCount(0);
   await expect.poll(() => page.evaluate(key => localStorage.getItem(key), preference)).toBe('done');
-  await page.reload(); await expect(help(page)).toBeVisible(); await expect(guide(page)).toHaveCount(0);
+  await page.reload(); await expect(settings(page)).toBeVisible(); await expect(guide(page)).toHaveCount(0);
 }
 async function rpc<T>(request: APIRequestContext, method: string, params: unknown = {}): Promise<T> {
   const response = await request.post('/__desktop_rpc', { data: { method, params } });
@@ -116,8 +118,8 @@ async function projectFixture(request: APIRequestContext, title: string, count =
   return rpc<ProjectDocument>(request, 'project.update', { projectId: created.id, revision: created.revision, patch: { shots: Array.from({ length: count }, (_, index) => ({ id: `interactive-guide-${index}`, title: `操作镜头 ${index + 1}`, narration: '', visualPrompt: '', durationUs, sceneTemplate: createSceneTemplate('process') })) } });
 }
 async function openProjectTour(page: Page, project: ProjectDocument) {
-  await dismissFirst(page); await page.getByRole('button', { name: `打开项目：${project.title}`, exact: true }).click();
-  await expect(page.getByLabel('项目名称', { exact: true })).toHaveValue(project.title); await help(page).click(); await opened(page);
+  await dismissFirst(page); await openProjectFromList(page, project.title);
+  await expect(page.getByLabel('项目名称', { exact: true })).toHaveValue(project.title); await openGuide(page); await opened(page);
 }
 async function savedProject(request: APIRequestContext, projectId: string) { return (await rpc<{ project: ProjectDocument }>(request, 'project.get', { projectId })).project; }
 async function holdNextRpc(page: Page, method: string, error?: string) {
@@ -159,10 +161,10 @@ for (const viewport of [{ width: 1536, height: 960, theme: 'dark', reducedMotion
       await guide(page).getByRole('button', { name: '上一步', exact: true }).click(); await expect(guide(page).getByRole('heading')).toHaveText('新建创作项目');
       const seen = await walk(page, info, `${viewport.theme}-${viewport.width}-`);
       expect(seen).toContain('create-project'); expect(seen).toContain('models'); expect(seen).toContain('preview'); expect(seen).toContain('timeline'); expect(seen.at(-1)).toBe('help');
-      await remembered(page); await help(page).click(); await opened(page);
+      await remembered(page); await openGuide(page); await opened(page);
       for (let index = 0; index < 3; index++) await nextStep(page);
-      await page.keyboard.press('Escape'); await expect(guide(page)).toHaveCount(0); await expect(help(page)).toBeFocused();
-      await help(page).click(); await opened(page); await page.keyboard.press('Escape'); await remembered(page);
+      await page.keyboard.press('Escape'); await expect(guide(page)).toHaveCount(0); await expect(settings(page)).toBeFocused();
+      await openGuide(page); await opened(page); await page.keyboard.press('Escape'); await remembered(page);
       await expect(page.locator('html')).toHaveAttribute('data-theme', viewport.theme);
       expect(observed.writes).toEqual([]); expect(observed.errors).toEqual([]);
     });
@@ -223,7 +225,7 @@ test('targets panel toggles when their actual workbench panels are hidden', asyn
   const observed = observe(page); await page.emulateMedia({ reducedMotion: 'reduce' }); await dismissFirst(page);
   await page.locator('[data-guide="outline-toggle"]').click(); await page.locator('[data-guide="inspector-toggle"]').click();
   await expect(page.locator('[data-guide="shots"]')).toBeHidden(); await expect(page.locator('[data-guide="inspector"]')).toBeHidden();
-  await help(page).click(); await opened(page); const seen = await walk(page);
+  await openGuide(page); await opened(page); const seen = await walk(page);
   expect(seen).toContain('outline-toggle'); expect(seen).toContain('inspector-toggle'); expect(seen).not.toContain('shots'); expect(seen).not.toContain('inspector');
   await expect(page.locator('[data-guide="outline-toggle"]')).toHaveAttribute('aria-pressed', 'false'); await expect(page.locator('[data-guide="inspector-toggle"]')).toHaveAttribute('aria-pressed', 'false');
   expect(observed.writes).toEqual([]); expect(observed.errors).toEqual([]);
@@ -232,8 +234,8 @@ test('targets panel toggles when their actual workbench panels are hidden', asyn
 test('does not navigate or target the hidden cached workbench when reopened from the asset library', async ({ page }) => {
   const observed = observe(page); await page.emulateMedia({ reducedMotion: 'reduce' }); await dismissFirst(page);
   await page.getByRole('button', { name: '素材库', exact: true }).click(); await expect(page.getByRole('heading', { name: '素材库', exact: true })).toBeVisible();
-  await help(page).click(); await opened(page); const seen = await walk(page);
-  expect(seen).toEqual(['create-project', 'models', 'workbench', 'help']);
+  await openGuide(page); await opened(page); const seen = await walk(page);
+  expect(seen).toEqual(['create-project', 'models', 'projects', 'help']);
   await expect(page.getByRole('heading', { name: '素材库', exact: true })).toBeVisible();
   expect(observed.writes).toEqual([]); expect(observed.errors).toEqual([]);
 });
@@ -241,22 +243,20 @@ test('does not navigate or target the hidden cached workbench when reopened from
 test('includes only the actual workflow canvas when reopened in the flow view', async ({ page }) => {
   const observed = observe(page); await page.emulateMedia({ reducedMotion: 'reduce' }); await dismissFirst(page);
   await page.getByRole('button', { name: '流程', exact: true }).click(); await expect(page.locator('[data-guide="workflow"]')).toBeVisible();
-  await help(page).click(); await opened(page); const seen = await walk(page);
+  await openGuide(page); await opened(page); const seen = await walk(page);
   expect(seen).toContain('workflow'); for (const hidden of ['preview', 'shots', 'timeline', 'inspector']) expect(seen).not.toContain(hidden);
   await expect(page.getByRole('button', { name: '流程', exact: true })).toHaveAttribute('aria-pressed', 'true');
   expect(observed.writes).toEqual([]); expect(observed.errors).toEqual([]);
 });
 
-test('keeps Help, theme and scrollable resource navigation reachable at the native minimum window', async ({ page }, info) => {
+test('keeps the consolidated settings and scrollable navigation reachable at the native minimum window', async ({ page }, info) => {
   const observed = observe(page); await page.setViewportSize({ width: 1024, height: 720 }); await page.emulateMedia({ reducedMotion: 'reduce' }); await dismissFirst(page);
-  await expect(help(page)).toBeInViewport({ ratio: 1 }); await help(page).click(); await opened(page); await page.keyboard.press('Escape'); await expect(guide(page)).toHaveCount(0); await expect(help(page)).toBeFocused();
-  await page.getByRole('button', { name: '展开工作空间导航', exact: true }).click();
-  await expect(help(page)).toBeInViewport({ ratio: 1 }); await expect(page.getByRole('button', { name: '浅色外观', exact: true })).toBeInViewport({ ratio: 1 });
-  await help(page).click(); await opened(page); await page.keyboard.press('Escape'); await expect(guide(page)).toHaveCount(0); await expect(help(page)).toBeFocused();
-  const costs = page.getByRole('button', { name: 'Token 消耗', exact: true }); await costs.scrollIntoViewIfNeeded(); await expect(costs).toBeInViewport({ ratio: 1 }); await expect(help(page)).toBeInViewport({ ratio: 1 });
-  await page.screenshot({ path: info.outputPath('tour-help-expanded-1024x720.png') });
-  await costs.click(); await expect(page.getByRole('heading', { name: 'Token 消耗', exact: true })).toBeVisible();
-  await page.getByRole('button', { name: '创作工作台', exact: true }).click(); await expect(page.getByLabel('项目名称', { exact: true })).toBeVisible();
+  await expect(settings(page)).toBeInViewport({ ratio: 1 }); await openGuide(page); await opened(page); await page.keyboard.press('Escape'); await expect(guide(page)).toHaveCount(0); await expect(settings(page)).toBeFocused();
+  await expect(settings(page)).toBeInViewport({ ratio: 1 }); const dialog = await openWorkspaceSettings(page);
+  await expect(dialog.getByRole('group', { name: '外观', exact: true })).toBeInViewport({ ratio: 1 }); await expect(dialog.getByRole('button', { name: 'Token 消耗', exact: true })).toBeInViewport({ ratio: 1 }); await expect(dialog.getByRole('button', { name: '使用指南', exact: true })).toBeInViewport({ ratio: 1 });
+  await page.screenshot({ path: info.outputPath('workspace-settings-rail-1024x720.png') }); await page.keyboard.press('Escape'); await expect(dialog).toHaveCount(0); await expect(settings(page)).toBeFocused();
+  await openGuide(page); await opened(page); await page.keyboard.press('Escape'); await expect(guide(page)).toHaveCount(0); await expect(settings(page)).toBeFocused();
+  await openCosts(page); await openProjectFromList(page); await expect(page.getByLabel('项目名称', { exact: true })).toBeVisible();
   expect(observed.writes).toEqual([]); expect(observed.errors).toEqual([]);
 });
 
@@ -264,15 +264,15 @@ test('isolates editor shortcuts and preserves an unsaved project draft throughou
   const created = await rpc<ProjectDocument>(request, 'project.create', { title: `定位指引保留草稿 ${randomUUID().slice(0, 8)}` });
   const project = await rpc<ProjectDocument>(request, 'project.update', { projectId: created.id, revision: created.revision, patch: { shots: [0, 1].map(index => ({ id: `guide-shot-${index}`, title: `原始镜头 ${index}`, narration: '', visualPrompt: '', durationUs: 5_000_000, sceneTemplate: createSceneTemplate('process') })) } });
   const observed = observe(page); await page.emulateMedia({ reducedMotion: 'reduce' }); await dismissFirst(page);
-  await page.getByRole('button', { name: `打开项目：${project.title}`, exact: true }).click();
+  await openProjectFromList(page, project.title);
   const title = page.getByLabel('镜头标题', { exact: true }); await expect(title).toHaveValue('原始镜头 0');
   const ruler = page.getByRole('slider', { name: '预览播放位置', exact: true }); await ruler.focus(); for (let index = 0; index < 10; index++) await ruler.press('ArrowRight');
   const time = await page.locator('.preview-controls .timecode b').innerText(); await expect(page.getByRole('button', { name: '播放预览', exact: true })).toBeEnabled();
   await title.fill('尚未保存的定位指引草稿'); await expect(page.getByRole('button', { name: '保存修改', exact: true })).toBeEnabled();
-  await help(page).click(); await opened(page); await reach(page, '制作与人工审阅');
+  await openGuide(page); await opened(page); await reach(page, '制作与人工审阅');
   await guide(page).getByRole('heading').focus();
   for (const key of ['ControlOrMeta+s', 's', 'Space', 'ArrowRight', 'ArrowLeft']) await page.keyboard.press(key);
-  await page.keyboard.press('Escape'); await expect(guide(page)).toHaveCount(0); await expect(help(page)).toBeFocused();
+  await page.keyboard.press('Escape'); await expect(guide(page)).toHaveCount(0); await expect(settings(page)).toBeFocused();
   await expect(title).toHaveValue('尚未保存的定位指引草稿'); await expect(page.getByRole('button', { name: '保存修改', exact: true })).toBeEnabled();
   await expect(page.locator('.outline-shot')).toHaveCount(2); await expect(page.getByRole('button', { name: '播放预览', exact: true })).toHaveAttribute('aria-pressed', 'false'); await expect(page.locator('.preview-controls .timecode b')).toHaveText(time);
   const saved = await rpc<{ project: ProjectDocument }>(request, 'project.get', { projectId: project.id });
@@ -323,9 +323,9 @@ test('navigates to current model controls, saves a real local connection and ret
     await (await settingField(dialog, 'API Key')).fill('guide-local-fixture-key'); await (await settingField(dialog, '服务地址')).fill(provider.baseUrl);
     const model = dialog.getByLabel('模型 ID', { exact: true }); await expect(model).toBeEnabled(); await model.selectOption('guide-local-text');
     const pending = await holdNextRpc(page, 'model.save'); await dialog.getByRole('button', { name: '保存连接', exact: true }).click(); await pending.entered;
-    await expect(guide(page)).toHaveCount(0); pending.release(); await expect(dialog).toHaveCount(0); await atStep(page, '进入创作工作台');
+    await expect(guide(page)).toHaveCount(0); pending.release(); await expect(dialog).toHaveCount(0); await atStep(page, '打开我的项目');
     const summary = await rpc<{ models: ModelProfile[] }>(request, 'workspace.summary'); expect(summary.models.find(model => model.name === name)).toMatchObject({ model: 'guide-local-text', baseUrl: provider.baseUrl });
-    await active(page).click(); await expect(page.getByLabel('项目名称', { exact: true })).toBeVisible(); await atStep(page, '分镜与流程');
+    await active(page).click(); await atStep(page, '进入创作工作台'); await active(page).click(); await expect(page.getByLabel('项目名称', { exact: true })).toBeVisible(); await atStep(page, '分镜与流程');
     await active(page).getByRole('button', { name: '流程', exact: true }).click(); await expect(page.locator('[data-guide="workflow"]')).toBeVisible(); await atStep(page, '当前流程画布');
     expect(provider.calls.length).toBeGreaterThan(0); expect(provider.calls.every(call => call.method === 'GET')).toBe(true);
     expect(observed.writes).toEqual(['model.save']); expect(observed.errors).toEqual([]);
@@ -410,7 +410,7 @@ isolatedTest('guides an empty isolated workspace without creating a project or p
   const before = await rpc<{ projects: ProjectDocument[] }>(request, 'workspace.snapshot');
   for (const project of before.projects.filter(project => !project.archived)) await rpc(request, 'project.archive', { projectId: project.id, revision: project.revision });
   const observed = observe(page); await page.emulateMedia({ reducedMotion: 'reduce' }); await page.goto('/'); await opened(page);
-  const seen = await walk(page); expect(seen).toEqual(['create-project', 'models', 'workbench', 'help']);
+  const seen = await walk(page); expect(seen).toEqual(['create-project', 'models', 'projects', 'help']);
   await expect(page.getByText('开始一段新的创作', { exact: true })).toBeVisible();
   expect((await rpc<{ projects: ProjectDocument[] }>(request, 'workspace.snapshot')).projects.every(project => project.archived)).toBe(true);
   expect(isolatedWorkspace.origin).toBe(new URL(page.url()).origin); expect(observed.writes).toEqual([]); expect(observed.errors).toEqual([]);

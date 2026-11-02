@@ -1,3 +1,4 @@
+import { openProjectFromList } from './workspace-navigation';
 import { expect, test, type APIRequestContext, type Page } from '@playwright/test';
 import type { ProjectDocument } from '@video-quickly/contracts';
 
@@ -15,7 +16,7 @@ async function fixture(request: APIRequestContext, title: string) {
 }
 async function openProject(page: Page, project: ProjectDocument) {
   await page.goto('/');
-  await page.getByRole('button', { name: `打开项目：${project.title}`, exact: true }).click();
+  await openProjectFromList(page, project.title);
   await expect(page.getByLabel('镜头标题', { exact: true })).toBeVisible();
 }
 async function current(request: APIRequestContext, projectId: string) { return (await rpc<{ project: ProjectDocument }>(request, 'project.get', { projectId })).project; }
@@ -85,7 +86,7 @@ test('persists the redo intent before submitting its save and restores it after 
     expect((await current(request, project.id)).shots[0].title).toBe('已提交的新镜头');
     // Keep the real committed HTTP reply pending across the page restart.
     await page.reload(); redoReply.release();
-    await page.getByRole('button', { name: `打开项目：${project.title}`, exact: true }).click();
+    await openProjectFromList(page, project.title);
     await expect(page.getByLabel('镜头标题', { exact: true })).toHaveValue('已提交的新镜头');
     await page.getByLabel('旁白', { exact: true }).fill('重启后的独立编辑'); await page.getByRole('button', { name: '保存镜头', exact: true }).click();
     await expect.poll(async () => (await current(request, project.id)).shots[0].narration).toBe('重启后的独立编辑');
@@ -165,13 +166,13 @@ test('reads queued selection writes before remounting the same project without c
     await page.locator('.outline-shot').filter({ hasText: '排写期间的第二镜头' }).click();
     await expect(page.getByLabel('镜头标题', { exact: true })).toHaveValue('排写期间的第二镜头');
     await expect.poll(() => page.evaluate(() => window.__vqDraftOrder!.queued)).toBeGreaterThan(0);
-    await page.getByRole('button', { name: `打开项目：${second.title}`, exact: true }).click();
+    await openProjectFromList(page, second.title);
     await expect(page.getByText('正在读取项目与本地草稿…', { exact: true })).toBeVisible();
-    await page.getByRole('button', { name: `打开项目：${first.title}`, exact: true }).click();
+    await openProjectFromList(page, first.title);
     await expect(page.getByText('正在读取项目与本地草稿…', { exact: true })).toBeVisible();
     await page.evaluate(() => window.__vqDraftOrder!.restore());
     await expect(page.getByLabel('镜头标题', { exact: true })).toHaveValue('排写期间的第二镜头');
-    await page.getByRole('button', { name: `打开项目：${second.title}`, exact: true }).click();
+    await openProjectFromList(page, second.title);
     await expect(page.getByLabel('镜头标题', { exact: true })).toHaveValue('原始镜头');
     expect((await current(request, first.id)).shots.map(shot => shot.title)).toEqual(['原始镜头', '排写期间的第二镜头']);
     expect((await current(request, second.id)).shots).toHaveLength(1);

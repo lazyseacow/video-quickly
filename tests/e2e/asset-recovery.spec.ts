@@ -1,3 +1,5 @@
+import { openProjectFromList } from './workspace-navigation';
+import { setWorkspaceTheme } from './workspace-settings';
 import { execFile } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { mkdtemp, readFile, rename, rm, writeFile } from 'node:fs/promises';
@@ -18,7 +20,7 @@ async function rpc<T>(request: APIRequestContext, method: string, params: unknow
 async function saved(request: APIRequestContext, projectId: string) { return (await rpc<{ project: ProjectDocument }>(request, 'project.get', { projectId })).project; }
 async function open(page: Page, project: ProjectDocument) {
   await page.emulateMedia({ reducedMotion: 'reduce' }); await page.goto('/'); await expect(page).toHaveTitle(/Video Quickly/);
-  await page.getByRole('button', { name: `打开项目：${project.title}`, exact: true }).click();
+  await openProjectFromList(page, project.title);
 }
 async function recovery(page: Page) {
   await page.getByRole('button', { name: '素材库', exact: true }).click(); await page.getByRole('button', { name: '恢复缺失素材', exact: true }).click();
@@ -90,7 +92,7 @@ test('restores a renamed real image through the complete dialog and automaticall
     await expect(dialog.locator('.asset-recovery__footer')).toContainText('0 个待恢复');
     await dialog.getByRole('button', { name: '关闭', exact: true }).click(); await expect(card.locator('img')).toBeVisible();
     expect(await card.locator('img').evaluate((image: HTMLImageElement) => image.complete && image.naturalWidth === 160)).toBe(true);
-    await page.getByRole('button', { name: '创作工作台', exact: true }).click(); await expect(page.locator('.preview-panel .scene-preview__state')).toHaveCount(0);
+    await openProjectFromList(page); await expect(page.locator('.preview-panel .scene-preview__state')).toHaveCount(0);
     expect(selected.map(value => value.candidateId)).toEqual([chosen]); expect(await readFile(asset.path, 'utf8')).toBe(bytes); expect(await saved(request, project.id)).toEqual(project);
   } finally { await rm(source, { recursive: true, force: true }); }
 });
@@ -112,7 +114,7 @@ test('pages every scoped record with causes and history, changes scope safely an
   await expect(dialog.getByText('检查完成', { exact: true })).toBeVisible(); expect(starts).toEqual([{ projectId: project.id }, {}]);
   await scope.selectOption(project.id); await expect(dialog.getByText('检查完成', { exact: true })).toBeVisible();
   await page.screenshot({ path: info.outputPath('complete-recovery-list-dark-1536.png') });
-  await dialog.getByRole('button', { name: '关闭', exact: true }).click(); await page.getByRole('button', { name: '浅色外观', exact: true }).click(); await page.setViewportSize({ width: 600, height: 900 });
+  await dialog.getByRole('button', { name: '关闭', exact: true }).click(); await setWorkspaceTheme(page, 'light'); await page.setViewportSize({ width: 600, height: 900 });
   await page.getByRole('button', { name: '恢复缺失素材', exact: true }).click(); const narrow = page.getByRole('dialog', { name: '恢复缺失素材', exact: true }); await expect(narrow).toBeVisible();
   await narrow.getByLabel('查找目录', { exact: true }).focus(); await expect(narrow.getByLabel('查找目录', { exact: true })).toBeFocused();
   expect(await narrow.evaluate(element => element.scrollWidth <= element.clientWidth + 1)).toBe(true); await page.screenshot({ path: info.outputPath('complete-recovery-list-light-600.png') });
@@ -144,7 +146,7 @@ test('automatically retries failed real video, source duration, waveform and loc
     await expect(page.locator('.clip-timing').getByRole('alert')).toContainText('无法读取');
     await expect.poll(() => rpcFailures.length).toBe(2); rpcPhase = 'recovery';
     const dialog = await restore(page, source); await dialog.getByRole('button', { name: '关闭', exact: true }).click();
-    await page.getByRole('button', { name: '创作工作台', exact: true }).click(); await expect(page.getByLabel('镜头标题', { exact: true })).toHaveValue('保留所选镜头');
+    await openProjectFromList(page); await expect(page.getByLabel('镜头标题', { exact: true })).toHaveValue('保留所选镜头');
     await expect(page.locator('.preview-panel .scene-preview__state')).toHaveCount(0); await expect(page.locator('.audio-waveform')).toHaveAttribute('data-status', 'ready');
     await expect(page.locator('.clip-timing')).toContainText('可用素材出点上限 2.000 秒');
     await expect(page.locator('.preview-panel .prepared-mix-preview')).toHaveAttribute('data-status', 'ready', { timeout: 20_000 });

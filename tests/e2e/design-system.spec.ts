@@ -1,3 +1,4 @@
+import { openCosts, setWorkspaceTheme } from './workspace-settings';
 import { expect, test, type Page } from '@playwright/test';
 import { writeFile } from 'node:fs/promises';
 import { addModelConnection } from './settings';
@@ -16,13 +17,13 @@ async function openApp(page: Page) {
 test('starts in light mode and preserves an explicit dark preference after reload', async ({ page }) => {
   await openApp(page);
   await expect(page.locator('html')).toHaveAttribute('data-theme', 'light');
-  await page.getByRole('button', { name: '深色外观', exact: true }).click();
+  await setWorkspaceTheme(page, 'dark');
   await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark');
   await page.reload();
   await expect(page.getByRole('navigation', { name: '主导航', exact: true })).toBeVisible();
   await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark');
-  await expect(page.getByRole('button', { name: '浅色外观', exact: true })).toBeVisible();
-  await page.getByRole('button', { name: '浅色外观', exact: true }).click();
+  await expect(page.getByRole('button', { name: '设置', exact: true })).toBeVisible();
+  await setWorkspaceTheme(page, 'light');
   await expect(page.locator('html')).toHaveAttribute('data-theme', 'light');
 });
 
@@ -33,7 +34,7 @@ test('shares typography and spacing roles across the workspace, navigation and d
     for (const [role, value] of Object.entries({ '--text-size-body': '15px', '--text-size-label': '14px', '--text-size-caption': '13px', '--text-size-project': '26px', '--text-size-title': '22px', '--space-2': '10px' })) document.documentElement.style.setProperty(role, value);
   });
   for (const theme of ['light', 'dark']) {
-    if (theme === 'dark') await page.getByRole('button', { name: '深色外观', exact: true }).click();
+    if (theme === 'dark') await setWorkspaceTheme(page, 'dark');
     await expect(page.getByRole('button', { name: '我的项目', exact: true })).toHaveCSS('font-size', '15px');
     await expect(page.getByLabel('项目名称', { exact: true })).toHaveCSS('font-size', '26px');
     const create = page.getByRole('button', { name: '新建项目', exact: true });
@@ -108,7 +109,7 @@ for (const width of [1536, 600]) for (const theme of ['light', 'dark']) {
     await openApp(page);
     await page.screenshot({ path: info.outputPath(`unified-workspace-${theme}-${width}.png`) });
     for (const name of ['我的项目', '素材库', '角色参考库', '系列模板', '模型连接', 'Skill 工作室', 'Token 消耗', '制作记录']) {
-      await page.getByRole('button', { name, exact: true }).click();
+      if (name === 'Token 消耗') await openCosts(page); else await page.getByRole('button', { name, exact: true }).click();
       await expect(page.getByRole('heading', { level: 1, name, exact: true })).toBeVisible();
       expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), name).toBe(true);
       await expect(page.getByRole('heading', { level: 1, name, exact: true })).toHaveCSS('font-weight', '650');
@@ -152,10 +153,10 @@ test('previews imported images automatically and keeps navigation typography sta
   await imageTab.click();
   await expect(imageTab).toHaveCSS('font-weight', tabWeight);
   await expect.poll(() => image.evaluate((element: HTMLImageElement) => element.naturalWidth)).toBe(320);
-  await page.getByRole('button', { name: '深色外观', exact: true }).click();
+  await setWorkspaceTheme(page, 'dark');
   expect(await typography()).toEqual(unselected);
   await expect(image).toBeVisible();
-  await page.getByRole('button', { name: 'Token 消耗', exact: true }).click();
+  await openCosts(page);
   await expect(page.locator('.cost-totals')).toBeVisible();
   await expect(page.locator('.cost-metric > p')).toHaveCount(0);
   const calls: string[] = [];
@@ -176,7 +177,7 @@ test('keeps long project filter labels synchronized with keyboard and native sel
   expect(response.ok()).toBe(true);
   const project = (await response.json()).result;
   await openApp(page);
-  await page.getByRole('button', { name: 'Token 消耗', exact: true }).click();
+  await openCosts(page);
   const filter = page.getByRole('combobox', { name: '用量项目', exact: true });
   await filter.selectOption(project.id);
   await expect(filter).toHaveValue(project.id);
@@ -194,7 +195,7 @@ test('keeps long project filter labels synchronized with keyboard and native sel
   await page.keyboard.press('Enter');
   await expect(filter).toHaveValue('');
   await expect(label).toHaveText('所有项目');
-  await page.getByRole('button', { name: '深色外观', exact: true }).click();
+  await setWorkspaceTheme(page, 'dark');
   await filter.selectOption(project.id);
   await expect(label).toHaveText(title);
 });

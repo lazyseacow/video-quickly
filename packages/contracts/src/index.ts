@@ -495,32 +495,17 @@ export type RpcRequest = { jsonrpc: '2.0'; id: string | number; method: string; 
 export type RpcResponse = { jsonrpc: '2.0'; id: string | number; result?: unknown; error?: { code: number; message: string } };
 
 export function createHistoryWorkflow(): WorkflowDefinition {
-  const steps: Array<[NodeKind, string, string, boolean]> = [
-    ['brief', '创意简报', '明确主题、观众与核心问题', false],
-    ['research', '资料与史实', '记录来源与待核验主张', false],
-    ['style', '风格与角色', '固定画风、角色和场景锚点', true],
-    ['script', '旁白与分镜', '编写旁白，逐镜头组织信息', true],
-    ['assets', '画面素材', '生成或引用图片与场景图层', false],
-    ['voice', '配音与字幕', '使用录音或模型制作旁白', false],
-    ['animation', '动画与运镜', '调整图层、关键帧和转场', false],
-    ['review', '小样审阅', '检查史实、画面、声音和字幕', true],
-    ['export', '导出成片', '按选定视频规格生成文件', false],
-  ];
-  const nodes: WorkflowNode[] = steps.map(([kind, label, description, requiresReview], index) => ({
-    id: kind, kind, label, description, prompt: '', skillIds: [], config: {}, position: { x: index * 270, y: 100 }, requiresReview,
-  }));
-  return { id: 'history-handdrawn', version: 1, name: '历史手绘科普', nodes, edges: nodes.slice(1).map((node, index) => ({ id: `${nodes[index].id}-${node.id}`, source: nodes[index].id, target: node.id })) };
+  return { ...createVideoWorkflow(), id: 'history-handdrawn', name: '历史手绘科普' };
 }
 
 export function createVideoWorkflow(): WorkflowDefinition {
   const definitions: Array<[NodeKind, string, string, boolean]> = [
     ['brief', '创意简报', '明确主题、观众与核心诉求', false],
     ['style', '风格与角色', '统一画风、角色与场景要求', false],
-    ['script', '旁白与分镜', '组织旁白、镜头画面与时长，确认创作方案', true],
+    ['script', '旁白与分镜', '组织旁白、镜头画面与时长，确认创作方案', false],
     ['assets', '画面素材', '生成或导入镜头对应的画面素材', false],
     ['voice', '配音与字幕', '准备旁白音频，按需要制作并对齐字幕', false],
     ['animation', '动画与运镜', '安排镜头视频、运镜、关键帧与转场', false],
-    ['review', '小样审阅', '核对内容、画面、声音与字幕', true],
     ['export', '导出成片', '按选定规格生成视频文件', false],
   ];
   const nodes: WorkflowNode[] = definitions.map(([kind, label, description, requiresReview], index) => ({
@@ -533,7 +518,7 @@ export function createVideoWorkflow(): WorkflowDefinition {
       { id: 'planning', label: '策划与分镜', description: '一次确定创作方向、视觉风格与镜头脚本。', nodeIds: ['brief', 'style', 'script'] },
       { id: 'materials', label: '素材与配音', description: '准备每个镜头的画面、旁白音频与字幕。', nodeIds: ['assets', 'voice'] },
       { id: 'editing', label: '剪辑与动画', description: '安排镜头节奏、运镜、动画与转场。', nodeIds: ['animation'] },
-      { id: 'delivery', label: '审阅与导出', description: '核对小样，确认后按规格导出成片。', nodeIds: ['review', 'export'] },
+      { id: 'delivery', label: '审阅与导出', description: '检查内容并按规格导出成片。', nodeIds: ['export'] },
     ],
   };
 }

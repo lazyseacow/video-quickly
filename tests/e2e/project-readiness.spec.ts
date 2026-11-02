@@ -1,3 +1,5 @@
+import { openProjectFromList } from './workspace-navigation';
+import { setWorkspaceTheme } from './workspace-settings';
 import { randomUUID, createHash } from 'node:crypto';
 import { join } from 'node:path';
 import { expect, type APIRequestContext, type Page } from '@playwright/test';
@@ -22,7 +24,7 @@ async function current(request: APIRequestContext, id: string) { return (await r
 async function open(page: Page, project: ProjectDocument) {
   await page.emulateMedia({ reducedMotion: 'reduce' }); await page.goto('/');
   await expect(page.getByRole('navigation', { name: '主导航', exact: true })).toBeVisible();
-  await page.getByRole('button', { name: `打开项目：${project.title}`, exact: true }).click();
+  await openProjectFromList(page, project.title);
   await expect(page.getByLabel('项目名称', { exact: true })).toHaveValue(project.title);
 }
 function gate() { let release!: () => void; const promise = new Promise<void>(done => { release = done; }); return { promise, release }; }
@@ -59,7 +61,7 @@ test('checks saved content without submitting or saving a dirty draft, preservin
   // Redo from the saved baseline intentionally saves a new revision; checking must not save another one.
   await expect.poll(async () => (await current(request, project.id)).title).toBe(`${project.title} 草稿`);
   const afterHistory = await current(request, project.id); methods.length = 0;
-  await page.getByRole('button', { name: '浅色外观', exact: true }).click(); await page.setViewportSize({ width: 600, height: 900 });
+  await setWorkspaceTheme(page, 'light'); await page.setViewportSize({ width: 600, height: 900 });
   await check.click(); dialog = page.getByRole('dialog', { name: '制作前检查', exact: true });
   await expect(dialog.getByText('本地检查通过。', { exact: true })).toBeVisible();
   const box = await dialog.locator('.dialog__surface').boundingBox(); expect(box).not.toBeNull(); expect(box!.x).toBeGreaterThanOrEqual(0); expect(box!.x + box!.width).toBeLessThanOrEqual(601);
@@ -95,7 +97,7 @@ test('aggregates blockers and repairs the exact step, model and project media wi
   await expect(model.getByLabel('模型 ID', { exact: true })).toHaveValue('fixture');
   await expect(model.getByRole('option', { name: 'fixture', exact: true })).toHaveCount(1);
   await model.getByRole('button', { name: '取消', exact: true }).click();
-  await page.getByRole('button', { name: '创作工作台', exact: true }).click(); await check.click();
+  await openProjectFromList(page); await check.click();
   dialog = page.getByRole('dialog', { name: '制作前检查', exact: true });
   await dialog.locator('li').filter({ hasText: '检查缺失画面' }).getByRole('button', { name: '修复素材', exact: true }).click();
   await expect(page.getByRole('dialog', { name: '恢复缺失素材', exact: true })).toBeVisible();
@@ -123,7 +125,7 @@ test('marks reports stale, refreshes explicitly and isolates a late result after
   try {
     await dialog.getByRole('button', { name: '重新检查', exact: true }).click(); await held.promise;
     await dialog.getByRole('button', { name: '关闭', exact: true }).click(); await expect.poll(() => cancels).toEqual([captured]);
-    await page.getByRole('button', { name: `打开项目：${second.title}`, exact: true }).click(); await page.getByRole('button', { name: '制作前检查', exact: true }).click();
+    await openProjectFromList(page, second.title); await page.getByRole('button', { name: '制作前检查', exact: true }).click();
     dialog = page.getByRole('dialog', { name: '制作前检查', exact: true }); await expect(dialog.getByRole('list', { name: '制作检查结果', exact: true })).toContainText('另一个项目的Agent');
     const late = page.waitForResponse(response => response.url().endsWith('/__desktop_rpc') && response.request().postDataJSON()?.params?.requestId === captured?.requestId);
     release.release(); await (await late).finished();

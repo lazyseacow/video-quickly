@@ -1,7 +1,7 @@
 import { createServer, type ServerResponse } from 'node:http';
 import { randomUUID } from 'node:crypto';
 import { expect, type APIRequestContext, type Locator, type Page } from '@playwright/test';
-import type { ProjectDocument, RunInspection, RunSummary } from '@video-quickly/contracts';
+import { createHistoryWorkflow, createSceneTemplate, type ProjectDocument, type RunInspection, type RunSummary } from '@video-quickly/contracts';
 import { test } from './isolated-workspace';
 
 const stageLabels = ['策划与分镜', '素材与配音', '剪辑与动画', '审阅与导出'];
@@ -41,7 +41,19 @@ async function descriptionHelp(page: Page, list: Locator, label: string, descrip
   else await help.click();
   await expect(page.getByRole('dialog')).toHaveCount(0); expect(await states()).toEqual(before);
   await page.keyboard.press('Escape'); await expect(tooltip).toHaveCount(0); await expect(help).toBeFocused(); await expect(help).not.toHaveAttribute('aria-describedby', /.+/);
-  await page.mouse.move(1, 1); await main.focus();
+  await page.mouse.move(1, 1); await help.press('Shift+Tab'); await expect(main).toBeFocused();
+  const focusBoundary = await main.evaluate(button => {
+    const card = button.closest('.workbench-guide__card');
+    if (!card) throw new Error('阶段按钮必须属于阶段卡片');
+    const rings = [card, ...card.querySelectorAll('button')].filter(element => {
+      const style = getComputedStyle(element);
+      return style.outlineStyle !== 'none' && parseFloat(style.outlineWidth) > 0;
+    });
+    return { visible: button.matches(':focus-visible'), card: card.getBoundingClientRect().toJSON(), rings: rings.map(element => element.getBoundingClientRect().toJSON()) };
+  });
+  expect(focusBoundary.visible).toBe(true); expect(focusBoundary.rings).toEqual([focusBoundary.card]);
+  await main.press('Tab'); await expect(help).toBeFocused(); await expect(help).toHaveCSS('outline-style', 'solid'); await expect(help.locator('..')).toHaveCSS('outline-style', 'none');
+  await expect(tooltip).toBeVisible(); await page.keyboard.press('Escape'); await help.press('Shift+Tab'); await expect(main).toBeFocused(); expect(await states()).toEqual(before);
 }
 async function currentStage(page: Page, label: string, status: string) {
   await expect(progress(page).locator('[aria-current="step"]')).toHaveCount(1); await expect(card(page, label)).toHaveAttribute('aria-current', 'step'); await expect(card(page, label)).toHaveAttribute('data-state', status);
@@ -85,10 +97,12 @@ async function fixture(request: APIRequestContext) {
 }
 async function status(request: APIRequestContext, runId: string) { return (await rpc<RunSummary>(request, 'run.get', { runId })).status; }
 async function approve(page: Page) { const button = production(page).getByRole('button', { name: '通过审阅并继续', exact: true }); await expect(button).toBeEnabled(); await button.click(); }
-async function completed(page: Page, count: number) {
-  await expect(cards(page)).toHaveCount(count);
-  await expect(progress(page).locator('[aria-current="step"]')).toHaveCount(0);
-  await expect.poll(() => cards(page).evaluateAll(buttons => buttons.map(button => button.getAttribute('data-state')))).toEqual(Array.from({ length: count }, () => 'succeeded'));
+async function completed(page: Page, completedLabels = stageLabels) {
+  await expect(cards(page)).toHaveCount(stageLabels.length);
+  await expect(progress(page).locator('[aria-current="step"]')).toHaveCount(1);
+  await expect(card(page, completedLabels.at(-1)!)).toHaveAttribute('aria-current', 'step');
+  await expect(production(page)).not.toContainText('下一步');
+  await expect.poll(() => cards(page).evaluateAll(buttons => buttons.map(button => button.getAttribute('data-state')))).toEqual(stageLabels.map(label => completedLabels.includes(label) ? 'succeeded' : 'pending'));
 }
 
 for (const viewport of [{ width: 1536, height: 960, theme: 'dark' }, { width: 600, height: 900, theme: 'light' }] as const) {
@@ -101,11 +115,11 @@ for (const viewport of [{ width: 1536, height: 960, theme: 'dark' }, { width: 60
       try {
         await page.emulateMedia({ reducedMotion: 'reduce' }); await page.goto('/'); await expect(page).toHaveTitle(/Video Quickly/); await selectProject(page, source.project.title);
         await shotOutlineOnly(page);
-        const configuration = page.getByRole('region', { name: '制作指引', exact: true }); await expect(configuration.locator('button[aria-label^="配置阶段："]')).toHaveCount(4); await expect(configuration.locator('[aria-current="step"]')).toHaveCount(0);
+        const configuration = page.getByRole('region', { name: '制作指引', exact: true }); await expect(configuration.locator('button[aria-label^="配置阶段："]')).toHaveCount(4); await expect(configuration.locator('[aria-current="step"]')).toHaveCount(1); await expect(configuration.locator('.workbench-guide__step').first()).toHaveAttribute('aria-current', 'step');
         await page.screenshot({ path: info.outputPath(`stage-titles-${viewport.theme}-${viewport.width}.png`) });
         await descriptionHelp(page, configuration.getByRole('list', { name: '流程步骤设置', exact: true }), stageLabels[2], '已有本地内容的阶段状态', { touch: viewport.width === 600 });
         await configuration.getByRole('button', { name: `配置阶段：${stageLabels[2]}`, exact: true }).click(); const settings = page.getByRole('dialog', { name: stageLabels[2], exact: true }); await expect(settings).toBeVisible(); await settings.getByRole('button', { name: '取消', exact: true }).click();
-        await expect(configuration.locator('[aria-current="step"]')).toHaveCount(0); expect(observed.writes).toEqual([]); expect(source.calls()).toBe(0);
+        await expect(configuration.locator('[aria-current="step"]')).toHaveCount(1); await expect(configuration.locator('.workbench-guide__step').first()).toHaveAttribute('aria-current', 'step'); expect(observed.writes).toEqual([]); expect(source.calls()).toBe(0);
         await page.getByRole('button', { name: '开始制作', exact: true }).click(); await expect.poll(source.calls).toBe(1);
         const run = (await rpc<{ items: RunSummary[] }>(request, 'run.list', { projectId: source.project.id })).items[0]; expect(run).toBeDefined();
         await expect(cards(page)).toHaveCount(4); await expect(configuration).toHaveCount(0); await expect(progress(page)).toHaveClass(/workbench-guide__steps/); await currentStage(page, stageLabels[0], 'running');
@@ -121,7 +135,7 @@ for (const viewport of [{ width: 1536, height: 960, theme: 'dark' }, { width: 60
             await currentStage(page, stageLabels[1], 'waiting_review'); expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(viewport.width + 1); await page.screenshot({ path: info.outputPath(`top-stage-2-${viewport.theme}-${viewport.width}.png`) });
           }
         }
-        await expect.poll(() => status(request, run.id)).toBe('succeeded'); await completed(page, 4); await expect(production(page).locator('.workbench-production__count')).toHaveText('4 / 4 阶段 · 4 / 4 任务');
+        await expect.poll(() => status(request, run.id)).toBe('succeeded'); await completed(page); await expect(progress(page).locator('.workbench-guide__step[data-state="succeeded"]')).toHaveCount(4);
         await shotOutlineOnly(page);
         expect(await saved(request, source.project.id)).toEqual(source.project); expect(source.calls()).toBe(1); expect(await rpc(request, 'run.replay', { runId: run.id })).toMatchObject({ externalCalls: 0, matchesSnapshot: true });
         expect(observed.writes).toEqual(['run.start', 'run.review', 'run.review', 'run.review', 'run.review']); expect(observed.errors).toEqual([]); expect(new URL(page.url()).origin).toBe(isolatedWorkspace.origin); await page.screenshot({ path: info.outputPath('top-stages-completed.png') });
@@ -135,7 +149,9 @@ test('keeps the newer run highlighted after an old inspection arrives and expose
   try {
     await page.setViewportSize({ width: 600, height: 900 }); await page.emulateMedia({ reducedMotion: 'reduce' }); await page.addInitScript(() => localStorage.setItem('vq-theme', 'light')); await page.goto('/'); await selectProject(page, source.project.title);
     const old = await rpc<RunSummary>(request, 'run.start', { projectId: source.project.id, nodeId: taskIds[0] }); await expect.poll(source.calls).toBe(1); await currentStage(page, stageLabels[0], 'running'); source.reply(0);
-    await currentStage(page, stageLabels[0], 'waiting_review'); await approve(page); await expect.poll(() => status(request, old.id)).toBe('succeeded'); await completed(page, 1);
+    await currentStage(page, stageLabels[0], 'waiting_review'); await approve(page); await expect.poll(() => status(request, old.id)).toBe('succeeded'); await completed(page, [stageLabels[0]]);
+    await card(page, stageLabels[2]).click(); const configuration = page.getByRole('dialog', { name: stageLabels[2], exact: true }); await expect(configuration).toBeVisible(); await configuration.getByRole('button', { name: '取消', exact: true }).click();
+    await completed(page, [stageLabels[0]]); await expect(card(page, stageLabels[0])).toContainText('1 / 1 任务');
     await page.route('**/__desktop_rpc', async route => {
       const input = route.request().postDataJSON();
       if (!holdOld && input?.method === 'run.inspect' && input.params?.runId === old.id) { holdOld = true; const response = await route.fetch(); held.release(); await release.promise; await route.fulfill({ response }); delivered.release(); return; }
@@ -143,11 +159,40 @@ test('keeps the newer run highlighted after an old inspection arrives and expose
     });
     const updated = await rpc<ProjectDocument>(request, 'project.update', { projectId: source.project.id, revision: source.project.revision, patch: { title: `${source.project.title} · 新修订` } }); await held.promise;
     const newer = await rpc<RunSummary>(request, 'run.start', { projectId: updated.id, nodeId: taskIds[1] }); await expect.poll(() => status(request, newer.id)).toBe('waiting_review'); await currentStage(page, stageLabels[1], 'waiting_review');
-    release.release(); await delivered.promise; await currentStage(page, stageLabels[1], 'waiting_review'); await expect(progress(page)).not.toContainText(stageLabels[0]);
-    await approve(page); await expect.poll(() => status(request, newer.id)).toBe('succeeded'); await completed(page, 1);
+    release.release(); await delivered.promise; await currentStage(page, stageLabels[1], 'waiting_review'); await expect(cards(page)).toHaveCount(4); await expect(card(page, stageLabels[0])).toHaveAttribute('data-state', 'pending');
+    await approve(page); await expect.poll(() => status(request, newer.id)).toBe('succeeded'); await completed(page, [stageLabels[1]]);
     const failing = await rpc<RunSummary>(request, 'run.start', { projectId: updated.id, nodeId: taskIds[0] }); await expect.poll(source.calls).toBe(2); await currentStage(page, stageLabels[0], 'running'); source.reply(1, true);
     await expect.poll(async () => ['failed', 'needs_attention'].includes(await status(request, failing.id))).toBe(true); const failedStatus = await status(request, failing.id);
-    await expect(card(page, stageLabels[0])).toHaveAttribute('data-state', failedStatus); await expect(card(page, stageLabels[0])).toContainText(/失败|需要核对/); await expect(cards(page)).toHaveCount(1);
+    await expect(card(page, stageLabels[0])).toHaveAttribute('data-state', failedStatus); await expect(card(page, stageLabels[0])).toContainText(/失败|需要核对/); await expect(cards(page)).toHaveCount(4);
     expect(source.calls()).toBe(2); expect((await saved(request, updated.id)).revision).toBe(updated.revision); expect(observed.writes).toEqual(['run.review', 'run.review']); expect(observed.errors).toEqual([]); await expect(page.locator('html')).toHaveAttribute('data-theme', 'light'); expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(601);
   } finally { release.release(); await page.unrouteAll({ behavior: 'wait' }); await source.close(); }
 });
+
+for (const viewport of [{ width: 1536, height: 960, theme: 'light' }, { width: 600, height: 900, theme: 'dark' }] as const) {
+  test(`keeps exactly four stages for a legacy project before and after a single script run at ${viewport.width}px in ${viewport.theme}`, async ({ page, request }, info) => {
+    const created = await rpc<ProjectDocument>(request, 'project.create', { title: `旧流程完整进度 ${randomUUID().slice(0, 8)}`, templateId: 'history-handdrawn', brief: '只使用已有分镜验证完整流程，不请求模型服务。' });
+    const project = await rpc<ProjectDocument>(request, 'project.update', { projectId: created.id, revision: created.revision, patch: { shots: [{ id: 'local-shot', title: '保留的本地分镜', narration: '已有旁白', visualPrompt: '', durationUs: 1_000_000, sceneTemplate: createSceneTemplate('process') }] } });
+    expect(project.workflow).toEqual(createHistoryWorkflow());
+    const observed = observe(page); await page.setViewportSize(viewport); await page.emulateMedia({ reducedMotion: 'reduce' }); await page.addInitScript(theme => localStorage.setItem('vq-theme', theme), viewport.theme);
+    await page.goto('/'); await expect(page).toHaveTitle(/Video Quickly/); await selectProject(page, project.title);
+    const guide = page.getByRole('region', { name: '制作指引', exact: true }); await expect(guide.locator('.workbench-guide__step strong')).toHaveText(stageLabels); await expect(guide.getByRole('list')).not.toContainText('史实');
+    const run = await rpc<RunSummary>(request, 'run.start', { projectId: project.id, nodeId: 'script' });
+    await expect.poll(() => status(request, run.id)).toBe('succeeded');
+    const list = progress(page), steps = cards(page), planning = card(page, stageLabels[0]);
+    await expect(steps).toHaveCount(4); await expect(steps.locator('strong')).toHaveText(stageLabels); await expect(list).not.toContainText('史实'); await expect(planning).toHaveAttribute('data-state', 'pending');
+    await expect(planning).toHaveAttribute('aria-current', 'step'); await expect(planning.locator('..')).toHaveAttribute('data-current', 'true');
+    await expect(planning).toBeInViewport({ ratio: 1 }); await page.screenshot({ path: info.outputPath(`legacy-four-stages-active-${viewport.theme}-${viewport.width}.png`) });
+    await planning.click(); const details = page.getByRole('dialog', { name: '策划与分镜', exact: true }); await expect(details.getByRole('tab')).toHaveText(['创意简报', '风格与角色', '旁白与分镜']); await details.getByRole('button', { name: '取消', exact: true }).click();
+    await expect(page.getByRole('button', { name: '通过审阅并继续', exact: true })).toHaveCount(0);
+    await expect(steps).toHaveCount(4); await expect(list.locator('[aria-current="step"]')).toHaveCount(1); await expect(planning).toHaveAttribute('aria-current', 'step'); await expect(production(page)).not.toContainText('下一步'); await expect(planning).toHaveAttribute('data-state', 'pending'); await expect(planning).toContainText('1 / 3 任务');
+    await expect(card(page, stageLabels[0])).toContainText('1 / 3 任务');
+    await list.getByRole('button', { name: '配置阶段：素材与配音', exact: true }).click(); const configuration = page.getByRole('dialog', { name: '素材与配音', exact: true });
+    await expect(configuration).toBeVisible(); await configuration.getByRole('button', { name: '取消', exact: true }).click();
+    await page.reload(); await selectProject(page, project.title); await expect(steps).toHaveCount(4); await expect(steps.locator('strong')).toHaveText(stageLabels); await expect(list).not.toContainText('史实'); await expect(planning).toContainText('1 / 3 任务');
+    await expect(card(page, stageLabels[1])).toHaveAttribute('data-state', 'pending'); await expect(card(page, stageLabels[0])).toContainText('1 / 3 任务');
+    expect(await saved(request, project.id)).toEqual(project); expect(await rpc(request, 'run.replay', { runId: run.id })).toMatchObject({ externalCalls: 0, matchesSnapshot: true });
+    expect(observed.writes).toEqual([]); expect(observed.errors).toEqual([]); await expect(page.locator('html')).toHaveAttribute('data-theme', viewport.theme);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(viewport.width + 1); await production(page).scrollIntoViewIfNeeded(); await list.getByRole('button', { name: `${stageLabels[0]}说明`, exact: true }).press('Shift+Tab'); await expect(planning).toBeFocused();
+    await page.screenshot({ path: info.outputPath(`legacy-four-stages-completed-${viewport.theme}-${viewport.width}.png`) }); await production(page).screenshot({ path: info.outputPath(`stage-card-focus-${viewport.theme}-${viewport.width}.png`) });
+  });
+}

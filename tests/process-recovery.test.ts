@@ -100,6 +100,7 @@ describe('actual sidecar process recovery', () => {
     directories.push(directory);
     const first = new RpcProcess(directory);
     const project = await first.request<ProjectDocument>('project.create', { title: '旧流程审阅进程恢复', templateId: 'history-handdrawn' });
+    await first.request('workflow.save', { projectId: project.id, revision: project.revision, workflow: { ...project.workflow, id: 'process-custom-review', nodes: project.workflow.nodes.map(node => node.id === 'style' ? { ...node, requiresReview: true } : node) } });
     const run = await first.request<RunRecord>('run.start', { projectId: project.id, nodeId: 'style' });
     const before = await waitFor(first, run.id, 'waiting_review');
     expect(before.activities).toHaveLength(1);

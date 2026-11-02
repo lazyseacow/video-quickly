@@ -49,7 +49,7 @@ for (const viewport of [{ width: 1536, height: 960, theme: 'dark' }, { width: 39
       await page.addInitScript(theme => localStorage.setItem('vq-theme', theme), viewport.theme); await page.setViewportSize(viewport);
       await open(page, source.project); await page.getByRole('button', { name: '开始制作', exact: true }).click();
       const panel = production(page);
-      await expect(panel).toBeVisible(); await expect(panel.locator('.workbench-production__heading strong')).toHaveText('风格确认');
+      await expect(panel).toBeVisible(); await expect(panel.locator('.workbench-guide__step[aria-current="step"]')).toContainText('风格确认');
       await expect(panel.getByRole('button', { name: '通过审阅并继续', exact: true })).toBeEnabled();
       await expect(page.getByRole('button', { name: '开始制作', exact: true })).toBeDisabled();
       await panel.getByRole('button', { name: '查看产物', exact: true }).click();
@@ -57,8 +57,8 @@ for (const viewport of [{ width: 1536, height: 960, theme: 'dark' }, { width: 39
       await output.getByRole('button', { name: '关闭', exact: true }).click();
       await panel.scrollIntoViewIfNeeded(); await page.screenshot({ path: info.outputPath('workbench-review.png') });
       await panel.getByRole('button', { name: '通过审阅并继续', exact: true }).click();
-      await expect(panel.locator('.workbench-production__heading strong')).toHaveText('分镜确认'); await expect(panel.getByRole('button', { name: '通过审阅并继续', exact: true })).toBeEnabled();
-      await panel.getByRole('list', { name: '制作步骤进度', exact: true }).getByRole('button', { name: /风格确认/ }).click();
+      await expect(panel.locator('.workbench-guide__step[aria-current="step"]')).toContainText('分镜确认'); await expect(panel.getByRole('button', { name: '通过审阅并继续', exact: true })).toBeEnabled();
+      await panel.getByRole('list', { name: '制作步骤进度', exact: true }).getByRole('button', { name: '风格确认 已完成', exact: true }).click();
       const detail = page.getByRole('dialog', { name: '制作步骤详情', exact: true });
       await expect(detail.getByRole('region', { name: '步骤详情：风格确认', exact: true })).toBeVisible();
       await detail.getByRole('button', { name: '关闭', exact: true }).click();
@@ -86,7 +86,7 @@ test('rejects a review in the workbench and opens frozen step details without le
   try {
     await open(page, source.project); await page.getByRole('button', { name: '开始制作', exact: true }).click();
     const panel = production(page); await expect(panel.getByRole('button', { name: '通过审阅并继续', exact: true })).toBeEnabled();
-    await panel.getByRole('button', { name: '制作详情', exact: true }).click();
+    await panel.locator('.workbench-guide__step[aria-current="step"]').click();
     const detail = page.getByRole('dialog', { name: '制作步骤详情', exact: true }); await expect(detail).toContainText('风格确认');
     await detail.getByRole('button', { name: '关闭', exact: true }).click();
     await panel.getByRole('button', { name: '停止并修改', exact: true }).click();
@@ -106,7 +106,7 @@ test('retains unsaved shot edits when the workbench approves a production step',
     const panel = production(page); await expect(panel.getByRole('button', { name: '通过审阅并继续', exact: true })).toBeEnabled();
     await page.getByLabel('镜头标题', { exact: true }).fill('审核期间的镜头草稿');
     await panel.getByRole('button', { name: '通过审阅并继续', exact: true }).click();
-    await expect(panel.locator('.workbench-production__heading strong')).toHaveText('分镜确认');
+    await expect(panel.locator('.workbench-guide__step[aria-current="step"]')).toContainText('分镜确认');
     await expect(page.getByLabel('镜头标题', { exact: true })).toHaveValue('审核期间的镜头草稿');
     await expect(page.locator('.unsaved-dot')).toBeVisible();
     const saved = await rpc<{ project: ProjectDocument }>(request, 'project.get', { projectId: source.project.id });
@@ -153,7 +153,7 @@ test('retries failed progress reads and review actions without leaving the workb
     await expect(panel.getByRole('button', { name: '通过审阅并继续', exact: true })).toBeEnabled();
     await panel.getByRole('button', { name: '通过审阅并继续', exact: true }).click();
     await expect.poll(() => reviewAttempts).toBe(2); expect(reviewTargets).toEqual([target, target]); releaseInspection();
-    await expect(panel.locator('.workbench-production__heading strong')).toHaveText('分镜确认');
+    await expect(panel.locator('.workbench-guide__step[aria-current="step"]')).toContainText('分镜确认');
     await expect(panel).not.toContainText('操作未完成'); expect(source.calls()).toBe(2);
     await expect(page.getByRole('heading', { name: '制作记录', exact: true })).toHaveCount(0);
   } finally { releaseInspection(); await page.unrouteAll({ behavior: 'wait' }); await close(source.server); }
@@ -180,7 +180,7 @@ test('refreshes a lost review receipt without approving the next checkpoint or s
       await route.continue();
     });
     await approve.click(); await expect(panel).toContainText('操作未完成');
-    await expect(panel.locator('.workbench-production__heading strong')).toHaveText('分镜确认'); await expect(approve).toBeEnabled();
+    await expect(panel.locator('.workbench-guide__step[aria-current="step"]')).toContainText('分镜确认'); await expect(approve).toBeEnabled();
     const second = await latest(request, source.project.id);
     expect(second).toMatchObject({ id: first.id, status: 'waiting_review', currentNodeId: 'script' });
     expect(reviews).toEqual([{ runId: first.id, expectedNodeId: first.currentNodeId, expectedUpdatedAt: first.updatedAt }]);

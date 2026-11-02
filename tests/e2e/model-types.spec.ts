@@ -4,7 +4,7 @@ import { addModelConnection, settingField } from './settings';
 import { modelCatalog } from './model-catalog';
 
 let catalog: Awaited<ReturnType<typeof modelCatalog>>;
-test.beforeEach(async () => { catalog = await modelCatalog(['fixture-text', 'fixture-image', 'fixture-video', 'gpt-4o-mini-transcribe', 'fixture-tts']); });
+test.beforeEach(async () => { catalog = await modelCatalog(['fixture-text', 'fixture-image', 'fixture-video', 'gpt-4o-mini-transcribe', 'qwen-tts-fixture']); });
 test.afterEach(async () => { await catalog.close(); });
 
 async function models(request: APIRequestContext) {
@@ -39,7 +39,7 @@ for (const viewport of [{ width: 1536, height: 960, theme: 'dark' }, { width: 39
       if (item.protocol) await (await settingField(dialog, 'API 协议')).selectOption(item.protocol);
       if (item.kind === 'text') await expect(dialog.getByLabel('API 协议', { exact: true })).toHaveValue('messages');
       await (await settingField(dialog, '连接名称')).fill(name); await (await settingField(dialog, '服务地址')).fill(catalog.baseUrl);
-      await (await settingField(dialog, '模型 ID')).selectOption(item.capability === 'asr' ? 'gpt-4o-mini-transcribe' : `fixture-${item.capability}`);
+      await (await settingField(dialog, '模型 ID')).selectOption(item.capability === 'asr' ? 'gpt-4o-mini-transcribe' : item.capability === 'tts' ? 'qwen-tts-fixture' : `fixture-${item.capability}`);
       for (const tab of ['文本参数', '图片参数', '视频参数', '配音参数', '识别参数']) {
         if (tab === item.parameterTab) await expect(dialog.getByRole('tab', { name: tab, exact: true })).toBeVisible();
         else await expect(dialog.getByRole('tab', { name: tab, exact: true })).toHaveCount(0);

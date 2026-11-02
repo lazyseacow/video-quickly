@@ -1,3 +1,6 @@
+import { closeProjectSettings } from './settings';
+import { openProjectFromList } from './workspace-navigation';
+import { setWorkspaceTheme } from './workspace-settings';
 import { projectSettingAction } from './settings';
 import { readFile, writeFile } from 'node:fs/promises';
 import { expect, test, type APIRequestContext, type Page } from '@playwright/test';
@@ -115,7 +118,7 @@ test('edits real music through the UI, restores history and follows project time
   await expect(page.locator('.track--music')).toHaveCount(0);
   await page.getByRole('button', { name: '重做', exact: true }).click();
   await expect.poll(async () => (await savedProject(request, project.id)).musicClips).toEqual(saved.musicClips);
-  await page.reload(); await page.getByRole('button', { name: `打开项目：${project.title}`, exact: true }).click();
+  await page.reload(); await openProjectFromList(page, project.title);
   dialog = await musicEditor(page);
   await expect(dialog.getByLabel('音乐 1 项目起点（秒）', { exact: true })).toHaveValue('1');
   await expect(dialog.getByLabel('音乐 1 音量（dB）', { exact: true })).toHaveValue('-6');
@@ -174,7 +177,7 @@ test('edits real music through the UI, restores history and follows project time
   await page.getByRole('button', { name: '撤销', exact: true }).click();
   await expect.poll(async () => (await savedProject(request, project.id)).musicClips).toEqual(nonLooping.musicClips);
   await expect(page.locator('.track--music .audio-waveform')).toHaveAttribute('data-status', 'ready');
-  await page.getByRole('button', { name: '浅色外观', exact: true }).click();
+  await setWorkspaceTheme(page, 'light');
   await page.setViewportSize({ width: 600, height: 900 });
   await musicEditor(page);
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1)).toBe(true);
@@ -200,7 +203,7 @@ test('protects referenced public music and restores it as an independent asset t
   await expect(card.getByRole('button', { name: `移除素材“${asset.name}”`, exact: true })).toBeDisabled();
   const rejected = await request.post('/__desktop_rpc', { data: { method: 'asset.delete', params: { assetId: asset.id } } });
   expect((await rejected.json()).error).toContain('正在使用或已保留');
-  await page.getByRole('button', { name: `打开项目：${project.title}`, exact: true }).click();
+  await openProjectFromList(page, project.title);
   await page.getByRole('button', { name: '项目设置', exact: true }).click();
   const pendingBackup = page.waitForResponse(response => response.url().endsWith('/__desktop_rpc') && response.request().postDataJSON()?.method === 'project.backup');
   await (await projectSettingAction(page, '备份项目与素材', {exact: true})).click();
@@ -209,7 +212,7 @@ test('protects referenced public music and restores it as an independent asset t
   const portable = JSON.parse(await readFile(`${backup.path}/project.json`, 'utf8'));
   expect(portable.project.musicClips).toEqual(saved.musicClips);
   expect(portable.assets[0].sha256).toBe(asset.sha256);
-  await page.getByRole('button', { name: '我的项目', exact: true }).click();
+  await closeProjectSettings(page); await page.getByRole('button', { name: '我的项目', exact: true }).click();
   await page.getByRole('button', { name: '导入项目', exact: true }).click();
   dialog = page.getByRole('dialog', { name: '导入项目备份', exact: true });
   await dialog.getByLabel('项目备份路径', { exact: true }).fill(backup.path);

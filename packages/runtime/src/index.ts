@@ -19,6 +19,7 @@ import { interrupt } from '@langchain/langgraph';
 import { AsyncLocalStorageProviderSingleton } from '@langchain/core/singletons';
 import { validateWorkflowComposition, workflowNodesWithSubflows, workflowEdgesWithSubflows, resolveSubflowInputs, substituteSubflowInputs, subflowNodeId, subflowThreadId, subflowValueAt, type SubflowDefinition } from '@video-quickly/contracts';
 import { createWorkflowTemplateLibrary } from './workflow-templates.js';
+import { upgradeBuiltinWorkflow } from './builtin-workflows.js';
 import { executeMediaGraph } from './media-graph.js';
 import { discoverModels, generateText, testModelConnection, type TextProvider } from './providers.js';
 import { discoverModelVoices } from './model-voices.js';
@@ -303,7 +304,7 @@ export function createRuntime(options: RuntimeOptions) {
   }
 
   function saveProject(value: ProjectDocument, previous?: ProjectDocument) {
-    const saved = projectSchema.parse({ ...value, revision: value.revision + 1, updatedAt: now() });
+    const saved = projectSchema.parse({ ...value, workflow: upgradeBuiltinWorkflow(value.workflow), revision: value.revision + 1, updatedAt: now() });
     const baseline = previous ?? project(value.id);
     validateResearchProject(saved, baseline);
     validateEdits(saved, baseline);
@@ -1365,7 +1366,7 @@ export function createRuntime(options: RuntimeOptions) {
           await writeFile(destination, bytes, { flag: 'wx' });
           restoredAssets.push({ ...asset, id, projectId: characterReferences.has(asset.id) ? undefined : projectId, shotId: characterReferences.has(asset.id) ? undefined : asset.shotId, path: destination, createdAt: timestamp });
         }
-        const restored = projectSchema.parse({ ...backup.project, id: projectId, title: `${backup.project.title.slice(0, 150)}（恢复）`, revision: 1, archived: false, createdAt: timestamp, updatedAt: timestamp,
+        const restored = projectSchema.parse({ ...backup.project, workflow: upgradeBuiltinWorkflow(backup.project.workflow), id: projectId, title: `${backup.project.title.slice(0, 150)}（恢复）`, revision: 1, archived: false, createdAt: timestamp, updatedAt: timestamp,
           clipEditSources: backup.project.clipEditSources?.map(source => ({ ...source, original: { ...source.original, assetId: clipAssetId(source.original.assetId), audioAssetId: clipAssetId(source.original.audioAssetId), videoAssetId: clipAssetId(source.original.videoAssetId), captionTrack: source.original.captionTrack ? { ...source.original.captionTrack, sourceAssetId: clipAssetId(source.original.captionTrack.sourceAssetId) } : undefined }, assetHashes: source.assetHashes.map(hash => ({ ...hash, assetId: clipAssetId(hash.assetId)! })) })),
           musicClips: backup.project.musicClips?.map(clip => ({ ...clip, assetId: identifiers.get(clip.assetId) })), shots: backup.project.shots.map(shot => ({ ...shot, characterIds: shot.characterIds?.map(id => importedCharacters.idMap.get(id)), assetId: shot.assetId ? identifiers.get(shot.assetId) : undefined, audioAssetId: shot.audioAssetId ? identifiers.get(shot.audioAssetId) : undefined, videoAssetId: shot.videoAssetId ? identifiers.get(shot.videoAssetId) : undefined, captionTrack: shot.captionTrack ? { ...shot.captionTrack, sourceAssetId: shot.captionTrack.sourceAssetId ? identifiers.get(shot.captionTrack.sourceAssetId) : undefined } : undefined })) });
         database.transaction(() => {
@@ -1398,7 +1399,7 @@ export function createRuntime(options: RuntimeOptions) {
         })();
         const record = run(runId); const value = project(record.projectId); requireRevision(value, revision);
         const saved = store.get<RunSnapshot>('run-snapshot', runId);
-        if ((saved?.inspectionNodes ?? saved?.nodes)?.some(node => node.id === nodeId && node.kind === 'research')) throw new Error('请在“资料与事实主张”中比较证据候选，选择后加入草稿并人工核验。');
+        if ((saved?.inspectionNodes ?? saved?.nodes)?.some(node => node.id === nodeId && node.kind === 'research')) throw new Error('该历史资料产物仅支持查看。');
         if (saved?.regeneration) {
           if (applicationId) throw new Error('镜头候选请使用候选应用接口。');
           if (nodeId !== 'regenerate') throw new Error('未找到对应镜头候选。');
@@ -1478,9 +1479,8 @@ export function createRuntime(options: RuntimeOptions) {
 function buildPrompt(project: ProjectDocument, node: WorkflowNode, skills: SkillPackage[], singleShot = false, characters: CharacterProfile[] = []) {
   const selected = skills.filter(skill => skill.enabled && node.skillIds.includes(skill.id));
   const contract = node.kind === 'script' ? `\n只返回 JSON：{"shots":[{"title":"标题","narration":"旁白","visualPrompt":"画面描述","durationUs":8000000}]}。${singleShot ? '只编辑给出的目标镜头，必须恰好返回一条镜头，不增删其他镜头。' : '保持已锁定镜头。'}` : '\n输出可供人工审阅的中文结果。未经查证的来源与主张标为待核验，不编造引用。';
-  const referenced = new Set(project.shots.flatMap(shot => shot.claimIds));
-  const promptShots = project.shots.map(({ captionStyle: _captionStyle, ...shot }) => shot);
-  return [`你正在执行视频制作步骤：${node.label}。`, project.brief, `系列风格：${project.style}`, `现有分镜：${JSON.stringify(promptShots)}`, `镜头已引用的事实主张（保留核验状态，pending/disputed不得表述为已核实）：${JSON.stringify(project.claims.filter(claim => referenced.has(claim.id)))}`, ...(characters.length ? [`镜头已选择的角色文字设定（仅文字，没有发送参考图）：\n${characters.map(profile => `${profile.name}：${profile.description}`).join('\n')}`] : []), ...selected.map(skill => `Skill ${skill.name}:\n${skill.instructions}`), node.prompt, contract].filter(Boolean).join('\n\n');
+  const promptShots = project.shots.map(({ captionStyle: _captionStyle, claimIds: _claimIds, ...shot }) => shot);
+  return [`你正在执行视频制作步骤：${node.label}。`, project.brief, `系列风格：${project.style}`, `现有分镜：${JSON.stringify(promptShots)}`, ...(characters.length ? [`镜头已选择的角色文字设定（仅文字，没有发送参考图）：\n${characters.map(profile => `${profile.name}：${profile.description}`).join('\n')}`] : []), ...selected.map(skill => `Skill ${skill.name}:\n${skill.instructions}`), node.prompt, contract].filter(Boolean).join('\n\n');
 }
 
 function parseShots(text: string, previous: ProjectDocument['shots'], singleShot = false, preset?: ProjectDocument['scenePreset']) {

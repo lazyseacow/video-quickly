@@ -1,3 +1,5 @@
+import { openProjectFromList } from './workspace-navigation';
+import { openCosts, setWorkspaceTheme } from './workspace-settings';
 import { settingField, settingControl } from './settings';
 import { createServer } from 'node:http';
 import { writeFile } from 'node:fs/promises';
@@ -64,7 +66,7 @@ test('creates a visual character library, binds a shot with durable undo, and pr
   const referencedImage = page.locator('.asset-card').filter({ hasText: 'public-character.png' });
   await expect(referencedImage).toContainText('使用中');
   await expect(referencedImage.getByRole('button', { name: '移除素材“public-character.png”', exact: true })).toBeDisabled();
-  await page.getByRole('button', { name: '创作工作台', exact: true }).click();
+  await openProjectFromList(page);
   await page.getByRole('checkbox', { name: '稳定角色小青', exact: true }).check();
   await page.getByRole('button', { name: '保存镜头', exact: true }).click();
   await expect.poll(async () => (await savedProject(request, project.id)).shots[0].characterIds).toEqual([character!.id]);
@@ -72,7 +74,7 @@ test('creates a visual character library, binds a shot with durable undo, and pr
   await expect.poll(async () => (await savedProject(request, project.id)).shots[0].characterIds ?? []).toEqual([]);
   await page.getByRole('button', { name: '重做', exact: true }).click();
   await expect.poll(async () => (await savedProject(request, project.id)).shots[0].characterIds).toEqual([character!.id]);
-  await page.reload(); await page.getByRole('button', { name: `打开项目：${project.title}`, exact: true }).click();
+  await page.reload(); await openProjectFromList(page, project.title);
   await expect(page.getByRole('checkbox', { name: '稳定角色小青', exact: true })).toBeChecked();
   await page.getByRole('button', { name: '角色参考库', exact: true }).click();
   const blockedArchive = page.waitForResponse(response => response.url().endsWith('/__desktop_rpc') && response.request().postDataJSON()?.method === 'character.archive');
@@ -126,7 +128,7 @@ test('sends frozen character settings into generation and records provider token
     await page.getByRole('button', { name: '关闭提示', exact: true }).click();
     await expect(page.locator('.toast')).toHaveCount(0);
     await rpc(request, 'model.save', { model: { ...model, pricing: { currency: 'USD', inputPerMillionTokens: 99, outputPerMillionTokens: 99 } } });
-    await page.getByRole('button', { name: 'Token 消耗', exact: true }).click();
+    await openCosts(page);
     await page.getByLabel('用量项目').selectOption(project.id);
     await page.getByRole('button', { name: `查看任务用量详情：${ledger.items[0].runId}`, exact: true }).click();
     const row = page.locator('.cost-record').filter({ hasText: '费用计量服务' });
@@ -135,10 +137,10 @@ test('sends frozen character settings into generation and records provider token
     await expect(row.locator('[data-metric="cachedOutputTokens"] dd')).toHaveText('—');
     const saved = (await rpc<{ items: UsageRecord[] }>(request, 'cost.list', { projectId: project.id })).items[0];
     expect(saved.pricing).toBeUndefined(); expect(saved.actualAmount).toBeUndefined();
-    await page.getByRole('button', { name: '浅色外观', exact: true }).click(); await page.setViewportSize({ width: 600, height: 900 });
+    await setWorkspaceTheme(page, 'light'); await page.setViewportSize({ width: 600, height: 900 });
     await page.screenshot({ path: info.outputPath('cost-records-light-600.png') });
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1)).toBe(true);
-    await page.reload(); await page.getByRole('button', { name: 'Token 消耗', exact: true }).click(); await page.getByLabel('用量项目').selectOption(project.id);
+    await page.reload(); await openCosts(page); await page.getByLabel('用量项目').selectOption(project.id);
     await page.getByRole('button', { name: `查看任务用量详情：${ledger.items[0].runId}`, exact: true }).click();
     await expect(page.locator('.cost-record [data-metric="inputTokens"] dd')).toHaveText('100');
     expect(errors).toEqual(['Failed to load resource: the server responded with a status of 400 (Bad Request)']); await expect(page.locator('vite-error-overlay')).toHaveCount(0);

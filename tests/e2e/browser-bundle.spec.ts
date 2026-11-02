@@ -12,7 +12,8 @@ test('loads the built browser client and receives real runtime notifications wit
   const response = await request.post('/__desktop_rpc', { data: { method: 'project.create', params: { title: '构建产物与真实事件验收' } } });
   expect(response.ok()).toBe(true); const payload = await response.json(); expect(payload.error).toBeUndefined();
   await expect.poll(() => events.some(event => JSON.parse(event).type === 'workspace.changed')).toBe(true);
-  await expect(page.getByRole('button', { name: `打开项目：${payload.result.title}`, exact: true })).toBeVisible();
+  await page.getByRole('button', { name: '我的项目', exact: true }).click();
+  await expect(page.getByRole('heading', { name: payload.result.title, exact: true })).toBeVisible();
   expect(paths.some(path => path.startsWith('/assets/'))).toBe(true);
   expect(paths.filter(path => /^\/(?:src\/|@vite\/|@react-refresh)/.test(path))).toEqual([]);
   await page.screenshot({ path: info.outputPath('browser-bundle-ready.png') });

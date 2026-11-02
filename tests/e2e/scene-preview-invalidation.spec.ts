@@ -112,17 +112,17 @@ test('keeps an unchanged thumbnail out of renders when another shot title change
   expect(errors).toEqual([]);
 });
 
-test('invalidates global reference spacing, evidence, caption style and profile in the real canvas', async ({ page }) => {
+test('ignores retired citation data while invalidating caption style and profile in the real canvas', async ({ page }) => {
   const errors = await openFixture(page);
   await change(page, 'numbers'); await change(page, 'small-profile'); const noReferences = await measure(page);
   await change(page, 'other-reference'); const footer = await measure(page);
-  expect(footer.pixels).not.toBe(noReferences.pixels);
+  expect(footer.pixels).toBe(noReferences.pixels);
   await change(page, 'own-reference'); const verified = await measure(page);
-  expect(verified.pixels).not.toBe(footer.pixels);
+  expect(verified.pixels).toBe(footer.pixels);
   await change(page, 'disputed'); const disputed = await measure(page);
-  expect(disputed.pixels).not.toBe(verified.pixels);
+  expect(disputed.pixels).toBe(verified.pixels);
   await change(page, 'source-replaced'); const replaced = await measure(page);
-  expect(replaced.pixels).not.toBe(disputed.pixels);
+  expect(replaced.pixels).toBe(disputed.pixels);
   await change(page, 'caption-style'); const styled = await measure(page);
   expect(styled.pixels).not.toBe(replaced.pixels);
   await change(page, 'profile'); const portrait = await measure(page);
@@ -142,11 +142,12 @@ test('invalidates shared clip sources and plans and exposes a removed source', a
   expect(errors).toEqual([]);
 });
 
-test('uses an explicit global reference-footer projection while preserving the legacy shots fallback', async ({ page }) => {
+test('ignores both legacy global reference-footer projections and shot metadata', async ({ page }) => {
   const errors = await openFixture(page);
   await change(page, 'numbers'); await change(page, 'small-profile'); const empty = await measure(page);
   await change(page, 'computed-footer'); const footer = await measure(page);
-  expect(footer.pixels).not.toBe(empty.pixels);
+  expect(footer.pixels).toBe(empty.pixels);
+  expect(footer.reads).toBe(empty.reads);
   await change(page, 'computed-no-footer');
   expect((await measure(page)).pixels).toBe(empty.pixels);
   expect(errors).toEqual([]);

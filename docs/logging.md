@@ -1,6 +1,6 @@
 # 运行日志规范与排查
 
-自动运行日志记录应用和任务的技术状态。项目内原有运行事件、活动账本、检查点和用户主动导出的运行诊断继续保留各自用途；文件日志不能作为提交成功或付费任务是否可重试的依据。
+自动运行日志记录应用和任务的技术状态。运行事件、活动账本、检查点和用户主动导出的运行诊断分别保存业务与恢复证据；文件日志用于定位问题，提交结果和可重试状态以持久化记录为准。
 
 ## 位置与保留
 
@@ -66,8 +66,8 @@ UUID 和内建节点编号可直接关联；用户自定义标识符使用稳定
 4. 生成失败时，按 `runId` 依次查 `run.execution_started`、节点事件、`activity.dispatched/completed/failed` 和 `run.failed`。`activity.blocked` 或 `status: unknown` 表示提交结果需核对，不据此自动再次调用供应商。
 5. `run.recovered` 说明启动时发现未结束运行；`activity.reused` 表示复用了已提交结果。需要创作输入、步骤输出和更完整上下文时，在应用内主动导出该运行的诊断包。
 
-## 方案与验证
+## 实现与验证
 
-采用 MIT 许可、无额外运行时依赖的 [electron-log 5.4.4](https://github.com/megahertz/electron-log) 的独立 Node 入口，复用其[文件写入和大小轮转](https://github.com/megahertz/electron-log/blob/master/docs/transports/file.md)。关闭默认控制台输出，并替换库内部文件错误通知中的原始异常转发。
+文件写入与大小轮转由 `packages/runtime/src/logging.ts` 统一封装 electron-log 的独立 Node 入口，固定版本见 [Runtime 包清单](../packages/runtime/package.json)。封装关闭默认控制台输出，并替换库内部文件错误通知中的原始异常转发。
 
 回归覆盖 JSON 行格式、级别过滤、大小轮转、受限文件权限、写入失败、脱敏、任务恢复/复用、请求关联、协议隔离和真实执行器退出。`pnpm test:desktop --packaged` 同时检查实际应用包生成的两类日志及夹具凭据排除；Windows 和 macOS 的原生包验收分别执行，不能互相替代。
