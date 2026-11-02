@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { afterEach, expect, it } from 'vitest';
 import { RuntimeController } from '../apps/desktop/electron/runtime-controller.mjs';
+import { createLogger } from '../packages/runtime/src/logging.js';
 
 const cleanups: Array<() => Promise<unknown>> = [];
 afterEach(async () => { for (const cleanup of cleanups.splice(0).reverse()) await cleanup(); });
@@ -138,15 +139,95 @@ it('never announces ready after its startup deadline while the failed process is
 
 it('keeps credentials behind the host boundary and reports startup failures without hanging shutdown', async () => {
   const path = await directory(), script = join(path, 'fixture.mjs');
+  const logger = createLogger({ dataDirectory: path, component: 'desktop', level: 'debug' }).child({ component: 'runtime-controller' });
   await writeFile(script, `import {createInterface} from 'node:readline'; console.log(JSON.stringify({method:'runtime.ready'}));
 const input=createInterface({input:process.stdin});let original;
 input.on('line',line=>{const q=JSON.parse(line);if(q.method){original=q.id; console.log(JSON.stringify({id:'host-1',method:'host.secret.get',params:{key:'fixture'}}));}
 else console.log(JSON.stringify({id:original,result:q.result}));});`);
   const hostCalls: unknown[] = [];
-  const controller = own({ command: process.execPath, args: [script], hostRequest: async (method: string, params: unknown) => { hostCalls.push([method, params]); return 'test-only'; } });
+  const controller = own({ command: process.execPath, args: [script], logger, hostRequest: async (method: string, params: unknown) => { hostCalls.push([method, params]); return 'test-only'; } });
   await controller.start(); expect(await controller.request('fixture')).toBe('test-only');
   expect(hostCalls).toEqual([['host.secret.get', { key: 'fixture' }]]);
-  const missing = own({ command: join(path, 'does-not-exist'), readyTimeoutMs: 1_000, shutdownTimeoutMs: 100 });
+  const missing = own({ command: join(path, 'does-not-exist'), logger, readyTimeoutMs: 1_000, shutdownTimeoutMs: 100 });
   await expect(missing.start()).rejects.toThrow('无法启动');
   expect(missing.status().state).toBe('disconnected');
+  const log = await readFile(join(path, 'logs', 'desktop.log'), 'utf8');
+  expect(log).toContain('"event":"runtime.spawn_failed"');
+  expect(log).not.toContain('test-only');
+  expect(log).not.toContain('does-not-exist');
+});
+
+it('persists correlated lifecycle and RPC logs without protocol payloads or provider output', async () => {
+  const path = await directory(), script = join(path, 'fixture.mjs');
+  await writeFile(script, `import {createInterface} from 'node:readline';
+process.stderr.write('provider-stderr-fixture-secret\\n');
+console.log(JSON.stringify({method:'runtime.ready'}));
+createInterface({input:process.stdin}).on('line',line=>{
+  const q=JSON.parse(line);
+  if(q.method==='project.create')console.log(JSON.stringify({id:q.id,error:{message:'provider-error-fixture-secret https://private.example/api?token=fixture'}}));
+  else if(q.method==='project.archive')process.stdout.write('malformed-fixture-secret\\n');
+  else console.log(JSON.stringify({id:q.id,result:q.params.secret}));
+});`);
+  const logger = createLogger({ dataDirectory: path, component: 'desktop', level: 'debug' }).child({ component: 'runtime-controller' });
+  const controller = own({ command: process.execPath, args: [script], logger });
+  await controller.start();
+  expect(await controller.request('project.get', { secret: 'rpc-input-output-fixture-secret' })).toBe('rpc-input-output-fixture-secret');
+  await expect(controller.request('project.create', { prompt: 'private-prompt-fixture-secret' })).rejects.toThrow('provider-error-fixture-secret');
+  expect(await controller.request('unknown-method-fixture-secret', { secret: 'unknown-result-fixture-secret' })).toBe('unknown-result-fixture-secret');
+  await expect(controller.request('project.archive')).rejects.toThrow('无效消息');
+  await controller.close();
+  const text = await readFile(join(path, 'logs', 'desktop.log'), 'utf8');
+  const records: Array<Record<string, unknown>> = text.trim().split('\n').map(line => JSON.parse(line));
+  expect(records).toContainEqual(expect.objectContaining({ event: 'runtime.spawned', generation: 1, childPid: expect.any(Number) }));
+  expect(records).toContainEqual(expect.objectContaining({ event: 'rpc.completed', requestId: 1, method: 'project.get', generation: 1, durationMs: expect.any(Number) }));
+  expect(records).toContainEqual(expect.objectContaining({ event: 'rpc.failed', requestId: 2, method: 'project.create', reason: 'runtime_error' }));
+  expect(records).toContainEqual(expect.objectContaining({ event: 'rpc.completed', requestId: 3, method: 'unknown' }));
+  expect(records).toContainEqual(expect.objectContaining({ event: 'runtime.disconnected', reason: 'invalid_json', generation: 1 }));
+  expect(records).toContainEqual(expect.objectContaining({ event: 'rpc.aborted', requestId: 4, method: 'project.archive', reason: 'invalid_json' }));
+  expect(records.every(record => record.component === 'runtime-controller' && record.schemaVersion === 1 && typeof record.time === 'string' && typeof record.runtimeSessionId === 'string')).toBe(true);
+  expect(text).not.toContain('fixture-secret');
+  expect(text).not.toContain('private.example');
+});
+
+it('records request deadlines and unexpected exits across actual sidecar generations', async () => {
+  const path = await directory(), script = join(path, 'fixture.mjs');
+  await writeFile(script, `import {createInterface} from 'node:readline';
+console.log(JSON.stringify({method:'runtime.ready'}));
+createInterface({input:process.stdin}).on('line',line=>{const q=JSON.parse(line);if(q.method==='project.archive')process.exit(9);});`);
+  const logger = createLogger({ dataDirectory: path, component: 'desktop' }).child({ component: 'runtime-controller' });
+  const controller = own({ command: process.execPath, args: [script], logger, requestTimeoutMs: 150 });
+  await controller.start();
+  await expect(controller.request('project.get')).rejects.toThrow('超时');
+  expect((await controller.reconnect()).generation).toBe(2);
+  await expect(controller.request('project.archive')).rejects.toThrow(/失联|退出/);
+  await controller.close();
+  const records: Array<Record<string, unknown>> = (await readFile(join(path, 'logs', 'desktop.log'), 'utf8')).trim().split('\n').map(line => JSON.parse(line));
+  expect(records).toContainEqual(expect.objectContaining({ event: 'rpc.timeout', level: 'error', requestId: 1, method: 'project.get', generation: 1, durationMs: expect.any(Number) }));
+  expect(records).toContainEqual(expect.objectContaining({ event: 'runtime.exited', level: 'error', generation: 2, exitCode: 9, reason: 'nonzero_exit' }));
+});
+
+it.skipIf(process.platform === 'win32')('records a sidecar killed by a signal as abnormal even when cleanup starts before exit is delivered', async () => {
+  const path = await directory(), script = join(path, 'fixture.mjs');
+  await writeFile(script, `import {createInterface} from 'node:readline';
+console.log(JSON.stringify({method:'runtime.ready'}));
+createInterface({input:process.stdin}).on('line',()=>process.kill(process.pid,'SIGKILL'));`);
+  const logger = createLogger({ dataDirectory: path, component: 'desktop' }).child({ component: 'runtime-controller' });
+  const controller = own({ command: process.execPath, args: [script], logger });
+  await controller.start();
+  await expect(controller.request('project.get')).rejects.toThrow(/失联|退出/);
+  await controller.close();
+  const records: Array<Record<string, unknown>> = (await readFile(join(path, 'logs', 'desktop.log'), 'utf8')).trim().split('\n').map(line => JSON.parse(line));
+  expect(records).toContainEqual(expect.objectContaining({ event: 'runtime.exited', level: 'error', generation: 1, signal: 'SIGKILL', reason: 'unexpected_exit' }));
+});
+
+it('keeps an ordinary requested sidecar shutdown at info level', async () => {
+  const path = await directory(), script = join(path, 'fixture.mjs');
+  await writeFile(script, `console.log(JSON.stringify({method:'runtime.ready'}));process.stdin.resume();`);
+  const logger = createLogger({ dataDirectory: path, component: 'desktop' }).child({ component: 'runtime-controller' });
+  const controller = own({ command: process.execPath, args: [script], logger });
+  await controller.start();
+  await controller.close();
+  const records: Array<Record<string, unknown>> = (await readFile(join(path, 'logs', 'desktop.log'), 'utf8')).trim().split('\n').map(line => JSON.parse(line));
+  expect(records).toContainEqual(expect.objectContaining({ event: 'runtime.exited', level: 'info', generation: 1, exitCode: 0, reason: 'requested_stop' }));
+  expect(records.some(record => record.level === 'error')).toBe(false);
 });

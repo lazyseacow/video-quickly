@@ -35,9 +35,11 @@ import { replaceShotMedia } from '@video-quickly/video/clip-edits';
 import { trimShotInContext } from '@video-quickly/video/editing';
 import { createAudioPreview, type AudioMixCallbacks } from './audio-preview.js';
 import { createRunInspector, redactInspectionText } from './run-inspection.js';
+import { createLogger, logError, type DiagnosticLogger } from './logging.js';
 
 export { ActivityJournal, AmbiguousActivityError, SimulatedProcessExit } from './activities.js';
 export type { ActivityContext } from './activities.js';
+export type { DiagnosticLogger } from './logging.js';
 
 export interface SecretStore {
   persistent?: boolean;
@@ -67,6 +69,7 @@ export interface ActivityExecutionContext {
 
 export interface RuntimeOptions {
   dataDirectory: string;
+  logger?: DiagnosticLogger;
   mode?: 'desktop' | 'development';
   secretStore?: SecretStore;
   provider?: TextProvider;
@@ -121,7 +124,11 @@ function containsPromptTemplate(value: unknown): boolean {
 
 export function createRuntime(options: RuntimeOptions) {
   const directory = resolve(options.dataDirectory);
-  const database = openDatabase(directory);
+  const logger = options.logger ?? createLogger({ dataDirectory: directory, component: 'runtime' });
+  logger.info('runtime.initializing');
+  let database: ReturnType<typeof openDatabase>;
+  try { database = openDatabase(directory); }
+  catch (error) { logger.error('runtime.initialization_failed', { error: logError(error) }); throw error; }
   const store = new DocumentStore(database);
   const reads = createReadModels(database, store);
   const listeners = new Set<(event: RuntimeEvent) => void>();
@@ -143,7 +150,7 @@ export function createRuntime(options: RuntimeOptions) {
   let workspaceVersion = 0;
   const changed = () => { workspaceVersion++; emit({ type: 'workspace.changed' }); };
   function emit(event: RuntimeEvent) { for (const listener of listeners) listener(event); }
-  const journal = new ActivityJournal(database, { failpoint: options.failpoint, onEvent: changed });
+  const journal = new ActivityJournal(database, { failpoint: options.failpoint, onEvent: changed, logger });
   const costs = createCostLedger({ database, store, onChanged: changed });
   const characters = createCharacterLibrary({ database, store, onChanged: changed });
   const seriesTemplates = createSeriesTemplateLibrary({ database, store, onChanged: changed });
@@ -171,6 +178,7 @@ export function createRuntime(options: RuntimeOptions) {
   for (const previous of store.list<RunRecord>('run')) {
     if (['running', 'queued', 'waiting_external', 'retry_scheduled'].includes(previous.status)) {
       store.put('run', previous.id, { ...previous, status: 'queued', updatedAt: now(), error: '上次执行已中断，可从检查点继续。' });
+      logger.warn('run.recovered', { runId: previous.id, projectId: previous.projectId, previousStatus: previous.status, status: 'queued' });
     }
   }
 
@@ -340,16 +348,24 @@ export function createRuntime(options: RuntimeOptions) {
   }
 
   function updateRun(id: string, patch: Partial<RunRecord>) {
-    const updated = { ...run(id), ...patch, updatedAt: now() };
+    const previous = run(id);
+    const updated = { ...previous, ...patch, updatedAt: now() };
     store.put('run', id, updated);
+    if (previous.status !== updated.status) logger.debug('run.status_changed', { runId: id, projectId: updated.projectId, nodeId: updated.currentNodeId, previousStatus: previous.status, status: updated.status });
     changed();
     return updated;
   }
 
-  function recordEvent(runId: string, type: string, message: string, nodeId?: string) {
+  function recordEvent(runId: string, type: string, message: string, nodeId?: string, error?: unknown) {
     const record = run(runId);
     const created = store.event(runId, type, { message, nodeId });
     const event: RunEvent = { id: `event-${created.sequence}`, runId, projectId: record.projectId, sequence: created.sequence, type, message, nodeId, createdAt: created.createdAt };
+    // Presentation messages contain user labels and provider text. Diagnostics
+    // keep only the event identity and safe, explicitly selected metadata.
+    const fields = { runId, projectId: record.projectId, nodeId, sequence: created.sequence, status: record.status, ...(error === undefined ? {} : { error: logError(error) }) };
+    if (type === 'run.failed') logger.error(type, fields);
+    else if (type === 'run.interrupted') logger.warn(type, fields);
+    else logger.info(type, fields);
     emit({ type: 'run.event', data: event as unknown as JsonValue });
     changed();
     return event;
@@ -699,6 +715,7 @@ export function createRuntime(options: RuntimeOptions) {
       });
       const config = { configurable: { thread_id: runId }, durability: 'sync' as const, signal: controller.signal, recursionLimit: 400 };
       const state = await graph.getState(config);
+      logger.info('run.execution_started', { runId, projectId: saved.project.id, resumed: Boolean(state.values && Object.keys(state.values).length) });
       if (review !== undefined) await graph.invoke(new Command<unknown, { completed?: string[]; skipped?: string[]; currentNodeId?: string; outputs?: Record<string, JsonValue>; pendingReview?: boolean }, 'dispatch' | 'execute' | 'review' | '__start__'>({ resume: { approved: review } }), config);
       else await graph.invoke(state.values && Object.keys(state.values).length ? null : { completed: [], skipped: [], currentNodeId: '', outputs: {}, pendingReview: false }, config);
       const latest = run(runId);
@@ -713,7 +730,7 @@ export function createRuntime(options: RuntimeOptions) {
       const message = redactError(error instanceof Error ? error.message : '运行失败', availableModels(), transientSecrets);
       const status = error instanceof AmbiguousActivityError || message.includes('请') || message.includes('先') ? 'needs_attention' : 'failed';
       updateRun(runId, { status, error: message });
-      recordEvent(runId, 'run.failed', message, latest.currentNodeId);
+      recordEvent(runId, 'run.failed', message, latest.currentNodeId, error);
     }).finally(() => { active.delete(runId); });
     active.set(runId, { promise, controller });
   }
@@ -779,8 +796,25 @@ export function createRuntime(options: RuntimeOptions) {
     },
   });
 
-  function dispatch(method: string, rawParams: unknown = {}): Promise<unknown> {
-    return trackWork(() => dispatchRequest(method, rawParams));
+  function dispatch(method: string, rawParams: unknown = {}, context?: { requestId?: string | number }): Promise<unknown> {
+    const requestLogger = logger.child({ requestId: context?.requestId ?? randomUUID(), method });
+    const started = performance.now();
+    requestLogger.debug('rpc.started');
+    return trackWork(async () => {
+      try {
+        const result = await dispatchRequest(method, rawParams);
+        const runId = ['run.start', 'run.resume', 'run.review', 'run.cancel', 'run.get'].includes(method) && result && typeof result === 'object' && 'id' in result && typeof result.id === 'string' ? result.id : undefined;
+        const fields = { durationMs: Math.round(performance.now() - started), runId };
+        // Polling and read models belong to debug; successful user changes
+        // remain visible at the default info level without their payloads.
+        if (/\.(?:get|list|summary|snapshot|inspect|payload|versions|plan|replay|status|read|references|tasks|events|activities|candidates|voices|waveform|result)$/.test(method)) requestLogger.debug('rpc.completed', fields);
+        else requestLogger.info('rpc.completed', fields);
+        return result;
+      } catch (error) {
+        requestLogger.error('rpc.failed', { durationMs: Math.round(performance.now() - started), error: logError(error) });
+        throw error;
+      }
+    });
   }
   async function dispatchRequest(method: string, rawParams: unknown): Promise<unknown> {
     if (closing) throw new Error('运行环境正在关闭。');
@@ -1382,17 +1416,22 @@ export function createRuntime(options: RuntimeOptions) {
     }
   }
 
+  logger.info('runtime.initialized');
   return {
     dispatch,
     subscribe(listener: (event: RuntimeEvent) => void) { listeners.add(listener); return () => { listeners.delete(listener); }; },
     async waitForIdle() { await audioPreview.waitForIdle(); await batches.waitForIdle(); await drainWork(); },
     async close() {
+      logger.info('runtime.stopping', { pendingCount: active.size + pendingWork.size });
       closing = true;
-      await audioPreview.close();
-      await batches.close();
-      for (const value of active.values()) value.controller.abort();
-      await drainWork();
-      database.close(); listeners.clear(); transientSecrets.clear();
+      try {
+        await audioPreview.close();
+        await batches.close();
+        for (const value of active.values()) value.controller.abort();
+        await drainWork();
+        database.close(); listeners.clear(); transientSecrets.clear();
+        logger.info('runtime.stopped');
+      } catch (error) { logger.error('runtime.shutdown_failed', { error: logError(error) }); throw error; }
     },
   };
 }

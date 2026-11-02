@@ -70,3 +70,7 @@ macOS ZIP 未签名，最低系统版本为 13.5；可运行 `node scripts/verif
 浏览器回归使用 `pnpm test:e2e`，默认端口为 1421。多个工作目录同时验证时，可通过 `VIDEO_QUICKLY_PORT` 指定不同端口；各次运行的数据目录独立。
 
 Electron 使用独立的 `VideoQuickly-Electron` 数据目录；本轮按开发阶段要求不迁移旧 Tauri 数据，旧目录保持原样。详见 [Electron 架构与验收](docs/electron-migration.md)。
+
+## 日志与排查
+
+运行日志自动保存在工作区的 `logs/` 目录，桌面外壳记录在 `desktop.log`，执行器与浏览器预览记录在 `runtime.log`。日志按大小轮转，默认记录关键操作及异常，支持临时开启调试级别。具体路径、字段、脱敏范围和排查步骤见 [日志规范](docs/logging.md)。

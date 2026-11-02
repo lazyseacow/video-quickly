@@ -5,12 +5,16 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { RuntimeController } from './runtime-controller.mjs';
 import { createCredentialHost } from './credentials.mjs';
+import { createLogger, logError } from './logging.mjs';
 import { windowsJobContainer } from './windows-job.mjs';
 import { applicationId, applicationOrigin, externalWebUrl, fileInside, pathDialogOptions, rendererIsTrusted, runtimeMediaEnvironment, serveFile, validPath, validRuntimeRequest, workspaceDirectory } from './platform.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const repository = resolve(here, '../../..');
 const dataDirectory = workspaceDirectory();
+const logger = createLogger({ dataDirectory, component: 'desktop' });
+// Observe fatal errors without replacing Node/Electron's termination behavior.
+process.on('uncaughtExceptionMonitor', (error, origin) => logger.error('desktop.uncaught_exception', { error: logError(error), reason: origin }));
 const developmentUrl = !app.isPackaged ? process.env.VIDEO_QUICKLY_DEV_URL : undefined;
 if (developmentUrl && !/^http:\/\/(127\.0\.0\.1|localhost):\d+\/?$/.test(developmentUrl)) throw new Error('桌面开发地址必须使用本机端口。');
 app.setName('Video Quickly');
@@ -31,13 +35,19 @@ function sendEvent(event) {
 }
 
 function trust(event) {
-  if (!window || !rendererIsTrusted(event, window.webContents, developmentUrl)) throw new Error('不允许此页面调用桌面功能。');
+  if (!window || !rendererIsTrusted(event, window.webContents, developmentUrl)) {
+    logger.warn('ipc.rejected', { reason: 'untrusted_renderer' });
+    throw new Error('不允许此页面调用桌面功能。');
+  }
 }
 
 function installIpc() {
   ipcMain.handle('vq:runtime', async (event, input) => {
     trust(event);
-    const { method, params } = validRuntimeRequest(input);
+    let request;
+    try { request = validRuntimeRequest(input); }
+    catch (error) { logger.warn('ipc.rejected', { reason: 'invalid_request' }); throw error; }
+    const { method, params } = request;
     if (method === 'runtime.status') return controller.status();
     if (method === 'runtime.reconnect') return controller.reconnect();
     return controller.request(method, params);
@@ -73,7 +83,10 @@ function createWindow() {
   });
   window.webContents.setWindowOpenHandler(({ url }) => {
     const external = externalWebUrl(url);
-    if (external) void shell.openExternal(external).catch(() => dialog.showErrorBox('无法打开网页', '请在系统浏览器中打开该链接。'));
+    if (external) void shell.openExternal(external).catch(error => {
+      logger.warn('desktop.external_open_failed', { error: logError(error) });
+      dialog.showErrorBox('无法打开网页', '请在系统浏览器中打开该链接。');
+    });
     return { action: 'deny' };
   });
   window.webContents.on('will-navigate', (event, url) => {
@@ -82,6 +95,9 @@ function createWindow() {
   });
   window.webContents.on('will-attach-webview', event => event.preventDefault());
   const owner = window;
+  owner.webContents.on('render-process-gone', (_event, details) => logger.error('desktop.renderer_gone', { reason: details.reason, exitCode: details.exitCode }));
+  owner.webContents.on('did-fail-load', (_event, code, _description, _url, mainFrame) => logger.error('desktop.load_failed', { exitCode: code, status: mainFrame ? 'main_frame' : 'sub_frame' }));
+  owner.webContents.on('preload-error', (_event, _path, error) => logger.error('desktop.preload_failed', { error: logError(error) }));
   owner.webContents.on('will-prevent-unload', event => {
     const choice = dialog.showMessageBoxSync(owner, {
       type: 'question', title: '离开工作台？', message: '还有未保存的修改。',
@@ -91,9 +107,9 @@ function createWindow() {
     // Electron reverses the usual meaning here: preventDefault accepts unload.
     if (choice === 1) event.preventDefault();
   });
-  owner.once('ready-to-show', () => { if (!owner.isDestroyed()) owner.show(); });
-  owner.on('closed', () => { if (window === owner) window = undefined; });
-  void owner.loadURL(developmentUrl ?? `${applicationOrigin}/`);
+  owner.once('ready-to-show', () => { logger.info('desktop.window_ready'); if (!owner.isDestroyed()) owner.show(); });
+  owner.on('closed', () => { logger.info('desktop.window_closed'); if (window === owner) window = undefined; });
+  void owner.loadURL(developmentUrl ?? `${applicationOrigin}/`).catch(error => logger.error('desktop.navigation_failed', { error: logError(error) }));
   return owner;
 }
 
@@ -107,6 +123,7 @@ function activateWindow() {
 }
 
 async function launch() {
+  logger.info('desktop.starting', { appVersion: app.getVersion(), platform: process.platform, arch: process.arch, nodeVersion: process.versions.node, electronVersion: process.versions.electron, packaged: app.isPackaged });
   // The development Electron bundle has its own icon; packaged macOS uses its ICNS.
   if (!app.isPackaged) app.dock?.setIcon(join(here, '../build/icons/dock.png'));
   await mkdir(dataDirectory, { recursive: true });
@@ -131,6 +148,7 @@ async function launch() {
     command: join(sidecar, process.platform === 'win32' ? 'node.exe' : 'node'),
     args: [join(sidecar, 'runtime.mjs'), '--data-dir', dataDirectory], cwd: sidecar,
     env: runtimeMediaEnvironment(media, app.isPackaged),
+    logger: logger.child({ component: 'runtime-controller' }),
     hostRequest: createCredentialHost(AsyncEntry), onEvent: sendEvent, onSpawn: await windowsJobContainer(),
   });
   installIpc();
@@ -155,11 +173,13 @@ async function launch() {
   if (process.platform !== 'darwin') tray.on('click', activateWindow);
   createWindow();
   // Show the window and recovery controls even when sidecar startup fails.
-  try { await controller.start(); } catch { /* Connection state contains an actionable failure. */ }
+  try { await controller.start(); logger.info('desktop.ready'); }
+  catch (error) { logger.error('desktop.runtime_unavailable', { error: logError(error) }); }
 }
 
 if (!app.requestSingleInstanceLock()) app.quit();
 else {
+  app.on('child-process-gone', (_event, details) => logger.error('desktop.child_process_gone', { reason: details.reason, exitCode: details.exitCode }));
   app.on('second-instance', activateWindow);
   app.on('activate', activateWindow);
   app.on('window-all-closed', () => { if (process.platform !== 'darwin') app.quit(); });
@@ -168,9 +188,11 @@ else {
   app.on('will-quit', event => {
     if (exiting) return;
     event.preventDefault();
+    if (!shutdown) logger.info('desktop.stopping');
     shutdown ??= Promise.resolve().then(() => controller?.close()).then(
-      () => { exiting = true; app.quit(); },
-      () => {
+      () => { logger.info('desktop.stopped'); exiting = true; app.quit(); },
+      error => {
+        logger.error('desktop.shutdown_failed', { error: logError(error) });
         exiting = true;
         dialog.showErrorBox('退出清理失败', '本地执行组件未能正常退出，请在重新打开后核对未完成任务。');
         app.exit(1);
@@ -178,6 +200,7 @@ else {
     );
   });
   void app.whenReady().then(launch).catch(error => {
+    logger.error('desktop.start_failed', { error: logError(error) });
     dialog.showErrorBox('Video Quickly 无法启动', error instanceof Error ? error.message : '桌面环境启动失败。');
     app.quit();
   });

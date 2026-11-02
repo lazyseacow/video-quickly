@@ -23,3 +23,12 @@ await build({
     },
   }],
 });
+
+// The desktop shell uses the same file-only logger as the standalone runtime.
+// Bundle its Node entry so production never depends on workspace source paths.
+await build({
+  entryPoints: [resolve(root, 'packages/runtime/src/logging.ts')],
+  outfile: resolve(root, 'apps/desktop/electron/logging.mjs'),
+  bundle: true, platform: 'node', format: 'esm', target: 'node24',
+  banner: { js: "import { createRequire as __createRequire } from 'node:module'; const require = __createRequire(import.meta.url);" },
+});

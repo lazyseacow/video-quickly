@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import type Database from 'better-sqlite3';
 import { LockedShotChangeError, TranscriptionTimestampError } from '@video-quickly/contracts';
 import { DocumentStore } from './database.js';
+import { logError, type DiagnosticLogger } from './logging.js';
 
 export type ActivitySafety = 'local' | 'idempotent' | 'external';
 export interface ActivityRecord {
@@ -40,6 +41,7 @@ export interface ActivityContext {
 }
 
 export interface ActivityHooks {
+  logger?: DiagnosticLogger;
   failpoint?: (point: 'before-dispatch' | 'after-dispatch' | 'after-result' | 'after-commit', activityId: string) => void;
   onEvent?: (event: unknown) => void;
 }
@@ -69,12 +71,22 @@ export class ActivityJournal {
   }
 
   async execute<T>(runId: string, activityId: string, input: unknown, safety: ActivitySafety, action: (context: ActivityContext) => Promise<T>, commit?: (result: T) => void): Promise<T> {
+    const logger = this.hooks.logger?.child({ runId, activityId, safety });
+    const started = performance.now();
     const inputHash = fingerprint(input);
     const previous = this.get(runId, activityId);
-    if (previous && previous.input_hash !== inputHash) throw new ActivityInputChangedError(activityId);
-    if (previous?.status === 'completed') return JSON.parse(previous.result!) as T;
+    if (previous && previous.input_hash !== inputHash) {
+      logger?.warn('activity.input_changed', { status: previous.status });
+      throw new ActivityInputChangedError(activityId);
+    }
+    if (previous?.status === 'completed') {
+      const result = JSON.parse(previous.result!) as T;
+      logger?.debug('activity.reused', { status: previous.status, cached: true });
+      return result;
+    }
     if (previous && ['dispatched', 'unknown'].includes(previous.status) && safety === 'external' && !previous.remote_id) {
       this.database.prepare("UPDATE activities SET status = 'unknown' WHERE run_id = ? AND activity_id = ?").run(runId, activityId);
+      logger?.warn('activity.blocked', { status: 'unknown', hasRemoteId: false });
       throw new AmbiguousActivityError(activityId);
     }
     if (!previous) {
@@ -82,11 +94,15 @@ export class ActivityJournal {
     }
     this.hooks.failpoint?.('before-dispatch', activityId);
     this.database.prepare("UPDATE activities SET status = 'dispatched', error = NULL WHERE run_id = ? AND activity_id = ?").run(runId, activityId);
+    logger?.info('activity.dispatched', { status: 'dispatched', resumed: Boolean(previous), hasRemoteId: Boolean(previous?.remote_id) });
     this.hooks.failpoint?.('after-dispatch', activityId);
     const context: ActivityContext = {
       operationId: `${runId}:${activityId}`,
       remoteId: previous?.remote_id ?? undefined,
-      recordRemoteId: id => { this.database.prepare('UPDATE activities SET remote_id = ? WHERE run_id = ? AND activity_id = ?').run(id, runId, activityId); },
+      recordRemoteId: id => {
+        this.database.prepare('UPDATE activities SET remote_id = ? WHERE run_id = ? AND activity_id = ?').run(id, runId, activityId);
+        logger?.debug('activity.receipt_recorded', { hasRemoteId: true });
+      },
     };
     try {
       const result = await action(context);
@@ -96,6 +112,7 @@ export class ActivityJournal {
         this.database.prepare("UPDATE activities SET status = 'completed', result = ?, completed_at = ?, error = NULL WHERE run_id = ? AND activity_id = ?").run(JSON.stringify(result), new Date().toISOString(), runId, activityId);
         return this.store.event(runId, 'activity.completed', { activityId });
       })();
+      logger?.info('activity.completed', { status: 'completed', durationMs: Math.round(performance.now() - started) });
       this.hooks.onEvent?.(event);
       this.hooks.failpoint?.('after-commit', activityId);
       return result;
@@ -103,6 +120,7 @@ export class ActivityJournal {
       if (error instanceof SimulatedProcessExit) throw error;
       const message = error instanceof TranscriptionTimestampError || error instanceof LockedShotChangeError ? error.message : safety === 'external' ? '外部调用未完成，结果需要核对。' : error instanceof Error ? error.message : '活动执行失败';
       this.database.prepare('UPDATE activities SET status = ?, error = ? WHERE run_id = ? AND activity_id = ?').run(safety === 'external' ? 'unknown' : 'failed', message, runId, activityId);
+      logger?.error('activity.failed', { status: safety === 'external' ? 'unknown' : 'failed', durationMs: Math.round(performance.now() - started), error: logError(error) });
       // LangGraph also persists thrown errors in pending writes. Replace the
       // error before crossing that boundary; redacting only UI logs is too late.
       if (safety === 'external') throw new Error(message);

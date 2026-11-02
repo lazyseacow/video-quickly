@@ -16,3 +16,6 @@ playwright-report/
 
 # Retired framework cache left on developer machines; never ship it.
 apps/desktop/src-tauri/gen/
+
+# Shared logger compiled by scripts/build-runtime.mjs.
+apps/desktop/electron/logging.mjs

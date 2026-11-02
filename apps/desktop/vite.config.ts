@@ -4,6 +4,7 @@ import react from '@vitejs/plugin-react';
 import { createReadStream, existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import { resolve, relative, isAbsolute, extname } from 'node:path';
 import { createRuntime } from '../../packages/runtime/src/index.ts';
+import { createLogger, logError } from '../../packages/runtime/src/logging.ts';
 import { createActivityExecutor, createWaveformReader, validateMediaActivity } from '../../packages/integrations/src/index.ts';
 import { readRpcRequest } from './dev/read-rpc-request.ts';
 import { audioMixProjectionKey, prepareAudioMix, readAudioLevelWindow, detectAudioSilence } from '../../packages/video/src/audio-mix.ts';
@@ -25,6 +26,7 @@ function developmentBridge(browserTest: boolean): Plugin {
       server.middlewares.use('/__desktop_test/thumbnail', (_request, response) => { response.writeHead(302, { Location: '/' + file }); response.end(); });
     }
     const dataDirectory = resolve(process.env.VIDEO_QUICKLY_DATA_DIR ?? (browserTest ? '../../.data/browser-preview' : '../../.data/development'));
+    const logger = createLogger({ dataDirectory, component: 'runtime' });
     const temporarySecrets = new Map<string, string>();
     const toolsDirectory = resolve('../../.tools');
     const mediaLock = JSON.parse(readFileSync(resolve('../../scripts/media-manifest.json'), 'utf8')) as { directory: string };
@@ -34,7 +36,7 @@ function developmentBridge(browserTest: boolean): Plugin {
       .find(path => existsSync(path)) : undefined;
     const ffmpegPath = process.env.VIDEO_QUICKLY_FFMPEG ?? bundledMedia;
     const waveforms = createWaveformReader({ dataDirectory, ffmpegPath });
-    const runtime = await createRuntime({ dataDirectory, mode: 'development', ffmpegPath, readAudioWaveform: asset => waveforms.read(asset),
+    const runtime = await createRuntime({ dataDirectory, mode: 'development', logger, ffmpegPath, readAudioWaveform: asset => waveforms.read(asset),
       audioMix: { projectionKey: audioMixProjectionKey, prepare: options => prepareAudioMix({ ...options, ffmpegPath }), levels: readAudioLevelWindow, silence: options => detectAudioSilence({ ...options, ffmpegPath }) },
       preflightActivity: validateMediaActivity, executeActivity: createActivityExecutor({ ffmpegPath }), secretStore: {
       persistent: false,
@@ -55,7 +57,7 @@ function developmentBridge(browserTest: boolean): Plugin {
       response.write(': connected\n\n'); peers.add(response);
       response.on('close', () => peers.delete(response));
     });
-    server.httpServer?.on('close', () => { unsubscribe(); void waveforms.close().then(() => runtime.close()); });
+    server.httpServer?.on('close', () => { unsubscribe(); void waveforms.close().then(() => runtime.close()).catch(error => logger.error('preview.shutdown_failed', { error: logError(error) })); });
     server.middlewares.use('/__desktop_rpc', async (request, response) => {
       response.setHeader('Content-Type', 'application/json; charset=utf-8');
       if (request.method !== 'POST') { response.statusCode = 405; response.end(JSON.stringify({ error: '只支持 POST' })); return; }
@@ -66,6 +68,7 @@ function developmentBridge(browserTest: boolean): Plugin {
         const result = ['runtime.status', 'runtime.reconnect'].includes(parsed.method) ? { state: 'ready', generation: 0 } : await runtime.dispatch(parsed.method, 'params' in parsed ? parsed.params : {});
         response.end(JSON.stringify({ result }));
       } catch (error) {
+        logger.warn('preview.rpc_rejected', { error: logError(error) });
         response.statusCode = 400;
         response.end(JSON.stringify({ error: error instanceof Error ? error.message : '操作失败' }));
       }

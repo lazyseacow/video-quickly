@@ -95,6 +95,10 @@ async function launch() {
   await expect(page).toHaveTitle(/Video Quickly/);
   await expect(page.locator('.workspace-shell')).toBeVisible({ timeout: 30_000 });
   await expect.poll(() => rpc('runtime.status'), { timeout: 20_000 }).toMatchObject({ state: 'ready' });
+  const records = (await readFile(join(workspace, 'logs', 'desktop.log'), 'utf8')).trim().split('\n').map(line => JSON.parse(line));
+  const startup = records.slice(records.findLastIndex(record => record.event === 'desktop.starting'));
+  assert.equal(startup.some(record => record.event === 'rpc.rejected' && record.reason === 'not_connected'), false, 'Startup requests must wait for runtime readiness');
+  checks.startupReadiness = true;
   assert.equal(new URL(page.url()).protocol, 'video-quickly:');
   assert.equal(new URL(page.url()).hostname, 'app');
   return page;
@@ -374,6 +378,16 @@ try {
   assert.deepEqual(errors, [], 'Native renderer must have no application errors');
   checks.consoleHealth = true;
   await close(1);
+  for (const component of ['desktop', 'runtime']) {
+    const text = await readFile(join(workspace, 'logs', `${component}.log`), 'utf8');
+    const records = text.trim().split('\n').map(line => JSON.parse(line));
+    assert.ok(records.every(record => record.schemaVersion === 1 && Number.isFinite(Date.parse(record.time)) && ['debug', 'info', 'warn', 'error'].includes(record.level)));
+    assert.ok(records.some(record => record.event === (component === 'desktop' ? 'desktop.ready' : 'runtime.initialized')));
+    assert.ok(records.some(record => record.event === (component === 'desktop' ? 'desktop.stopped' : 'runtime.stopped')));
+    for (const secret of [testSecret, expectedSecret]) assert.ok(!text.includes(secret), 'Credentials must never enter automatic diagnostics');
+    await writeFile(join(artifacts, `${component}.log`), text);
+  }
+  checks.structuredLogs = true;
   await mkdir(dirname(reportPath), { recursive: true });
   await writeFile(reportPath, JSON.stringify({ status: 'passed', platform: process.platform, architecture: process.arch, packaged, distributionScope, relocatedExecutable: Boolean(process.env.VIDEO_QUICKLY_ELECTRON_EXECUTABLE), electron: actualElectronVersion, checks,
     nativeDialogs: 'file/directory/save selection, cancellation and close decisions substituted; OS dialog UI requires manual verification',
