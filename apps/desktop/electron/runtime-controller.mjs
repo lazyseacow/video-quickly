@@ -104,8 +104,10 @@ export class RuntimeController {
     if (this.#session !== session || session.exited || session.terminal || session.child.stdin.destroyed) return Promise.reject(new Error('执行通道已关闭。'));
     return new Promise((resolve, reject) => session.child.stdin.write(`${JSON.stringify(message)}\n`, error => error ? reject(error) : resolve()));
   }
-  request(method, params = {}) {
+  async request(method, params = {}) {
     if (typeof method !== 'string' || method.startsWith('host.')) return Promise.reject(new Error('该操作不能由界面调用。'));
+    // The window can invoke RPC before an explicit start/reconnect is ready.
+    await this.#operation;
     const session = this.#session;
     if (this.#closing || this.#status.state !== 'ready' || !session) return Promise.reject(new Error('本地执行组件未连接，请先重新连接。'));
     const id = ++this.#sequence;

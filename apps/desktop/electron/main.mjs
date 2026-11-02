@@ -107,6 +107,8 @@ function activateWindow() {
 }
 
 async function launch() {
+  // The development Electron bundle has its own icon; packaged macOS uses its ICNS.
+  if (!app.isPackaged) app.dock?.setIcon(join(here, '../build/icons/dock.png'));
   await mkdir(dataDirectory, { recursive: true });
   await mkdir(app.getPath('userData'), { recursive: true });
   session.defaultSession.setPermissionRequestHandler((_contents, _permission, callback) => callback(false));
