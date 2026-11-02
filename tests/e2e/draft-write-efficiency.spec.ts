@@ -25,6 +25,9 @@ async function fixture(request: APIRequestContext, title: string, count = 2) {
 async function openProject(page: Page, project: ProjectDocument) {
   await page.goto('/'); await expect(page).toHaveTitle(/Video Quickly/);
   await page.getByRole('button', { name: `打开项目：${project.title}`, exact: true }).click();
+  await page.waitForFunction(({ title, count }) => [...document.querySelectorAll<HTMLElement>('.workbench')].some(root =>
+    root.querySelector<HTMLInputElement>('input[aria-label="项目名称"]')?.value === title && root.querySelectorAll('.outline-shot').length === count &&
+    root.getClientRects().length > 0 && getComputedStyle(root).visibility === 'visible'), { title: project.title, count: project.shots.length });
   await expect(page.getByLabel('镜头标题', { exact: true })).toHaveValue('原始镜头 0');
   await expect(page.getByRole('button', { name: '保存修改', exact: true })).toBeDisabled();
   await settleWrites(page);

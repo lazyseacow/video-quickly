@@ -28,11 +28,13 @@ async function bounded<T>(work: Promise<T>, milliseconds: number): Promise<T> {
 
 /** Fault fixtures own a real preview/runtime, filesystem and HTTP origin for each test. */
 export const test = base.extend<{ isolatedWorkspace: { directory: string; origin: string } }>({
-  isolatedWorkspace: [async ({}, use) => {
+  isolatedWorkspace: [async ({}, use, info) => {
     const directory = await mkdtemp(join(tmpdir(), 'vq-isolated-browser-')), canonical = await realpath(directory), parent = await realpath(tmpdir()), owned = await lstat(directory, { bigint: true });
     const difference = relative(parent, canonical);
     if (difference === '..' || difference.startsWith('..' + (process.platform === 'win32' ? '\\' : '/')) || isAbsolute(difference)) throw new Error('隔离目录不在系统临时目录内。');
-    const child = fork(join(desktop, 'dev/preview-e2e.ts'), [], { cwd: desktop, execArgv: ['--import', 'tsx'], env: { ...process.env, VIDEO_QUICKLY_DATA_DIR: directory, VIDEO_QUICKLY_PORT: '0', VIDEO_QUICKLY_NATIVE_DESKTOP: '0' }, stdio: ['ignore', 'pipe', 'pipe', 'ipc'], windowsHide: true });
+    // Each writer owns its output; a child must never truncate the main preview's diagnostics.
+    const diagnostics = process.env.VIDEO_QUICKLY_RPC_DIAGNOSTICS ? { VIDEO_QUICKLY_RPC_DIAGNOSTICS: info.outputPath('browser-rpc-diagnostics.jsonl') } : {};
+    const child = fork(join(desktop, 'dev/preview-e2e.ts'), [], { cwd: desktop, execArgv: ['--import', 'tsx'], env: { ...process.env, ...diagnostics, VIDEO_QUICKLY_DATA_DIR: directory, VIDEO_QUICKLY_PORT: '0', VIDEO_QUICKLY_NATIVE_DESKTOP: '0' }, stdio: ['ignore', 'pipe', 'pipe', 'ipc'], windowsHide: true });
     let output = '', closed = false;
     for (const stream of [child.stdout, child.stderr]) stream?.on('data', chunk => { output = (output + String(chunk)).slice(-16_000); });
     const exit = new Promise<{ code: number | null; signal: string | null }>(done => child.once('close', (code, signal) => { closed = true; done({ code, signal }); }));

@@ -34,21 +34,34 @@ async function restore(page: Page, source: string) {
 }
 let failures: string[];
 let missingAssets: Set<string>;
-let rpcFailures: Array<{ method: string; error: string }>, expectedRpcFailures: Array<{ method: string; error: RegExp }>;
+type RpcFailure = { method: string; error: string; phase: 'normal' | 'missing' | 'recovery'; projectId?: string; assetId?: string };
+let rpcFailures: RpcFailure[], expectedRpcFailures: Array<Omit<RpcFailure, 'error' | 'phase'> & { error: RegExp; phase?: RpcFailure['phase'] }>;
+let rpcFailureReads: Promise<void>[], rpcPhase: RpcFailure['phase'];
 test.beforeEach(async ({ page, baseURL }) => {
-  failures = []; missingAssets = new Set(); rpcFailures = []; expectedRpcFailures = []; page.on('pageerror', error => failures.push(error.message));
+  failures = []; missingAssets = new Set(); rpcFailures = []; expectedRpcFailures = []; rpcFailureReads = []; rpcPhase = 'normal'; page.on('pageerror', error => failures.push(error.message));
   page.on('console', entry => {
     if (entry.type() !== 'error') return;
     let expected = false;
     if (/^Failed to load resource: the server responded with a status of 404/.test(entry.text())) {
       try { const url = new URL(entry.location().url); expected = url.origin === baseURL && url.pathname === '/__desktop_asset' && url.searchParams.size === 1 && missingAssets.has(url.searchParams.get('path') ?? ''); } catch { /* A non-URL diagnostic is still an unexpected console error. */ }
     }
-    if (!expected) failures.push(entry.text());
+    if (!expected) failures.push(entry.location().url === `${baseURL}/__desktop_rpc` ? entry.text() : `${entry.text()} (${entry.location().url})`);
   });
-  page.on('response', async response => { if (response.status() === 400 && response.url().endsWith('/__desktop_rpc')) { const payload = await response.json(); rpcFailures.push({ method: response.request().postDataJSON().method, error: payload.error }); } });
+  page.on('response', response => {
+    if (response.status() !== 400 || response.url() !== `${baseURL}/__desktop_rpc`) return;
+    const phase = rpcPhase;
+    rpcFailureReads.push((async () => {
+      try {
+        const payload = await response.json(), input = response.request().postDataJSON();
+        rpcFailures.push({ method: input.method, error: payload.error, phase, ...(input.method === 'audio.mix.prepare' ? { projectId: input.params.project.id } : input.method === 'asset.waveform' ? { assetId: input.params.assetId } : {}) });
+      } catch (error) { failures.push(`无法读取 RPC 失败响应：${String(error)}`); }
+    })());
+  });
 });
 test.afterEach(async ({ page }) => {
-  expect(rpcFailures).toEqual(expectedRpcFailures.map(value => ({ method: value.method, error: expect.stringMatching(value.error) })));
+  while (rpcFailureReads.length) await Promise.all(rpcFailureReads.splice(0));
+  const byMethod = (left: { method: string }, right: { method: string }) => left.method.localeCompare(right.method);
+  expect([...rpcFailures].sort(byMethod)).toEqual(expectedRpcFailures.map(value => ({ ...value, phase: value.phase ?? 'normal', error: expect.stringMatching(value.error) })).sort(byMethod));
   expect(failures).toEqual(expectedRpcFailures.map(() => 'Failed to load resource: the server responded with a status of 400 (Bad Request)'));
   await expect(page.locator('vite-error-overlay')).toHaveCount(0);
 });
@@ -108,22 +121,28 @@ test('pages every scoped record with causes and history, changes scope safely an
 
 test('automatically retries failed real video, source duration, waveform and local mix after recovery without changing the editor selection', async ({ page, request }, info) => {
   test.setTimeout(60_000); const source = await mkdtemp(join(tmpdir(), 'vq-recovery-media-'));
-  expectedRpcFailures = [{ method: 'asset.waveform', error: /ENOENT/ }];
   try {
     const video = join(source, 'video.mp4'), audio = join(source, 'voice.wav');
     await execute(process.env.VIDEO_QUICKLY_FFMPEG ?? 'ffmpeg', ['-hide_banner', '-loglevel', 'error', '-y', '-f', 'lavfi', '-i', 'color=blue:size=320x180:rate=30:duration=2', '-an', '-c:v', 'libx264', '-preset', 'ultrafast', '-pix_fmt', 'yuv420p', video]);
     await execute(process.env.VIDEO_QUICKLY_FFMPEG ?? 'ffmpeg', ['-hide_banner', '-loglevel', 'error', '-y', '-f', 'lavfi', '-i', 'sine=frequency=440:sample_rate=16000:duration=2', audio]);
     const created = await rpc<ProjectDocument>(request, 'project.create', { title: `真实媒体恢复 ${randomUUID().slice(0, 8)}` });
     const picture = await rpc<AssetRecord>(request, 'asset.import', { projectId: created.id, path: video, kind: 'video' }), voice = await rpc<AssetRecord>(request, 'asset.import', { projectId: created.id, path: audio, kind: 'audio' });
+    const missingVoiceError = new RegExp(`^ENOENT: no such file or directory, open '${voice.path.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}'$`);
+    expectedRpcFailures = [{ method: 'asset.waveform', error: missingVoiceError, assetId: voice.id, phase: 'missing' }, { method: 'audio.mix.prepare', error: missingVoiceError, projectId: created.id, phase: 'missing' }];
     const before = await saved(request, created.id), project = await rpc<ProjectDocument>(request, 'project.update', { projectId: created.id, revision: before.revision, patch: {
       audioMix: { ...DEFAULT_AUDIO_MIX_SETTINGS, loudness: { ...DEFAULT_AUDIO_MIX_SETTINGS.loudness, enabled: false } },
       shots: [{ id: 'media', title: '保留所选镜头', narration: '', visualPrompt: '', durationUs: 1_000_000, videoAssetId: picture.id, audioAssetId: voice.id, sourceInUs: 0 }],
     } });
+    const failedMix = page.waitForResponse(response => response.url().endsWith('/__desktop_rpc') && response.status() === 400 && response.request().postDataJSON()?.method === 'audio.mix.prepare' && response.request().postDataJSON().params.project.id === project.id);
+    rpcPhase = 'missing';
     await rm(picture.path); await rm(voice.path); missingAssets.add(picture.path); missingAssets.add(voice.path); await open(page, project);
     await expect(page.locator('.preview-panel .scene-preview__state')).toContainText('无法');
     await expect(page.locator('.audio-waveform')).toHaveAttribute('data-status', 'error');
-    await expect(page.locator('.preview-panel').getByRole('alert')).toBeVisible();
+    await expect(page.locator('.preview-panel .preview-audio').getByRole('alert')).toContainText('ENOENT');
+    await expect(page.getByRole('button', { name: '重新准备预览混音', exact: true })).toBeVisible();
+    expect((await (await failedMix).json()).error).toContain(voice.path);
     await expect(page.locator('.clip-timing').getByRole('alert')).toContainText('无法读取');
+    await expect.poll(() => rpcFailures.length).toBe(2); rpcPhase = 'recovery';
     const dialog = await restore(page, source); await dialog.getByRole('button', { name: '关闭', exact: true }).click();
     await page.getByRole('button', { name: '创作工作台', exact: true }).click(); await expect(page.getByLabel('镜头标题', { exact: true })).toHaveValue('保留所选镜头');
     await expect(page.locator('.preview-panel .scene-preview__state')).toHaveCount(0); await expect(page.locator('.audio-waveform')).toHaveAttribute('data-status', 'ready');

@@ -64,24 +64,29 @@ test('owns queued paging and late refreshes by project and refreshes the loaded 
   await page.getByLabel('制作状态', { exact: true }).selectOption('succeeded');
   await page.getByLabel('开始日期', { exact: true }).fill('2026-01-01'); await page.getByLabel('结束日期', { exact: true }).fill('2026-01-01');
   await expect(cards).toHaveCount(100); await expect(more).toBeEnabled();
-  const held = gate(), release = gate(); let holding = true;
+  const held = gate(), replacementHeld = gate(), release = gate(); let holding = true, heldReads = 0;
+  const ownsBaseRead = (params: Record<string, unknown>) => params.projectId === data.first.id && params.status === 'succeeded' && params.createdAfter === '2026-01-01T00:00:00.000Z' && params.createdBefore === '2026-01-02T00:00:00.000Z' && params.before === undefined;
   const reads: Array<{ projectId?: string; status?: string; createdAfter?: string; createdBefore?: string; before?: number; limit: number }> = [];
   await page.route('**/__desktop_rpc', async route => {
     const input = route.request().postDataJSON();
     if (input.method === 'run.list') {
       reads.push(input.params);
-      if (holding && input.params.projectId === data.first.id && !input.params.before) {
-        holding = false; const response = await route.fetch(); held.release(); await release.promise; await route.fulfill({ response }); return;
+      if (holding && ownsBaseRead(input.params)) {
+        // Notifications may supersede a pending read; keep every replacement pending too.
+        const response = await route.fetch(); heldReads++; held.release(); if (heldReads >= 2) replacementHeld.release();
+        await release.promise; await route.fulfill({ response }); return;
       }
     }
     await route.continue();
   });
   try {
     await page.getByRole('button', { name: '刷新制作记录', exact: true }).click(); await held.promise;
+    await rpc(request, 'project.create', { title: `门闩期间真实刷新 ${randomUUID().slice(0, 8)}` });
+    await replacementHeld.promise;
     await expect(more).toBeEnabled(); await more.click(); await expect(more).toBeDisabled();
     await filter.selectOption(data.second.id); await expect.poll(() => visibleIds(page)).toEqual([...data.secondIds].reverse());
     const finished = page.waitForResponse(response => response.url().endsWith('/__desktop_rpc') && response.request().postDataJSON()?.method === 'run.list' && response.request().postDataJSON()?.params.projectId === data.first.id);
-    release.release(); await (await finished).finished();
+    holding = false; release.release(); await (await finished).finished();
     await page.evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
     await expect.poll(() => visibleIds(page)).toEqual([...data.secondIds].reverse());
     expect(reads.some(read => read.projectId === data.first.id && read.before !== undefined)).toBe(false);
