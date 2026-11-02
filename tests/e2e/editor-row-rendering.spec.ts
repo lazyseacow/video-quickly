@@ -26,14 +26,14 @@ function observed(shot) { const title = shot.title; return { ...shot, get title(
 let project = projectSchema.parse({ id: 'row-project', title: '真实行组件', brief: '', revision: 1, profile: { width: 128, height: 72, previewScale: 1, fitMode: 'contain', frameRate: { numerator: 30, denominator: 1 } }, shots: Array.from({ length: 6 }, (_, index) => ({ id: 'shot-' + index, title: '镜头 ' + index, narration: '需要留白的字幕', visualPrompt: '', durationUs: 2_000_000 })), workflow: { id: 'workflow', version: 1, name: '流程', nodes: [{ id: 'script', kind: 'script', label: '脚本' }], edges: [] }, claims: [{ id: 'claim', text: '资料', source: '人工', status: 'pending' }], captionStyle: { ...DEFAULT_CAPTION_STYLE }, createdAt: '2026-01-01T00:00:00.000Z', updatedAt: '2026-01-01T00:00:00.000Z', archived: false });
 project = { ...project, shots: project.shots.map(observed) };
 const clock = new PlaybackClock(12_000_000, project.profile.frameRate);
-const assets = [], selectedIds = ['shot-0'], completedNodeIds = [];
+const assets = [], models = [], selectedIds = ['shot-0'], completedNodeIds = [];
 const root = createRoot(document.getElementById('fixture'));
 const noop = () => {}, asyncNoop = async () => {};
 function render() {
   const capturedTag = tag;
   const onSelect = (...args) => { calls.push({ type: 'select', tag: capturedTag, args }); };
   flushSync(() => root.render(createElement('div', { className: 'workbench', style: { height: '900px' } },
-    createElement('aside', { className: 'story-panel', style: { width: '280px', height: '500px' } }, createElement(ProjectOutline, { project, assets, selectedShotId: 'shot-0', selectedIds, completedNodeIds, onSelectShot: onSelect, onSelectNode: noop, onAddShot: asyncNoop, onOpenFlow: noop })),
+    createElement('aside', { className: 'story-panel', style: { width: '280px', height: '500px' } }, createElement(ProjectOutline, { project, assets, models, selectedShotId: 'shot-0', selectedIds, completedNodeIds, onSelectShot: onSelect, onSelectNode: noop, onAddShot: asyncNoop, onOpenFlow: noop })),
     createElement(Timeline, { project, assets, shots: project.shots, timeline: buildTimeline(project.shots), selectedId: 'shot-0', selectedIds, rate: project.profile.frameRate, clock, sourceDurationUs: 10_000_000, sourceStatus: 'ready', editingDisabled: false, onSelect, onMove: asyncNoop, onDuplicate: asyncNoop, onRemove: asyncNoop, onSplit: asyncNoop, onReorder: async (...args) => { calls.push({ type: 'reorder', tag: capturedTag, args }); }, onTrim: async (...args) => { calls.push({ type: 'trim', tag: capturedTag, args }); } })
   )));
 }

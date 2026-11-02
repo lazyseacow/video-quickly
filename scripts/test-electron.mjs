@@ -180,6 +180,18 @@ try {
   await assert.rejects(rpc('host.secret.get', { key: 'not-a-real-key' }), /桌面请求无效/);
   checks.nativeBridge = true;
   checks.sandbox = true;
+  const trayState = await application.evaluate(({ app, BrowserWindow, nativeImage }) => {
+    const load = process.getBuiltinModule('module').createRequire(app.getAppPath() + '/package.json');
+    const { tray, trayMenu } = load('./electron/main.mjs');
+    const window = BrowserWindow.getAllWindows()[0];
+    const iconName = process.platform === 'darwin' ? 'trayTemplate.png' : process.platform === 'win32' ? 'icon.ico' : '32x32.png';
+    const icon = nativeImage.createFromPath(app.getAppPath() + '/build/icons/' + iconName);
+    window.hide();
+    trayMenu.getMenuItemById('show-main').click();
+    return { alive: !tray.isDestroyed(), iconLoaded: !icon.isEmpty(), visible: window.isVisible(), labels: trayMenu.items.map(item => item.label) };
+  });
+  assert.deepEqual(trayState, { alive: true, iconLoaded: true, visible: true, labels: ['显示主窗口', '退出 Video Quickly'] });
+  checks.tray = true;
   const senderDenied = await application.evaluate(async ({ BrowserWindow, app }) => {
     const other = new BrowserWindow({ show: false, webPreferences: { preload: app.getAppPath() + '/electron/preload.cjs', contextIsolation: true, sandbox: true, nodeIntegration: false } });
     try {

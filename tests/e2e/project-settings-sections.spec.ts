@@ -39,7 +39,10 @@ for (const viewport of [{ width: 1536, height: 960, theme: 'dark' }, { width: 10
     });
     expect(layout.outerScroll).toBeLessThanOrEqual(1); expect(layout.navScroll).toBeLessThanOrEqual(1);
     expect(layout.footerBottom).toBeLessThanOrEqual(layout.bodyBottom + 1); expect(layout.contentBottom).toBeLessThanOrEqual(layout.footerTop + 1);
-    await panel.scrollIntoViewIfNeeded(); await expect(panel.locator('.project-settings-panel__footer')).toBeInViewport({ ratio: 1 });
+    await panel.scrollIntoViewIfNeeded();
+    // Fractional scrolling can leave subpixel footer padding outside the
+    // viewport; the complete save control must remain visible and actionable.
+    await expect(panel.getByRole('button', { name: '保存', exact: true })).toBeInViewport({ ratio: 1 });
     await page.screenshot({ path: info.outputPath('project-settings-video.png') });
     await panel.getByRole('button', { name: '保存', exact: true }).click(); await expect(panel.getByRole('button', { name: '保存', exact: true })).toBeDisabled();
     await page.getByRole('button', { name: '素材库', exact: true }).click(); await expect(page.getByRole('heading', { name: '素材库', exact: true })).toBeVisible();

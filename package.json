@@ -21,6 +21,7 @@
     "benchmark:workspace": "node --expose-gc --import tsx scripts/benchmark-workspace.ts",
     "test:media": "node scripts/render-smoke.mjs",
     "prepare:media": "node scripts/prepare-media.mjs",
+    "prepare:icons": "node scripts/prepare-icons.mjs",
     "check": "pnpm typecheck && pnpm test && pnpm build",
     "start:runtime": "pnpm --filter @video-quickly/runtime start",
     "test:desktop": "node scripts/test-electron.mjs"

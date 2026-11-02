@@ -2,6 +2,7 @@ import { randomUUID, createHash } from 'node:crypto';
 import { join } from 'node:path';
 import { expect, type APIRequestContext, type Page } from '@playwright/test';
 import { test } from './isolated-workspace';
+import { modelCatalog } from './model-catalog';
 import { modelSchema, workflowNodeSchema, type ProjectDocument, type WorkflowNode } from '@video-quickly/contracts';
 import { DocumentStore, openDatabase } from '../../packages/runtime/src/database';
 
@@ -69,12 +70,14 @@ test('checks saved content without submitting or saving a dirty draft, preservin
 });
 
 test('aggregates blockers and repairs the exact step, model and project media without generating', async ({ page, request }) => {
+  const catalog = await modelCatalog(['fixture']);
+  try {
   let project = await fixture(request, [{ id: 'bad-script', kind: 'script', label: '需要文本的脚本', modelId: 'readiness-image' }, { id: 'bad-image', kind: 'assets', label: '需要修正参数的画面', modelId: 'readiness-invalid' }, { id: 'export', kind: 'export', label: '本地导出' }]);
   const workspace = await rpc<{ system: { dataDirectory: string } }>(request, 'workspace.summary');
   const database = openDatabase(workspace.system.dataDirectory), store = new DocumentStore(database);
   const missingPath = join(workspace.system.dataDirectory, 'assets', `${project.id}-missing.png`); expectedMissingMedia.add(missingPath);
   try {
-    for (const [id, name, parameters] of [['readiness-image', '检查图片连接', {}], ['readiness-invalid', '检查参数连接', { size: 'invalid-size' }]] as const) store.put('model', id, modelSchema.parse({ id, name, provider: 'openai-compatible', baseUrl: 'https://example.invalid/v1', model: 'fixture', capabilities: ['image'], parameters, createdAt: '', updatedAt: '' }));
+    for (const [id, name, parameters] of [['readiness-image', '检查图片连接', {}], ['readiness-invalid', '检查参数连接', { size: 'invalid-size' }]] as const) store.put('model', id, modelSchema.parse({ id, name, provider: 'openai-compatible', baseUrl: catalog.baseUrl, model: 'fixture', capabilities: ['image'], parameters, createdAt: '', updatedAt: '' }));
     store.put('asset', 'readiness-missing', { id: 'readiness-missing', name: '检查缺失画面', kind: 'image', path: missingPath, mimeType: 'image/png', projectId: project.id, shotId: 'shot', size: 1, sha256: createHash('sha256').update('x').digest('hex'), version: 1, createdAt: '', provenance: 'fixture', retained: false, active: true });
   } finally { database.close(); }
   project = await rpc<ProjectDocument>(request, 'project.update', { projectId: project.id, revision: project.revision, patch: { shots: [{ ...project.shots[0], assetId: 'readiness-missing' }] } });
@@ -89,12 +92,15 @@ test('aggregates blockers and repairs the exact step, model and project media wi
   await check.click(); dialog = page.getByRole('dialog', { name: '制作前检查', exact: true });
   await dialog.locator('li').filter({ hasText: '需要修正参数的画面' }).getByRole('button', { name: '配置模型', exact: true }).click();
   const model = page.getByRole('dialog', { name: '编辑模型连接', exact: true }); await expect(model).toBeVisible(); await expect(model.getByLabel('连接名称', { exact: true })).toHaveValue('检查参数连接');
+  await expect(model.getByLabel('模型 ID', { exact: true })).toHaveValue('fixture');
+  await expect(model.getByRole('option', { name: 'fixture', exact: true })).toHaveCount(1);
   await model.getByRole('button', { name: '取消', exact: true }).click();
   await page.getByRole('button', { name: '创作工作台', exact: true }).click(); await check.click();
   dialog = page.getByRole('dialog', { name: '制作前检查', exact: true });
   await dialog.locator('li').filter({ hasText: '检查缺失画面' }).getByRole('button', { name: '修复素材', exact: true }).click();
   await expect(page.getByRole('dialog', { name: '恢复缺失素材', exact: true })).toBeVisible();
   expect(methods.filter(method => ['run.start', 'model.test', 'shot.regenerate', 'project.update'].includes(method))).toEqual([]);
+  } finally { await catalog.close(); }
 });
 
 test('marks reports stale, refreshes explicitly and isolates a late result after closing and switching projects', async ({ page, request }) => {

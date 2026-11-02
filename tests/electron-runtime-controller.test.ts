@@ -32,6 +32,56 @@ it('reconnects the actual Node runtime once and preserves project data and the o
   expect(events).toContainEqual({ type: 'runtime.ready' });
 }, 30_000);
 
+it.each(['start', 'reconnect'] as const)('waits for %s readiness before dispatching concurrent reads or starting their request deadlines', async operation => {
+  const path = await directory(), script = join(path, 'fixture.mjs');
+  await writeFile(script, `import {createInterface} from 'node:readline';
+setTimeout(()=>console.log(JSON.stringify({method:'runtime.ready'})),450);
+createInterface({input:process.stdin}).on('line',line=>{
+  const q=JSON.parse(line);
+  if(q.method==='disconnect')process.exit(0);
+  console.log(JSON.stringify({id:q.id,result:q.method}));
+});`);
+  const controller = own({ command: process.execPath, args: [script], requestTimeoutMs: 300 });
+  if (operation === 'reconnect') {
+    await controller.start();
+    await expect(controller.request('disconnect')).rejects.toThrow(/失联|退出/);
+  }
+  const connecting = controller[operation]();
+  await expect(Promise.all([controller.request('workspace.summary'), controller.request('project.get')])).resolves.toEqual(['workspace.summary', 'project.get']);
+  expect(await connecting).toMatchObject({ state: 'ready', generation: operation === 'start' ? 1 : 2 });
+});
+
+it('rejects reads waiting on failed startup without replaying them after explicit reconnect', async () => {
+  const path = await directory(), script = join(path, 'fixture.mjs'), calls = join(path, 'calls');
+  await writeFile(script, `console.log(JSON.stringify({method:'runtime.failed'}));process.stdin.resume();`);
+  const controller = own({ command: process.execPath, args: [script, calls] });
+  const startup = expect(controller.start()).rejects.toThrow('工作区无法打开');
+  await expect(controller.request('workspace.summary')).rejects.toThrow('未连接');
+  await startup;
+  expect(controller.status().state).toBe('disconnected');
+  await writeFile(script, `import {appendFileSync} from 'node:fs';import {createInterface} from 'node:readline';
+console.log(JSON.stringify({method:'runtime.ready'}));
+createInterface({input:process.stdin}).on('line',line=>{const q=JSON.parse(line);appendFileSync(process.argv[2],q.method+'\\n');console.log(JSON.stringify({id:q.id,result:'ready'}));});`);
+  await controller.reconnect();
+  expect(await controller.request('workspace.summary')).toBe('ready');
+  expect(await readFile(calls, 'utf8')).toBe('workspace.summary\n');
+});
+
+it('rejects waiting startup reads when the application begins closing', async () => {
+  const path = await directory(), script = join(path, 'fixture.mjs'), calls = join(path, 'calls');
+  await writeFile(script, `import {appendFileSync} from 'node:fs';import {createInterface} from 'node:readline';
+setTimeout(()=>console.log(JSON.stringify({method:'runtime.ready'})),100);
+createInterface({input:process.stdin}).on('line',line=>appendFileSync(process.argv[2],line));`);
+  let closing: Promise<unknown> | undefined;
+  const controller = own({ command: process.execPath, args: [script, calls], onSpawn: () => { closing = controller.close(); } });
+  const startup = controller.start();
+  const request = expect(controller.request('workspace.summary')).rejects.toThrow('未连接');
+  await Promise.all([startup, request]);
+  await closing;
+  await expect(readFile(calls, 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
+  expect(controller.status().state).toBe('disconnected');
+});
+
 it('rejects an ambiguous timed-out write without replaying it, and serializes concurrent reconnects', async () => {
   const path = await directory(), script = join(path, 'fixture.mjs'), calls = join(path, 'calls');
   await writeFile(script, `import {appendFileSync} from 'node:fs'; import {createInterface} from 'node:readline';
@@ -79,7 +129,9 @@ it('never announces ready after its startup deadline while the failed process is
   const path = await directory(), script = join(path, 'fixture.mjs'), events: Array<{ type: string; data?: { state: string } }> = [];
   await writeFile(script, `process.stdin.resume();process.stdin.on('end',()=>{console.log(JSON.stringify({method:'runtime.ready'}));setInterval(()=>{},1000);});`);
   const controller = own({ command: process.execPath, args: [script], readyTimeoutMs: 100, shutdownTimeoutMs: 100, onEvent: (event: { type: string }) => events.push(event) });
-  await expect(controller.start()).rejects.toThrow('启动未完成');
+  const startup = expect(controller.start()).rejects.toThrow('启动未完成');
+  await expect(controller.request('workspace.summary')).rejects.toThrow('未连接');
+  await startup;
   expect(events.some(event => event.type === 'runtime.ready' || event.data?.state === 'ready')).toBe(false);
   expect(controller.status().state).toBe('disconnected');
 });

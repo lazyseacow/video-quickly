@@ -1,5 +1,10 @@
 import { expect, test, type APIRequestContext } from '@playwright/test';
 import type { ModelProfile } from '@video-quickly/contracts';
+import { modelCatalog } from './model-catalog';
+
+let catalog: Awaited<ReturnType<typeof modelCatalog>>;
+test.beforeEach(async () => { catalog = await modelCatalog(['fixture-category']); });
+test.afterEach(async () => { await catalog.close(); });
 
 async function rpc<T>(request: APIRequestContext, method: string, params: unknown = {}): Promise<T> {
   const response = await request.post('/__desktop_rpc', { data: { method, params } }); const payload = await response.json();
@@ -15,7 +20,7 @@ for (const width of [1536, 390]) {
       { label: '音频模型', provider: 'openai-compatible', capabilities: ['tts', 'asr'], parameters: { voice: 'alloy', timestampGranularity: 'segment' } },
     ];
     const saved: Array<{ label: string; model: ModelProfile }> = [];
-    for (const entry of entries) saved.push({ label: entry.label, model: await rpc<ModelProfile>(request, 'model.save', { model: { name: `旧连接归类 ${entry.label} ${width}`, provider: entry.provider, baseUrl: 'http://127.0.0.1:1/v1', model: 'fixture-category', capabilities: entry.capabilities, parameters: entry.parameters } }) });
+    for (const entry of entries) saved.push({ label: entry.label, model: await rpc<ModelProfile>(request, 'model.save', { model: { name: `旧连接归类 ${entry.label} ${width}`, provider: entry.provider, baseUrl: catalog.baseUrl, model: 'fixture-category', capabilities: entry.capabilities, parameters: entry.parameters } }) });
     const errors: string[] = []; page.on('pageerror', error => errors.push(error.message));
     await page.setViewportSize({ width, height: width === 390 ? 844 : 960 }); await page.goto('/'); await expect(page).toHaveTitle(/Video Quickly/);
     await page.getByRole('button', { name: '模型连接', exact: true }).click(); const filters = page.getByRole('group', { name: '模型类型筛选' });

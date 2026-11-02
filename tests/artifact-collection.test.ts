@@ -35,7 +35,7 @@ async function fixture(platform: 'win32' | 'darwin') {
     'bundledTools', 'nativeBridge', 'sandbox', 'senderBoundary', 'nativeCredentialWriteRead', 'nativeCredentialRestart',
     'nativeCredentialReplacement', 'nativeCredentialDeletion', 'editHistory', 'platformShortcutHints', 'nativeTextEditing',
     'dialogBridge', 'directoryAndSaveDialogs', 'revealBridge', 'mediaRange', 'mediaBoundary', 'videoPreview', 'actualExport',
-    'reconnect', 'cancelWindowClose', 'cancelQuit', 'macWindowReopen', 'macSecondInstance', 'confirmedQuit', 'restartRecovery', 'consoleHealth', 'productionReadiness', 'assetRecovery',
+    'reconnect', 'cancelWindowClose', 'cancelQuit', 'macWindowReopen', 'macSecondInstance', 'confirmedQuit', 'restartRecovery', 'consoleHealth', 'productionReadiness', 'assetRecovery', 'tray',
   ].map(name => [name, true]));
   const native = { status: 'passed', packaged: true, platform, architecture: process.arch, distributionScope: 'bundled-runtime-and-media', electron: 'fixture-electron', checks };
   const protectedFiles = Array.from({ length: 3 }, (_, index) => ({ path: `fixture-protected-${index}`, role: `role-${index}`, exists: true, bytes: 1, sha256: packageSha256 }));
@@ -75,7 +75,7 @@ describe('Windows artifact collection gates', () => {
     expect(await stat(input.manifest).then(() => true, () => false)).toBe(false);
   });
 
-  it.each(['productionReadiness', 'assetRecovery'])('rejects missing native %s evidence despite a passed summary', async check => {
+  it.each(['productionReadiness', 'assetRecovery', 'tray'])('rejects missing native %s evidence despite a passed summary', async check => {
     const input = await fixture('win32'); delete input.native.checks[check];
     await input.report('electron-results.json', input.native);
     expect(input.run().status).toBe(1);
@@ -84,7 +84,7 @@ describe('Windows artifact collection gates', () => {
 });
 
 describe.skipIf(process.platform !== 'darwin')('macOS artifact collection gates', () => {
-  it.each(['productionReadiness', 'assetRecovery'])('rejects missing native %s evidence despite a passed summary', async check => {
+  it.each(['productionReadiness', 'assetRecovery', 'tray'])('rejects missing native %s evidence despite a passed summary', async check => {
     const input = await fixture('darwin'); delete input.native.checks[check];
     await input.report('electron-results.json', input.native);
     expect(input.run().status).toBe(1);

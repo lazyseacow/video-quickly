@@ -1074,9 +1074,11 @@ export function createRuntime(options: RuntimeOptions) {
         schedule(runId); return hydrateRun(run(runId));
       }
       case 'run.review': {
-        const { runId, approved } = runIdInput.extend({ approved: z.boolean() }).parse(rawParams);
-        if (run(runId).status !== 'waiting_review') throw new Error('当前运行没有待审阅步骤。');
-        if (batches.blocked(run(runId).projectId)) throw new Error('请先继续或取消当前批量导出。');
+        const { runId, approved, expectedNodeId, expectedUpdatedAt } = runIdInput.extend({ approved: z.boolean(), expectedNodeId: z.string().min(1).optional(), expectedUpdatedAt: z.string().min(1).optional() }).parse(rawParams);
+        const value = run(runId);
+        if (expectedNodeId !== undefined && value.currentNodeId !== expectedNodeId || expectedUpdatedAt !== undefined && value.updatedAt !== expectedUpdatedAt) throw new Error('制作进度已变化，请核对当前步骤后再审阅。');
+        if (value.status !== 'waiting_review') throw new Error('当前运行没有待审阅步骤。');
+        if (batches.blocked(value.projectId)) throw new Error('请先继续或取消当前批量导出。');
         schedule(runId, approved); return hydrateRun(run(runId));
       }
       case 'run.cancel': {
@@ -1107,7 +1109,7 @@ export function createRuntime(options: RuntimeOptions) {
         try { return method === 'model.voices' ? await discoverModelVoices(draft, secret) : await discoverModels(draft, secret); }
         catch (error) {
           if (method === 'model.voices') return { ...getModelVoiceCatalog(draft), message: '账号音色暂时无法读取，可选择公共音色预设或自定义填写。' };
-          return { source: 'remote', items: [], message: error instanceof Error && /^读取模型列表返回 HTTP \d+$/.test(error.message) ? `${error.message}，请核对地址与密钥，或手动填写。` : '暂时无法读取模型，请核对服务地址、密钥及接口支持，或手动填写。' };
+          return { source: 'remote', items: [], message: error instanceof Error && /^读取模型列表返回 HTTP \d+$/.test(error.message) ? `${error.message}，请核对地址与密钥后重试。` : '暂时无法读取模型，请核对服务地址、密钥及接口支持后重试。' };
         }
       }
       case 'model.save': {

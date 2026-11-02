@@ -1,17 +1,20 @@
 import { primaryModifier } from '../lib/desktop';
 import { memo, useId, useMemo, useRef, useState, type KeyboardEvent } from 'react';
 import { Check, ChevronRight, Film, GitBranch, ListChecks, SlidersHorizontal, X, Plus } from 'lucide-react';
-import type { AssetRecord, ProjectDocument, WorkflowNode } from '@video-quickly/contracts';
+import type { AssetRecord, ModelProfile, ProjectDocument, WorkflowNode } from '@video-quickly/contracts';
+import { stepGuidance, stepModelLabel } from '../lib/workflow-guidance';
 import { Button, IconButton } from './Primitives';
 import type { SelectionModifiers } from '../lib/shot-selection';
 import OutlineShotRow from './OutlineShotRow';
 import { useScenePreviewContext } from '../lib/scene-preview-context';
 import { useCommittedCallback } from '../lib/use-committed-callback';
 import TabSurface from './TabSurface';
+import './project-outline.css';
 
 interface ProjectOutlineProps {
   project: ProjectDocument;
   assets: AssetRecord[];
+  models: ModelProfile[];
   selectedShotId?: string;
   selectedIds?: readonly string[];
   selectedNodeId?: string;
@@ -31,7 +34,7 @@ const tabs: Array<{ id: OutlineTab; label: string; icon: typeof Film }> = [
   { id: 'steps', label: '制作步骤', icon: GitBranch },
 ];
 
-export default memo(function ProjectOutline({ project, assets, selectedShotId, selectedIds, selectedNodeId, completedNodeIds, onSelectShot, onSelectAll, onClearSelection, onBulkEdit, onSelectNode, onAddShot, onOpenFlow }: ProjectOutlineProps) {
+export default memo(function ProjectOutline({ project, assets, models, selectedShotId, selectedIds, selectedNodeId, completedNodeIds, onSelectShot, onSelectAll, onClearSelection, onBulkEdit, onSelectNode, onAddShot, onOpenFlow }: ProjectOutlineProps) {
   const [outlineTab, setOutlineTab] = useState<OutlineTab>('shots');
   const tabButtons = useRef<Array<HTMLButtonElement | null>>([]);
   const id = useId();
@@ -65,7 +68,7 @@ export default memo(function ProjectOutline({ project, assets, selectedShotId, s
     {outlineTab === 'shots' ? <div className="shot-list outline-list" id={`${id}-shots-panel`} role="tabpanel" aria-labelledby={`${id}-shots-tab`} tabIndex={0} onKeyDown={selectionKey}>
       {project.shots.length ? project.shots.map((shot, index) => <OutlineShotRow key={shot.id} project={previewContext} shot={shot} index={index} assets={assets} selected={selected.has(shot.id)} primary={selected.has(shot.id) && shot.id === selectedShotId} multipleSelected={selected.size > 1 && selected.has(shot.id)} modifierLabel={modifierLabel} onSelectShot={selectShot} />) : <div className="outline-empty"><Film size={20} aria-hidden="true" /><p>还没有镜头</p><span>添加镜头，开始安排画面与旁白。</span></div>}
     </div> : <div className="step-list outline-list" id={`${id}-steps-panel`} role="tabpanel" aria-labelledby={`${id}-steps-tab`}>
-      {project.workflow.nodes.map((node, index) => <button type="button" key={node.id} className={`step-item ${selectedNodeId === node.id ? 'active' : ''}`} aria-pressed={selectedNodeId === node.id} onClick={() => onSelectNode(node)}><span className={`step-circle ${completed.has(node.id) ? 'done' : selectedNodeId === node.id ? 'current' : ''}`}>{completed.has(node.id) ? <Check size={10} aria-label="已完成" /> : index + 1}</span><span>{node.label}</span><ChevronRight className="step-tail" size={12} aria-hidden="true" /></button>)}
+      {project.workflow.nodes.map((node, index) => <button type="button" key={node.id} className={`step-item ${selectedNodeId === node.id ? 'active' : ''}`} aria-label={node.label} aria-describedby={`${id}-step-${index}-details`} aria-pressed={selectedNodeId === node.id} onClick={() => onSelectNode(node)}><span className={`step-circle ${completed.has(node.id) ? 'done' : selectedNodeId === node.id ? 'current' : ''}`}>{completed.has(node.id) ? <Check size={10} aria-label="已完成" /> : index + 1}</span><span className="step-item__copy" id={`${id}-step-${index}-details`}><strong>{node.label}</strong><small>{node.description || stepGuidance(node).purpose}</small><span>{stepModelLabel(node, models)}{node.requiresReview && ' · 需审阅'}</span></span><ChevronRight className="step-tail" size={12} aria-hidden="true" /></button>)}
     </div>}
     <div className="outline-footer">{outlineTab === 'shots' ? <Button className="outline-add-shot button-full" variant="ghost" onClick={() => void onAddShot()}><Plus size={15} />添加镜头</Button> : <Button className="button-full" variant="ghost" onClick={onOpenFlow}><GitBranch size={15} />编辑流程图</Button>}</div>
   </>;

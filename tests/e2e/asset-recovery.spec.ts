@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import { promisify } from 'node:util';
 import { expect, type APIRequestContext, type Page } from '@playwright/test';
 import { test } from './isolated-workspace';
-import { DEFAULT_AUDIO_MIX_SETTINGS, type AssetRecord, type ProjectDocument } from '@video-quickly/contracts';
+import { DEFAULT_AUDIO_MIX_SETTINGS, type AssetRecord, type ProjectDocument, type RunSummary } from '@video-quickly/contracts';
 import { DocumentStore, openDatabase } from '../../packages/runtime/src/database';
 import { createAssetRecovery, type AssetRecoveryOptions } from '../../packages/runtime/src/asset-recovery';
 
@@ -186,4 +186,58 @@ test('cancels a real controlled scan and continues after an unreadable source di
     await expect(readFile(asset.path)).rejects.toMatchObject({ code: 'ENOENT' }); expect(await saved(request, project.id)).toEqual(project);
     await dialog.getByRole('button', { name: '关闭', exact: true }).click();
   } finally { release(); await page.unrouteAll({ behavior: 'wait' }); await manager.close(); database.close(); await rm(source, { recursive: true, force: true }); }
+});
+
+test('automatically recovers the selected media in both current and historical real step results', async ({ page, request }, info) => {
+  const source = await mkdtemp(join(tmpdir(), 'vq-result-media-recovery-'));
+  try {
+    const created = await rpc<ProjectDocument>(request, 'project.create', { title: `结果媒体恢复 ${randomUUID().slice(0, 8)}` });
+    await rpc(request, 'project.update', { projectId: created.id, revision: created.revision, patch: {
+      shots: ['first', 'selected'].map(id => ({ id, title: id === 'first' ? '第一张' : '保留所选画面', narration: '', visualPrompt: '', durationUs: 1_000_000 })),
+      workflow: { ...created.workflow, nodes: [{ id: 'assets', kind: 'assets', label: '沿用本地画面' }], edges: [] },
+    } });
+    const assets: AssetRecord[] = [];
+    for (const [shotId, color] of [['first', '#379269'], ['selected', '#3266cc']]) {
+      const path = join(source, `${shotId}.svg`); await writeFile(path, `<svg xmlns="http://www.w3.org/2000/svg" width="160" height="90"><rect width="160" height="90" fill="${color}"/></svg>`);
+      assets.push(await rpc<AssetRecord>(request, 'asset.import', { projectId: created.id, shotId, path, kind: 'image' }));
+    }
+    const project = await saved(request, created.id), runs: RunSummary[] = [];
+    for (let index = 0; index < 2; index++) {
+      const started = await rpc<{ id: string }>(request, 'run.start', { projectId: project.id }); let completed: RunSummary | undefined;
+      await expect.poll(async () => { completed = await rpc<RunSummary>(request, 'run.get', { runId: started.id }); return completed.status; }).toBe('succeeded');
+      runs.push(completed!);
+    }
+    const { system } = await rpc<{ system: { dataDirectory: string } }>(request, 'workspace.summary');
+    function frozen() {
+      const database = openDatabase(system.dataDirectory), store = new DocumentStore(database);
+      try { return runs.map(run => ({ snapshot: store.get('run-snapshot', run.id), result: store.get('node-result', `${run.id}:assets`) })); }
+      finally { database.close(); }
+    }
+    const baseline = frozen(), asset = assets[1]; await rm(asset.path); missingAssets.add(asset.path);
+    await open(page, project); await page.getByRole('button', { name: '制作记录', exact: true }).click();
+    await page.locator(`.run-card[data-run-id="${runs[1].id}"]`).getByRole('button', { name: '查看步骤', exact: true }).click();
+    const detail = page.getByRole('dialog', { name: '制作步骤详情', exact: true }), current = detail.getByRole('region', { name: '本次产物', exact: true });
+    await current.getByLabel('选择媒体', { exact: true }).getByRole('button', { name: asset.name, exact: true }).click(); await expect(current.getByRole('alert')).toContainText('媒体暂时无法预览');
+    await detail.getByRole('button', { name: '历史产物', exact: true }).click();
+    await detail.getByLabel('历史产物版本', { exact: true }).locator(`[data-run-id="${runs[0].id}"]`).click();
+    const history = detail.getByRole('region', { name: '历史产物', exact: true });
+    await history.getByLabel('选择媒体', { exact: true }).getByRole('button', { name: asset.name, exact: true }).click(); await expect(history.getByRole('alert')).toContainText('媒体暂时无法预览');
+    const job = await rpc<{ id: string }>(request, 'asset.recovery.start', { projectId: project.id });
+    await expect.poll(async () => (await rpc<{ job: { phase: string } }>(request, 'asset.recovery.get', { jobId: job.id })).job.phase).toBe('awaiting_directory');
+    await rpc(request, 'asset.recovery.scan', { jobId: job.id, directory: source });
+    await expect.poll(async () => (await rpc<{ job: { phase: string } }>(request, 'asset.recovery.get', { jobId: job.id })).job.phase).toBe('awaiting_confirmation');
+    const pageResult = await rpc<{ items: Array<{ id: string; assetId: string; candidates: Array<{ id: string }> }> }>(request, 'asset.recovery.get', { jobId: job.id });
+    const item = pageResult.items.find(item => item.assetId === asset.id); expect(item?.candidates).toHaveLength(1);
+    await rpc(request, 'asset.recovery.confirm', { jobId: job.id, selections: [{ itemId: item!.id, candidateId: item!.candidates[0].id }] });
+    await expect.poll(async () => (await rpc<{ job: { phase: string } }>(request, 'asset.recovery.get', { jobId: job.id })).job.phase).toBe('succeeded');
+    for (const result of [current, history]) {
+      await expect(result.getByRole('alert')).toHaveCount(0);
+      const image = result.getByRole('img', { name: asset.name, exact: true }); await expect(image).toBeVisible();
+      expect(await image.evaluate((element: HTMLImageElement) => ({ ready: element.complete && element.naturalWidth === 160, path: new URL(element.src).searchParams.get('path'), retried: Number(new URL(element.src).searchParams.get('availability')) > 0 }))).toEqual({ ready: true, path: asset.path, retried: true });
+      await expect(result.getByLabel('选择媒体', { exact: true }).getByRole('button', { name: asset.name, exact: true })).toHaveAttribute('aria-pressed', 'true');
+    }
+    expect(await saved(request, project.id)).toEqual(project); expect(frozen()).toEqual(baseline);
+    for (const run of runs) expect(await rpc(request, 'run.get', { runId: run.id })).toEqual(run);
+    await page.screenshot({ path: info.outputPath('recovered-current-and-historical-result-media.png') });
+  } finally { await rm(source, { recursive: true, force: true }); }
 });

@@ -27,15 +27,12 @@ for (const platform of [
   await field.fill('平台键盘保存'); await field.press(`${platform.key}+s`);
   const saved = async () => (await rpc<{ project: ProjectDocument }>(request, 'project.get', { projectId: project.id })).project;
   await expect.poll(async () => (await saved()).shots[0].title).toBe('平台键盘保存');
-  // The database write can precede its response and the UI's saving state.
-  // A keyboard shortcut deliberately ignores history while that save is busy.
-  await expect(page.getByRole('button', { name: '撤销', exact: true })).toBeEnabled();
-  await page.getByRole('button', { name: '撤销', exact: true }).focus();
-  await expect(page.getByRole('button', { name: '撤销', exact: true })).toBeFocused(); await page.keyboard.press(`${platform.key}+z`);
+  // A committed RPC can precede the renderer clearing its save-in-progress
+  // guard. Keyboard focus must target the enabled history control.
+  const undo = page.getByRole('button', { name: '撤销', exact: true }), redo = page.getByRole('button', { name: '重做', exact: true });
+  await expect(undo).toBeEnabled(); await undo.focus(); await expect(undo).toBeFocused(); await page.keyboard.press(`${platform.key}+z`);
   await expect.poll(async () => (await saved()).shots[0].title).toBe('平台原镜头');
-  await expect(page.getByRole('button', { name: '重做', exact: true })).toBeEnabled();
-  await page.getByRole('button', { name: '重做', exact: true }).focus();
-  await expect(page.getByRole('button', { name: '重做', exact: true })).toBeFocused(); await page.keyboard.press(`${platform.key}+Shift+z`);
+  await expect(redo).toBeEnabled(); await redo.focus(); await expect(redo).toBeFocused(); await page.keyboard.press(`${platform.key}+Shift+z`);
   await expect.poll(async () => (await saved()).shots[0].title).toBe('平台键盘保存');
 
   const create = page.getByRole('button', { name: '新建项目', exact: true }); await create.click();

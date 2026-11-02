@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, ipcMain, Menu, protocol, session, shell } from 'electron';
+import { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, protocol, session, shell, Tray } from 'electron';
 import { AsyncEntry } from '@napi-rs/keyring';
 import { mkdir, stat } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
@@ -23,6 +23,8 @@ let window;
 let controller;
 let exiting = false;
 let shutdown;
+export let tray;
+export let trayMenu;
 
 function sendEvent(event) {
   if (window && !window.isDestroyed() && !window.webContents.isDestroyed()) window.webContents.send('vq:runtime-event', event);
@@ -105,6 +107,8 @@ function activateWindow() {
 }
 
 async function launch() {
+  // The development Electron bundle has its own icon; packaged macOS uses its ICNS.
+  if (!app.isPackaged) app.dock?.setIcon(join(here, '../build/icons/dock.png'));
   await mkdir(dataDirectory, { recursive: true });
   await mkdir(app.getPath('userData'), { recursive: true });
   session.defaultSession.setPermissionRequestHandler((_contents, _permission, callback) => callback(false));
@@ -139,6 +143,16 @@ async function launch() {
     { label: '视图', submenu: [{ role: 'togglefullscreen' }, ...(app.isPackaged ? [] : [{ role: 'reload' }, { role: 'toggleDevTools' }])] },
     { label: '窗口', submenu: [{ role: 'minimize' }, { role: 'zoom' }, ...(process.platform === 'darwin' ? [{ role: 'front' }] : [])] },
   ]));
+  const trayIcon = nativeImage.createFromPath(join(here, '../build/icons', process.platform === 'darwin' ? 'trayTemplate.png' : process.platform === 'win32' ? 'icon.ico' : '32x32.png'));
+  if (process.platform === 'darwin') trayIcon.setTemplateImage(true);
+  tray = new Tray(trayIcon);
+  trayMenu = Menu.buildFromTemplate([
+    { id: 'show-main', label: '显示主窗口', click: activateWindow },
+    { id: 'quit', label: '退出 Video Quickly', click: () => app.quit() },
+  ]);
+  tray.setToolTip('Video Quickly');
+  tray.setContextMenu(trayMenu);
+  if (process.platform !== 'darwin') tray.on('click', activateWindow);
   createWindow();
   // Show the window and recovery controls even when sidecar startup fails.
   try { await controller.start(); } catch { /* Connection state contains an actionable failure. */ }

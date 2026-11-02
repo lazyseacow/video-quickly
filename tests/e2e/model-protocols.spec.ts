@@ -8,44 +8,42 @@ async function rpc<T>(request: APIRequestContext, method: string, params: unknow
   expect(response.ok()).toBe(true); expect(payload.error).toBeUndefined(); return payload.result;
 }
 
-for (const manual of ['focused before typing', 'already typing'] as const) {
-  test(`preserves manual model input when discovery completes: ${manual}`, async ({ page, request }) => {
-    let releaseModels!: () => void, requestedModels!: () => void;
-    const released = new Promise<void>(resolve => { releaseModels = resolve; });
-    const requested = new Promise<void>(resolve => { requestedModels = resolve; });
-    const server = createServer(async (incoming, response) => {
-      expect(incoming.method).toBe('GET'); expect(incoming.url).toBe('/v1/models');
-      requestedModels(); await released;
-      response.setHeader('Content-Type', 'application/json'); response.end(JSON.stringify({ data: [{ id: 'discovered-model' }] }));
-    });
-    await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
-    const address = server.address(); if (!address || typeof address === 'string') throw new Error('测试服务未启动。');
-    try {
-      await page.setViewportSize({ width: 390, height: 844 }); await page.goto('/');
-      await page.getByRole('button', { name: '模型连接', exact: true }).click();
-      const dialog = await addModelConnection(page), name = `异步发现期间的手动型号 ${manual}`;
-      await (await settingField(dialog, '连接名称')).fill(name);
-      await (await settingField(dialog, '模型平台')).selectOption('custom');
-      await (await settingField(dialog, '服务地址')).fill(`http://127.0.0.1:${address.port}/v1`);
-      await requested;
-      const input = dialog.locator('input[aria-label="模型 ID"]');
-      await input.focus();
-      if (manual === 'already typing') await page.keyboard.insertText('private-');
-      releaseModels();
-      await expect(dialog.getByRole('status')).toContainText('已读取 1 个模型');
-      await expect(input).toBeFocused();
-      await page.keyboard.insertText(manual === 'already typing' ? 'model' : 'private-model');
-      await expect(input).toHaveValue('private-model');
-      await dialog.getByRole('button', { name: '从列表选择', exact: true }).click();
-      const selector = dialog.locator('select[aria-label="模型 ID"]');
-      await expect(selector).toHaveValue('private-model');
-      await expect(selector.locator('option[value="discovered-model"]')).toHaveCount(1);
-      await dialog.getByRole('button', { name: '保存连接', exact: true }).click(); await expect(dialog).toHaveCount(0);
-      const workspace = await rpc<{ models: ModelProfile[] }>(request, 'workspace.summary');
-      expect(workspace.models.find(model => model.name === name)?.model).toBe('private-model');
-    } finally { releaseModels(); server.closeAllConnections(); await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve())); }
+test('requires a fetched model selection before saving and offers no manual input during discovery', async ({ page, request }) => {
+  let releaseModels!: () => void, requestedModels!: () => void;
+  const released = new Promise<void>(resolve => { releaseModels = resolve; });
+  const requested = new Promise<void>(resolve => { requestedModels = resolve; });
+  const server = createServer(async (incoming, response) => {
+    expect(incoming.method).toBe('GET'); expect(incoming.url).toBe('/v1/models');
+    requestedModels(); await released;
+    response.setHeader('Content-Type', 'application/json'); response.end(JSON.stringify({ data: [{ id: 'discovered-model' }] }));
   });
-}
+  await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
+  const address = server.address(); if (!address || typeof address === 'string') throw new Error('测试服务未启动。');
+  try {
+    await page.setViewportSize({ width: 390, height: 844 }); await page.goto('/');
+    await page.getByRole('button', { name: '模型连接', exact: true }).click();
+    const dialog = await addModelConnection(page), name = '接口获取型号后保存';
+    await (await settingField(dialog, '连接名称')).fill(name);
+    await (await settingField(dialog, '模型平台')).selectOption('custom');
+    await (await settingField(dialog, '服务地址')).fill(`http://127.0.0.1:${address.port}/v1`);
+    await requested;
+    const selector = dialog.locator('select[aria-label="模型 ID"]');
+    await expect(dialog.locator('input[aria-label="模型 ID"]')).toHaveCount(0);
+    await expect(dialog.getByRole('button', { name: '手动填写', exact: true })).toHaveCount(0);
+    await expect(selector).toBeDisabled();
+    await expect(dialog.getByRole('button', { name: '保存连接', exact: true })).toBeDisabled();
+    releaseModels();
+    await expect(dialog.getByRole('status')).toContainText('已读取 1 个模型');
+    await expect(selector).toBeEnabled();
+    await expect(selector).toHaveValue('');
+    await expect(dialog.getByRole('button', { name: '保存连接', exact: true })).toBeDisabled();
+    await expect(selector.locator('option[value="discovered-model"]')).toHaveCount(1);
+    await selector.selectOption('discovered-model');
+    await dialog.getByRole('button', { name: '保存连接', exact: true }).click(); await expect(dialog).toHaveCount(0);
+    const workspace = await rpc<{ models: ModelProfile[] }>(request, 'workspace.summary');
+    expect(workspace.models.find(model => model.name === name)?.model).toBe('discovered-model');
+  } finally { releaseModels(); server.closeAllConnections(); await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve())); }
+});
 
 for (const viewport of [{ width: 1536, height: 960, theme: 'dark' }, { width: 390, height: 844, theme: 'light' }]) {
   for (const protocol of ['chat-completions', 'responses', 'messages'] as const) {

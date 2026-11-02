@@ -7,6 +7,8 @@ import { Button, Field, IconButton, Notice, Select } from '../components/Primiti
 import ToolBindings from '../components/ToolBindings';
 import WorkflowComposition, { SubflowInputBindings } from '../components/WorkflowComposition';
 import { sameWorkflow } from '../lib/project-edits';
+import { matchingStepModels, stepGuidance, stepModelLabel } from '../lib/workflow-guidance';
+import WorkflowStepHelp from '../components/WorkflowStepHelp';
 import './workflow-canvas.css';
 
 type FlowNode = Node<{ node: WorkflowNode }, 'activity'>;
@@ -94,6 +96,7 @@ export default function WorkflowCanvas({ workflow, models, dirty, saving, confli
     workflowRef.current = next; onChange(next, label, group);
   }, [onChange]);
   const selected = nodes.find(node => node.id === selectedId)?.data.node;
+  const stepModels = selected ? matchingStepModels(selected, models) : [];
   const updateSelected = useCallback((patch: Partial<WorkflowNode>) => {
     const next = nodesRef.current.map(node => node.id === selectedId ? { ...node, ariaLabel: `${patch.label ?? node.data.node.label}，${typeLabels[patch.kind ?? node.data.node.kind]}`, data: { node: { ...node.data.node, ...patch } } } : node);
     const active = document.activeElement;
@@ -177,11 +180,12 @@ export default function WorkflowCanvas({ workflow, models, dirty, saving, confli
       {error && <Notice kind="error">{error}</Notice>}
       <WorkflowComposition workflow={workflow} models={models} onChange={onChange} />
       {selected ? <>
+        <WorkflowStepHelp node={selected} workflow={workflow} />
         <Field label="步骤名称"><input value={selected.label} onChange={event => updateSelected({ label: event.target.value })} /></Field>
         <Field label="步骤类型"><Select value={selected.kind} onChange={event => updateSelected({ kind: nodeKindSchema.parse(event.target.value) })}>{Object.entries(typeLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</Select></Field>
         <Field label="步骤说明"><textarea value={selected.description} onChange={event => updateSelected({ description: event.target.value })} /></Field>
         <Field label="提示词"><textarea value={selected.prompt} onChange={event => updateSelected({ prompt: event.target.value })} placeholder="补充这个步骤的具体要求" /></Field>
-        <Field label="使用模型"><Select value={selected.modelId ?? ''} onChange={event => updateSelected({ modelId: event.target.value || undefined })}><option value="">本地素材 / 手动制作</option>{models.filter(model => model.enabled).map(model => <option key={model.id} value={model.id}>{model.name}</option>)}</Select></Field>
+        {(stepGuidance(selected).capability || selected.modelId) && <Field label="使用模型" hint={stepGuidance(selected).requiresModel ? '此步骤需要选择匹配的模型才能执行。' : '未选择模型时使用已有内容或本地处理，不会自动调用 AI。'}><Select value={selected.modelId ?? ''} onChange={event => updateSelected({ modelId: event.target.value || undefined })}><option value="">{stepGuidance(selected).local}{!stepGuidance(selected).requiresModel && '（不调用模型）'}</option>{selected.modelId && !stepModels.some(model => model.id === selected.modelId) && <option value={selected.modelId} disabled>当前：{stepModelLabel(selected, models)}</option>}{stepModels.map(model => <option key={model.id} value={model.id}>{model.name}</option>)}</Select></Field>}
         {selected.kind === 'subflow' && <SubflowInputBindings node={selected} onChange={value => updateSelected(value)} />}
         {selected.kind === 'agent' && <ToolBindings node={selected} onChange={value => updateSelected(value)} />}
         {selected.kind === 'condition' && <Field label="条件结果"><Select aria-label="条件分支结果" value={selected.config.value === true ? 'true' : 'false'} onChange={event => updateSelected({ config: { ...selected.config, value: event.target.value === 'true' } })}><option value="true">成立</option><option value="false">不成立</option></Select></Field>}
