@@ -182,6 +182,8 @@ test('retains a requested detail page when a workspace refresh supersedes its re
 });
 
 test('keeps a pending task page scoped to its original project when the filter changes', async ({ page, request }) => {
+  // Prepare 66 real runs; each individual run retains its 30-second completion bound.
+  test.setTimeout(90_000);
   const source = await fixture(request, '旧筛选分页范围'), target = await fixture(request, '新筛选独立范围');
   await page.emulateMedia({ reducedMotion: 'reduce' });
   const clockOrigin = new Date('2026-01-01T00:00:00Z'); await page.clock.install({ time: clockOrigin });
