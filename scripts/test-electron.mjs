@@ -39,7 +39,9 @@ const testSecret = `isolated-electron-fixture-${randomUUID()}`;
 let expectedSecret = testSecret;
 const credentialReferences = new Set();
 let credentialRequests = 0;
+let credentialContacts = 0;
 const credentialServer = createServer((request, response) => {
+  credentialContacts++;
   if (request.headers.authorization !== `Bearer ${expectedSecret}`) { response.writeHead(401); response.end(); return; }
   credentialRequests++;
   response.writeHead(200, { 'Content-Type': 'application/json' });
@@ -304,6 +306,45 @@ try {
   checks.mediaBoundary = true;
   await expect.poll(() => page.locator('.preview-panel .scene-preview canvas').evaluate(canvas => { const pixel = canvas.getContext('2d').getImageData(Math.floor(canvas.width / 2), Math.floor(canvas.height / 2), 1, 1).data; return pixel[0] < 50 && pixel[1] < 50 && pixel[2] > 180; }), { timeout: 10_000 }).toBe(true);
   checks.videoPreview = true;
+
+  const beforeCheck = await projectDocument(project.id), contactsBeforeCheck = credentialContacts;
+  await page.getByRole('button', { name: '制作前检查', exact: true }).click();
+  const readinessDialog = page.getByRole('dialog', { name: '制作前检查', exact: true });
+  await expect(readinessDialog.locator('.readiness-summary dd').first()).toHaveText(String(beforeCheck.revision));
+  await expect(readinessDialog).toContainText('供应商连通性和计费状态需单独验证');
+  await readinessDialog.getByRole('button', { name: '关闭', exact: true }).click();
+  const exportNode = beforeCheck.workflow.nodes.find(node => node.kind === 'export');
+  assert.ok(exportNode);
+  const readiness = await rpc('project.readiness', { projectId: project.id, selection: { nodeId: exportNode.id, mode: 'node' } });
+  assert.equal(readiness.ready, true); assert.equal(readiness.serviceCheck, 'not_contacted');
+  assert.equal((await projectDocument(project.id)).revision, beforeCheck.revision); assert.equal(credentialContacts, contactsBeforeCheck);
+  checks.productionReadiness = true;
+
+  const recoveryDirectory = join(fixture, '中文 恢复来源'); await mkdir(recoveryDirectory);
+  await writeFile(join(recoveryDirectory, '重命名的原视频.mp4'), importedBytes);
+  await rm(asset.path);
+  await assert.rejects(page.evaluate(path => window.videoQuickly.assetUrl(path), asset.path));
+  const recovery = await rpc('asset.recovery.start', { projectId: project.id });
+  await expect.poll(async () => (await rpc('asset.recovery.get', { jobId: recovery.id })).job.phase).toBe('awaiting_directory');
+  const missing = (await rpc('asset.recovery.get', { jobId: recovery.id })).items.find(item => item.assetId === asset.id);
+  assert.equal(missing?.status, 'missing');
+  await rpc('asset.recovery.scan', { jobId: recovery.id, directory: recoveryDirectory });
+  await expect.poll(async () => (await rpc('asset.recovery.get', { jobId: recovery.id })).job.phase).toBe('awaiting_confirmation');
+  const matched = (await rpc('asset.recovery.get', { jobId: recovery.id })).items.find(item => item.assetId === asset.id);
+  assert.ok(matched?.candidates.length);
+  const reloadedMedia = page.waitForResponse(response => {
+    const url = new URL(response.url());
+    return url.pathname === '/__asset' && url.searchParams.get('path') === asset.path && url.searchParams.has('availability') && [200, 206].includes(response.status());
+  }, { timeout: 10_000 }).then(response => ({ response }), error => ({ error }));
+  await rpc('asset.recovery.confirm', { jobId: recovery.id, selections: [{ itemId: matched.id, candidateId: matched.candidates[0].id }] });
+  await expect.poll(async () => (await rpc('asset.recovery.get', { jobId: recovery.id })).job.phase).toBe('succeeded');
+  const mediaReload = await reloadedMedia;
+  if ('error' in mediaReload) throw mediaReload.error;
+  assert.deepEqual(await readFile(asset.path), importedBytes);
+  const restored = (await rpc('project.get', { projectId: project.id })).assets.find(value => value.id === asset.id);
+  for (const field of ['id', 'path', 'version', 'size', 'sha256']) assert.equal(restored[field], asset[field]);
+  assert.equal((await projectDocument(project.id)).revision, beforeCheck.revision);
+  checks.assetRecovery = true;
 
   const exported = await rpc('render.export', { projectId: project.id });
   await expect.poll(async () => {

@@ -48,13 +48,15 @@ Mac 正式组件使用固定摘要验证的官方独立 Node.js 和静态 FFmpeg
 ## 验收门槛
 
 1. 类型检查、Runtime／SQLite／契约测试和完整浏览器流程通过。
-2. `pnpm test:desktop` 在临时工作区启动真实 Electron，验证生产协议、沙箱预加载、IPC／Node、系统凭据、编辑历史、媒体 Range／路径边界、实际 MP4、断连重连及重启草稿。
+2. `pnpm test:desktop` 在临时工作区启动真实 Electron，验证生产协议、沙箱预加载、IPC／Node、系统凭据、编辑历史、只读制作检查、同身份素材恢复与媒体自动重读、媒体 Range／路径边界、实际 MP4、断连重连及重启草稿。正式包清单必须包含制作检查和素材恢复的原生通过记录。
 3. `pnpm test:desktop --packaged` 对本次实际打包应用执行同样的原生检查。
 4. 包外执行独立 PDF 解析，本地 HTTP CLI 验证恢复和三比例成片，FFmpeg 实际编码覆盖横屏、竖屏、方形及 4K。
 5. Windows 在中文和空格路径验证安装、覆盖、待审任务继续、默认卸载保留以及明确删除范围；Mac 实际解压 ZIP 后验证覆盖、任务继续和移除应用后的数据保留。
 6. 明暗主题、自定义主题、代表性窗口、减少动效和焦点行为由生产组件测试；CSS 静态检查核对统一令牌。
 
 [Desktop verification](https://github.com/lazyseacow/video-quickly/actions/workflows/ci.yml) 在 Windows 和两个 Mac 架构执行完整矩阵。每次交付核对对应提交、实际包、清单和安装记录的 SHA-256，失败或缺少报告时不生成成功清单。平台专项及证据见 [Windows 验收](windows-verification.md)和 [Mac 验收](macos-verification.md)。
+
+浏览器中的故意缺失素材与制作检查夹具使用 `preview:e2e` 的同一真实 HTTP、事件和媒体桥接，每条测试拥有独立预览进程、随机端口和临时工作区，复用已构建的客户端。结束时等待执行器与媒体读取器关闭、确认子进程退出后，仅清理该夹具创建且归属未变化的目录；故障文件不会混入其他并行测试的项目封面或素材库。
 
 浏览器测试固定 Playwright 1.64.1，并通过 `pnpm patch` 回移[官方 TCP 随机端口修复 #43605](https://github.com/microsoft/playwright/pull/43605)。该补丁保留原 Chromium 配置，只向已有禁用列表加入 `TcpPortRandomizationWin`，处理 Windows Server 2025 上加载本地资源的 `ERR_NO_BUFFER_SPACE`。升级到包含此修复的稳定版本后，应移除补丁并重跑三平台验收。
 
