@@ -32,6 +32,6 @@ export async function saveDraft(key: string, state: SavedEdits) {
     transaction.objectStore('projects').put({ version, projectId, revision, base, present, undo, redo, selectedShotId }, key);
     transaction.oncomplete = () => resolve();
     transaction.onabort = () => reject(transaction.error ?? new Error('草稿未能写入本机存储。'));
-    transaction.onerror = () => reject(transaction.error);
+    transaction.onerror = () => reject(transaction.error ?? new Error('草稿未能写入本机存储。'));
   });
 }

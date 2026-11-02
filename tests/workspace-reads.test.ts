@@ -1,10 +1,11 @@
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
-import { assetListItemSchema, projectDetailSchema, recordPageSchema, runEventSchema, runSummarySchema, workspaceSummarySchema } from '@video-quickly/contracts';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { assetListItemSchema, projectDetailSchema, projectSchema, recordPageSchema, runEventSchema, runSummarySchema, workspaceSummarySchema, type AssetRecord, type ProjectDetail, type ProjectDocument, type RunRecord } from '@video-quickly/contracts';
 import { createRuntime } from '../packages/runtime/src';
 import { DocumentStore, openDatabase } from '../packages/runtime/src/database';
+import { editContent } from '../apps/desktop/src/lib/project-edits';
 import { seedLargeWorkspace } from './fixtures/large-workspace';
 
 const directories: string[] = [];
@@ -13,16 +14,67 @@ afterEach(async () => {
   await Promise.all(runtimes.splice(0).map(runtime => runtime.close()));
   await Promise.all(directories.splice(0).map(directory => rm(directory, { recursive: true, force: true })));
 });
-async function fixture(shots = 200) {
+async function fixture(shots = 200, options = { assets: 1000, runs: 105, eventsPerRun: 105 }) {
   const directory = await mkdtemp(join(tmpdir(), 'vq-large-')); directories.push(directory);
   const database = openDatabase(directory); const store = new DocumentStore(database);
-  const project = seedLargeWorkspace(store, shots, { assets: 1000, runs: 105, eventsPerRun: 105 });
+  const project = seedLargeWorkspace(store, shots, options);
   database.close();
   const runtime = createRuntime({ dataDirectory: directory, seed: false }); runtimes.push(runtime);
   return { runtime, project, directory };
 }
 
 describe('on-demand workspace reads', () => {
+  it('uses the existing project index for latest runs without sorting or crossing project and document kinds', async () => {
+    const { runtime, project, directory } = await fixture(10, { assets: 1, runs: 10_000, eventsPerRun: 0 });
+    const database = openDatabase(directory), store = new DocumentStore(database);
+    try {
+      const other = seedLargeWorkspace(store, 11, { assets: 0, runs: 1, eventsPerRun: 0 });
+      const empty = seedLargeWorkspace(store, 12, { assets: 0, runs: 0, eventsPerRun: 0 });
+      const asset = store.get<AssetRecord>('asset', `${project.id}-asset-0`)!;
+      store.put('asset', 'later-asset', { ...asset, id: 'later-asset' });
+      const prepared = vi.spyOn(Object.getPrototypeOf(database) as Pick<typeof database, 'prepare'>, 'prepare');
+      let detail: ProjectDetail;
+      let latestSql: string;
+      try {
+        detail = projectDetailSchema.parse(await runtime.dispatch('project.get', { projectId: project.id }));
+        // Inspect the query actually issued by the production read model.
+        const queries = prepared.mock.calls.map(([sql]) => sql).filter(sql => sql.includes('ORDER BY rowid DESC LIMIT 1'));
+        expect(queries).toHaveLength(1); latestSql = queries[0];
+      } finally { prepared.mockRestore(); }
+      expect(detail.latestRun?.id).toBe(`${project.id}-run-9999`);
+      expect(projectDetailSchema.parse(await runtime.dispatch('project.get', { projectId: other.id })).latestRun?.id).toBe(`${other.id}-run-0`);
+      expect(projectDetailSchema.parse(await runtime.dispatch('project.get', { projectId: empty.id })).latestRun).toBeUndefined();
+      const plan = database.prepare(`EXPLAIN QUERY PLAN ${latestSql}`).all(project.id) as { detail: string }[];
+      expect(plan.some(row => row.detail.includes('USING INDEX documents_project'))).toBe(true);
+      expect(plan.some(row => /SCAN documents|USE TEMP B-TREE/.test(row.detail))).toBe(false);
+      const previous = store.get<RunRecord>('run', `${project.id}-run-9999`)!;
+      store.put('run', 'new-latest-run', { ...previous, id: 'new-latest-run' });
+      const refreshed = projectDetailSchema.parse(await runtime.dispatch('project.get', { projectId: project.id, revision: detail.revision, assetsVersion: detail.assetsVersion }));
+      expect(refreshed.latestRun?.id).toBe('new-latest-run');
+      expect(refreshed.project).toBeUndefined(); expect(refreshed.assets).toBeUndefined();
+    } finally { database.close(); }
+  });
+
+  it('reads a current project once for a full editor save without caching it across revisions', async () => {
+    const { runtime, project, directory } = await fixture(1000);
+    const patch = { ...editContent(project), shots: project.shots.map((shot, index) => index === 999 ? { ...shot, title: '保存最后的镜头' } : shot) };
+    const reads = vi.spyOn(DocumentStore.prototype, 'get');
+    let saved: ProjectDocument;
+    try {
+      saved = projectSchema.parse(await runtime.dispatch('project.update', { projectId: project.id, revision: project.revision, patch }));
+      expect(reads.mock.calls.filter(([kind, id]) => kind === 'project' && id === project.id)).toHaveLength(1);
+    } finally { reads.mockRestore(); }
+    expect(saved.revision).toBe(project.revision + 1);
+    expect(saved.shots[999].title).toBe('保存最后的镜头');
+    expect(saved.shots.slice(0, 999)).toEqual(project.shots.slice(0, 999));
+    const database = openDatabase(directory);
+    const external = { ...saved, title: '独立写入的新修订', revision: saved.revision + 1 };
+    try { new DocumentStore(database).put('project', project.id, external); }
+    finally { database.close(); }
+    await expect(runtime.dispatch('project.update', { projectId: project.id, revision: saved.revision, patch: { title: '不应覆盖外部修改' } })).rejects.toThrow('其他视图修改');
+    expect(projectDetailSchema.parse(await runtime.dispatch('project.get', { projectId: project.id })).project).toEqual(external);
+  });
+
   it('protects background music and caption provenance references transactionally', async () => {
     const { runtime, project, directory } = await fixture(10);
     const db = openDatabase(directory); const store = new DocumentStore(db);

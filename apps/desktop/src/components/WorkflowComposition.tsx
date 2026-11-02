@@ -40,7 +40,7 @@ export default function WorkflowComposition({ workflow, models, onChange }: { wo
 
 function SubflowLibrary({ mode, workflow, onClose, onInsert }: { mode: 'save' | 'insert'; workflow: WorkflowDefinition; onClose: () => void; onInsert: (template: WorkflowTemplate) => void }) {
   const [snapshot] = useState(workflow);
-  const [items, setItems] = useState<WorkflowTemplate[]>([]), [cursor, setCursor] = useState<number | null>(null), [error, setError] = useState(''), [busy, setBusy] = useState(false);
+  const [items, setItems] = useState<WorkflowTemplate[]>([]), [cursor, setCursor] = useState<number | null>(null), [error, setError] = useState(''), [busy, setBusy] = useState(true);
   const [name, setName] = useState(workflow.name), [templateId, setTemplateId] = useState(''), [version, setVersion] = useState(1);
   const [inputs, setInputs] = useState('[]'), [outputs, setOutputs] = useState(() => JSON.stringify(workflow.nodes.length ? [{ name: 'result', type: 'json', nodeId: workflow.nodes.at(-1)!.id, path: [] }] : [], null, 2));
   const alive = useRef(true), reading = useRef(0);

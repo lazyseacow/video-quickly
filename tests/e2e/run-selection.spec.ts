@@ -81,6 +81,32 @@ test('executes the confirmed dependent scope, skips the false branch and retains
   const inspector = page.getByRole('dialog', { name: '制作步骤详情', exact: true }); await expect(inspector.getByRole('navigation', { name: '冻结流程步骤' }).getByRole('button')).toHaveCount(5);
 });
 
+test('keeps a completed execution plan usable while an unrelated workspace update is being checked', async ({ page, request }, info) => {
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  const project = await fixture(request), editor = await open(page, project);
+  await editor.getByRole('button', { name: '预览这步及后续', exact: true }).click();
+  const dialog = page.getByRole('dialog', { name: '执行范围', exact: true });
+  const confirm = dialog.getByRole('button', { name: '确认执行', exact: true });
+  await expect(dialog.locator('.run-scope-steps li')).toHaveCount(5); await expect(confirm).toBeEnabled();
+  let release!: () => void;
+  const held = new Promise<void>(resolve => { release = resolve; });
+  await page.route('**/__desktop_rpc', async route => {
+    if (route.request().postDataJSON()?.method !== 'run.plan') { await route.continue(); return; }
+    const response = await route.fetch(); await held; await route.fulfill({ response });
+  });
+  try {
+    await rpc(request, 'project.create', { title: '不影响当前执行范围的项目' });
+    await expect(dialog.getByText('正在核对执行范围…', { exact: true })).toBeVisible();
+    await expect(confirm).toBeEnabled();
+    await page.screenshot({ path: info.outputPath('run-scope-refresh-usable.png') });
+    await confirm.click(); await expect(dialog).toHaveCount(0);
+    await expect.poll(async () => (await runs(request, project.id)).items[0]?.status).toBe('succeeded');
+    const completed = (await runs(request, project.id)).items;
+    expect(completed).toHaveLength(1); expect(completed[0]).toMatchObject({ projectRevision: project.revision, selection: { nodeId: 'start', mode: 'downstream' }, stepCount: 5 });
+    expect(await current(request, project.id)).toEqual(project);
+  } finally { release(); await page.unrouteAll({ behavior: 'wait' }); }
+});
+
 test('keeps an obsolete preview open, rejects execution and starts only after the user confirms a refreshed plan', async ({ page, request }) => {
   expectedErrors = ['status of 400 (Bad Request)'];
   const project = await fixture(request); let previous: unknown, hold = true, submissions = 0;

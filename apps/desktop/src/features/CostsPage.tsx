@@ -54,7 +54,7 @@ export default function CostsPage({ workspace }: { workspace: WorkspaceView }) {
         {tasks.busy && !tasks.hasLoaded && !tasks.items.length && <p className="cost-loading" role="status">正在读取任务用量…</p>}
         {!tasks.items.length && tasks.hasLoaded && !tasks.error && <EmptyState icon={<ChartNoAxesCombined size={25} />} title="还没有 Token 用量" description="模型用量将按任务保存在这里。" />}
       </div>
-      {tasks.nextCursor !== null && <Button aria-label="加载更多任务" busy={tasks.busy} onClick={() => void tasks.loadMore()}><ChevronDown size={14} />加载更多</Button>}
+      {tasks.nextCursor !== null && <Button aria-label="加载更多任务" busy={tasks.loadingMore} disabled={!tasks.canLoadMore} onClick={() => void tasks.loadMore()}><ChevronDown size={14} />加载更多</Button>}
     </div>
     {runId && <TaskUsage key={runId} runId={runId} version={workspace.version} onBack={() => setRunId(undefined)} onTaskUpdated={updateTask} />}
   </div>;
@@ -99,6 +99,6 @@ function TaskUsage({ runId, version, onBack, onTaskUpdated }: { runId: string; v
         </div>
       </article>)}
     </div>
-    {records.nextCursor !== null && <Button aria-label="加载更多明细" busy={records.busy} onClick={() => void records.loadMore()}><ChevronDown size={14} />加载更多</Button>}
+    {records.nextCursor !== null && <Button aria-label="加载更多明细" busy={records.loadingMore} disabled={!records.canLoadMore} onClick={() => void records.loadMore()}><ChevronDown size={14} />加载更多</Button>}
   </div>;
 }

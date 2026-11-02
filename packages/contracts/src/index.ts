@@ -4,6 +4,7 @@ import { claimSchema, researchSourceSchema } from './research.js';
 import { captionStyleSchema, scenePresetSchema } from './caption-style.js';
 import { audioMixSettingsSchema, audioProcessingSchema } from './audio-processing.js';
 import { motionKeyframesSchema } from './keyframes.js';
+export * from './asset-recovery.js';
 export { motionKeyframeSchema, motionKeyframesSchema, motionEasingSchema, type MotionKeyframe, type MotionEasing } from './keyframes.js';
 export { modelPlatforms, getModelPlatform, platformForConnection, type ModelPlatformPreset } from './model-platforms.js';
 export { textProtocols, mediaAdapters, getMediaAdapters } from './model-protocols.js';
@@ -367,6 +368,19 @@ export const runPlanSchema = z.object({
   shotCount: z.number().int().nonnegative(), lockedShotCount: z.number().int().nonnegative(), hasConditions: z.boolean(), blockedReason: z.string(),
 });
 export type RunPlan = z.infer<typeof runPlanSchema>;
+export const readinessIssueSchema = z.object({
+  id: z.string(), severity: z.enum(['error', 'warning']), category: z.enum(['project', 'workflow', 'model', 'media', 'environment', 'skill']),
+  message: z.string(), hint: z.string().optional(), nodeId: z.string().optional(), nodeLabel: z.string().optional(), modelId: z.string().optional(), modelName: z.string().optional(), assetId: z.string().optional(),
+  fix: z.enum(['project', 'step', 'models', 'characters', 'assets', 'runtime', 'runs']),
+});
+export type ReadinessIssue = z.infer<typeof readinessIssueSchema>;
+export const projectReadinessSchema = z.object({
+  projectId: z.string(), projectTitle: z.string(), projectRevision: z.number().int().positive(), workflowVersion: z.number().int().positive(),
+  selection: runSelectionSchema.optional(), checkedAt: z.string(), digest: z.string().regex(/^[a-f0-9]{64}$/), ready: z.boolean(),
+  serviceCheck: z.literal('not_contacted'), stepCount: z.number().int().nonnegative(), modelCount: z.number().int().nonnegative(), assetCount: z.number().int().nonnegative(),
+  issues: z.array(readinessIssueSchema),
+});
+export type ProjectReadiness = z.infer<typeof projectReadinessSchema>;
 export const runSchema = z.object({
   id: z.string(), projectId: z.string(), projectRevision: z.number().int(), status: runStatusSchema,
   workflowVersion: z.number().int(), snapshotDigest: z.string(), currentNodeId: z.string().optional(),

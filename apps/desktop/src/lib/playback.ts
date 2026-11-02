@@ -54,8 +54,10 @@ export class PlaybackClock {
     if (timeUs === this.snapshot.timeUs && playing === this.snapshot.playing) return;
     this.snapshot = { timeUs, playing }; this.listeners.forEach(listener => listener());
   }
-  private tick = (now: number) => {
-    const elapsedUs = this.startedUs + (now - this.startedAt) * 1000;
+  private tick = () => {
+    // RAF timestamps are shared by the entire callback batch. Earlier canvas
+    // work can delay this callback while audio advances, so use execution time.
+    const elapsedUs = this.startedUs + (performance.now() - this.startedAt) * 1000;
     if (elapsedUs >= this.durationUs) { this.request = undefined; this.publish(this.lastTimeUs, false); return; }
     const frame = Math.floor(elapsedUs * this.rate.numerator / (1_000_000 * this.rate.denominator));
     this.publish(Math.min(this.lastTimeUs, timeAtFrame(frame, this.rate)), true);

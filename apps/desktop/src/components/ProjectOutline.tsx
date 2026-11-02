@@ -1,11 +1,13 @@
 import { primaryModifier } from '../lib/desktop';
 import { memo, useId, useMemo, useRef, useState, type KeyboardEvent } from 'react';
-import { Check, ChevronRight, Film, GitBranch, ListChecks, LockKeyhole, SlidersHorizontal, X, Plus } from 'lucide-react';
+import { Check, ChevronRight, Film, GitBranch, ListChecks, SlidersHorizontal, X, Plus } from 'lucide-react';
 import type { AssetRecord, ModelProfile, ProjectDocument, WorkflowNode } from '@video-quickly/contracts';
 import { stepGuidance, stepModelLabel } from '../lib/workflow-guidance';
 import { Button, IconButton } from './Primitives';
 import type { SelectionModifiers } from '../lib/shot-selection';
-import { ScenePreview } from './ScenePreview';
+import OutlineShotRow from './OutlineShotRow';
+import { useScenePreviewContext } from '../lib/scene-preview-context';
+import { useCommittedCallback } from '../lib/use-committed-callback';
 import TabSurface from './TabSurface';
 import './project-outline.css';
 
@@ -36,6 +38,9 @@ export default memo(function ProjectOutline({ project, assets, models, selectedS
   const [outlineTab, setOutlineTab] = useState<OutlineTab>('shots');
   const tabButtons = useRef<Array<HTMLButtonElement | null>>([]);
   const id = useId();
+  const modifierLabel = primaryModifier().label;
+  const previewContext = useScenePreviewContext(project);
+  const selectShot = useCommittedCallback(onSelectShot);
   const completed = useMemo(() => new Set(completedNodeIds), [completedNodeIds]);
   const selected = useMemo(() => { const ids = new Set(selectedIds ?? (selectedShotId ? [selectedShotId] : [])); return new Set(project.shots.filter(shot => ids.has(shot.id)).map(shot => shot.id)); }, [project.shots, selectedIds, selectedShotId]);
 
@@ -61,10 +66,7 @@ export default memo(function ProjectOutline({ project, assets, models, selectedS
     </div>
     {outlineTab === 'shots' && (onSelectAll || onClearSelection || onBulkEdit) && <div className="outline-selection" role="group" aria-label="镜头多选操作" onKeyDown={selectionKey}><span aria-live="polite">已选 {selected.size} 个镜头</span>{onSelectAll && <IconButton label="全选镜头" disabled={!project.shots.length || selected.size === project.shots.length} onClick={onSelectAll}><ListChecks size={15} /></IconButton>}{onClearSelection && <IconButton label="清除镜头选择" disabled={!selected.size} onClick={onClearSelection}><X size={15} /></IconButton>}{onBulkEdit && <IconButton label="批量编辑镜头" disabled={!selected.size} onClick={onBulkEdit}><SlidersHorizontal size={15} /></IconButton>}</div>}
     {outlineTab === 'shots' ? <div className="shot-list outline-list" id={`${id}-shots-panel`} role="tabpanel" aria-labelledby={`${id}-shots-tab`} tabIndex={0} onKeyDown={selectionKey}>
-      {project.shots.length ? project.shots.map((shot, index) => <button type="button" key={shot.id} className={`shot-card outline-shot ${selected.has(shot.id) ? 'selected' : ''} ${selected.has(shot.id) && shot.id === selectedShotId ? 'active' : ''}`} aria-pressed={selected.has(shot.id)} aria-keyshortcuts="Control+Space Meta+Space Shift+Enter" onClick={event => void onSelectShot(shot.id, { toggle: event.ctrlKey || event.metaKey, range: event.shiftKey, keepGroup: !event.ctrlKey && !event.metaKey && !event.shiftKey && selected.has(shot.id) })} title={`${shot.title}；${primaryModifier().label} 切换选择，Shift 连续选择`}>
-        <div className="shot-thumbnail"><ScenePreview project={project} shot={shot} shotIndex={index} assets={assets} thumbnail /><span className="shot-thumb-index">{(index + 1).toString().padStart(2, '0')}</span>{selected.size > 1 && selected.has(shot.id) && <span className="outline-shot-selection" aria-hidden="true"><Check size={11} /></span>}</div>
-        <div className="outline-shot-copy"><div className="shot-card-info"><strong>{shot.title}</strong>{shot.locked ? <LockKeyhole size={12} aria-label="镜头已锁定" /> : shot.assetId || shot.videoAssetId ? <Check size={12} aria-label="已添加画面素材" /> : null}</div><div className="outline-shot-meta">{(shot.durationUs / 1_000_000).toFixed(1)} 秒</div></div>
-      </button>) : <div className="outline-empty"><Film size={20} aria-hidden="true" /><p>还没有镜头</p><span>添加镜头，开始安排画面与旁白。</span></div>}
+      {project.shots.length ? project.shots.map((shot, index) => <OutlineShotRow key={shot.id} project={previewContext} shot={shot} index={index} assets={assets} selected={selected.has(shot.id)} primary={selected.has(shot.id) && shot.id === selectedShotId} multipleSelected={selected.size > 1 && selected.has(shot.id)} modifierLabel={modifierLabel} onSelectShot={selectShot} />) : <div className="outline-empty"><Film size={20} aria-hidden="true" /><p>还没有镜头</p><span>添加镜头，开始安排画面与旁白。</span></div>}
     </div> : <div className="step-list outline-list" id={`${id}-steps-panel`} role="tabpanel" aria-labelledby={`${id}-steps-tab`}>
       {project.workflow.nodes.map((node, index) => <button type="button" key={node.id} className={`step-item ${selectedNodeId === node.id ? 'active' : ''}`} aria-label={node.label} aria-describedby={`${id}-step-${index}-details`} aria-pressed={selectedNodeId === node.id} onClick={() => onSelectNode(node)}><span className={`step-circle ${completed.has(node.id) ? 'done' : selectedNodeId === node.id ? 'current' : ''}`}>{completed.has(node.id) ? <Check size={10} aria-label="已完成" /> : index + 1}</span><span className="step-item__copy" id={`${id}-step-${index}-details`}><strong>{node.label}</strong><small>{node.description || stepGuidance(node).purpose}</small><span>{stepModelLabel(node, models)}{node.requiresReview && ' · 需审阅'}</span></span><ChevronRight className="step-tail" size={12} aria-hidden="true" /></button>)}
     </div>}

@@ -36,6 +36,12 @@ export function createCharacterLibrary({ database, store, onChanged }: Character
     // Archived characters remain restorable, so their reference images are retained too.
     return Boolean(database.prepare("SELECT 1 FROM documents profile, json_each(profile.body, '$.referenceAssetIds') reference WHERE profile.kind = 'character' AND reference.value = ? LIMIT 1").get(id));
   }
+  function assetsInUse(ids: readonly string[]): Set<string> {
+    if (!ids.length) return new Set();
+    // Scan current and archived references once for this page, without retaining a cross-request cache.
+    const rows = database.prepare("SELECT DISTINCT reference.value AS asset_id FROM documents profile, json_each(profile.body, '$.referenceAssetIds') reference WHERE profile.kind = 'character' AND reference.value IN (SELECT value FROM json_each(?))").all(JSON.stringify(ids)) as { asset_id: string }[];
+    return new Set(rows.map(row => row.asset_id));
+  }
   function profilesFor(project: { shots: ReadonlyArray<Pick<Shot, 'characterIds'>> }): CharacterBundle {
     const ids = new Set(project.shots.flatMap(shot => shot.characterIds ?? []));
     const assets = new Map<string, AssetRecord>();
@@ -103,5 +109,5 @@ export function createCharacterLibrary({ database, store, onChanged }: Character
       default: throw new Error(`未知角色方法：${method}`);
     }
   }
-  return { dispatch, assetInUse, profilesFor, prepareImport };
+  return { dispatch, assetInUse, assetsInUse, profilesFor, prepareImport };
 }

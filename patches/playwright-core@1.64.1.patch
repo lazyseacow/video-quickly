@@ -1,0 +1,26 @@
+diff --git a/lib/coreBundle.js b/lib/coreBundle.js
+index 6893f1cf133efec2c5dccc35c77cc7a53870ccbc..8d18e18482fe8f8af35e5a13e7b91e23e4fab603 100644
+--- a/lib/coreBundle.js
++++ b/lib/coreBundle.js
+@@ -36195,6 +36195,8 @@ var init_chromiumSwitches = __esm({
+       "Translate",
+       // See https://issues.chromium.org/u/1/issues/435410220
+       "AutoDeElevate",
++      // Avoids intermittent ERR_NO_BUFFER_SPACE failures on Windows (https://crbug.com/572515601).
++      "TcpPortRandomizationWin",
+       // Prevents downloading optimization hints on startup.
+       "OptimizationHints",
+       // Prevents network time queries to clients2.google.com on startup.
+diff --git a/lib/server/electron/loader.js b/lib/server/electron/loader.js
+index afa1d0e4d8efd2a049de610b7894afaa9fb9be73..e525d423418ec4a6ccff2f0ee460a0f2782af9b6 100644
+--- a/lib/server/electron/loader.js
++++ b/lib/server/electron/loader.js
+@@ -31,6 +31,8 @@ var disabledFeatures = [
+   "Translate",
+   // See https://issues.chromium.org/u/1/issues/435410220
+   "AutoDeElevate",
++  // Avoids intermittent ERR_NO_BUFFER_SPACE failures on Windows (https://crbug.com/572515601).
++  "TcpPortRandomizationWin",
+   // Prevents downloading optimization hints on startup.
+   "OptimizationHints",
+   // Prevents network time queries to clients2.google.com on startup.

@@ -116,12 +116,25 @@ test('retains unsaved shot edits when the workbench approves a production step',
 });
 
 test('retries failed progress reads and review actions without leaving the workbench or duplicating generation', async ({ page, request }) => {
-  const source = await fixture(request); let failRead = true, failReview = true;
+  const source = await fixture(request); let failRead = true, failReview = true, holdInspection = false, reviewAttempts = 0;
+  const reviewTargets: Array<Record<string, unknown>> = [];
+  let inspectionEntered!: () => void, releaseInspection!: () => void;
+  const entered = new Promise<void>(resolve => { inspectionEntered = resolve; });
+  const release = new Promise<void>(resolve => { releaseInspection = resolve; });
   try {
     await page.route('**/__desktop_rpc', async route => {
       const input = route.request().postDataJSON();
       if (input.method === 'run.inspect' && failRead) { failRead = false; await route.fulfill({ status: 400, json: { error: '制作进度读取暂时失败' } }); return; }
-      if (input.method === 'run.review' && failReview) { failReview = false; await route.fulfill({ status: 400, json: { error: '审阅提交暂时失败' } }); return; }
+      if (input.method === 'run.inspect' && holdInspection) {
+        holdInspection = false;
+        const response = await route.fetch(); inspectionEntered(); await release;
+        await route.fulfill({ response }); return;
+      }
+      if (input.method === 'run.review') {
+        reviewAttempts++;
+        reviewTargets.push({ runId: input.params.runId, expectedNodeId: input.params.expectedNodeId, expectedUpdatedAt: input.params.expectedUpdatedAt });
+        if (failReview) { failReview = false; holdInspection = true; await route.fulfill({ status: 400, json: { error: '审阅提交暂时失败' } }); return; }
+      }
       await route.continue();
     });
     await open(page, source.project); await page.getByRole('button', { name: '开始制作', exact: true }).click();
@@ -131,10 +144,57 @@ test('retries failed progress reads and review actions without leaving the workb
     await expect(panel.getByRole('button', { name: '通过审阅并继续', exact: true })).toBeEnabled();
     await panel.getByRole('button', { name: '通过审阅并继续', exact: true }).click();
     await expect(panel).toContainText('操作未完成');
-    expect((await latest(request, source.project.id)).status).toBe('waiting_review'); expect(source.calls()).toBe(1);
+    await entered;
+    const waiting = await latest(request, source.project.id);
+    expect(waiting.status).toBe('waiting_review'); expect(source.calls()).toBe(1);
+    const target = { runId: waiting.id, expectedNodeId: waiting.currentNodeId, expectedUpdatedAt: waiting.updatedAt };
+    expect(reviewTargets).toEqual([target]);
+    // A matching completed inspection remains usable while a background read is pending.
+    await expect(panel.getByRole('button', { name: '通过审阅并继续', exact: true })).toBeEnabled();
     await panel.getByRole('button', { name: '通过审阅并继续', exact: true }).click();
+    await expect.poll(() => reviewAttempts).toBe(2); expect(reviewTargets).toEqual([target, target]); releaseInspection();
     await expect(panel.locator('.workbench-production__heading strong')).toHaveText('分镜确认');
     await expect(panel).not.toContainText('操作未完成'); expect(source.calls()).toBe(2);
     await expect(page.getByRole('heading', { name: '制作记录', exact: true })).toHaveCount(0);
-  } finally { await close(source.server); }
+  } finally { releaseInspection(); await page.unrouteAll({ behavior: 'wait' }); await close(source.server); }
+});
+
+test('refreshes a lost review receipt without approving the next checkpoint or saving its draft', async ({ page, request }) => {
+  const source = await fixture(request), reviews: Array<Record<string, unknown>> = [];
+  try {
+    await open(page, source.project); await page.getByRole('button', { name: '开始制作', exact: true }).click();
+    const panel = production(page), approve = panel.getByRole('button', { name: '通过审阅并继续', exact: true });
+    await expect(approve).toBeEnabled();
+    const first = await latest(request, source.project.id);
+    expect(first).toMatchObject({ status: 'waiting_review', currentNodeId: 'style' });
+    const title = page.getByLabel('镜头标题', { exact: true }); await title.fill('回执丢失后的镜头草稿');
+    await page.route('**/__desktop_rpc', async route => {
+      const input = route.request().postDataJSON();
+      if (input.method === 'run.review') {
+        reviews.push({ runId: input.params.runId, expectedNodeId: input.params.expectedNodeId, expectedUpdatedAt: input.params.expectedUpdatedAt });
+        if (reviews.length === 1) {
+          const response = await route.fetch(); expect(response.ok()).toBe(true);
+          await route.fulfill({ status: 400, json: { error: '审阅已经提交，但回执暂时丢失' } }); return;
+        }
+      }
+      await route.continue();
+    });
+    await approve.click(); await expect(panel).toContainText('操作未完成');
+    await expect(panel.locator('.workbench-production__heading strong')).toHaveText('分镜确认'); await expect(approve).toBeEnabled();
+    const second = await latest(request, source.project.id);
+    expect(second).toMatchObject({ id: first.id, status: 'waiting_review', currentNodeId: 'script' });
+    expect(reviews).toEqual([{ runId: first.id, expectedNodeId: first.currentNodeId, expectedUpdatedAt: first.updatedAt }]);
+    expect(source.calls()).toBe(2);
+    await expect(title).toHaveValue('回执丢失后的镜头草稿'); await expect(page.locator('.unsaved-dot')).toBeVisible();
+    expect((await rpc<{ project: ProjectDocument }>(request, 'project.get', { projectId: source.project.id })).project).toEqual(source.project);
+    await approve.click();
+    await expect.poll(async () => (await latest(request, source.project.id)).status).toBe('succeeded');
+    expect(reviews).toEqual([
+      { runId: first.id, expectedNodeId: first.currentNodeId, expectedUpdatedAt: first.updatedAt },
+      { runId: second.id, expectedNodeId: second.currentNodeId, expectedUpdatedAt: second.updatedAt },
+    ]);
+    expect(source.calls()).toBe(2); await expect(panel).not.toContainText('操作未完成');
+    await expect(title).toHaveValue('回执丢失后的镜头草稿');
+    expect((await rpc<{ project: ProjectDocument }>(request, 'project.get', { projectId: source.project.id })).project).toEqual(source.project);
+  } finally { await page.unrouteAll({ behavior: 'wait' }); await close(source.server); }
 });

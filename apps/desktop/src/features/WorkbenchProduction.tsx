@@ -28,8 +28,9 @@ export default function WorkbenchProduction({ run, version, action, onOpenOutput
   const output = current?.outputAvailable && !['review', 'brief', 'condition', 'join'].includes(current.kind) ? current : usefulOutput ?? steps.findLast(step => step.outputAvailable);
   const reviewHint = current?.kind === 'voice' ? '核对音频、文字内容和时间对齐。' : current ? stepGuidance({ kind: current.kind, config: {} }).review : '核对本步产物是否符合创作要求。';
   const completed = steps.filter(step => step.status === 'succeeded' || step.status === 'skipped').length;
-  const synchronized = Boolean(data && data.run.status === run.status && data.run.updatedAt === run.updatedAt);
-  const blocked = inspection.busy || Boolean(inspection.error) || !synchronized;
+  const synchronized = Boolean(data && data.run.status === run.status && data.run.updatedAt === run.updatedAt && data.run.currentNodeId === run.currentNodeId);
+  // A completed matching inspection stays actionable during a background read.
+  const blocked = Boolean(inspection.error) || !synchronized;
   function inspect(nodeId = run.currentNodeId ?? '') { onPausePreview(); setInspectedStep(nodeId); }
   async function perform(method: string, params: Record<string, unknown> = {}) {
     if (inFlight.current || blocked) return;

@@ -1,5 +1,6 @@
 import type { AssetRecord } from '@video-quickly/contracts';
 import { getAssetUrl } from '../lib/client';
+import { assetAvailabilityUrl } from '../lib/asset-availability';
 import { createPreviewVideoController, previewAssetKey } from './preview-media';
 
 export interface ThumbnailRequest { asset: AssetRecord; timeUs: number; width: number; height: number }
@@ -105,7 +106,7 @@ function capture(input: ThumbnailRequest, signal: AbortSignal): Promise<Thumbnai
     controller.synchronize(input.timeUs, false, 30, 'thumbnail', range);
     signal.addEventListener('abort', cancel, { once: true });
     timeout = setTimeout(() => fail(new Error('视频缩略图读取超时')), 8_000);
-    void getAssetUrl(input.asset.path).then(url => { if (!settled) { video.src = url; video.load(); } }).catch(fail);
+    void getAssetUrl(input.asset.path).then(url => { if (!settled) { video.src = assetAvailabilityUrl(url, input.asset.id); video.load(); } }).catch(fail);
   });
 }
 

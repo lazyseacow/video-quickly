@@ -26,6 +26,20 @@ describe('local preview clock', () => {
     clock.dispose(); expect(callbacks.size).toBe(0);
   });
 
+  it('uses execution time when an earlier animation callback stalls the shared frame timestamp', () => {
+    const clock = new PlaybackClock(10_000_000, { numerator: 30, denominator: 1 });
+    clock.toggle();
+    const pending = [...callbacks.values()]; callbacks.clear();
+    // Every RAF callback in a batch receives 34ms, even if an earlier callback
+    // blocks for 180ms before this clock gets to run. The audio keeps advancing.
+    now = 214; pending.forEach(callback => callback(34));
+    expect(clock.getSnapshot()).toEqual({ playing: true, timeUs: 200_000 });
+    clock.pause(); clock.seek(1_000_000); clock.toggle();
+    advance(34);
+    expect(clock.getSnapshot()).toEqual({ playing: true, timeUs: 1_033_333 });
+    clock.dispose(); expect(callbacks.size).toBe(0);
+  });
+
   it('steps exactly one fractional-rate frame in either direction', () => {
     const clock = new PlaybackClock(2_000_000, { numerator: 30000, denominator: 1001 });
     clock.step(1); expect(clock.getSnapshot().timeUs).toBe(33367);

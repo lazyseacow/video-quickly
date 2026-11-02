@@ -5,14 +5,51 @@ async function rpc<T>(request: APIRequestContext, method: string, params: unknow
 async function fixture(request: APIRequestContext) { const project = await rpc<ProjectDocument>(request, 'project.create', { title: `子流程验收 ${randomUUID().slice(0, 8)}`, brief: '冻结资料' }); return rpc<ProjectDocument>(request, 'project.update', { projectId: project.id, revision: project.revision, patch: { profile: { ...project.profile, width: 640, height: 360 }, shots: [{ id: 'shot', title: '镜头', narration: '', visualPrompt: '', durationUs: 1_000_000 }], workflow: { id: 'body', version: 1, name: '双步骤流程', nodes: [{ id: 'first', kind: 'brief', label: '第一步' }, { id: 'last', kind: 'brief', label: '第二步', position: { x: 300, y: 0 } }], edges: [{ id: 'edge', source: 'first', target: 'last' }] } } }); }
 async function open(page: Page, project: ProjectDocument) { await page.goto('/'); await page.getByRole('button', { name: '我的项目', exact: true }).click(); await page.getByLabel('搜索项目', { exact: true }).fill(project.title); await page.locator('.project-card').filter({ hasText: project.title }).getByRole('button', { name: '继续创作', exact: true }).click(); await page.getByRole('button', { name: '流程', exact: true }).click(); await expect(page.locator('.react-flow')).toBeVisible(); }
 async function current(request: APIRequestContext, projectId: string) { return (await rpc<{ project: ProjectDocument }>(request, 'project.get', { projectId })).project; }
-async function save(page: Page) { const button = page.getByRole('button', { name: '保存流程', exact: true }); await expect(button).toBeEnabled(); await button.click(); await expect(button).toBeDisabled(); }
+async function save(page: Page) { const button = page.getByRole('button', { name: '保存流程', exact: true }); await expect(button).toBeEnabled(); await button.click(); await expect(page.locator('.flow-save-state')).toHaveText('修改已保存'); await expect(button).toBeDisabled(); }
 for (const width of [1536, 600]) test(`saves and inserts a copied template version with undo and reload at ${width}px`, async ({ page, request }) => {
   const errors: string[] = []; page.on('pageerror', error => errors.push(error.message)); const project = await fixture(request); await page.setViewportSize({ width, height: 960 }); await open(page, project);
-  await page.getByRole('button', { name: '保存为子流程', exact: true }).click(); let dialog = page.getByRole('dialog', { name: '保存子流程版本', exact: true }); const templateName = `模板 ${randomUUID().slice(0, 8)}`; await dialog.getByLabel('名称', { exact: true }).fill(templateName); await expect(dialog.getByRole('button', { name: '保存版本', exact: true })).toBeEnabled(); await dialog.getByRole('button', { name: '保存版本', exact: true }).click(); await expect(dialog).toHaveCount(0);
+  await page.getByRole('button', { name: '保存为子流程', exact: true }).click(); let dialog = page.getByRole('dialog', { name: '保存子流程版本', exact: true }); const templateName = `模板 ${randomUUID().slice(0, 8)}`;
+  await dialog.getByLabel('名称', { exact: true }).fill(templateName); await expect(dialog.getByLabel('名称', { exact: true })).toHaveValue(templateName);
+  await expect(dialog.getByRole('button', { name: '保存版本', exact: true })).toBeEnabled();
+  const saveResponse = page.waitForResponse(response => response.url().endsWith('/__desktop_rpc') && response.request().postDataJSON()?.method === 'workflowTemplate.save');
+  await dialog.getByRole('button', { name: '保存版本', exact: true }).click();
+  const reply = await saveResponse; expect(reply.request().postDataJSON().params.name).toBe(templateName); expect(reply.status()).toBe(200);
+  const savedTemplate: WorkflowTemplate = (await reply.json()).result; expect(savedTemplate.definition.name).toBe(templateName); await expect(dialog).toHaveCount(0);
   const library = await rpc<{ items: WorkflowTemplate[] }>(request, 'workflowTemplate.list'); const template = library.items.find(item => item.definition.name === templateName); expect(template).toBeDefined();
+  expect(template!.id).toBe(savedTemplate.id);
   await page.getByRole('button', { name: '插入子流程', exact: true }).click(); dialog = page.getByRole('dialog', { name: '插入固定版本子流程', exact: true }); await dialog.getByLabel('选择模板', { exact: true }).selectOption(template!.id); await dialog.getByRole('button', { name: '插入', exact: true }).click(); await expect(dialog).toHaveCount(0); await expect(page.locator('.react-flow__node')).toHaveCount(3); await save(page);
   const saved = await current(request, project.id); expect(saved.workflow.subflows).toHaveLength(1); expect(saved.workflow.nodes.at(-1)?.subflow).toMatchObject({ id: template!.id, version: 1 });
   await page.reload(); await page.getByRole('button', { name: '我的项目', exact: true }).click(); await page.getByLabel('搜索项目', { exact: true }).fill(project.title); await page.locator('.project-card').filter({ hasText: project.title }).getByRole('button', { name: '继续创作', exact: true }).click(); await page.getByRole('button', { name: '流程', exact: true }).click(); await expect(page.locator('.react-flow__node')).toHaveCount(3); await page.getByRole('button', { name: '撤销', exact: true }).click(); await expect(page.locator('.react-flow__node')).toHaveCount(2); await page.getByRole('button', { name: '重做', exact: true }).click(); await expect(page.locator('.react-flow__node')).toHaveCount(3); await page.screenshot({ path: test.info().outputPath(`composition-${width}.png`) }); expect(errors).toEqual([]);
+});
+test('keeps the first visible subflow form disabled until its real template library has loaded', async ({ page, request }) => {
+  const project = await fixture(request); await open(page, project);
+  let entered!: () => void, release!: () => void;
+  const pending = new Promise<void>(resolve => { entered = resolve; }), gate = new Promise<void>(resolve => { release = resolve; });
+  await page.route('**/__desktop_rpc', async route => {
+    if (route.request().postDataJSON()?.method !== 'workflowTemplate.list') { await route.continue(); return; }
+    const response = await route.fetch(); entered(); await gate; await route.fulfill({ response });
+  });
+  // Observe the native visibility boundary, before the passive loading effect can disable the form.
+  await page.evaluate(() => {
+    const show = HTMLDialogElement.prototype.showModal;
+    HTMLDialogElement.prototype.showModal = function() {
+      const result = Reflect.apply(show, this, []);
+      if (this.querySelector('h2')?.textContent === '保存子流程版本') {
+        this.dataset.initialNameDisabled = String(this.querySelector<HTMLInputElement>('input[aria-label="名称"]')?.disabled);
+        this.dataset.initialSaveDisabled = String(this.querySelector<HTMLButtonElement>('button[type="submit"]')?.disabled);
+        HTMLDialogElement.prototype.showModal = show;
+      }
+      return result;
+    };
+  });
+  try {
+    await page.getByRole('button', { name: '保存为子流程', exact: true }).click(); await pending;
+    const dialog = page.getByRole('dialog', { name: '保存子流程版本', exact: true }); await expect(dialog).toBeVisible();
+    await expect(dialog).toHaveAttribute('data-initial-name-disabled', 'true'); await expect(dialog).toHaveAttribute('data-initial-save-disabled', 'true');
+    await expect(dialog.getByLabel('名称', { exact: true })).toBeDisabled(); await expect(dialog.getByRole('button', { name: '保存版本', exact: true })).toBeDisabled();
+    release(); await expect(dialog.getByLabel('名称', { exact: true })).toBeEditable(); await expect(dialog.getByRole('button', { name: '保存版本', exact: true })).toBeEnabled();
+    await dialog.getByRole('button', { name: '取消', exact: true }).click(); await expect(dialog).toHaveCount(0);
+  } finally { release(); await page.unrouteAll({ behavior: 'wait' }); }
 });
 test('keeps parallel configuration undoable and restores an unfinished input binding draft', async ({ page, request }) => {
   const project = await fixture(request); await open(page, project); await page.getByLabel('镜头同时处理数', { exact: true }).selectOption('3'); await save(page); expect((await current(request, project.id)).workflow.execution?.maxConcurrentShots).toBe(3); await page.getByRole('button', { name: '撤销', exact: true }).click(); await expect(page.getByLabel('镜头同时处理数', { exact: true })).toHaveValue('1'); await page.getByRole('button', { name: '重做', exact: true }).click(); await expect(page.getByLabel('镜头同时处理数', { exact: true })).toHaveValue('3'); await expect.poll(async () => (await current(request, project.id)).workflow.execution?.maxConcurrentShots).toBe(3);

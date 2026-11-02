@@ -21,9 +21,18 @@ export function selectShot(selection: ShotSelection, orderedIds: readonly string
   }
   if (modifiers.toggle) {
     if (!current.ids.includes(id)) return normalizeSelection({ ids: [...current.ids, id], primary: id, anchor: id }, order);
-    const ids = current.ids.filter(value => value !== id), index = order.indexOf(id);
-    const nearest = ids.reduce<string | undefined>((best, value) => best === undefined || Math.abs(order.indexOf(value) - index) < Math.abs(order.indexOf(best) - index) ? value : best, undefined);
-    return normalizeSelection({ ids, primary: current.primary === id ? nearest : current.primary, anchor: id }, order);
+    const ids = current.ids.filter(value => value !== id);
+    let primary = current.primary;
+    if (primary === id) {
+      primary = undefined;
+      const remaining = new Set(ids), index = order.indexOf(id);
+      for (let distance = 1; remaining.size && distance < order.length; distance++) {
+        // Canonical order wins ties, including after the shot list is reordered.
+        if (index - distance >= 0 && remaining.has(order[index - distance])) { primary = order[index - distance]; break; }
+        if (index + distance < order.length && remaining.has(order[index + distance])) { primary = order[index + distance]; break; }
+      }
+    }
+    return normalizeSelection({ ids, primary, anchor: id }, order);
   }
   if (modifiers.keepGroup && current.ids.includes(id)) return { ...current, primary: id };
   return { ids: [id], primary: id, anchor: id };

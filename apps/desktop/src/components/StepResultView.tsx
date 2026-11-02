@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { Check, Clapperboard, Clock3, Download, Film, FolderOpen, Image, Mic, RefreshCw } from 'lucide-react';
 import { assetSchema, captionTrackSchema, type AssetRecord, type JsonValue, type WorkflowNode } from '@video-quickly/contracts';
 import { getAssetUrl } from '../lib/client';
+import { assetAvailabilityUrl, useAssetAvailability } from '../lib/asset-availability';
 import { nativeDesktop, revealFile } from './PathPicker';
 import { Button, Notice, formatTime } from './Primitives';
 import './step-result-view.css';
@@ -59,20 +60,21 @@ function MediaGallery({ assets, exported }: { assets: AssetRecord[]; exported: b
   const [selectedId, setSelectedId] = useState('');
   const selected = assets.find(asset => asset.id === selectedId) ?? (exported ? assets.find(asset => asset.kind === 'video') : undefined) ?? assets[0];
   return <section aria-label="产物媒体">
-    <figure className="step-result__media"><ResultMedia key={`${selected.id}:${selected.version}:${selected.path}`} path={selected.path} kind={selected.kind} name={selected.name} exported={exported && selected.kind === 'video'} />{!exported && <figcaption>{selected.name}</figcaption>}</figure>
+    <figure className="step-result__media"><ResultMedia key={`${selected.id}:${selected.version}:${selected.sha256}:${selected.path}`} assetId={selected.id} path={selected.path} kind={selected.kind} name={selected.name} exported={exported && selected.kind === 'video'} />{!exported && <figcaption>{selected.name}</figcaption>}</figure>
     {assets.length > 1 && <div className="step-result__asset-list" aria-label="选择媒体">{assets.map(asset => <button type="button" key={asset.id} aria-pressed={selected.id === asset.id} onClick={() => setSelectedId(asset.id)}>{asset.kind === 'image' ? <Image size={16} /> : asset.kind === 'audio' ? <Mic size={16} /> : <Film size={16} />}<span>{asset.name}</span></button>)}</div>}
   </section>;
 }
 
-function ResultMedia({ path, kind, name, exported = false }: { path: string; kind: AssetRecord['kind']; name: string; exported?: boolean }) {
+function ResultMedia({ assetId, path, kind, name, exported = false }: { assetId?: string; path: string; kind: AssetRecord['kind']; name: string; exported?: boolean }) {
+  const availability = useAssetAvailability(assetId);
   const media = useRef<HTMLMediaElement | null>(null);
   const [source, setSource] = useState<{ url?: string; error?: string }>({});
   const [retry, setRetry] = useState(0);
   useEffect(() => {
     let current = true; setSource({});
-    void getAssetUrl(path).then(url => { if (current) setSource({ url }); }).catch(error => { if (current) setSource({ error: String(error) }); });
+    void getAssetUrl(path).then(url => { if (current) setSource({ url: assetId ? assetAvailabilityUrl(url, assetId) : url }); }).catch(error => { if (current) setSource({ error: String(error) }); });
     return () => { current = false; };
-  }, [path, retry]);
+  }, [assetId, path, retry, availability]);
   useEffect(() => {
     const element = media.current;
     return () => { if (element) { element.pause(); element.removeAttribute('src'); element.load(); } };

@@ -54,6 +54,8 @@ async function open(page: Page, project: ProjectDocument) {
 }
 for (const viewport of [{ width: 1536, height: 960, theme: 'dark' }, { width: 390, height: 844, theme: 'light' }]) {
   test(`previews real storyboard, image, audio, captions and exported video while retaining all production steps at ${viewport.width}px`, async ({ page, request }, info) => {
+    // Two bounded production waits plus media inspection and downloads share this case.
+    test.setTimeout(90_000);
     const source = await fixture(request, info), errors: string[] = [], consoleErrors: string[] = [], payloadKinds: string[] = [];
     let imageFailed = false;
     page.on('pageerror', error => errors.push(error.message)); page.on('console', message => { if (message.type() === 'error') consoleErrors.push(message.text()); });
