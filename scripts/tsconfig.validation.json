@@ -1,5 +1,5 @@
 {
   "extends": "../tsconfig.base.json",
-  "compilerOptions": { "types": ["node"] },
-  "include": ["real-service-config.ts", "real-service-smoke.ts", "real-service-progress.ts", "check-real-service-cli.ts", "../apps/desktop/dev/rpc-diagnostics.ts"]
+  "compilerOptions": { "types": ["node"], "allowImportingTsExtensions": true },
+  "include": ["real-service-config.ts", "real-service-smoke.ts", "real-service-progress.ts", "check-real-service-cli.ts", "../apps/desktop/dev/rpc-diagnostics.ts", "../apps/desktop/dev/preview-e2e.ts", "../apps/desktop/vite.config.ts", "../tests/e2e/isolated-workspace.ts"]
 }

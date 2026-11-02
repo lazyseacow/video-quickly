@@ -8,9 +8,12 @@ import { createPreviewVideoController, loadPreviewImage, previewAssetKey } from 
 import { Button } from './Primitives';
 import { videoThumbnails, type ThumbnailFrame } from './preview-thumbnails';
 import { useThumbnailVisibility } from './thumbnail-visibility';
+import { assetAvailabilityUrl, useAssetAvailabilityKey } from '../lib/asset-availability';
+
+export type ScenePreviewProject = Pick<ProjectDocument, 'profile'> & Partial<Pick<ProjectDocument, 'claims' | 'researchSources' | 'referenceDisplay' | 'shots' | 'captionStyle' | 'clipEditSources' | 'clipEditPlans'>> & { referenceFooter?: boolean };
 
 interface ScenePreviewProps {
-  project: Pick<ProjectDocument, 'profile'> & Partial<Pick<ProjectDocument, 'claims' | 'researchSources' | 'referenceDisplay' | 'shots' | 'captionStyle' | 'clipEditSources' | 'clipEditPlans'>>;
+  project: ScenePreviewProject;
   shot: Shot;
   shotIndex: number;
   timeUs?: number;
@@ -28,7 +31,7 @@ const previewPropKeys = Object.keys({
   shot: true, shotIndex: true, timeUs: true, className: true, thumbnail: true, assets: true, playing: true, onRepair: true,
 } satisfies Record<PreviewPropKey, true>) as PreviewPropKey[];
 const previewProjectKeys = Object.keys({
-  profile: true, claims: true, researchSources: true, referenceDisplay: true, shots: true, captionStyle: true, clipEditSources: true, clipEditPlans: true,
+  profile: true, claims: true, researchSources: true, referenceDisplay: true, shots: true, captionStyle: true, clipEditSources: true, clipEditPlans: true, referenceFooter: true,
 } satisfies Record<PreviewProjectKey, true>) as PreviewProjectKey[];
 
 function samePreviewProps(previous: ScenePreviewProps, next: ScenePreviewProps) {
@@ -60,6 +63,7 @@ export const ScenePreview = memo(function ScenePreview({ project, shot, shotInde
   const hasImage = !templateActive && !hasVideo && Boolean(shot.assetId);
   const imageAsset = useMemo(() => hasImage ? assets.find(asset => asset.id === shot.assetId) : undefined, [assets, shot.assetId, hasImage]);
   const videoAsset = useMemo(() => hasVideo ? assets.find(asset => asset.id === shot.videoAssetId) : undefined, [assets, shot.videoAssetId, hasVideo]);
+  useAssetAvailabilityKey([imageAsset?.id, videoAsset?.id]);
   const imageKey = imageAsset ? previewAssetKey(imageAsset) : `missing:${shot.assetId ?? ''}`;
   const videoKey = videoAsset ? previewAssetKey(videoAsset) : `missing:${shot.videoAssetId ?? ''}`;
   const mediaKey = `${templateActive ? 'template' : hasVideo ? videoKey : imageKey}:${retry}`;
@@ -77,7 +81,7 @@ export const ScenePreview = memo(function ScenePreview({ project, shot, shotInde
   const videoSpan = videoSpans.find(span => span.spanIndex === resolvedTime.spanIndex);
   const videoRange = videoSpan ? { startUs: videoSpan.videoInUs, endUs: videoSpan.videoInUs + videoSpan.durationUs } : undefined;
   const citation = useMemo(() => project.referenceDisplay === 'numbers' ? citationOverlayForShot(createCitationManifest({ claims: project.claims ?? [], researchSources: project.researchSources, referenceDisplay: project.referenceDisplay, shots: [shot] }), shot.id) : undefined, [project.claims, project.researchSources, project.referenceDisplay, shot.id, shot.claimIds]);
-  const referenceFooter = project.referenceDisplay === 'numbers' && (project.shots ?? [shot]).some(shot => shot.claimIds.length > 0);
+  const referenceFooter = project.referenceDisplay === 'numbers' && (project.referenceFooter ?? (project.shots ?? [shot]).some(shot => shot.claimIds.length > 0));
   const captionStyle = effectiveCaptionStyle(project, shot);
   const profile = useMemo(() => {
     const scale = Math.min(project.profile.previewScale, (thumbnail ? 420 : 1280) / project.profile.width);
@@ -143,7 +147,7 @@ export const ScenePreview = memo(function ScenePreview({ project, shot, shotInde
     });
     videoController.current = controller;
     void getAssetUrl(videoAsset.path).then(url => {
-      if (active) { element.src = url; element.load(); }
+      if (active) { element.src = assetAvailabilityUrl(url, videoAsset.id); element.load(); }
     }).catch(() => { if (active) setMediaError({ key: mediaKey, message: '视频素材无法读取' }); });
     return () => {
       active = false;

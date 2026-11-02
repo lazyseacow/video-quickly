@@ -1,5 +1,6 @@
 import type { AssetRecord } from '@video-quickly/contracts';
 import { getAssetUrl } from '../lib/client';
+import { assetAvailabilityUrl, assetAvailabilityVersion } from '../lib/asset-availability';
 
 interface CachedImage { image: Promise<HTMLImageElement>; pixels: number }
 const imageCache = new Map<string, CachedImage>();
@@ -7,7 +8,7 @@ const MAX_CACHED_IMAGES = 12;
 const MAX_CACHED_PIXELS = 16_000_000;
 
 export function previewAssetKey(asset: AssetRecord): string {
-  return JSON.stringify([asset.id, asset.version, asset.sha256, asset.path]);
+  return JSON.stringify([asset.id, asset.version, asset.sha256, asset.path, assetAvailabilityVersion(asset.id)]);
 }
 
 function trimImageCache(): void {
@@ -43,7 +44,7 @@ export function loadPreviewImage(asset: AssetRecord, refresh = false): Promise<H
       image.onerror = null;
       reject(new Error('图片素材无法读取或解码'));
     };
-    image.src = url;
+    image.src = assetAvailabilityUrl(url, asset.id);
   })).catch(error => {
     if (imageCache.get(key) === entry) imageCache.delete(key);
     throw error;

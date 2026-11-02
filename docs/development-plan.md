@@ -7,14 +7,16 @@
 | 范围 | 当前能力 | 契约与验证入口 |
 | --- | --- | --- |
 | 桌面与交付 | Windows x64、macOS arm64／x64；沙箱预加载、独立 Node 执行器、系统凭据、原生路径选择、媒体协议、进程退出与重连；独立媒体组件和安装数据保留 | [Electron 架构](electron-desktop.md)、[Windows](windows-verification.md)、[macOS](macos-verification.md) |
-| 大项目读取 | 轻量工作区摘要、条件项目详情、服务端分页、后台刷新合并、迟到结果隔离；只为可见缩略图读取真实帧，限制并发与缓存 | [读取与编辑契约](workspace-editing.md#读取契约)、`benchmark:workspace`、`media-performance.spec.ts` |
+| 大项目读取 | 轻量工作区摘要、条件项目详情、服务端分页、后台刷新合并、迟到结果隔离；镜头与轨道按行复用，保持最新操作及全片引用上下文；只为可见缩略图读取真实帧，限制并发与缓存 | [读取与编辑契约](workspace-editing.md#读取契约)、`benchmark:workspace`、`editor-row-rendering.spec.ts`、`media-performance.spec.ts` |
 | 编辑与恢复 | 统一增量命令、连续输入合并、最多 50 步撤销／重做、IndexedDB 草稿；保存前意图落盘、保存期间新输入、外部修订冲突与重启恢复 | [编辑与恢复](workspace-editing.md#编辑与恢复)、`project-editing.spec.ts`、`draft-save-ordering.spec.ts` |
 | 剪辑与声音 | 多选、成组移动／复制／删除、分割、入出点、吸附；真实波形、字幕编辑、配音识别、音乐、增益／降噪、响度及旁白压低音乐；视频原声独立增益与静音 | [剪辑与混音](workspace-editing.md#镜头剪辑区间)、`clip-editing.spec.ts`、`audio-processing.spec.ts` |
 | 文稿剪辑 | 来源匹配的逐词／句段时间戳、手选区间、真实停顿检测；Source／Plan 同步裁切画面、音频和字幕，恢复当前源窗口 | [文稿与备份](workspace-editing.md#文稿剪辑与源窗口恢复)、`transcript-editing.spec.ts` |
 | 模型与候选 | 文本、图片、视频和音频连接；协议参数与高级 JSON；单镜头生成候选、对比、按字段应用、修订与素材保护 | [角色、参数与费用](workspace-editing.md#角色模型参数与费用)、`model-protocols.spec.ts`、`shot-regeneration.spec.ts` |
+| 制作前检查 | 已保存项目的模型、步骤、角色、素材及引擎检查，错误聚合与修复入口；可取消、显式重新检查，独立标识供应商尚未联系 | [制作前检查](workspace-editing.md#制作前检查)、`project-readiness.spec.ts` |
+| 素材恢复 | 当前项目或整个工作区的缺失清单、目录扫描、完整摘要匹配、候选确认、分页批量恢复与取消；保留冻结身份并自动刷新媒体 | [批量素材恢复](workspace-editing.md#批量素材恢复)、`asset-recovery.spec.ts` |
 | 角色、费用与资料 | 角色参考图、镜头绑定、价格快照、服务用量与实付登记、任务归档；正文／PDF 读取、精确摘录、事实核验及镜头引用 | [工作区功能契约](workspace-editing.md)、`cost-task-archive.spec.ts`、`research-review.spec.ts` |
 | 画面与导出 | 流程讲解／对比／数据图模板、字幕样式、系列模板、位置与缩放关键帧曲线；MP4／SRT／分镜导出，多比例冻结批次、部分失败恢复和取消 | [模板与批量导出](workspace-editing.md#科普模板与批量导出)、`template-batch-export.spec.ts`、`keyframe-editing.spec.ts` |
-| 工作流与审阅 | 节点／连接编辑、条件分支、局部执行范围预览、固定版本子流程、受控镜头并行、逐层人工审阅、历史产物比较与脱敏诊断 | [持久化执行契约](durable-execution.md)、`workflow-composition.spec.ts`、`run-inspection.spec.ts` |
+| 工作流与审阅 | 节点／连接编辑、条件分支、局部执行范围预览、固定版本子流程、受控镜头并行、逐层人工审阅、历史产物比较与脱敏诊断；制作记录支持项目、状态和本地日期组合筛选 | [持久化执行契约](durable-execution.md)、`workflow-composition.spec.ts`、`run-history-filter.spec.ts`、`run-inspection.spec.ts` |
 | 项目备份 | 按内容选择格式 1／2／3；子流程、并行配置和关键帧要求格式 3，恢复时重新映射素材和角色引用 | [持久化执行契约](durable-execution.md)、Runtime 备份回归 |
 
 表中测试位于 `tests/e2e`；Runtime、契约及媒体单元回归同时覆盖各自的数据与副作用边界。模型连接列表、协议夹具或自动化通过不能代替某个供应商的实际可用性和计费验证。

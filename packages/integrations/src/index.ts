@@ -185,10 +185,12 @@ export async function validateMediaActivity(context: MediaPreflightContext): Pro
   }
   if (!['assets', 'animation'].includes(context.node.kind)) return;
   for (const shot of context.project.shots) {
+    context.signal?.throwIfAborted();
     const kind = context.node.kind === 'assets' ? 'image' : 'video';
     const existing = context.assets.find(asset => asset.projectId === context.project.id && asset.shotId === shot.id && asset.kind === kind && asset.active);
     if (context.node.config.operation !== 'regenerate' && shot.locked && existing && await validAsset(existing)) continue;
     const references = await resolveCharacterReferences({ shot, characters: context.characters, assets: context.assets });
+    context.signal?.throwIfAborted();
     validateReferenceProtocol(context, shot, references);
   }
 }

@@ -398,10 +398,11 @@ test('persists a review decision and supports read-only replay', async ({ page, 
   const { result: run } = await started.json();
   await openApp(page);
   await page.getByRole('button', { name: '制作记录', exact: true }).click();
-  await expect(page.getByText('等待审阅', { exact: true }).first()).toBeVisible();
+  const card = page.locator(`.run-card[data-run-id="${run.id}"]`);
+  await expect(card.getByText('等待审阅', { exact: true })).toBeVisible();
   await page.reload();
   await page.getByRole('button', { name: '制作记录', exact: true }).click();
-  await expect(page.getByText('等待审阅', { exact: true }).first()).toBeVisible();
+  await expect(card.getByText('等待审阅', { exact: true })).toBeVisible();
   await request.post('/__desktop_rpc', { data: { method: 'run.review', params: { runId: run.id, approved: true } } });
   await expect.poll(async () => {
     const response = await request.post('/__desktop_rpc', { data: { method: 'workspace.snapshot' } });

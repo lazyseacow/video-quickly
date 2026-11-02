@@ -15,10 +15,11 @@ const developmentPort = Number(process.env.VIDEO_QUICKLY_PORT ?? 1420);
 // Development preview exercises the same runtime as the desktop sidecar.
 // This bridge is never included in the production application.
 function developmentBridge(browserTest: boolean): Plugin {
+  let dispose: (() => Promise<void>) | undefined;
   async function attach(server: ViteDevServer | PreviewServer) {
     // Local preview clients own their connection lifetime. Avoid both forced
     // connection churn and racing an idle server close with a pooled RPC.
-    if (server.httpServer) server.httpServer.keepAliveTimeout = 0;
+    if (server.httpServer && 'keepAliveTimeout' in server.httpServer) server.httpServer.keepAliveTimeout = 0;
     if (browserTest) {
       const manifest: unknown = JSON.parse(readFileSync(resolve('.generated/browser-preview/.vite/manifest.json'), 'utf8'));
       const entry = manifest && typeof manifest === 'object' && 'dev/thumbnail-test.ts' in manifest ? manifest['dev/thumbnail-test.ts'] : undefined;
@@ -46,25 +47,32 @@ function developmentBridge(browserTest: boolean): Plugin {
       async get(key) { return temporarySecrets.get(key); },
       async set(key, value) { temporarySecrets.set(key, value); },
       async delete(key) { temporarySecrets.delete(key); },
-    }}); } catch (error) { await diagnostics?.close(); throw error; }
+    }}); } catch (error) { try { await diagnostics?.close(); } finally { await waveforms.close(); } throw error; }
     const peers = new Set<ServerResponse>();
     const unsubscribe = runtime.subscribe(event => {
       if ('ws' in server) server.ws.send({ type: 'custom', event: 'workspace-event', data: event });
       const message = 'data: ' + JSON.stringify(event) + '\n\n';
       for (const peer of peers) if (!peer.write(message)) { peers.delete(peer); peer.destroy(); }
     });
+    const origin = () => { const address = server.httpServer?.address(); return `http://127.0.0.1:${address && typeof address === 'object' ? address.port : developmentPort}`; };
+    let disposing: Promise<void> | undefined;
+    const close = () => disposing ??= (async () => {
+      unsubscribe(); for (const peer of peers) peer.destroy(); peers.clear();
+      try { await diagnostics?.close(); } finally { try { await waveforms.close(); } finally { await runtime.close(); } }
+    })();
+    dispose = close;
     if (browserTest) server.middlewares.use('/__desktop_events', (request, response) => {
       if (request.method !== 'GET') { response.statusCode = 405; response.end(); return; }
-      if (request.headers.origin && request.headers.origin !== 'http://127.0.0.1:' + developmentPort) { response.statusCode = 403; response.end(); return; }
+      if (request.headers.origin && request.headers.origin !== origin()) { response.statusCode = 403; response.end(); return; }
       response.writeHead(200, { 'Content-Type': 'text/event-stream; charset=utf-8', 'Cache-Control': 'no-store', Connection: 'keep-alive' });
       response.write(': connected\n\n'); peers.add(response);
       response.on('close', () => peers.delete(response));
     });
-    server.httpServer?.on('close', () => { unsubscribe(); void diagnostics?.close(); void waveforms.close().then(() => runtime.close()); });
+    server.httpServer?.on('close', () => { void close().catch(error => server.config.logger.error(error instanceof Error ? error.message : String(error))); });
     server.middlewares.use('/__desktop_rpc', async (request, response) => {
       response.setHeader('Content-Type', 'application/json; charset=utf-8');
       if (request.method !== 'POST') { response.statusCode = 405; response.end(JSON.stringify({ error: '只支持 POST' })); return; }
-      if (request.headers.origin && request.headers.origin !== `http://127.0.0.1:${developmentPort}`) { response.statusCode = 403; response.end(JSON.stringify({ error: '不允许此来源' })); return; }
+      if (request.headers.origin && request.headers.origin !== origin()) { response.statusCode = 403; response.end(JSON.stringify({ error: '不允许此来源' })); return; }
       const diagnostic = diagnostics?.request(request, response);
       try {
         const parsed = await readRpcRequest(request);
@@ -108,7 +116,7 @@ function developmentBridge(browserTest: boolean): Plugin {
       stream.on('error', () => { if (!response.headersSent) response.statusCode = 500; response.end(); }).pipe(response);
     });
   }
-  return { name: 'video-quickly-development-bridge', apply: 'serve', configureServer: attach, configurePreviewServer: browserTest ? attach : undefined };
+  return { name: 'video-quickly-development-bridge', apply: 'serve', configureServer: attach, configurePreviewServer: browserTest ? attach : undefined, closeServer: async () => { await dispose?.(); }, closePreviewServer: async () => { await dispose?.(); } };
 }
 
 export default defineConfig(({ mode }) => ({

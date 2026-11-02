@@ -4,6 +4,7 @@ import { activitySchema, assetSchema, recordPageSchema, runDiagnosticsSchema, ru
 import { Button, Dialog, Notice, Status, statusLabels } from '../components/Primitives';
 import { nativeDesktop, revealFile } from '../components/PathPicker';
 import { getAssetUrl, rpc } from '../lib/client';
+import { assetAvailabilityUrl, useAssetAvailability } from '../lib/asset-availability';
 import { useRecordPage } from '../lib/use-record-page';
 import { useRuntimeRead } from '../lib/use-runtime-read';
 import type { StepOutputSelection } from '../lib/types';
@@ -154,12 +155,13 @@ function RunLog({ runId, nodeId, version }: { runId: string; nodeId?: string; ve
 }
 
 function OutputMedia({ asset }: { asset: ReturnType<typeof assetSchema.parse> }) {
+  const availability = useAssetAvailability(asset.id);
   const [source, setSource] = useState<{ url?: string; error?: string }>({});
   useEffect(() => {
     let current = true;
-    void getAssetUrl(asset.path).then(url => { if (current) setSource({ url }); }).catch(error => { if (current) setSource({ error: String(error) }); });
+    void getAssetUrl(asset.path).then(url => { if (current) setSource({ url: assetAvailabilityUrl(url, asset.id) }); }).catch(error => { if (current) setSource({ error: String(error) }); });
     return () => { current = false; };
-  }, [asset.path]);
+  }, [asset.path, availability]);
   if (source.error) return <Notice kind="error">{source.error}</Notice>;
   if (!source.url) return <p role="status">正在读取媒体…</p>;
   return asset.kind === 'image' ? <img src={source.url} alt={asset.name} loading="lazy" /> : asset.kind === 'video' ? <video src={source.url} controls preload="metadata" aria-label={asset.name} /> : <audio src={source.url} controls preload="metadata" aria-label={asset.name} />;

@@ -1,5 +1,5 @@
 import { pathExample } from '../lib/desktop';
-import { useEffect, useId, useRef, useState } from 'react';
+import { lazy, Suspense, useEffect, useId, useRef, useState } from 'react';
 import { BookOpen, Code2, Eye, EyeOff, File, FileImage, FolderOpen, Image, Link, LoaderCircle, Mic, Pencil, Power, RefreshCw, Search, Server, ShieldCheck, Trash2, Video, Upload, Plus, RotateCcw, Download, Check } from 'lucide-react';
 import { modelConnectionTypes, getModelConnectionType, getModelCapabilities, validateModelConnection, platformForConnection, modelDiscoverySchema, getModelVoiceCatalog, supportsAccountVoices, voiceDiscoverySchema, type VoiceDiscovery, type ModelDiscovery, type ModelConnectionType, getModelParameterFields, getMediaAdapters, mediaAdapters, textProtocols, textProtocolSchema, type TextProtocol } from '@video-quickly/contracts';
 import { assetListItemSchema, projectDetailSchema, recordPageSchema, jsonValueSchema, modelPlatforms, getModelPlatform, modelPlatformSchema, validateModelParameters, type ModelPlatform, type AssetRecord, type AssetListItem, type ProjectSummary, type JsonValue, type ModelCapability, type ModelProfile, type ProjectDocument, type SkillPackage } from '@video-quickly/contracts';
@@ -10,12 +10,14 @@ import { useRecordPage } from '../lib/use-record-page';
 export { default as RunsPage } from './RunHistory';
 const assetsPageSchema = recordPageSchema(assetListItemSchema);
 import { getAssetUrl, rpc } from '../lib/client';
+import { assetAvailabilityUrl, useAssetAvailability } from '../lib/asset-availability';
 import ToolConnections from './ToolConnections';
 import PathPicker from '../components/PathPicker';
 import ModelParameters, { modelParameterSections } from '../components/ModelParameters';
 import SettingsSections from '../components/SettingsSections';
 import PlatformIcon from '../components/PlatformIcon';
 import './model-connections.css';
+const AssetRecoveryDialog = lazy(() => import('../components/AssetRecoveryDialog'));
 
 type PageProps = { workspace: WorkspaceView; action: Action };
 const capabilityLabels: Record<ModelCapability, string> = { text: '文本问答', image: '图片生成', video: '视频生成', tts: '配音生成', asr: '语音识别', vision: '图片理解', tools: '工具调用', 'structured-output': '结构化输出' };
@@ -30,10 +32,22 @@ export function ProjectsPage({ workspace, action, onOpen, onCreate }: PageProps 
   return <div className="content-page"><div className="page-heading"><div><h1>我的项目</h1></div><div className="heading-actions"><Button aria-label="导入项目" onClick={() => setImporting(true)}><Upload size={15} />导入</Button><Button variant="primary" onClick={onCreate}><Plus size={16} />新建项目</Button></div></div><div className="page-toolbar"><div className="search-field"><Search size={16} /><input aria-label="搜索项目" placeholder="搜索项目" value={search} onChange={event => setSearch(event.target.value)} /></div><div className="tabs"><button aria-label="全部项目" className={!archived ? 'active' : ''} onClick={() => setArchived(false)}>全部 <small>{workspace.projects.filter(project => !project.archived).length}</small></button><button className={archived ? 'active' : ''} onClick={() => setArchived(true)}><Trash2 size={13} />回收站</button></div></div>{projects.length ? <div className="project-cards">{projects.map(project => <article className="project-card" key={project.id}><div className="project-card-preview">{project.thumbnailShot && <ScenePreview project={project} shot={project.thumbnailShot} shotIndex={0} assets={project.thumbnailAsset ? [project.thumbnailAsset] : []} thumbnail />}<span className="pill">{project.templateId === 'history-handdrawn' ? '历史手绘' : '通用视频'}</span></div><div className="project-card-body"><h3>{project.title}</h3><p>{project.shotCount} 个镜头 · {formatTime(project.durationUs).split('.')[0]} · {project.profile.width} × {project.profile.height}</p><div className="project-card-footer"><span className="tiny-meta">{new Date(project.updatedAt).toLocaleDateString('zh-CN')}</span>{archived ? <Button onClick={() => void action('project.restore', { projectId: project.id }, '项目已恢复')}><RotateCcw size={14} />恢复项目</Button> : <><IconButton label={`将“${project.title}”移入回收站`} onClick={() => void action('project.archive', { projectId: project.id }, '项目已移入回收站')}><Trash2 size={14} /></IconButton><Button onClick={() => onOpen(project.id)}>继续创作</Button></>}</div></div></article>)}</div> : <EmptyState icon={<FolderOpen size={25} />} title={archived ? '回收站为空' : search ? '没有找到这个项目' : '开始你的第一个视频'} description={archived ? '移入回收站的项目会保留素材，随时可以恢复。' : search ? '试试其他关键词。' : '填写主题，选择视频规格，再逐步完成分镜和画面。'}>{!archived && !search && <Button variant="primary" onClick={onCreate}><Plus size={15} />新建项目</Button>}</EmptyState>}{importing && <Dialog title="导入项目备份" onClose={() => setImporting(false)}><form onSubmit={event => { event.preventDefault(); setImportBusy(true); void action<ProjectDocument>('project.importBackup', { path: backupPath }, '项目备份已导入').then(result => { setImportBusy(false); if (result) { setImporting(false); onOpen(result.id); } }); }}><div className="dialog__body"><Field label="项目备份路径" hint="选择备份目录或 project.json。"><PathPicker label="项目备份路径" mode="directory" autoFocus required value={backupPath} onChange={setBackupPath} placeholder={pathExample('backup')} /></Field><p className="tiny-meta">将创建独立项目，并校验和复制备份素材。</p></div><div className="dialog__footer"><Button onClick={() => setImporting(false)}>取消</Button><Button aria-label="导入备份" type="submit" variant="primary" busy={importBusy}><Upload size={15} />导入</Button></div></form></Dialog>}</div>;
 }
 
-export function ModelsPage({ workspace, action }: PageProps) {
+export function ModelsPage({ workspace, action, repairModelId, onRepairConsumed }: PageProps & { repairModelId?: string; onRepairConsumed?: () => void }) {
   const [editing, setEditing] = useState<ModelProfile | ModelConnectionType | null>(null);
   const [choosingType, setChoosingType] = useState(false);
   const [filter, setFilter] = useState<ModelConnectionType | 'all'>('all');
+  const [repairError, setRepairError] = useState('');
+  useEffect(() => {
+    if (!repairModelId) return;
+    if (editing) {
+      if (typeof editing === 'object' && editing.id === repairModelId) onRepairConsumed?.();
+      return;
+    }
+    const model = workspace.models.find(model => model.id === repairModelId);
+    if (model) { setFilter('all'); setEditing(model); setRepairError(''); }
+    else setRepairError('待修复的模型连接已移除，请重新检查项目并选择其他连接。');
+    onRepairConsumed?.();
+  }, [repairModelId, workspace.models, editing, onRepairConsumed]);
   const models = workspace.models.filter(model => filter === 'all' || getModelConnectionType(model) === filter);
   function addModel() { if (filter !== 'all') setEditing(filter); else setChoosingType(true); }
   return <div className="content-page">
@@ -42,6 +56,7 @@ export function ModelsPage({ workspace, action }: PageProps) {
       <button type="button" className={filter === 'all' ? 'active' : ''} aria-pressed={filter === 'all'} onClick={() => setFilter('all')}>全部</button>
       {modelConnectionTypes.map(type => <button type="button" key={type.id} className={filter === type.id ? 'active' : ''} aria-pressed={filter === type.id} onClick={() => setFilter(type.id)}>{type.label}</button>)}
     </div><span className="tiny-meta">{models.length} 个连接</span></div>
+    {repairError && <Notice kind="error">{repairError}</Notice>}
     <div className="model-connections-list">{models.length ? models.map(model => {
       const category = getModelConnectionType(model);
       const label = modelConnectionTypes.find(type => type.id === category)!.label;
@@ -199,14 +214,16 @@ export function SkillsPage({ workspace, action }: PageProps) {
 
 export function AssetsPage({ workspace, action, project }: PageProps & { project?: ProjectDocument }) {
   const [importing, setImporting] = useState(false);
+  const [recovering, setRecovering] = useState(false);
   const [source, setSource] = useState('');
   const [filter, setFilter] = useState('all');
   const library = useRecordPage('asset.list', filter === 'all' ? {} : { kind: filter }, workspace.version, assetsPageSchema, workspace.assetsVersion);
   const assets = library.items;
-  return <div className="content-page"><div className="page-heading"><div><h1>素材库</h1></div><Button aria-label="导入素材" variant="primary" onClick={() => setImporting(true)}><Upload size={15} />导入</Button></div><div className="page-toolbar"><div className="tabs">{[['all', '全部'], ['image', '图片'], ['video', '视频'], ['audio', '音频'], ['document', '资料']].map(([value, label]) => <button key={value} className={filter === value ? 'active' : ''} onClick={() => setFilter(value)}>{label}</button>)}</div><span className="tiny-meta">{assets.length} 个素材</span></div>{library.error && <Notice kind="error">{library.error}<Button aria-label="重试读取素材" onClick={library.refresh}>重试</Button></Notice>}{assets.length ? <div className="asset-grid">{assets.map(asset => <AssetCard key={asset.id} asset={asset} action={action} projects={workspace.projects.filter(item => !item.archived)} initialProject={project} />)}</div> : <div className="section-card"><EmptyState icon={<Image size={25} />} title="把素材带进工作台" description="导入自有或已授权的图片、视频、音频和资料。" /></div>}{library.nextCursor !== null && <Button aria-label="加载更多素材" className="button-full" busy={library.loadingMore} disabled={!library.canLoadMore} onClick={() => void library.loadMore()}>加载更多</Button>}{importing && <Dialog title="导入本地素材" onClose={() => setImporting(false)}><form onSubmit={event => { event.preventDefault(); void action('asset.import', { path: source, projectId: project?.id }, '素材已导入').then(result => { if (result !== null) { setImporting(false); setSource(''); } }); }}><div className="dialog__body"><Field label="文件路径"><PathPicker label="文件路径" autoFocus required value={source} onChange={setSource} placeholder={pathExample('image')} /></Field><p className="tiny-meta">请使用自己创作或已获授权的素材。源文件会保留。</p></div><div className="dialog__footer"><Button onClick={() => setImporting(false)}>取消</Button><Button variant="primary" type="submit"><Upload size={15} />导入</Button></div></form></Dialog>}</div>;
+  return <div className="content-page"><div className="page-heading"><div><h1>素材库</h1></div><div className="heading-actions"><Button aria-label="恢复缺失素材" onClick={() => setRecovering(true)}><RotateCcw size={15} />恢复缺失素材</Button><Button aria-label="导入素材" variant="primary" onClick={() => setImporting(true)}><Upload size={15} />导入</Button></div></div><div className="page-toolbar"><div className="tabs">{[['all', '全部'], ['image', '图片'], ['video', '视频'], ['audio', '音频'], ['document', '资料']].map(([value, label]) => <button key={value} className={filter === value ? 'active' : ''} onClick={() => setFilter(value)}>{label}</button>)}</div><span className="tiny-meta">{assets.length} 个素材</span></div>{library.error && <Notice kind="error">{library.error}<Button aria-label="重试读取素材" onClick={library.refresh}>重试</Button></Notice>}{assets.length ? <div className="asset-grid">{assets.map(asset => <AssetCard key={asset.id} asset={asset} action={action} projects={workspace.projects.filter(item => !item.archived)} initialProject={project} />)}</div> : <div className="section-card"><EmptyState icon={<Image size={25} />} title="把素材带进工作台" description="导入自有或已授权的图片、视频、音频和资料。" /></div>}{library.nextCursor !== null && <Button aria-label="加载更多素材" className="button-full" busy={library.loadingMore} disabled={!library.canLoadMore} onClick={() => void library.loadMore()}>加载更多</Button>}{importing && <Dialog title="导入本地素材" onClose={() => setImporting(false)}><form onSubmit={event => { event.preventDefault(); void action('asset.import', { path: source, projectId: project?.id }, '素材已导入').then(result => { if (result !== null) { setImporting(false); setSource(''); } }); }}><div className="dialog__body"><Field label="文件路径"><PathPicker label="文件路径" autoFocus required value={source} onChange={setSource} placeholder={pathExample('image')} /></Field><p className="tiny-meta">请使用自己创作或已获授权的素材。源文件会保留。</p></div><div className="dialog__footer"><Button onClick={() => setImporting(false)}>取消</Button><Button variant="primary" type="submit"><Upload size={15} />导入</Button></div></form></Dialog>}{recovering && <Suspense fallback={null}><AssetRecoveryDialog project={project} directory={workspace.system.dataDirectory} onClose={() => setRecovering(false)} /></Suspense>}</div>;
 }
 
 function AssetCard({ asset, action, projects, initialProject }: { asset: AssetListItem; action: Action; projects: ProjectSummary[]; initialProject?: ProjectDocument }) {
+  const availability = useAssetAvailability(asset.id);
   const [image, setImage] = useState<string>();
   const [error, setError] = useState(false);
   const [selecting, setSelecting] = useState(false);
@@ -216,10 +233,10 @@ function AssetCard({ asset, action, projects, initialProject }: { asset: AssetLi
   const [targetError, setTargetError] = useState('');
   useEffect(() => {
     let active = true;
-    setError(false);
-    if (asset.kind === 'image') void getAssetUrl(asset.path).then(url => { if (active) setImage(url); }).catch(() => { if (active) setError(true); });
+    setError(false); setImage(undefined);
+    if (asset.kind === 'image') void getAssetUrl(asset.path).then(url => { if (active) setImage(assetAvailabilityUrl(url, asset.id)); }).catch(() => { if (active) setError(true); });
     return () => { active = false; };
-  }, [asset.kind, asset.path]);
+  }, [asset.kind, asset.path, availability]);
   useEffect(() => {
     if (!selecting || !projectId) return;
     let active = true; setTarget(undefined); setTargetError('');

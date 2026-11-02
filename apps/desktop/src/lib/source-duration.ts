@@ -3,6 +3,7 @@ import { usesVideoAudio, type AssetRecord, type Shot } from '@video-quickly/cont
 import { commonSourceOutUs, type SourceDurations } from '@video-quickly/video/audio';
 import type { ClipEditContext } from '@video-quickly/video/clip-edits';
 import { getAssetUrl } from './client';
+import { assetAvailabilityUrl, useAssetAvailabilityKey } from './asset-availability';
 
 const durations = new Map<string, number>();
 
@@ -39,7 +40,7 @@ async function readDuration(asset: AssetRecord, signal: AbortSignal): Promise<nu
       resolve(value);
     };
     element.onerror = () => fail(new Error(`无法读取「${asset.name}」的素材时长，请重新导入素材。`));
-    element.src = url;
+    element.src = assetAvailabilityUrl(url, asset.id);
     element.load();
   });
 }
@@ -69,22 +70,23 @@ export async function readSourceDurations(shots: readonly Shot[], assets: readon
 }
 
 export function useBulkSourceDurations(shots: readonly Shot[], assets: readonly AssetRecord[], enabled: boolean) {
-  const key = sourceDurationsKey(shots, assets);
+  const availability = useAssetAvailabilityKey(sourceIds(shots));
+  const key = sourceDurationsKey(shots, assets), requestKey = JSON.stringify([key, availability]);
   const [result, setResult] = useState<{ key: string; durations?: Record<string, number>; error?: string }>();
   useEffect(() => {
     if (!enabled) return;
     const controller = new AbortController();
     void readSourceDurations(shots, assets, controller.signal).then(durations => {
-      if (!controller.signal.aborted) setResult({ key, durations });
+      if (!controller.signal.aborted) setResult({ key: requestKey, durations });
     }).catch(error => {
       if (controller.signal.aborted) return;
       controller.abort();
-      setResult({ key, error: error instanceof Error ? error.message : String(error) });
+      setResult({ key: requestKey, error: error instanceof Error ? error.message : String(error) });
     });
     return () => controller.abort();
-  }, [key, enabled]);
+  }, [requestKey, enabled]);
   if (!enabled) return { key, status: 'none' as const, durations: {} };
-  if (result?.key !== key) return { key, status: 'loading' as const, durations: {} };
+  if (result?.key !== requestKey) return { key, status: 'loading' as const, durations: {} };
   return result.error ? { key, status: 'error' as const, error: result.error, durations: {} } : { key, status: 'ready' as const, durations: result.durations ?? {} };
 }
 
@@ -95,7 +97,8 @@ export function useSourceDuration(shot: (Pick<Shot, 'videoAssetId' | 'audioAsset
   const media = [video, audio].filter((asset): asset is AssetRecord => !!asset);
   const hasMedia = Boolean(videoId || shot?.audioAssetId);
   const missingMedia = Boolean(videoId && !video?.active || shot?.audioAssetId && !audio?.active);
-  const key = JSON.stringify([videoId, shot?.audioAssetId, ...media.map(asset => [asset.id, asset.version, asset.sha256, asset.path, asset.name, asset.active])]);
+  const availability = useAssetAvailabilityKey([videoId, shot?.audioAssetId]);
+  const key = JSON.stringify([videoId, shot?.audioAssetId, availability, ...media.map(asset => [asset.id, asset.version, asset.sha256, asset.path, asset.name, asset.active])]);
   const [result, setResult] = useState<{ key: string; status: 'ready' | 'error'; durations?: SourceDurations; error?: string }>();
   useEffect(() => {
     if (!hasMedia || missingMedia) return;
