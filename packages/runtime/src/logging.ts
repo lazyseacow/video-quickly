@@ -21,9 +21,23 @@ const versionFields = new Set(['appVersion', 'nodeVersion', 'electronVersion']);
 const methodWords = new Set(('workspace snapshot summary project create get update archive restore backup importBackup saveShot shot candidate apply candidates regenerate ' +
   'run list start cancel resume review replay plan events activities diagnostics inspect step payload versions node result model save delete test discover voices ' +
   'skill import toggle tool register cost task tasks character references workflow workflowTemplate seriesTemplate render batch export research search analyze source read ' +
-  'asset select retain waveform caption transcribe system status runtime reconnect host secret set audio preview levels silence mix prepare edit history undo redo').split(' '));
+  'asset select retain waveform caption transcribe system status runtime reconnect host secret set audio preview levels silence mix prepare edit history undo redo readiness recovery scan confirm').split(' '));
 const builtinNodeIds = new Set(['brief', 'research', 'style', 'script', 'assets', 'voice', 'animation', 'caption', 'export', 'review', 'join', 'condition', 'subflow', 'agent']);
 const errorNames = new Set(['Error', 'TypeError', 'SyntaxError', 'RangeError', 'ReferenceError', 'AggregateError', 'URIError', 'EvalError', 'AbortError', 'ZodError', 'AmbiguousActivityError', 'ActivityInputChangedError', 'LockedShotChangeError', 'TranscriptionTimestampError']);
+const errorCodes = new Set([
+  'EACCES', 'EADDRINUSE', 'EADDRNOTAVAIL', 'EAGAIN', 'EBADF', 'EBUSY', 'ECANCELED', 'ECONNABORTED', 'ECONNREFUSED', 'ECONNRESET',
+  'EEXIST', 'EHOSTUNREACH', 'EINTR', 'EINVAL', 'EIO', 'EISDIR', 'ELOOP', 'EMFILE', 'ENAMETOOLONG', 'ENETDOWN', 'ENETUNREACH',
+  'ENFILE', 'ENOENT', 'ENOMEM', 'ENOSPC', 'ENOSYS', 'ENOTDIR', 'ENOTEMPTY', 'ENOTSUP', 'EPERM', 'EPIPE', 'EPROTO', 'EROFS',
+  'ESPIPE', 'ESRCH', 'ETIMEDOUT', 'EXDEV', 'ABORT_ERR', 'UND_ERR_SOCKET', 'UND_ERR_CONNECT_TIMEOUT', 'UND_ERR_HEADERS_TIMEOUT',
+  'UND_ERR_BODY_TIMEOUT', 'UND_ERR_ABORTED', 'UND_ERR_RES_CONTENT_LENGTH_MISMATCH',
+]);
+
+function frameLocation(file: string, line: string, column: string): string {
+  // A provider can supply its own stack. Hash every basename rather than treating
+  // filename syntax as proof that it contains no private content.
+  const identity = /^sha256:[0-9a-f]{16}$/.test(file) ? file : `sha256:${createHash('sha256').update(file).digest('hex').slice(0, 16)}`;
+  return `${identity}:${line}:${column}`;
+}
 
 export function safeLogMethod(value: unknown): string {
   if (typeof value !== 'string' || value.length > 100) return 'unknown';
@@ -45,7 +59,7 @@ export function logError(error: unknown): Record<string, unknown> {
     if (!error || typeof error !== 'object') return { name: 'Error' };
     const record = error as Record<string, unknown>;
     const result: Record<string, unknown> = { name: typeof record.name === 'string' && errorNames.has(record.name) ? record.name : 'Error' };
-    if (typeof record.code === 'string' && /^E[A-Z0-9_]{1,35}$/.test(record.code)) result.code = record.code;
+    if (typeof record.code === 'string' && errorCodes.has(record.code)) result.code = record.code;
     const status = record.status ?? record.statusCode;
     if (typeof status === 'number' && Number.isInteger(status) && status >= 100 && status <= 599) result.statusCode = status;
     if (typeof record.stack === 'string') {
@@ -55,11 +69,14 @@ export function logError(error: unknown): Record<string, unknown> {
       const body = record.stack.startsWith(`${header}\n`) ? record.stack.slice(header.length + 1) : '';
       const frames = body.split('\n').slice(0, 8).flatMap(line => {
         const match = /^\s+at .*[/\\]([a-zA-Z0-9_.-]{1,80}):(\d+):(\d+)\)?$/.exec(line);
-        return match ? [`${match[1]}:${match[2]}:${match[3]}`] : [];
+        return match ? [frameLocation(match[1], match[2], match[3])] : [];
       });
       if (frames.length) result.frames = frames;
     } else if (Array.isArray(record.frames)) {
-      result.frames = record.frames.filter((frame): frame is string => typeof frame === 'string' && /^[a-zA-Z0-9_.-]{1,80}:\d+:\d+$/.test(frame)).slice(0, 8);
+      result.frames = record.frames.slice(0, 8).flatMap(frame => {
+        const match = typeof frame === 'string' && /^((?:sha256:[0-9a-f]{16})|[a-zA-Z0-9_.-]{1,80}):(\d+):(\d+)$/.exec(frame);
+        return match ? [frameLocation(match[1], match[2], match[3])] : [];
+      });
     }
     return result;
   } catch { return { name: 'Error' }; }

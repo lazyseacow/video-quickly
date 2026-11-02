@@ -1,4 +1,4 @@
-import { copyFile, mkdir, readFile, writeFile } from 'node:fs/promises';
+import { copyFile, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -39,7 +39,7 @@ async function png(source, size, name) {
   await writeFile(join(icons, name), canvas.toBuffer('image/png'));
 }
 
-for (const [size, name] of [[1024, 'icon.png'], [32, '32x32.png'], [128, '128x128.png'], [256, '128x128@2x.png']]) {
+for (const [size, name] of [[1024, 'icon.png'], [32, '32x32.png']]) {
   await png(appIcon, size, name);
 }
 await png(macIcon, 1024, 'dock.png');
@@ -51,4 +51,5 @@ for (const format of ['ico', 'icns']) {
   await copyFile(result.icons[0].file, join(icons, `icon.${format}`));
 }
 await writeFile(join(desktop, 'public/favicon.svg'), appIcon);
+await rm(staging, { recursive: true, force: true });
 process.stdout.write('已更新应用、托盘和浏览器图标。\n');

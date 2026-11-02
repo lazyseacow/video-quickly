@@ -8,9 +8,12 @@ import { createPreviewVideoController, loadPreviewImage, previewAssetKey } from 
 import { Button } from './Primitives';
 import { videoThumbnails, type ThumbnailFrame } from './preview-thumbnails';
 import { useThumbnailVisibility } from './thumbnail-visibility';
+import { assetAvailabilityUrl, useAssetAvailabilityKey } from '../lib/asset-availability';
+
+export type ScenePreviewProject = Pick<ProjectDocument, 'profile'> & Partial<Pick<ProjectDocument, 'claims' | 'researchSources' | 'referenceDisplay' | 'shots' | 'captionStyle' | 'clipEditSources' | 'clipEditPlans'>> & { referenceFooter?: boolean };
 
 interface ScenePreviewProps {
-  project: Pick<ProjectDocument, 'profile'> & Partial<Pick<ProjectDocument, 'claims' | 'researchSources' | 'referenceDisplay' | 'shots' | 'captionStyle' | 'clipEditSources' | 'clipEditPlans'>>;
+  project: ScenePreviewProject;
   shot: Shot;
   shotIndex: number;
   timeUs?: number;
@@ -22,6 +25,26 @@ interface ScenePreviewProps {
 }
 
 const NO_ASSETS: AssetRecord[] = [];
+type PreviewPropKey = Exclude<keyof ScenePreviewProps, 'project'>;
+type PreviewProjectKey = keyof ScenePreviewProps['project'];
+const previewPropKeys = Object.keys({
+  shot: true, shotIndex: true, timeUs: true, className: true, thumbnail: true, assets: true, playing: true, onRepair: true,
+} satisfies Record<PreviewPropKey, true>) as PreviewPropKey[];
+const previewProjectKeys = Object.keys({
+  profile: true, claims: true, researchSources: true, referenceDisplay: true, shots: true, captionStyle: true, clipEditSources: true, clipEditPlans: true, referenceFooter: true,
+} satisfies Record<PreviewProjectKey, true>) as PreviewProjectKey[];
+
+function samePreviewProps(previous: ScenePreviewProps, next: ScenePreviewProps) {
+  for (const key of previewPropKeys) if (!Object.is(previous[key], next[key])) return false;
+  if (previous.project === next.project) return true;
+  for (const key of previewProjectKeys) {
+    // Numbered references reserve caption space across all shots. Otherwise an
+    // unrelated title edit does not change this preview's rendering context.
+    if (key === 'shots' && previous.project.referenceDisplay !== 'numbers' && next.project.referenceDisplay !== 'numbers') continue;
+    if (!Object.is(previous.project[key], next.project[key])) return false;
+  }
+  return true;
+}
 
 export const ScenePreview = memo(function ScenePreview({ project, shot, shotIndex, timeUs = 0, className = '', thumbnail = false, assets = NO_ASSETS, playing = false, onRepair }: ScenePreviewProps) {
   const canvas = useRef<HTMLCanvasElement>(null);
@@ -40,6 +63,7 @@ export const ScenePreview = memo(function ScenePreview({ project, shot, shotInde
   const hasImage = !templateActive && !hasVideo && Boolean(shot.assetId);
   const imageAsset = useMemo(() => hasImage ? assets.find(asset => asset.id === shot.assetId) : undefined, [assets, shot.assetId, hasImage]);
   const videoAsset = useMemo(() => hasVideo ? assets.find(asset => asset.id === shot.videoAssetId) : undefined, [assets, shot.videoAssetId, hasVideo]);
+  useAssetAvailabilityKey([imageAsset?.id, videoAsset?.id]);
   const imageKey = imageAsset ? previewAssetKey(imageAsset) : `missing:${shot.assetId ?? ''}`;
   const videoKey = videoAsset ? previewAssetKey(videoAsset) : `missing:${shot.videoAssetId ?? ''}`;
   const mediaKey = `${templateActive ? 'template' : hasVideo ? videoKey : imageKey}:${retry}`;
@@ -57,7 +81,7 @@ export const ScenePreview = memo(function ScenePreview({ project, shot, shotInde
   const videoSpan = videoSpans.find(span => span.spanIndex === resolvedTime.spanIndex);
   const videoRange = videoSpan ? { startUs: videoSpan.videoInUs, endUs: videoSpan.videoInUs + videoSpan.durationUs } : undefined;
   const citation = useMemo(() => project.referenceDisplay === 'numbers' ? citationOverlayForShot(createCitationManifest({ claims: project.claims ?? [], researchSources: project.researchSources, referenceDisplay: project.referenceDisplay, shots: [shot] }), shot.id) : undefined, [project.claims, project.researchSources, project.referenceDisplay, shot.id, shot.claimIds]);
-  const referenceFooter = project.referenceDisplay === 'numbers' && (project.shots ?? [shot]).some(shot => shot.claimIds.length > 0);
+  const referenceFooter = project.referenceDisplay === 'numbers' && (project.referenceFooter ?? (project.shots ?? [shot]).some(shot => shot.claimIds.length > 0));
   const captionStyle = effectiveCaptionStyle(project, shot);
   const profile = useMemo(() => {
     const scale = Math.min(project.profile.previewScale, (thumbnail ? 420 : 1280) / project.profile.width);
@@ -123,7 +147,7 @@ export const ScenePreview = memo(function ScenePreview({ project, shot, shotInde
     });
     videoController.current = controller;
     void getAssetUrl(videoAsset.path).then(url => {
-      if (active) { element.src = url; element.load(); }
+      if (active) { element.src = assetAvailabilityUrl(url, videoAsset.id); element.load(); }
     }).catch(() => { if (active) setMediaError({ key: mediaKey, message: '视频素材无法读取' }); });
     return () => {
       active = false;
@@ -162,4 +186,4 @@ export const ScenePreview = memo(function ScenePreview({ project, shot, shotInde
   }, [requestRender]);
 
   return <span ref={container} className={`scene-preview ${thumbnail ? 'scene-preview--thumbnail' : ''}`} aria-busy={loading}><canvas ref={canvas} className={className} role="img" aria-label={`${shot.title} · 镜头预览`} style={error || loading ? { visibility: 'hidden' } : undefined} />{(error || loading) && <span className="scene-preview__state" role={error ? 'alert' : 'status'}>{error ? <CircleAlert size={thumbnail ? 18 : 27} /> : <LoaderCircle className="spin" size={thumbnail ? 18 : 27} />}<strong>{error || '正在读取素材…'}</strong>{error && !thumbnail && <><span>检查源文件，或为这个镜头重新导入素材。</span><span className="scene-preview__actions"><Button onClick={() => setRetry(value => value + 1)}><RefreshCw size={14} />重新读取</Button>{onRepair && <Button onClick={onRepair}><Upload size={14} />重新导入</Button>}</span></>}</span>}</span>;
-});
+}, samePreviewProps);

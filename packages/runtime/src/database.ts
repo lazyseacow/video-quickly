@@ -169,6 +169,7 @@ export const WORKSPACE_MIGRATIONS: readonly DatabaseMigration[] = [
   // Older clients strip unknown project fields. Advance the workspace version
   // before storing these capabilities so opening it with such a client fails.
   { version: 7, name: 'workflow-composition-and-keyframe-capabilities', sql: `INSERT INTO runtime_metadata(key, value) VALUES ('document-capabilities', '["keyframes-v1","workflow-composition-v1","media-concurrency-v1"]') ON CONFLICT(key) DO UPDATE SET value = excluded.value;` },
+  { version: 8, name: 'active-project-runs-index', sql: `CREATE INDEX documents_active_project_runs ON documents(json_extract(body, '$.projectId')) WHERE kind = 'run' AND json_extract(body, '$.status') IN ('queued','running','waiting_review','waiting_external','retry_scheduled');` },
 ];
 
 export function openDatabase(directory: string) {

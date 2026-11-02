@@ -19,7 +19,7 @@ const developmentUrl = !app.isPackaged ? process.env.VIDEO_QUICKLY_DEV_URL : und
 if (developmentUrl && !/^http:\/\/(127\.0\.0\.1|localhost):\d+\/?$/.test(developmentUrl)) throw new Error('桌面开发地址必须使用本机端口。');
 app.setName('Video Quickly');
 app.setAppUserModelId(applicationId);
-// Keep Chromium state inside the new workspace, separate from former WebViews.
+// Keep Chromium state alongside the workspace for isolated application profiles.
 app.setPath('userData', process.env.VIDEO_QUICKLY_ELECTRON_USER_DATA ? resolve(process.env.VIDEO_QUICKLY_ELECTRON_USER_DATA) : join(dataDirectory, 'electron-session'));
 protocol.registerSchemesAsPrivileged([{ scheme: 'video-quickly', privileges: { standard: true, secure: true, supportFetchAPI: true, stream: true, codeCache: true } }]);
 

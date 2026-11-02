@@ -6,6 +6,38 @@ import { deleteShotRanges } from '../packages/video/src/clip-edits';
 const project = () => projectSchema.parse({ id: 'p', title: '项目', brief: '', revision: 1, profile: DEFAULT_VIDEO_PROFILE, workflow: createHistoryWorkflow(), createdAt: '2026-10-29', updatedAt: '2026-10-29', shots: [1, 2].map(id => ({ id: `shot-${id}`, title: `镜头 ${id}`, narration: '', visualPrompt: '', durationUs: 1_000_000 })) });
 
 describe('unified project edit commands', () => {
+  it('restores optional workflow stages and their removal through persisted deltas without losing other draft edits', () => {
+    const original = project(), session = new ProjectEditSession(original);
+    const stages = [{ id: 'planning', label: '策划', description: '制作前准备', nodeIds: ['brief', 'style', 'script'] }];
+    session.edit({ ...session.state.present, title: '尚未保存的标题' }, '标题');
+    session.edit({ ...session.state.present, workflow: { ...session.state.present.workflow, stages } }, '流程阶段');
+    expect(session.state.undo[1].before.workflow).toEqual({ stages: null });
+    expect(session.state.undo[1].after.workflow).toEqual({ stages });
+    const restored = new ProjectEditSession(original, savedEditsSchema.parse(JSON.parse(JSON.stringify(session.state))));
+    expect(restored.dirty).toBe(true); expect(restored.state.present.workflow.stages).toEqual(stages);
+    restored.undo(); expect(restored.state.present.workflow.stages).toBeUndefined(); expect(restored.state.present.title).toBe('尚未保存的标题');
+    restored.undo(); expect(restored.state.present).toEqual(editContent(original));
+    restored.redo(); restored.redo();
+    restored.edit({ ...restored.state.present, workflow: { ...restored.state.present.workflow, stages: undefined } }, '移除流程阶段');
+    expect(restored.state.undo.at(-1)?.after.workflow).toEqual({ stages: null });
+    const reloaded = new ProjectEditSession(original, savedEditsSchema.parse(JSON.parse(JSON.stringify(restored.state))));
+    reloaded.undo(); expect(reloaded.state.present.workflow.stages).toEqual(stages);
+    reloaded.redo(); expect(reloaded.state.present.workflow.stages).toBeUndefined(); expect(reloaded.state.present.title).toBe('尚未保存的标题');
+  });
+
+  it('rebases remote stages while retaining local draft edits and their undo history', () => {
+    const original = project(), session = new ProjectEditSession(original);
+    session.edit({ ...session.state.present, title: '本地标题草稿' }, '标题');
+    const stages = [{ id: 'planning', label: '策划', description: '', nodeIds: ['brief', 'style', 'script'] }];
+    const remote = { ...original, revision: 2, workflow: { ...original.workflow, version: 2, stages } };
+    session.receive(remote);
+    expect(session.state.conflict).toBeUndefined(); expect(session.dirty).toBe(true);
+    expect(session.state.present.workflow).toEqual(remote.workflow); expect(session.state.present.title).toBe('本地标题草稿');
+    const restored = new ProjectEditSession(remote, savedEditsSchema.parse(JSON.parse(JSON.stringify(session.state))));
+    restored.undo(); expect(restored.state.present).toEqual(editContent(remote));
+    restored.redo(); expect(restored.state.present.title).toBe('本地标题草稿'); expect(restored.state.present.workflow.stages).toEqual(stages);
+  });
+
   it('persists source and plan record deltas atomically with mixing and shot DSP through undo and redo', () => {
     const original = project(); original.shots[0] = { ...original.shots[0], durationUs: 3_000_000, sourceInUs: 0, audioAssetId: 'voice' };
     let id = 0; const nextId = (kind: string) => `${kind}-${++id}`;

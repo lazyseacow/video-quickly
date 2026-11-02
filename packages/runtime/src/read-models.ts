@@ -34,12 +34,22 @@ export function createReadModels(database: Database.Database, store: DocumentSto
     const summary = store.get<ProjectSummary>('project-summary', id);
     if (!summary) throw new Error('项目不存在或已被移除。');
     const version = assetsVersion();
-    const latest = database.prepare("SELECT body FROM documents WHERE kind = 'run' AND json_extract(body, '$.projectId') = ? ORDER BY rowid DESC LIMIT 1").get(id) as { body: string } | undefined;
+    // Resuming an older run preserves its rowid. Prefer active work through the
+    // small partial index, then retain creation order for completed history.
+    const active = database.prepare("SELECT body FROM documents WHERE kind = 'run' AND json_extract(body, '$.projectId') = ? AND json_extract(body, '$.status') IN ('queued','running','waiting_review','waiting_external','retry_scheduled') ORDER BY rowid DESC LIMIT 1").get(id) as { body: string } | undefined;
+    const latest = active ?? database.prepare("SELECT body FROM documents WHERE kind IN ('run', 'asset') AND kind = 'run' AND json_extract(body, '$.projectId') = ? ORDER BY rowid DESC LIMIT 1").get(id) as { body: string } | undefined;
     const assets = knownAssetsVersion === version ? undefined : (database.prepare("SELECT body FROM documents WHERE kind = 'asset' AND (json_extract(body, '$.projectId') = ? OR json_extract(body, '$.projectId') IS NULL) ORDER BY rowid").all(id) as { body: string }[]).map(row => JSON.parse(row.body) as AssetRecord);
     return { id, revision: summary.revision, assetsVersion: version, project: revision === summary.revision ? undefined : store.get<ProjectDocument>('project', id), assets, latestRun: latest ? runSummary(JSON.parse(latest.body)) : undefined };
   }
-  function runs(before: number | undefined, limit: number, projectId?: string): RecordPage<RunSummary> {
-    const rows = database.prepare("SELECT rowid AS cursor, body FROM documents WHERE kind = 'run' AND (? IS NULL OR rowid < ?) AND (? IS NULL OR json_extract(body, '$.projectId') = ?) ORDER BY rowid DESC LIMIT ?").all(before ?? null, before ?? null, projectId ?? null, projectId ?? null, limit + 1) as DocumentRow[];
+  function runs(before: number | undefined, limit: number, projectId?: string, filter: { status?: RunRecord['status']; createdAfter?: string; createdBefore?: string } = {}): RecordPage<RunSummary> {
+    // Match the existing partial index; optional clauses contain only fixed SQL, never caller values.
+    const conditions = ["kind IN ('run', 'asset')", "kind = 'run'"], parameters: Record<string, string | number> = { limit: limit + 1 };
+    if (before !== undefined) { conditions.push('rowid < @before'); parameters.before = before; }
+    if (projectId !== undefined) { conditions.push("json_extract(body, '$.projectId') = @projectId"); parameters.projectId = projectId; }
+    if (filter.status !== undefined) { conditions.push("json_extract(body, '$.status') = @status"); parameters.status = filter.status; }
+    if (filter.createdAfter !== undefined) { conditions.push("julianday(json_extract(body, '$.createdAt')) >= julianday(@createdAfter)"); parameters.createdAfter = filter.createdAfter; }
+    if (filter.createdBefore !== undefined) { conditions.push("julianday(json_extract(body, '$.createdAt')) < julianday(@createdBefore)"); parameters.createdBefore = filter.createdBefore; }
+    const rows = database.prepare(`SELECT rowid AS cursor, body FROM documents WHERE ${conditions.join(' AND ')} ORDER BY rowid DESC LIMIT @limit`).all(parameters) as DocumentRow[];
     return page(rows, limit, row => runSummary(JSON.parse(row.body)));
   }
   function nodeIds(runId: string) {

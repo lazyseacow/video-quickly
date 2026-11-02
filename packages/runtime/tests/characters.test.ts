@@ -1,7 +1,7 @@
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createHistoryWorkflow, DEFAULT_VIDEO_PROFILE, projectSchema, type AssetRecord, type CharacterProfile, type RecordPage } from '@video-quickly/contracts';
 import { createCharacterLibrary } from '../src/characters.js';
 import { DocumentStore, openDatabase } from '../src/database.js';
@@ -58,6 +58,21 @@ describe('shared character library', () => {
     const restored = library.dispatch('character.restore', { characterId: profile.id, revision: archived.revision }) as CharacterProfile;
     expect(restored.archived).toBe(false); expect(restored.revision).toBe(3);
     expect(() => library.dispatch('character.archive', { characterId: profile.id, revision: 1 })).toThrow('其他视图修改');
+  });
+
+  it('returns only requested reference IDs in one query, including archived characters and opaque IDs', async () => {
+    const { database, store, library, image, save } = await fixture();
+    const quoted = { ...image, id: "reference'_%:" }, outside = { ...image, id: 'outside-page' };
+    for (const asset of [quoted, outside]) store.put('asset', asset.id, asset);
+    save('当前引用', [image.id, outside.id]);
+    const archived = save('归档引用', [quoted.id]);
+    library.dispatch('character.archive', { characterId: archived.id, revision: archived.revision });
+    const prepared = vi.spyOn(database, 'prepare');
+    try {
+      expect(library.assetsInUse([])).toEqual(new Set()); expect(prepared).not.toHaveBeenCalled();
+      expect(library.assetsInUse([image.id, quoted.id, 'missing', image.id])).toEqual(new Set([image.id, quoted.id]));
+      expect(prepared).toHaveBeenCalledTimes(1);
+    } finally { prepared.mockRestore(); }
   });
 
   it('reads only selected characters and refuses archiving any character referenced by a project shot', async () => {

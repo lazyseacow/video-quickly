@@ -22,8 +22,7 @@ async function open(page: Page, project: ProjectDocument) {
   await page.getByLabel('搜索项目', { exact: true }).fill(project.title);
   await page.locator('.project-card').filter({ hasText: project.title }).getByRole('button', { name: '继续创作', exact: true }).click();
   await expect(page.getByLabel('项目名称', { exact: true })).toHaveValue(project.title);
-  await page.getByRole('tab', { name: '制作步骤', exact: true }).click();
-  await page.locator('.step-list').getByRole('button').filter({ hasText: '条件起点' }).click();
+  await page.getByRole('button', { name: '配置步骤：条件起点', exact: true }).click();
   return page.getByRole('dialog', { name: '条件起点', exact: true });
 }
 const runs = (request: APIRequestContext, projectId: string) => rpc<{ items: RunRecord[] }>(request, 'run.list', { projectId });
@@ -79,6 +78,32 @@ test('executes the confirmed dependent scope, skips the false branch and retains
   await expect(card.locator('.progress-line > span')).toHaveCSS('width', await card.locator('.progress-line').evaluate(element => `${element.clientWidth}px`));
   await card.getByRole('button', { name: '查看步骤', exact: true }).click();
   const inspector = page.getByRole('dialog', { name: '制作步骤详情', exact: true }); await expect(inspector.getByRole('navigation', { name: '冻结流程步骤' }).getByRole('button')).toHaveCount(5);
+});
+
+test('keeps a completed execution plan usable while an unrelated workspace update is being checked', async ({ page, request }, info) => {
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  const project = await fixture(request), editor = await open(page, project);
+  await editor.getByRole('button', { name: '预览这步及后续', exact: true }).click();
+  const dialog = page.getByRole('dialog', { name: '执行范围', exact: true });
+  const confirm = dialog.getByRole('button', { name: '确认执行', exact: true });
+  await expect(dialog.locator('.run-scope-steps li')).toHaveCount(5); await expect(confirm).toBeEnabled();
+  let release!: () => void;
+  const held = new Promise<void>(resolve => { release = resolve; });
+  await page.route('**/__desktop_rpc', async route => {
+    if (route.request().postDataJSON()?.method !== 'run.plan') { await route.continue(); return; }
+    const response = await route.fetch(); await held; await route.fulfill({ response });
+  });
+  try {
+    await rpc(request, 'project.create', { title: '不影响当前执行范围的项目' });
+    await expect(dialog.getByText('正在核对执行范围…', { exact: true })).toBeVisible();
+    await expect(confirm).toBeEnabled();
+    await page.screenshot({ path: info.outputPath('run-scope-refresh-usable.png') });
+    await confirm.click(); await expect(dialog).toHaveCount(0);
+    await expect.poll(async () => (await runs(request, project.id)).items[0]?.status).toBe('succeeded');
+    const completed = (await runs(request, project.id)).items;
+    expect(completed).toHaveLength(1); expect(completed[0]).toMatchObject({ projectRevision: project.revision, selection: { nodeId: 'start', mode: 'downstream' }, stepCount: 5 });
+    expect(await current(request, project.id)).toEqual(project);
+  } finally { release(); await page.unrouteAll({ behavior: 'wait' }); }
 });
 
 test('keeps an obsolete preview open, rejects execution and starts only after the user confirms a refreshed plan', async ({ page, request }) => {

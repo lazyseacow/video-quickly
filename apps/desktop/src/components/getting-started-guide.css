@@ -1,0 +1,28 @@
+@import 'driver.js/dist/driver.css' layer(driver);
+
+.driver-popover.getting-started-guide-popover { display: flex; flex-direction: column; width: min(360px, calc(100vw - var(--space-8))); min-width: 0; max-width: calc(100vw - var(--space-8)); max-height: calc(100dvh - var(--space-8)); padding: var(--space-5); border: 1px solid var(--border); border-radius: var(--radius-medium); background: var(--surface); box-shadow: var(--floating-shadow); color: var(--text); font-family: var(--font-family-ui); overflow: visible; }
+.getting-started-guide-popover .driver-popover-title { flex-shrink: 0; padding-right: var(--space-8); color: var(--text); font-size: var(--text-size-title); font-weight: var(--font-weight-semibold); line-height: var(--line-height-title); letter-spacing: var(--letter-spacing-heading); text-wrap: balance; }
+.getting-started-guide-popover .driver-popover-title:focus { outline: none; }
+.getting-started-guide-popover .driver-popover-title[style*='block'] + .driver-popover-description { margin-top: var(--space-3); }
+.getting-started-guide-popover .driver-popover-description { min-height: 0; overflow-y: auto; margin-bottom: 0; color: var(--text-secondary); font-size: var(--text-size-body); font-weight: var(--font-weight-regular); line-height: var(--line-height-body); text-wrap: pretty; }
+.getting-started-guide-popover .driver-popover-footer { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: var(--space-3) var(--space-2); flex-shrink: 0; align-items: center; margin-top: var(--space-5); text-align: left; }
+.getting-started-guide-popover .driver-popover-progress-text { grid-column: 1 / -1; color: var(--text-subtle); font-size: var(--text-size-caption); font-weight: var(--font-weight-regular); line-height: var(--line-height-label); font-variant-numeric: tabular-nums; }
+.getting-started-guide-popover .getting-started-guide__skip { justify-self: start; padding-inline: var(--space-2); }
+.getting-started-guide-popover .driver-popover-navigation-btns { display: flex; gap: var(--space-2); }
+.getting-started-guide-popover .driver-popover-navigation-btns button + button { margin-left: 0; }
+.getting-started-guide-popover .button { display: inline-flex; min-height: var(--control-hit-size); padding-inline: var(--space-3); font-size: var(--text-size-label); line-height: var(--line-height-label); }
+.getting-started-guide-popover .driver-popover-btn-disabled { pointer-events: none; }
+.getting-started-guide-popover .driver-popover-close-btn { display: grid; place-items: center; position: absolute; inset: var(--space-2) var(--space-2) auto auto; width: var(--control-hit-size); height: var(--control-hit-size); margin: 0; padding: 0; border: 0; border-radius: var(--radius-pill); background: transparent; color: var(--text-secondary); font-family: var(--font-family-ui); font-size: var(--text-size-project); font-weight: var(--font-weight-regular); line-height: var(--line-height-icon); transition: none; }
+.getting-started-guide-popover .driver-popover-close-btn:hover { background: var(--surface-hover); color: var(--text); }
+.getting-started-guide-popover .driver-popover-close-btn:focus-visible, .getting-started-guide-popover .button:focus-visible { outline: 2px solid var(--accent); outline-offset: var(--space-tight); }
+.getting-started-guide-popover .driver-popover-arrow { border-color: transparent; }
+.getting-started-guide-popover .driver-popover-arrow-side-left { border-left-color: var(--surface); }
+.getting-started-guide-popover .driver-popover-arrow-side-right { border-right-color: var(--surface); }
+.getting-started-guide-popover .driver-popover-arrow-side-top { border-top-color: var(--surface); }
+.getting-started-guide-popover .driver-popover-arrow-side-bottom { border-bottom-color: var(--surface); }
+@media (max-width: 520px) {
+  .driver-popover.getting-started-guide-popover { padding: var(--space-4); }
+  .getting-started-guide-popover .driver-popover-footer { gap: var(--space-3) var(--space-1); }
+  .getting-started-guide-popover .driver-popover-navigation-btns { gap: var(--space-1); }
+  .getting-started-guide-popover .button { min-height: var(--control-height); padding-inline: var(--space-2); }
+}

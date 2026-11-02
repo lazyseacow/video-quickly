@@ -15,7 +15,7 @@ export function fixtureSecretCall(method, params, values) {
 }
 
 export async function prepareInstalledUpgrade(rpc, directory, waitRun) {
-  let project = await rpc('project.create', { title: '真实旧版本 中文路径升级验收' });
+  let project = await rpc('project.create', { title: '真实旧版本 中文路径升级验收', templateId: 'history-handdrawn' });
   await rpc('project.saveShot', { projectId: project.id, shot: { id: 'upgrade-shot', title: '旧版本真实素材', narration: '保留旧版本旁白', visualPrompt: '', durationUs: 500_000 } });
   const sourcePath = join(directory, 'upgrade-source.png');
   await writeFile(sourcePath, Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=', 'base64'));
@@ -48,8 +48,8 @@ export async function verifyInstalledUpgrade(rpc, saved, waitRun) {
 
 export async function verifyUpgradeBackup(dataDirectory, saved, Database) {
   const directory = join(dataDirectory, 'database-backups');
-  const names = (await readdir(directory)).filter(name => /^workspace-v6-to-v7-[a-f0-9-]+\.sqlite$/.test(name));
-  assert.equal(names.length, 1, '真实升级必须恰有一份 Schema 6 到 7 的迁移前快照');
+  const names = (await readdir(directory)).filter(name => /^workspace-v6-to-v8-[a-f0-9-]+\.sqlite$/.test(name));
+  assert.equal(names.length, 1, '真实升级必须恰有一份 Schema 6 的迁移前快照');
   const path = join(directory, names[0]);
   assert.ok((await lstat(path)).isFile(), '迁移快照须为普通文件');
   const backup = new Database(path, { readonly: true, fileMustExist: true });

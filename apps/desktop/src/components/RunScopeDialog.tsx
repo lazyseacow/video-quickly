@@ -15,7 +15,9 @@ export default function RunScopeDialog({ projectId, nodeId, initialMode = 'downs
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
   const read = useRuntimeRead('run.plan', { projectId, selection: { nodeId, mode } }, version, runPlanSchema), plan = read.data;
   async function start() {
-    if (!plan || busy || read.busy || read.error || plan.blockedReason) return;
+    // Keep a completed preview usable during background refresh. The runtime
+    // checks its digest before starting, so a changed plan still needs review.
+    if (!plan || busy || read.error || plan.blockedReason) return;
     setBusy(true); setError('');
     try {
       const run = runSchema.parse(await rpc('run.start', { projectId, selection: { ...plan.selection, previewDigest: plan.digest }, ...(parentRunId ? { parentRunId } : {}) }));
@@ -43,6 +45,6 @@ export default function RunScopeDialog({ projectId, nodeId, initialMode = 'downs
         {plan.boundary.length > 0 && <details className="run-scope-boundary"><summary><GitBranch size={14} aria-hidden="true" />沿用已保存的上游内容</summary><p>这些上游步骤不重新执行，相关输入取自已保存的项目。</p><ul>{plan.boundary.map((edge, index) => <li key={index}>{edge.targetLabel} ← {edge.sourceLabel}</li>)}</ul></details>}
       </>}
     </div>
-    <div className="dialog__footer"><Button onClick={onClose}>{busy ? '关闭' : '取消'}</Button><Button busy={read.busy} disabled={busy} onClick={read.refresh}><RefreshCw size={14} />重新预览</Button><Button aria-label="确认执行" variant="primary" busy={busy} disabled={!plan || read.busy || Boolean(read.error || plan.blockedReason)} onClick={() => void start()}><Play size={14} />执行</Button></div>
+    <div className="dialog__footer"><Button onClick={onClose}>{busy ? '关闭' : '取消'}</Button><Button busy={read.busy} disabled={busy} onClick={read.refresh}><RefreshCw size={14} />重新预览</Button><Button aria-label="确认执行" variant="primary" busy={busy} disabled={!plan || Boolean(read.error || plan.blockedReason)} onClick={() => void start()}><Play size={14} />执行</Button></div>
   </Dialog>;
 }

@@ -16,7 +16,7 @@ export function runtimeMediaEnvironment(mediaDirectory, packaged, environment = 
 
 export function workspaceDirectory({ platform = process.platform, home = homedir(), environment = process.env } = {}) {
   if (environment.VIDEO_QUICKLY_DATA_DIR) return resolve(environment.VIDEO_QUICKLY_DATA_DIR);
-  // The new desktop owns a separate workspace; do not read or rewrite old data.
+  // Use the same workspace layout for the desktop and its runtime tools.
   if (platform === 'win32') return join(environment.APPDATA ?? join(home, 'AppData', 'Roaming'), workspaceName);
   if (platform === 'darwin') return join(home, 'Library', 'Application Support', workspaceName);
   return join(environment.XDG_DATA_HOME ?? join(home, '.local', 'share'), workspaceName);

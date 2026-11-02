@@ -5,8 +5,10 @@ import { createReadStream, existsSync, readFileSync, readdirSync, statSync } fro
 import { resolve, relative, isAbsolute, extname } from 'node:path';
 import { createRuntime } from '../../packages/runtime/src/index.ts';
 import { createLogger, logError } from '../../packages/runtime/src/logging.ts';
+import { generateText } from '../../packages/runtime/src/providers.ts';
 import { createActivityExecutor, createWaveformReader, validateMediaActivity } from '../../packages/integrations/src/index.ts';
 import { readRpcRequest } from './dev/read-rpc-request.ts';
+import { createRpcDiagnostics } from './dev/rpc-diagnostics.ts';
 import { audioMixProjectionKey, prepareAudioMix, readAudioLevelWindow, detectAudioSilence } from '../../packages/video/src/audio-mix.ts';
 
 const developmentPort = Number(process.env.VIDEO_QUICKLY_PORT ?? 1420);
@@ -14,10 +16,11 @@ const developmentPort = Number(process.env.VIDEO_QUICKLY_PORT ?? 1420);
 // Development preview exercises the same runtime as the desktop sidecar.
 // This bridge is never included in the production application.
 function developmentBridge(browserTest: boolean): Plugin {
+  let dispose: (() => Promise<void>) | undefined;
   async function attach(server: ViteDevServer | PreviewServer) {
     // Local preview clients own their connection lifetime. Avoid both forced
     // connection churn and racing an idle server close with a pooled RPC.
-    if (server.httpServer) server.httpServer.keepAliveTimeout = 0;
+    if (server.httpServer && 'keepAliveTimeout' in server.httpServer) server.httpServer.keepAliveTimeout = 0;
     if (browserTest) {
       const manifest: unknown = JSON.parse(readFileSync(resolve('.generated/browser-preview/.vite/manifest.json'), 'utf8'));
       const entry = manifest && typeof manifest === 'object' && 'dev/thumbnail-test.ts' in manifest ? manifest['dev/thumbnail-test.ts'] : undefined;
@@ -36,39 +39,54 @@ function developmentBridge(browserTest: boolean): Plugin {
       .find(path => existsSync(path)) : undefined;
     const ffmpegPath = process.env.VIDEO_QUICKLY_FFMPEG ?? bundledMedia;
     const waveforms = createWaveformReader({ dataDirectory, ffmpegPath });
-    const runtime = await createRuntime({ dataDirectory, mode: 'development', logger, ffmpegPath, readAudioWaveform: asset => waveforms.read(asset),
+    const diagnostics = browserTest && process.env.VIDEO_QUICKLY_RPC_DIAGNOSTICS ? createRpcDiagnostics(process.env.VIDEO_QUICKLY_RPC_DIAGNOSTICS) : undefined;
+    let runtime: ReturnType<typeof createRuntime>;
+    try { runtime = await createRuntime({ dataDirectory, mode: 'development', logger, ffmpegPath, readAudioWaveform: asset => waveforms.read(asset),
+      provider: diagnostics?.textProvider(generateText),
       audioMix: { projectionKey: audioMixProjectionKey, prepare: options => prepareAudioMix({ ...options, ffmpegPath }), levels: readAudioLevelWindow, silence: options => detectAudioSilence({ ...options, ffmpegPath }) },
       preflightActivity: validateMediaActivity, executeActivity: createActivityExecutor({ ffmpegPath }), secretStore: {
       persistent: false,
       async get(key) { return temporarySecrets.get(key); },
       async set(key, value) { temporarySecrets.set(key, value); },
       async delete(key) { temporarySecrets.delete(key); },
-    }});
+    }}); } catch (error) { try { await diagnostics?.close(); } finally { await waveforms.close(); } throw error; }
     const peers = new Set<ServerResponse>();
     const unsubscribe = runtime.subscribe(event => {
       if ('ws' in server) server.ws.send({ type: 'custom', event: 'workspace-event', data: event });
       const message = 'data: ' + JSON.stringify(event) + '\n\n';
       for (const peer of peers) if (!peer.write(message)) { peers.delete(peer); peer.destroy(); }
     });
+    const origin = () => { const address = server.httpServer?.address(); return `http://127.0.0.1:${address && typeof address === 'object' ? address.port : developmentPort}`; };
+    let disposing: Promise<void> | undefined;
+    const close = () => disposing ??= (async () => {
+      unsubscribe(); for (const peer of peers) peer.destroy(); peers.clear();
+      try { await diagnostics?.close(); } finally { try { await waveforms.close(); } finally { await runtime.close(); } }
+    })();
+    dispose = close;
     if (browserTest) server.middlewares.use('/__desktop_events', (request, response) => {
       if (request.method !== 'GET') { response.statusCode = 405; response.end(); return; }
-      if (request.headers.origin && request.headers.origin !== 'http://127.0.0.1:' + developmentPort) { response.statusCode = 403; response.end(); return; }
+      if (request.headers.origin && request.headers.origin !== origin()) { response.statusCode = 403; response.end(); return; }
       response.writeHead(200, { 'Content-Type': 'text/event-stream; charset=utf-8', 'Cache-Control': 'no-store', Connection: 'keep-alive' });
       response.write(': connected\n\n'); peers.add(response);
       response.on('close', () => peers.delete(response));
     });
-    server.httpServer?.on('close', () => { unsubscribe(); void waveforms.close().then(() => runtime.close()).catch(error => logger.error('preview.shutdown_failed', { error: logError(error) })); });
+    server.httpServer?.on('close', () => { void close().catch(error => logger.error('preview.shutdown_failed', { error: logError(error) })); });
     server.middlewares.use('/__desktop_rpc', async (request, response) => {
       response.setHeader('Content-Type', 'application/json; charset=utf-8');
       if (request.method !== 'POST') { response.statusCode = 405; response.end(JSON.stringify({ error: '只支持 POST' })); return; }
-      if (request.headers.origin && request.headers.origin !== `http://127.0.0.1:${developmentPort}`) { response.statusCode = 403; response.end(JSON.stringify({ error: '不允许此来源' })); return; }
+      if (request.headers.origin && request.headers.origin !== origin()) { response.statusCode = 403; response.end(JSON.stringify({ error: '不允许此来源' })); return; }
+      const diagnostic = diagnostics?.request(request, response);
       try {
         const parsed = await readRpcRequest(request);
+        diagnostic?.bodyDecoded(parsed && typeof parsed === 'object' && 'method' in parsed ? parsed.method : undefined);
         if (!parsed || typeof parsed !== 'object' || !('method' in parsed) || typeof parsed.method !== 'string') throw new Error('请求格式无效');
+        diagnostic?.dispatchStarted();
         const result = ['runtime.status', 'runtime.reconnect'].includes(parsed.method) ? { state: 'ready', generation: 0 } : await runtime.dispatch(parsed.method, 'params' in parsed ? parsed.params : {});
+        diagnostic?.dispatchCompleted();
         response.end(JSON.stringify({ result }));
       } catch (error) {
         logger.warn('preview.rpc_rejected', { error: logError(error) });
+        diagnostic?.failed();
         response.statusCode = 400;
         response.end(JSON.stringify({ error: error instanceof Error ? error.message : '操作失败' }));
       }
@@ -101,7 +119,7 @@ function developmentBridge(browserTest: boolean): Plugin {
       stream.on('error', () => { if (!response.headersSent) response.statusCode = 500; response.end(); }).pipe(response);
     });
   }
-  return { name: 'video-quickly-development-bridge', apply: 'serve', configureServer: attach, configurePreviewServer: browserTest ? attach : undefined };
+  return { name: 'video-quickly-development-bridge', apply: 'serve', configureServer: attach, configurePreviewServer: browserTest ? attach : undefined, closeServer: async () => { await dispose?.(); }, closePreviewServer: async () => { await dispose?.(); } };
 }
 
 export default defineConfig(({ mode }) => ({

@@ -39,7 +39,11 @@ for (const width of [1536, 600]) test(`pans from blank canvas with the left butt
   await page.locator('.react-flow__pane').scrollIntoViewIfNeeded();
   await expect(node(page, 'b')).toBeVisible();
   const viewport = () => page.locator('.react-flow__viewport').evaluate(element => { const matrix = new DOMMatrixReadOnly(getComputedStyle(element).transform); return { x: matrix.e, y: matrix.f, zoom: matrix.a }; });
-  if (width === 600) { await page.getByRole('button', { name: '适应全部步骤', exact: true }).click(); await expect.poll(async () => (await viewport()).zoom).toBeLessThan(1); }
+  if (width === 600) {
+    await page.getByRole('button', { name: '适应全部步骤', exact: true }).click();
+    await expect(node(page, 'a')).toBeInViewport({ ratio: 1 }); await expect(node(page, 'b')).toBeInViewport({ ratio: 1 });
+    await expect.poll(async () => (await viewport()).zoom).toBeLessThan(1);
+  }
   const pane = await page.locator('.react-flow__pane').boundingBox(); if (!pane) throw new Error('流程画布不可见');
   const start = { x: pane.x + pane.width / 2, y: pane.y + 100 };
   const before = await viewport();
@@ -68,6 +72,41 @@ for (const width of [1536, 600]) test(`pans from blank canvas with the left butt
   await expect.poll(async () => (await viewport()).zoom).toBeLessThan(before.zoom);
   await expect(page.locator('vite-error-overlay')).toHaveCount(0);
   expect(errors).toEqual([]);
+});
+
+test('keeps a new pointer pan when fitting finishes before the next animation frame', async ({ page, request }) => {
+  const clockOrigin = new Date('2026-01-01T00:00:00Z');
+  await page.clock.install({ time: clockOrigin });
+  await page.setViewportSize({ width: 1536, height: 960 });
+  const project = await fixture(request, '适配与指针操作顺序'); await open(page, project.title);
+  await page.setViewportSize({ width: 600, height: 960 });
+  await page.locator('.react-flow__pane').scrollIntoViewIfNeeded();
+  const viewport = () => page.locator('.react-flow__viewport').evaluate(element => { const matrix = new DOMMatrixReadOnly(getComputedStyle(element).transform); return { x: matrix.e, y: matrix.f, zoom: matrix.a }; });
+  const fit = page.getByRole('button', { name: '适应全部步骤', exact: true });
+  await fit.click();
+  await expect(node(page, 'a')).toBeInViewport({ ratio: 1 }); await expect(node(page, 'b')).toBeInViewport({ ratio: 1 });
+  const pane = await page.locator('.react-flow__pane').boundingBox(); if (!pane) throw new Error('流程画布不可见');
+  const start = { x: pane.x + pane.width / 2, y: pane.y + 100 };
+  await page.mouse.move(start.x, start.y); await page.mouse.down(); await page.mouse.move(start.x - 120, start.y - 50, { steps: 8 }); await page.mouse.up();
+  // Pause the browser's real rendering boundary, without replacing fitView or
+  // its node queue. Input events still arrive before that next frame.
+  // This target exceeds the entire test deadline. A delayed protocol command
+  // cannot arrive after it while this test is still allowed to run.
+  const pauseTime = new Date(clockOrigin.getTime() + 2 * test.info().timeout);
+  // Reproduce a slow protocol delivery without sleeping inside the fake clock.
+  await new Promise(resolve => setTimeout(resolve, 180));
+  await page.clock.pauseAt(pauseTime);
+  await fit.dispatchEvent('click');
+  const before = await viewport();
+  await page.mouse.move(start.x, start.y); await page.mouse.down(); await page.mouse.move(start.x + 90, start.y + 60, { steps: 8 }); await page.mouse.up();
+  await page.clock.runFor(34);
+  await expect.poll(async () => Math.round((await viewport()).x - before.x)).toBe(90);
+  await expect.poll(async () => Math.round((await viewport()).y - before.y)).toBe(60);
+  expect((await viewport()).zoom).toBeCloseTo(before.zoom, 5);
+  expect((await current(request, project.id)).workflow).toEqual(project.workflow);
+  await fit.focus(); await expect(fit).toBeFocused(); await fit.press('Enter');
+  await expect(node(page, 'a')).toBeInViewport({ ratio: 1 }); await expect(node(page, 'b')).toBeInViewport({ ratio: 1 });
+  await expect(fit).toBeFocused();
 });
 
 test('recovers unfinished graph input without saving or starting an agent, then commits the corrected graph', async ({ page, request }) => {
@@ -168,14 +207,14 @@ test('retains input added during a committed save and keeps the view open until 
 
 test('shares step-setting history with the graph and preserves input when the same step changes elsewhere', async ({ page, request }) => {
   const project = await fixture(request, '步骤设置统一历史'); await open(page, project.title, false);
-  await page.getByRole('tab', { name: '制作步骤', exact: true }).click(); await page.locator('.step-list').getByRole('button').filter({ hasText: '简报 A' }).click();
+  await page.getByRole('button', { name: '配置步骤：简报 A', exact: true }).click();
   const dialog = page.getByRole('dialog', { name: '简报 A', exact: true });
   await dialog.getByLabel('提示词与补充要求').fill('人工设置的提示词'); await dialog.getByRole('button', { name: '保存', exact: true }).click();
   await expect(dialog).toHaveCount(0); await history(page, '撤销');
   await expect.poll(async () => (await current(request, project.id)).workflow.nodes[0].prompt).toBe('');
   await history(page, '重做');
   await expect.poll(async () => (await current(request, project.id)).workflow.nodes[0].prompt).toBe('人工设置的提示词');
-  await page.locator('.step-list').getByRole('button').filter({ hasText: '简报 A' }).click(); await dialog.getByLabel('提示词与补充要求').fill('尚未应用的输入');
+  await page.getByRole('button', { name: '配置步骤：简报 A', exact: true }).click(); await dialog.getByLabel('提示词与补充要求').fill('尚未应用的输入');
   const saved = await current(request, project.id);
   const remote = await rpc<ProjectDocument>(request, 'project.update', { projectId: project.id, revision: saved.revision, patch: { workflow: { ...saved.workflow, nodes: saved.workflow.nodes.map(node => node.id === 'a' ? { ...node, prompt: '另一视图的提示词' } : node) } } });
   await expect(page.locator('.project-heading-copy')).toHaveAttribute('data-revision', String(remote.revision));
@@ -187,8 +226,7 @@ test('shares step-setting history with the graph and preserves input when the sa
 
 test('keeps newer step input after a committed save and requires confirmation before executing it', async ({ page, request }) => {
   const project = await fixture(request, '步骤保存期间继续输入'); await open(page, project.title, false);
-  await page.getByRole('tab', { name: '制作步骤', exact: true }).click();
-  await page.locator('.step-list').getByRole('button').filter({ hasText: '简报 A' }).click();
+  await page.getByRole('button', { name: '配置步骤：简报 A', exact: true }).click();
   const dialog = page.getByRole('dialog', { name: '简报 A', exact: true }), prompt = dialog.getByLabel('提示词与补充要求');
   await prompt.fill('先提交的步骤要求');
   let release!: () => void, entered!: () => void, held = false;

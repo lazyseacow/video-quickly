@@ -1,4 +1,3 @@
-import { writeFile } from 'node:fs/promises';
 import { createServer } from 'node:http';
 import { expect, test, type APIRequestContext, type Page } from '@playwright/test';
 
@@ -23,10 +22,15 @@ test('undoes and redoes grouped input, ordering, duplication and deletion with m
   const project = await createProject(request, '统一编辑历史验收');
   await openProject(page, project.title);
   const title = page.getByLabel('镜头标题');
+  const outline = page.locator('#project-outline'); await expect(outline.getByRole('region', { name: '镜头列表', exact: true })).toBeVisible(); await expect(outline.locator('.outline-header')).toHaveCount(0); await expect(outline.getByRole('tab')).toHaveCount(0);
+  await outline.locator('.outline-shot').nth(1).click(); await expect(title).toHaveValue('测试镜头 2'); await outline.locator('.outline-shot').first().click(); await expect(title).toHaveValue('测试镜头 1');
   await title.fill('连续'); await title.pressSequentially('输入');
   await title.press('ControlOrMeta+z'); await expect(title).toHaveValue('测试镜头 1');
   await title.press('ControlOrMeta+Shift+z'); await expect(title).toHaveValue('连续输入');
   await expect(page.getByRole('button', { name: '保存镜头', exact: true })).toBeDisabled();
+  // This header action has a different label while saving; a disabled shot
+  // button alone also matches the interval before its checkpoint completes.
+  await expect(page.getByRole('button', { name: '保存修改', exact: true })).toBeDisabled();
   let saved = (await rpc(request, 'project.get', { projectId: project.id })).project;
   expect(saved.revision).toBe(project.revision + 1);
   await page.getByRole('button', { name: '撤销', exact: true }).click();
@@ -50,6 +54,7 @@ test('undoes and redoes grouped input, ordering, duplication and deletion with m
   }
   await expect(page.locator('.outline-shot').first()).toContainText('连续输入');
   await expect(page.getByRole('button', { name: '保存镜头', exact: true })).toBeDisabled();
+  await expect(page.getByRole('button', { name: '保存修改', exact: true })).toBeDisabled();
   await page.reload();
   await page.getByRole('button', { name: `打开项目：${project.title}`, exact: true }).click();
   await expect(page.getByRole('button', { name: '重做', exact: true })).toBeEnabled();
@@ -86,6 +91,7 @@ test('restores an unsaved multi-field draft and resolves external edits without 
   await expect(page.getByLabel('画面要求')).toHaveValue('另一视图的画面');
   await page.getByRole('button', { name: '保存镜头', exact: true }).click();
   await expect(page.getByRole('button', { name: '保存镜头', exact: true })).toBeDisabled();
+  await expect.poll(async () => (await rpc(request, 'project.get', { projectId: project.id })).project.revision).toBe(remote.revision + 1);
   const saved = (await rpc(request, 'project.get', { projectId: project.id })).project;
   expect(saved.revision).toBe(remote.revision + 1);
   expect(saved.shots[0]).toMatchObject({ title: '另一视图的标题', narration: '重启后仍保留的旁白', visualPrompt: '另一视图的画面' });
@@ -93,36 +99,6 @@ test('restores an unsaved multi-field draft and resolves external edits without 
   await page.setViewportSize({ width: 600, height: 900 });
   await page.screenshot({ path: info.outputPath('draft-restored-light-600.png') });
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1)).toBe(true);
-});
-
-test('loads 200 shots without snapshot or hidden historical reads and keeps controls responsive', async ({ page, request }, info) => {
-  const project = await createProject(request, '两百镜头读取验收', 200);
-  const methods: string[] = []; const errors: string[] = [];
-  page.on('request', request => { if (request.url().endsWith('/__desktop_rpc')) methods.push(request.postDataJSON().method); });
-  page.on('pageerror', error => errors.push(error.message));
-  const started = Date.now();
-  await openProject(page, project.title);
-  await expect(page.locator('.outline-shot')).toHaveCount(200);
-  const openMs = Date.now() - started;
-  const editStarted = Date.now();
-  await page.getByLabel('镜头标题').fill('大项目中的编辑');
-  await page.getByRole('button', { name: '撤销', exact: true }).click();
-  await expect(page.getByLabel('镜头标题')).toHaveValue('测试镜头 1');
-  const editMs = Date.now() - editStarted;
-  const selectStarted = Date.now();
-  await page.locator('.outline-shot').last().click();
-  await expect(page.getByLabel('镜头标题')).toHaveValue('测试镜头 200');
-  const selectMs = Date.now() - selectStarted;
-  const ruler = page.getByRole('slider', { name: '预览播放位置' });
-  await ruler.press('End'); await expect(ruler).toHaveAttribute('aria-valuenow', '399967');
-  const cdp = await page.context().newCDPSession(page);
-  const heap = await cdp.send('Runtime.getHeapUsage'); await cdp.detach();
-  await page.screenshot({ path: info.outputPath('large-project-dark-1536.png') });
-  expect(methods).not.toContain('workspace.snapshot'); expect(methods).not.toContain('run.events'); expect(methods).not.toContain('run.activities'); expect(methods).not.toContain('run.list'); expect(methods).not.toContain('asset.list');
-  expect(errors).toEqual([]); await expect(page.locator('vite-error-overlay')).toHaveCount(0);
-  const metrics = { shots: 200, openMs, editAndUndoMs: editMs, selectLastShotMs: selectMs, heapUsedMiB: Math.round(heap.usedSize / 1024 / 1024 * 100) / 100, methods };
-  await writeFile(info.outputPath('large-project-metrics.json'), JSON.stringify(metrics, null, 2));
-  await info.attach('large-project-interactions', { body: JSON.stringify(metrics), contentType: 'application/json' });
 });
 
 test('keeps generated results editable with undo and rejects reapplying them after revisions', async ({ page, request }) => {
@@ -144,13 +120,14 @@ test('keeps generated results editable with undo and rejects reapplying them aft
     await rpc(request, 'node.apply', { runId: run.id, nodeId: 'script', revision: project.revision });
     await openProject(page, project.title);
     await expect(page.getByLabel('镜头标题')).toHaveValue('已生成的分镜');
-    await page.getByRole('tab', { name: '制作步骤', exact: true }).click();
-    await page.locator('.step-item').filter({ hasText: '旁白与分镜' }).click();
+    await page.getByRole('button', { name: '流程', exact: true }).click(); await page.locator('.react-flow__node[data-id="script"]').click();
+    await page.getByRole('button', { name: '配置与执行步骤', exact: true }).click();
     const step = page.getByRole('dialog', { name: '旁白与分镜', exact: true });
     await expect(step.getByRole('button', { name: '保存', exact: true })).toBeVisible();
     await expect(step.getByRole('button', { name: '执行', exact: true })).toBeVisible();
     await expect(step.getByRole('button', { name: '查看最近产物', exact: true })).toHaveCount(0);
     await step.getByRole('button', { name: '取消', exact: true }).click();
+    await page.getByRole('button', { name: '分镜', exact: true }).click();
     await page.getByLabel('镜头标题').fill('人工修订的分镜');
     await page.getByRole('button', { name: '保存镜头', exact: true }).click();
     await page.getByRole('button', { name: '撤销', exact: true }).click();

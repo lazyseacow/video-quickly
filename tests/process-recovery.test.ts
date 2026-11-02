@@ -99,8 +99,7 @@ describe('actual sidecar process recovery', () => {
     const directory = await mkdtemp(join(tmpdir(), 'video-quickly-process-'));
     directories.push(directory);
     const first = new RpcProcess(directory);
-    const snapshot = await first.request<WorkspaceSnapshot>('workspace.snapshot');
-    const project = snapshot.projects[0];
+    const project = await first.request<ProjectDocument>('project.create', { title: '旧流程审阅进程恢复', templateId: 'history-handdrawn' });
     const run = await first.request<RunRecord>('run.start', { projectId: project.id, nodeId: 'style' });
     const before = await waitFor(first, run.id, 'waiting_review');
     expect(before.activities).toHaveLength(1);

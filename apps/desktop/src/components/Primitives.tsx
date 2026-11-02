@@ -6,7 +6,7 @@ export function Button({ children, variant = 'default', className = '', busy = f
   return <button type="button" {...props} disabled={props.disabled || busy} className={`button button--${variant} ${isStatic ? 'button--static' : ''} ${className}`} aria-busy={busy || undefined}>{busy && <LoaderCircle className="spin" size={16} aria-hidden="true" />}{children}</button>;
 }
 
-export function IconButton({ label, children, className = '', ...props }: ButtonHTMLAttributes<HTMLButtonElement> & { label: string }) {
+export function IconButton({ label, children, className = '', ...props }: ComponentProps<'button'> & { label: string }) {
   return <button type="button" {...props} title={props.title ?? label} aria-label={label} className={`icon-button ${className}`}>{children}</button>;
 }
 
@@ -22,12 +22,13 @@ export function Field({ label, hint, children, className = '' }: { label: string
   return <label className={`field ${className}`}><span className="field__label">{label}</span>{control}{hint && <span id={hintId} className="field__hint">{hint}</span>}</label>;
 }
 
-export function Dialog({ title, children, onClose, className = '' }: { title: string; children: ReactNode; onClose: () => void; className?: string }) {
+export function Dialog({ title, children, onClose, onDismissStart, className = '' }: { title: string; children: ReactNode; onClose: () => void; onDismissStart?: () => void; className?: string }) {
   const titleId = useId();
   const ref = useRef<HTMLDialogElement>(null);
   const surface = useRef<HTMLDivElement>(null);
   const dismiss = useRef<(() => void) | undefined>(undefined);
   const latestClose = useRef(onClose); latestClose.current = onClose;
+  const latestDismissStart = useRef(onDismissStart); latestDismissStart.current = onDismissStart;
   useGSAP((_context, contextSafe) => {
     const dialog = ref.current;
     const content = surface.current;
@@ -44,6 +45,7 @@ export function Dialog({ title, children, onClose, className = '' }: { title: st
     const close = () => {
       if (closing) return;
       closing = true;
+      latestDismissStart.current?.();
       enter.kill();
       content.inert = true;
       exit = gsap.to(content, { autoAlpha: 0, y: 6, scale: .995, duration: preference.matches ? 0 : motion.exit, ease: motion.ease, overwrite: 'auto', onComplete: () => latestClose.current() });

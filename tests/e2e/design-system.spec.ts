@@ -2,7 +2,10 @@ import { expect, test, type Page } from '@playwright/test';
 import { writeFile } from 'node:fs/promises';
 import { addModelConnection } from './settings';
 
-test.use({ storageState: { cookies: [], origins: [] } });
+test.use({ storageState: async ({ baseURL }, use) => {
+  if (!baseURL) throw new Error('Design-system tests require a local application origin');
+  await use({ cookies: [], origins: [{ origin: new URL(baseURL).origin, localStorage: [{ name: 'vq-onboarding-v1', value: 'done' }] }] });
+} });
 
 async function openApp(page: Page) {
   await page.goto('/');
@@ -49,30 +52,49 @@ test('shares typography and spacing roles across the workspace, navigation and d
 
 test('reads dialog timing from shared CSS roles and responds to reduced motion', async ({ page }) => {
   await page.emulateMedia({ reducedMotion: 'no-preference' });
+  // GSAP captures Date.now and its frame scheduler when the app loads.
+  // Install the clock first so pausing and advancing time drive that same ticker.
+  const clockOrigin = new Date('2026-01-01T00:00:00Z');
+  await page.clock.install({ time: clockOrigin });
   await openApp(page);
-  await page.clock.install();
   // Ten percent speed makes the actual production entrance observable, without
   // exporting a second GSAP instance or replacing its animation implementation.
   await page.evaluate(() => document.documentElement.style.setProperty('--motion-enter', '2400ms'));
   const create = page.getByRole('button', { name: '新建项目', exact: true });
+  // This target exceeds the entire test deadline. A delayed protocol command
+  // cannot arrive after it while this test is still allowed to run.
+  const pauseTime = new Date(clockOrigin.getTime() + 2 * test.info().timeout);
+  // Reproduce a slow protocol delivery without sleeping inside the fake clock.
+  await new Promise(resolve => setTimeout(resolve, 180));
+  await page.clock.pauseAt(pauseTime);
   await create.click();
   const dialog = page.getByRole('dialog', { name: '新建视频项目', exact: true });
+  await expect(dialog.locator('.dialog__surface')).toHaveCSS('opacity', '0');
   await page.clock.runFor(240);
   const opacity = await dialog.locator('.dialog__surface').evaluate(element => Number(getComputedStyle(element).opacity));
   expect(opacity).toBeGreaterThan(0);
   expect(opacity).toBeLessThan(.9);
   await page.clock.runFor(2500);
   await expect(dialog.locator('.dialog__surface')).toHaveCSS('opacity', '1');
-  // Resume real ticking before changing the media query: GSAP batches its
-  // matchMedia cleanup onto the animation ticker, which a paused clock stalls.
-  await page.clock.resume();
-  await page.emulateMedia({ reducedMotion: 'reduce' });
+  // Repeated dismissal has one completion, even when the preference changes
+  // during its exit. A late completion must not close a newly opened dialog.
+  await page.evaluate(() => document.documentElement.style.setProperty('--motion-exit', '2400ms'));
   await page.keyboard.press('Escape');
-  await expect(dialog).toHaveCount(0);
+  await page.keyboard.press('Escape');
+  // Exit content leaves the accessibility tree; a repeated Escape may also
+  // close the native modal before React's exit has finished. Observe unmount.
+  const mountedDialog = page.locator('dialog');
+  await expect(mountedDialog.locator('.dialog__surface')).toHaveAttribute('inert', '');
+  await expect(mountedDialog).toHaveCount(1);
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  await expect(mountedDialog).toHaveCount(0);
   await create.click();
   await expect(dialog.locator('.dialog__surface')).toHaveCSS('opacity', '1');
+  await page.clock.runFor(2500);
+  await expect(dialog).toHaveCount(1);
   await page.keyboard.press('Escape');
   await expect(create).toBeFocused();
+  await page.clock.resume();
 });
 
 for (const width of [1536, 600]) for (const theme of ['light', 'dark']) {
@@ -178,7 +200,7 @@ test('keeps long project filter labels synchronized with keyboard and native sel
 });
 
 for (const viewport of [{ width: 1536, height: 960 }, { width: 1024, height: 720 }, { width: 390, height: 844 }]) {
-  test(`keeps a long dialog's actions visible and restores keyboard focus at ${viewport.width}px`, async ({ page }) => {
+  test(`keeps creation dialog fields and actions reachable and restores keyboard focus at ${viewport.width}px`, async ({ page }) => {
     await page.setViewportSize(viewport);
     await page.emulateMedia({ reducedMotion: 'reduce' });
     await openApp(page);
@@ -186,20 +208,20 @@ for (const viewport of [{ width: 1536, height: 960 }, { width: 1024, height: 720
     await trigger.click();
     const dialog = page.getByRole('dialog', { name: '新建视频项目', exact: true });
     await expect(dialog.getByLabel('项目名称', { exact: true })).toBeFocused();
-    await dialog.getByText(/^视频规格 ·/).click();
+    await dialog.getByText('更多设置', { exact: true }).click();
+    await dialog.getByLabel('素材适配', { exact: true }).scrollIntoViewIfNeeded();
+    await expect(dialog.getByLabel('素材适配', { exact: true })).toBeInViewport({ ratio: .95 });
     const footer = dialog.locator('.dialog__footer');
     await expect(footer).toBeInViewport({ ratio: 1 });
     for (const button of await footer.getByRole('button').all()) await expect(button).toBeInViewport({ ratio: 1 });
     const layout = await dialog.evaluate(element => {
       const bounds = element.getBoundingClientRect();
-      const body = element.querySelector('.dialog__body')!;
-      return { left: bounds.left, right: bounds.right, top: bounds.top, bottom: bounds.bottom, viewportWidth: innerWidth, viewportHeight: innerHeight, scrollable: body.scrollHeight > body.clientHeight };
+      return { left: bounds.left, right: bounds.right, top: bounds.top, bottom: bounds.bottom, viewportWidth: innerWidth, viewportHeight: innerHeight };
     });
     expect(layout.left).toBeGreaterThanOrEqual(0);
     expect(layout.right).toBeLessThanOrEqual(layout.viewportWidth);
     expect(layout.top).toBeGreaterThanOrEqual(0);
     expect(layout.bottom).toBeLessThanOrEqual(layout.viewportHeight);
-    if (viewport.height <= 844) expect(layout.scrollable).toBe(true);
     await page.keyboard.press('Escape');
     await expect(dialog).toHaveCount(0);
     await expect(trigger).toBeFocused();

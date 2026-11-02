@@ -1,10 +1,10 @@
 # Windows Electron 交付与恢复验收
 
-本文件描述当前 Electron 路线。此前 Tauri 的安装及跨版本报告属于历史证据，不能作为 Electron 当前版本通过记录；本轮按用户明确要求不实施旧壳数据迁移。macOS 两架构的正式包另见 [macOS 验收](macos-verification.md)。架构与功能门槛见 [Electron 桌面实现与验收](electron-migration.md)。
+支持 Windows 10／11 x64，使用 NSIS 安装器交付 Electron 客户端。macOS 两架构的正式包另见 [macOS 验收](macos-verification.md)。进程、数据和安全边界见 [Electron 桌面架构](electron-desktop.md)。
 
 ## 自动检查
 
-`Desktop verification` 工作流的 Windows job 在隔离 `windows-2025` 运行器执行锁定依赖、类型检查、完整自动测试、浏览器流程、本地 HTTP CLI 恢复、四组实际媒体导出、Electron 构建、独立打包 PDF、真实 Electron 应用和安装卸载验收。Node 与 pnpm 版本由 `.node-version` 和根 `package.json` 固定；Electron 与构建器精确版本在桌面包清单及锁文件中固定。无需 Rust 或系统 WebView。
+`Desktop verification` 工作流的 Windows job 在隔离 `windows-2025` 运行器执行锁定依赖、类型检查、完整自动测试、浏览器流程、本地 HTTP CLI 恢复、四组实际媒体导出、Electron 构建、独立打包 PDF、真实 Electron 应用和安装卸载验收。Node 与 pnpm 版本由 `.node-version` 和根 `package.json` 固定；Electron 与构建器精确版本在桌面包清单及锁文件中固定。
 
 `pnpm prepare:media` 按 `scripts/media-manifest.json` 下载、核对 FFmpeg 来源及 SHA-256。许可、来源和 Node 版本随执行组件归档。Electron 产物位于 `.generated/electron-release`；命令使用 `--publish never`，不发布 Release。
 
@@ -14,14 +14,15 @@
 
 `scripts/install-smoke.ps1` 仅允许在隔离 Windows Actions 账号执行；它拒绝已有 `VideoQuickly-Electron` 数据和验收安装目录。它会：
 
-1. 在含中文／空格目录安装本次 NSIS 包，核对实际 EXE 产品版本。
+1. 在含中文／空格目录安装本次 NSIS 包，核对实际 EXE 产品版本，并记录实际安装包的 SHA-256，收集时与归档的 setup.exe 再次比对。
 2. 使用安装包自带的 Node 创建真实项目、素材和待审检查点。
 3. 重复安装本包，启动已安装的 Electron，验证默认数据目录、媒体组件、真实预加载通信及关闭后执行组件退出。
 4. 继续原待审任务并确认已完成活动复用，实际导出 MP4，再次覆盖安装并复核窗口启动。
 5. 在所有执行器退出后记录 DB、存在的 WAL 和夹具素材的长度／摘要；默认静默卸载后核对内容未变，不打开 SQLite 改变 WAL。
-6. 重装后明确传入 `--delete-app-data` 卸载，核对新 Electron 工作区被移除。交互卸载界面默认不选删除，只有用户明确勾选才删除。
+6. 重装后明确传入 `--delete-electron-workspace` 卸载，核对默认 `%APPDATA%\VideoQuickly-Electron` 工作区被移除。交互卸载界面默认不选删除，只有用户明确勾选才删除。
+7. 在全新隔离账号的两个打包工具名称别名目录及 `%LOCALAPPDATA%\VideoQuickly-Electron` 创建本次专用哨兵，核对默认卸载和明确删除工作区后其长度与 SHA-256 均保持不变；若任何目录已存在则停止，结束只清理本次创建的哨兵目录。
 
-数据选择仅针对新的 Electron 数据目录，不触碰旧 Tauri 目录。系统凭据不写入可提交文件，安装运行夹具不调用真实供应商。
+支持的删除参数仅为 `--delete-electron-workspace`，只针对默认 Roaming 工作区，不使用打包工具会额外清理应用名称别名的通用 `--delete-app-data` 参数，也不删除同名 LocalAppData 目录。系统凭据不写入可提交文件，安装运行夹具不调用真实供应商。
 
 ## 对应提交核对
 
@@ -38,4 +39,4 @@ push 到 `main` 或 PR 自动运行该工作流；`workflow_dispatch` 可补跑�
 | 媒体播放 | 系统播放器正常打开输出，音画字幕完整 | 自动编码／探测不能代替人工观片 |
 | 原生性能 | 12 个独立 1080p 源、200 镜头、300 秒，记录 GPU／驱动／内存／掉帧 | 浏览器 headless 或 macOS 数据不能冒充 Windows GPU 结果 |
 
-本机为 macOS，Windows 原生／安装结果以对应提交的 Windows CI 为准；没有实机或模型时保留相关未验收项。现有数据模型、Schema 迁移、Source／Plan、备份与回执恢复约束继续由 Runtime 的真实测试覆盖，见 [持久化执行](durable-execution.md)。
+Windows 原生与安装结果以对应提交的 Windows CI 和产物报告为准；没有实机或模型时，相应人工与服务验收保持未验收状态。现有数据模型、Schema 迁移、Source／Plan、备份与回执恢复约束继续由 Runtime 的真实测试覆盖，见 [持久化执行](durable-execution.md)。

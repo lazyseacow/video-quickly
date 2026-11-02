@@ -1,6 +1,7 @@
 import { build } from 'esbuild';
 import { fileURLToPath } from 'node:url';
 import { resolve } from 'node:path';
+import { cp } from 'node:fs/promises';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
 await build({
@@ -23,6 +24,7 @@ await build({
     },
   }],
 });
+await cp(resolve(root, 'packages/integrations/src/pdf-process.mjs'), resolve(root, 'packages/runtime/dist/pdf-process.mjs'));
 
 // The desktop shell uses the same file-only logger as the standalone runtime.
 // Bundle its Node entry so production never depends on workspace source paths.

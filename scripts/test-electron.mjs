@@ -11,12 +11,14 @@ import { dirname, isAbsolute, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import { _electron, expect } from '@playwright/test';
+import { findElectronRuntime } from './electron-runtime-process.mjs';
 
 const execute = promisify(execFile);
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const desktop = join(root, 'apps/desktop');
 const fromDesktop = createRequire(join(desktop, 'package.json'));
 const packaged = process.argv.includes('--packaged');
+const compact = process.argv.includes('--compact');
 const artifacts = process.env.VIDEO_QUICKLY_ELECTRON_ARTIFACT_DIR ?? join(root, '.generated/electron-artifacts');
 const reportPath = process.env.VIDEO_QUICKLY_ELECTRON_REPORT ?? join(root, '.generated/electron-results.json');
 const fixture = await mkdtemp(join(tmpdir(), 'vq-electron-native-'));
@@ -24,6 +26,9 @@ const workspace = join(fixture, '中文 workspace');
 const profile = join(fixture, '中文 Chromium profile');
 const checks = {};
 const errors = [];
+const windows = [];
+let nativeTextInputTypes;
+let gettingStartedHelpBounds;
 let application;
 let page;
 let runtimePid;
@@ -35,7 +40,9 @@ const testSecret = `isolated-electron-fixture-${randomUUID()}`;
 let expectedSecret = testSecret;
 const credentialReferences = new Set();
 let credentialRequests = 0;
+let credentialContacts = 0;
 const credentialServer = createServer((request, response) => {
+  credentialContacts++;
   if (request.headers.authorization !== `Bearer ${expectedSecret}`) { response.writeHead(401); response.end(); return; }
   credentialRequests++;
   response.writeHead(200, { 'Content-Type': 'application/json' });
@@ -101,28 +108,169 @@ async function launch() {
   checks.startupReadiness = true;
   assert.equal(new URL(page.url()).protocol, 'video-quickly:');
   assert.equal(new URL(page.url()).hostname, 'app');
+  await inspectWindow();
+  if (!checks.gettingStarted) { await verifyGettingStarted(); await verifyGenericWorkflow(); }
+  else {
+    assert.equal(await page.evaluate(() => localStorage.getItem('vq-onboarding-v1')), 'done');
+    await expect(page.getByRole('dialog', { name: '使用指南', exact: true })).toHaveCount(0);
+  }
   return page;
+}
+async function verifyGenericWorkflow() {
+  const snapshot = await rpc('workspace.snapshot');
+  const project = snapshot.projects.find(item => item.id === 'example-history');
+  assert.ok(project);
+  assert.equal(project.workflow.id, 'general-video');
+  assert.equal(project.workflow.nodes.some(node => node.kind === 'research'), false);
+  assert.equal(project.workflow.stages.length, 4);
+  const guidance = page.getByRole('region', { name: '制作指引', exact: true });
+  await expect(guidance.getByRole('button', { name: /^配置阶段：/ })).toHaveCount(4);
+  await guidance.getByRole('button', { name: '配置阶段：策划与分镜', exact: true }).click();
+  const dialog = page.getByRole('dialog', { name: '策划与分镜', exact: true });
+  for (const label of ['创意简报', '风格与角色', '旁白与分镜']) {
+    await dialog.getByRole('tab', { name: label, exact: true }).click();
+    await expect(dialog.getByLabel(`${label}使用模型`, { exact: true })).toHaveValue('');
+    await dialog.getByLabel(`${label}提示词与补充要求`, { exact: true }).fill(`未提交的${label}配置`);
+  }
+  await dialog.getByRole('tab', { name: '创意简报', exact: true }).click();
+  await expect(dialog.getByLabel('创意简报提示词与补充要求', { exact: true })).toHaveValue('未提交的创意简报配置');
+  await page.screenshot({ path: join(artifacts, 'desktop-workflow-stage.png') });
+  await dialog.getByRole('button', { name: '取消', exact: true }).click();
+  await expect(dialog).toHaveCount(0);
+  assert.deepEqual((await rpc('workspace.snapshot')).projects, snapshot.projects, 'Canceling grouped settings must preserve the project');
+  checks.genericWorkflow = true;
+}
+async function verifyGettingStarted() {
+  const guide = page.getByRole('dialog', { name: '使用指南', exact: true });
+  const heading = guide.getByRole('heading');
+  const highlighted = page.locator('.driver-active-element');
+  async function activeTarget() {
+    await expect(guide).toBeVisible();
+    await expect(guide).toBeInViewport({ ratio: 1 });
+    await expect(highlighted).toHaveCount(1);
+    await expect(highlighted).toBeVisible();
+    await expect(highlighted).toBeInViewport();
+    await expect(highlighted).not.toHaveAttribute('id', 'driver-dummy-element');
+    await expect(highlighted).toHaveAttribute('data-guide', /\S+/);
+    return highlighted.getAttribute('data-guide');
+  }
+  async function nextStep() {
+    const previousTitle = await heading.innerText();
+    await guide.getByRole('button', { name: '下一步', exact: true }).click();
+    await expect(heading).not.toHaveText(previousTitle);
+  }
+  await expect(heading).toHaveText('新建创作项目');
+  assert.equal(await activeTarget(), 'create-project');
+  assert.equal(await page.evaluate(() => localStorage.getItem('vq-onboarding-v1')), null);
+  const before = await rpc('workspace.snapshot');
+  await page.screenshot({ path: join(artifacts, 'desktop-getting-started.png') });
+
+  await highlighted.click();
+  const create = page.getByRole('dialog', { name: '新建视频项目', exact: true });
+  await expect(create).toBeVisible();
+  await expect(guide).toHaveCount(0);
+  await expect(page.locator('.driver-overlay')).toHaveCount(0);
+  await create.getByLabel('项目名称', { exact: true }).fill('取消原生导览中的项目');
+  await create.getByLabel('创意简报', { exact: true }).fill('确认高亮操作打开的表单可以正常输入。');
+  await page.keyboard.press('Escape');
+  await expect(create).toHaveCount(0);
+  await expect(heading).toHaveText('新建创作项目');
+  assert.equal(await activeTarget(), 'create-project');
+  assert.equal(await page.evaluate(() => localStorage.getItem('vq-onboarding-v1')), null);
+
+  let reachedEnd = false, contextCaptured = false;
+  for (let step = 0; step < 20; step++) {
+    const target = await activeTarget();
+    assert.equal(await page.evaluate(() => localStorage.getItem('vq-onboarding-v1')), null);
+    if (!contextCaptured && ['preview', 'timeline'].includes(target)) {
+      await page.screenshot({ path: join(artifacts, 'desktop-getting-started-context.png') });
+      contextCaptured = true;
+    }
+    if (!await guide.getByRole('button', { name: '下一步', exact: true }).count()) { reachedEnd = true; break; }
+    await nextStep();
+  }
+  assert.equal(reachedEnd, true, 'The getting started tour must finish within twenty steps');
+  assert.equal(contextCaptured, true, 'The native tour must highlight a real preview or timeline');
+  assert.equal(await activeTarget(), 'help');
+  await guide.getByRole('button', { name: '完成引导', exact: true }).click();
+  await expect(guide).toHaveCount(0);
+  assert.equal(await page.evaluate(() => localStorage.getItem('vq-onboarding-v1')), 'done');
+
+  await page.reload();
+  await expect(page.locator('.workspace-shell')).toBeVisible({ timeout: 30_000 });
+  await expect.poll(() => rpc('runtime.status'), { timeout: 20_000 }).toMatchObject({ state: 'ready' });
+  await expect(guide).toHaveCount(0);
+  const help = page.getByRole('button', { name: '使用指南', exact: true });
+  await expect(help).toBeVisible();
+  await expect(help).toBeInViewport({ ratio: 1 });
+  gettingStartedHelpBounds = await help.evaluate(element => {
+    const bounds = element.getBoundingClientRect();
+    return { left: bounds.left, top: bounds.top, right: bounds.right, bottom: bounds.bottom, width: bounds.width, height: bounds.height, viewportWidth: innerWidth, viewportHeight: innerHeight };
+  });
+  assert.ok(gettingStartedHelpBounds.left >= 0 && gettingStartedHelpBounds.top >= 0 && gettingStartedHelpBounds.right <= gettingStartedHelpBounds.viewportWidth && gettingStartedHelpBounds.bottom <= gettingStartedHelpBounds.viewportHeight, 'The getting started entry must fit inside the native viewport');
+  await help.click();
+  await expect(heading).toHaveText('新建创作项目');
+  assert.equal(await activeTarget(), 'create-project');
+  let reachedPreview = false;
+  for (let step = 0; step < 20; step++) {
+    if (await activeTarget() === 'preview') { reachedPreview = true; break; }
+    await nextStep();
+  }
+  assert.equal(reachedPreview, true, 'The manual tour must reach playback within twenty steps');
+  const play = highlighted.getByRole('button', { name: '播放预览', exact: true });
+  await expect(play).toBeEnabled({ timeout: 30_000 });
+  await play.click();
+  await expect(heading).toHaveText('安排镜头节奏');
+  assert.equal(await activeTarget(), 'timeline');
+  await expect(page.getByRole('button', { name: '暂停预览', exact: true })).toHaveAttribute('aria-pressed', 'true');
+  const ruler = highlighted.getByRole('slider', { name: '预览播放位置', exact: true });
+  await ruler.scrollIntoViewIfNeeded();
+  const beforeSeek = Number(await ruler.getAttribute('aria-valuenow'));
+  const maximum = Number(await ruler.getAttribute('aria-valuemax'));
+  const rulerBounds = await ruler.boundingBox();
+  assert.ok(maximum > 0 && rulerBounds?.width && rulerBounds.height, 'Interactive native acceptance requires a real seekable timeline');
+  await ruler.click({ position: { x: rulerBounds.width * (beforeSeek > maximum / 2 ? .2 : .8), y: rulerBounds.height / 2 } });
+  await expect.poll(async () => Number(await page.getByRole('slider', { name: '预览播放位置', exact: true }).getAttribute('aria-valuenow'))).not.toBe(beforeSeek);
+  await expect(heading).toHaveText(/^(展开属性面板|编辑属性)$/);
+  assert.ok(['inspector-toggle', 'inspector'].includes(await activeTarget()), 'A completed user seek must advance to the next available property step');
+  await page.keyboard.press('Escape');
+  await expect(guide).toHaveCount(0);
+  await expect(help).toBeFocused();
+  const after = await rpc('workspace.snapshot');
+  for (const field of ['projects', 'models', 'skills', 'runs', 'assets']) assert.deepEqual(after[field], before[field], `Getting started must not change workspace ${field}`);
+  checks.gettingStartedInteractive = true;
+  checks.gettingStarted = true;
 }
 function observePage(next) {
   page = next;
   page.on('pageerror', error => errors.push(error.message));
   page.on('console', message => { if (message.type() === 'error') errors.push(message.text()); });
 }
+async function inspectWindow() {
+  const native = await application.evaluate(({ BrowserWindow, screen }, compact) => {
+    const window = BrowserWindow.getAllWindows()[0];
+    if (compact) window.setContentSize(1024, 720);
+    return { visible: window.isVisible(), bounds: window.getBounds(), contentBounds: window.getContentBounds(), workArea: screen.getDisplayMatching(window.getBounds()).workArea };
+  }, compact);
+  assert.equal(native.visible, true, 'Native acceptance requires a shown Electron window');
+  if (compact) {
+    await expect.poll(() => page.evaluate(() => innerWidth)).toBe(1024);
+    await expect(page.getByRole('button', { name: '展开工作空间导航', exact: true })).toBeVisible();
+  }
+  windows.push({ ...native, viewport: await page.evaluate(() => ({ width: innerWidth, height: innerHeight })) });
+}
+async function openProject(title) {
+  const navigation = page.getByRole('complementary', { name: '工作空间导航', exact: true });
+  const expand = navigation.getByRole('button', { name: '展开工作空间导航', exact: true });
+  if (await expand.isVisible()) await expand.click();
+  await expect(navigation.getByRole('button', { name: '收起工作空间导航', exact: true })).toHaveAttribute('aria-expanded', 'true');
+  const project = navigation.getByRole('button', { name: `打开项目：${title}`, exact: true });
+  await expect(project).toBeVisible();
+  await project.click();
+}
 function rpc(method, params = {}) { return page.evaluate(({ method, params }) => window.videoQuickly.rpc(method, params), { method, params }); }
 async function findRuntime() {
-  const parent = application.process().pid;
-  if (process.platform === 'win32') {
-    const { stdout } = await execute('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', `@(Get-CimInstance Win32_Process -Filter 'ParentProcessId=${parent}' | Where-Object { $_.Name -eq 'node.exe' } | Select-Object ProcessId,CommandLine) | ConvertTo-Json -Compress`]);
-    const parsed = JSON.parse(stdout || '[]');
-    const children = Array.isArray(parsed) ? parsed : [parsed];
-    const candidates = children.filter(value => value.CommandLine?.includes('runtime.mjs') && value.CommandLine.includes(workspace));
-    assert.equal(candidates.length, 1, 'The desktop must own exactly one fixture runtime');
-    return candidates[0].ProcessId;
-  }
-  const { stdout } = await execute('ps', ['-ax', '-o', 'pid=,ppid=,command=']);
-  const candidates = stdout.split('\n').map(line => /^\s*(\d+)\s+(\d+)\s+(.*)$/.exec(line)).filter(value => value && Number(value[2]) === parent && value[3].includes('runtime.mjs') && value[3].includes(workspace));
-  assert.equal(candidates.length, 1, 'The desktop must own exactly one fixture runtime');
-  return Number(candidates[0][1]);
+  return findElectronRuntime(application, workspace, { onDiagnostics: diagnostics => writeFile(join(artifacts, 'runtime-process-diagnostics.json'), JSON.stringify(diagnostics, null, 2)) });
 }
 function processAlive(pid) { try { process.kill(pid, 0); return true; } catch { return false; } }
 async function close(expectedConfirmations) {
@@ -197,18 +345,20 @@ try {
 
   let project = await rpc('project.create', { title: 'Electron 原生功能验收', profile: { width: 320, height: 180, frameRate: { numerator: 30, denominator: 1 }, fitMode: 'contain', previewScale: .5 } });
   project = await rpc('project.update', { projectId: project.id, revision: project.revision, patch: { shots: [{ id: 'native-shot', title: '原生镜头', narration: '', visualPrompt: '', durationUs: 1_000_000 }] } });
-  await expect(page.getByRole('button', { name: `打开项目：${project.title}`, exact: true })).toBeVisible();
-  await page.getByRole('button', { name: `打开项目：${project.title}`, exact: true }).click();
+  await openProject(project.title);
   const title = page.getByLabel('镜头标题', { exact: true });
   await expect(title).toHaveValue('原生镜头');
   await title.fill('Electron 原生编辑');
   await page.getByRole('button', { name: '保存镜头', exact: true }).click();
   await expect.poll(async () => (await projectDocument(project.id)).shots[0].title).toBe('Electron 原生编辑');
-  await page.getByRole('button', { name: '撤销', exact: true }).focus();
+  const undo = page.getByRole('button', { name: '撤销', exact: true }), redo = page.getByRole('button', { name: '重做', exact: true });
+  // A committed RPC may still be awaiting its reply in the renderer. History
+  // shortcuts must wait until the UI leaves that saving state and owns focus.
+  await expect(undo).toBeEnabled(); await undo.focus(); await expect(undo).toBeFocused();
   await page.keyboard.press('ControlOrMeta+z');
   await expect(title).toHaveValue('原生镜头');
   await expect.poll(async () => (await projectDocument(project.id)).shots[0].title).toBe('原生镜头');
-  await page.getByRole('button', { name: '重做', exact: true }).focus();
+  await expect(redo).toBeEnabled(); await redo.focus(); await expect(redo).toBeFocused();
   await page.keyboard.press('ControlOrMeta+Shift+z');
   await expect(title).toHaveValue('Electron 原生编辑');
   await expect.poll(async () => (await projectDocument(project.id)).shots[0].title).toBe('Electron 原生编辑');
@@ -219,9 +369,21 @@ try {
   await page.getByRole('button', { name: '导入画面', exact: true }).click();
   const importDialog = page.getByRole('dialog'), pathInput = importDialog.getByRole('textbox', { name: '图片文件路径', exact: true });
   await pathInput.fill('native-input');
-  await pathInput.press('End'); await pathInput.pressSequentially('-edited');
+  await pathInput.press('End'); await expect(pathInput).toBeFocused();
+  const inputEvents = await pathInput.evaluateHandle(input => {
+    const types = [];
+    input.addEventListener('input', event => { if (event instanceof InputEvent) types.push(event.inputType); });
+    return types;
+  });
+  // Sequential key events need not share one native undo group. Insert one
+  // editing transaction before checking the operating system's shortcuts.
+  await page.keyboard.insertText('-edited');
+  await expect(pathInput).toHaveValue('native-input-edited');
   await pathInput.press('ControlOrMeta+z'); await expect(pathInput).toHaveValue('native-input');
   await pathInput.press(process.platform === 'win32' ? 'Control+y' : 'ControlOrMeta+Shift+z'); await expect(pathInput).toHaveValue('native-input-edited');
+  await expect(pathInput).toBeFocused();
+  nativeTextInputTypes = await inputEvents.jsonValue(); await inputEvents.dispose();
+  assert.deepEqual(nativeTextInputTypes, ['insertText', 'historyUndo', 'historyRedo']);
   await pathInput.press('ControlOrMeta+a');
   assert.deepEqual(await pathInput.evaluate(element => [element.selectionStart, element.selectionEnd]), [0, 'native-input-edited'.length]);
   await importDialog.getByRole('button', { name: '取消', exact: true }).click();
@@ -293,6 +455,45 @@ try {
   await expect.poll(() => page.locator('.preview-panel .scene-preview canvas').evaluate(canvas => { const pixel = canvas.getContext('2d').getImageData(Math.floor(canvas.width / 2), Math.floor(canvas.height / 2), 1, 1).data; return pixel[0] < 50 && pixel[1] < 50 && pixel[2] > 180; }), { timeout: 10_000 }).toBe(true);
   checks.videoPreview = true;
 
+  const beforeCheck = await projectDocument(project.id), contactsBeforeCheck = credentialContacts;
+  await page.getByRole('button', { name: '制作前检查', exact: true }).click();
+  const readinessDialog = page.getByRole('dialog', { name: '制作前检查', exact: true });
+  await expect(readinessDialog.locator('.readiness-summary dd').first()).toHaveText(String(beforeCheck.revision));
+  await expect(readinessDialog).toContainText('供应商连通性和计费状态需单独验证');
+  await readinessDialog.getByRole('button', { name: '关闭', exact: true }).click();
+  const exportNode = beforeCheck.workflow.nodes.find(node => node.kind === 'export');
+  assert.ok(exportNode);
+  const readiness = await rpc('project.readiness', { projectId: project.id, selection: { nodeId: exportNode.id, mode: 'node' } });
+  assert.equal(readiness.ready, true); assert.equal(readiness.serviceCheck, 'not_contacted');
+  assert.equal((await projectDocument(project.id)).revision, beforeCheck.revision); assert.equal(credentialContacts, contactsBeforeCheck);
+  checks.productionReadiness = true;
+
+  const recoveryDirectory = join(fixture, '中文 恢复来源'); await mkdir(recoveryDirectory);
+  await writeFile(join(recoveryDirectory, '重命名的原视频.mp4'), importedBytes);
+  await rm(asset.path);
+  await assert.rejects(page.evaluate(path => window.videoQuickly.assetUrl(path), asset.path));
+  const recovery = await rpc('asset.recovery.start', { projectId: project.id });
+  await expect.poll(async () => (await rpc('asset.recovery.get', { jobId: recovery.id })).job.phase).toBe('awaiting_directory');
+  const missing = (await rpc('asset.recovery.get', { jobId: recovery.id })).items.find(item => item.assetId === asset.id);
+  assert.equal(missing?.status, 'missing');
+  await rpc('asset.recovery.scan', { jobId: recovery.id, directory: recoveryDirectory });
+  await expect.poll(async () => (await rpc('asset.recovery.get', { jobId: recovery.id })).job.phase).toBe('awaiting_confirmation');
+  const matched = (await rpc('asset.recovery.get', { jobId: recovery.id })).items.find(item => item.assetId === asset.id);
+  assert.ok(matched?.candidates.length);
+  const reloadedMedia = page.waitForResponse(response => {
+    const url = new URL(response.url());
+    return url.pathname === '/__asset' && url.searchParams.get('path') === asset.path && url.searchParams.has('availability') && [200, 206].includes(response.status());
+  }, { timeout: 10_000 }).then(response => ({ response }), error => ({ error }));
+  await rpc('asset.recovery.confirm', { jobId: recovery.id, selections: [{ itemId: matched.id, candidateId: matched.candidates[0].id }] });
+  await expect.poll(async () => (await rpc('asset.recovery.get', { jobId: recovery.id })).job.phase).toBe('succeeded');
+  const mediaReload = await reloadedMedia;
+  if ('error' in mediaReload) throw mediaReload.error;
+  assert.deepEqual(await readFile(asset.path), importedBytes);
+  const restored = (await rpc('project.get', { projectId: project.id })).assets.find(value => value.id === asset.id);
+  for (const field of ['id', 'path', 'version', 'size', 'sha256']) assert.equal(restored[field], asset[field]);
+  assert.equal((await projectDocument(project.id)).revision, beforeCheck.revision);
+  checks.assetRecovery = true;
+
   const exported = await rpc('render.export', { projectId: project.id });
   await expect.poll(async () => {
     const detail = await rpc('run.inspect', { runId: exported.runId });
@@ -346,9 +547,10 @@ try {
       else await execute(executablePath(), packaged ? [] : [desktop], { env: environment, timeout: 20_000 });
       observePage(await opened);
       await expect(page.locator('.workspace-shell')).toBeVisible();
+      await inspectWindow();
       await expect.poll(() => rpc('runtime.status')).toMatchObject({ state: 'ready', generation: retainedGeneration });
       assert.equal(await findRuntime(), retainedPid, `${activation} must reuse exactly one runtime`);
-      await page.getByRole('button', { name: `打开项目：${project.title}`, exact: true }).click();
+      await openProject(project.title);
       await expect(page.getByLabel('旁白', { exact: true })).toHaveValue('Electron 重启后恢复的未保存草稿');
     }
     checks.macWindowReopen = true;
@@ -358,7 +560,7 @@ try {
   await close(1);
   checks.confirmedQuit = true;
   await launch(); runtimePid = await findRuntime();
-  await page.getByRole('button', { name: `打开项目：${project.title}`, exact: true }).click();
+  await openProject(project.title);
   await expect(page.getByLabel('旁白', { exact: true })).toHaveValue('Electron 重启后恢复的未保存草稿');
   await expect(page.getByText('已恢复未保存的本地草稿，含撤销与重做历史。')).toBeVisible();
   checks.restartRecovery = true;
@@ -389,16 +591,18 @@ try {
   }
   checks.structuredLogs = true;
   await mkdir(dirname(reportPath), { recursive: true });
-  await writeFile(reportPath, JSON.stringify({ status: 'passed', platform: process.platform, architecture: process.arch, packaged, distributionScope, relocatedExecutable: Boolean(process.env.VIDEO_QUICKLY_ELECTRON_EXECUTABLE), electron: actualElectronVersion, checks,
+  await writeFile(reportPath, JSON.stringify({ status: 'passed', platform: process.platform, architecture: process.arch, packaged, compact, windows, distributionScope, relocatedExecutable: Boolean(process.env.VIDEO_QUICKLY_ELECTRON_EXECUTABLE), electron: actualElectronVersion, checks,
+    nativeTextInputTypes,
+    gettingStartedHelpBounds,
     nativeDialogs: 'file/directory/save selection, cancellation and close decisions substituted; OS dialog UI requires manual verification',
     nativeShell: 'reveal invocation substituted; Finder/Explorer UI requires manual verification',
-    screenshots: ['desktop-editor.png', 'desktop-restored-draft.png'],
+    screenshots: ['desktop-getting-started.png', 'desktop-getting-started-context.png', 'desktop-workflow-stage.png', 'desktop-editor.png', 'desktop-restored-draft.png'],
   }, null, 2));
   console.log('Electron 原生窗口、真实 IPC/Node、编辑历史、媒体 Range/导出、失联重连和重启草稿验收通过。');
 } catch (error) {
   await page?.screenshot({ path: join(artifacts, 'failure.png') }).catch(() => {});
   await mkdir(dirname(reportPath), { recursive: true });
-  await writeFile(reportPath, JSON.stringify({ status: 'failed', platform: process.platform, packaged, distributionScope, checks, errors, failure: error instanceof Error ? error.message : String(error) }, null, 2));
+  await writeFile(reportPath, JSON.stringify({ status: 'failed', platform: process.platform, packaged, compact, windows, distributionScope, checks, errors, failure: error instanceof Error ? error.message : String(error) }, null, 2));
   throw error;
 } finally {
   if (credentialModel && application) await rpc('model.delete', { modelId: credentialModel.id }).catch(() => {});

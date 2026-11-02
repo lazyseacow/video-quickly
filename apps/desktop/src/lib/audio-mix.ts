@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { audioLevelWindowSchema, audioMixJobSchema, audioMixPrepareResultSchema, usesVideoAudio, type AssetRecord, type AudioLevelWindow, type AudioMixJob, type PreparedAudioMix, type ProjectDocument } from '@video-quickly/contracts';
 import { audioMixProjection } from '@video-quickly/video/audio-projection';
 import { rpc } from './client';
+import { useAssetAvailabilityKey } from './asset-availability';
 
 export class AudioMixRevisionChangedError extends Error {
   readonly expectedRevision: number;
@@ -111,30 +112,35 @@ export function usePreparedProjectMix(project: ProjectDocument, assets: readonly
   }, [project, assets]);
   const latest = useRef({ project, projection: projection.key, deferPreparation }); latest.current = { project, projection: projection.key, deferPreparation };
   const durationUs = project.shots.reduce((sum, shot) => sum + shot.durationUs, 0);
+  const sourceIds = useMemo(() => [...new Set([
+    ...project.shots.flatMap(shot => [shot.audioAssetId, usesVideoAudio(shot) ? shot.videoAssetId : undefined]),
+    ...(project.musicClips ?? []).filter(clip => clip.startUs < durationUs).map(clip => clip.assetId),
+  ].filter((id): id is string => Boolean(id)))], [project.shots, project.musicClips, durationUs]);
+  const availability = useAssetAvailabilityKey(sourceIds);
   const audible = project.shots.some(shot => Boolean(shot.audioAssetId) || usesVideoAudio(shot)) || Boolean(project.musicClips?.some(clip => clip.startUs < durationUs));
   const active = enabled && project.shots.length > 0 && audible;
   const [attempt, setAttempt] = useState(0), retry = useCallback(() => setAttempt(value => value + 1), []);
-  const [state, setState] = useState<{ projection: string; attempt: number; status: 'pending' | 'ready' | 'error'; mix?: PreparedAudioMix; error?: string }>();
+  const [state, setState] = useState<{ projection: string; attempt: number; availability: string; status: 'pending' | 'ready' | 'error'; mix?: PreparedAudioMix; error?: string }>();
   useEffect(() => {
     // A project write can advance the server revision before its reply reaches this editor.
     // Keep an unchanged ready mix, but schedule new dependencies only after that write settles.
     if (!active || !projection.key || deferPreparation) return;
-    if (state?.projection === projection.key && state.status !== 'pending' && state.attempt === attempt) return;
+    if (state?.projection === projection.key && state.status !== 'pending' && state.attempt === attempt && (state.status === 'ready' || state.availability === availability)) return;
     const key = projection.key, controller = new AbortController();
-    setState({ projection: key, attempt, status: 'pending' });
+    setState({ projection: key, attempt, availability, status: 'pending' });
     const timer = setTimeout(() => {
       void (async () => {
         try {
           const mix = await prepareLatestAudioMixPreview(() => latest.current, key, controller.signal);
-          if (mix && !controller.signal.aborted && latest.current.projection === key) setState({ projection: key, attempt, status: 'ready', mix });
+          if (mix && !controller.signal.aborted && latest.current.projection === key) setState({ projection: key, attempt, availability, status: 'ready', mix });
         } catch (error) {
           if (controller.signal.aborted || latest.current.projection !== key) return;
-          setState({ projection: key, attempt, status: 'error', error: error instanceof Error ? error.message : String(error) });
+          setState({ projection: key, attempt, availability, status: 'error', error: error instanceof Error ? error.message : String(error) });
         }
       })();
     }, 200);
     return () => { clearTimeout(timer); controller.abort(); };
-  }, [projection.key, active, attempt, deferPreparation]);
+  }, [projection.key, active, attempt, deferPreparation, availability]);
   if (!active) return { status: 'idle', retry };
   if (projection.error) return { status: 'error', error: projection.error, retry };
   if (!state || state.projection !== projection.key) return { status: 'pending', retry };

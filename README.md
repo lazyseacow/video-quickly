@@ -2,7 +2,9 @@
 
 ## 项目介绍
 
-Video Quickly 是本地视频创作工作台，覆盖创意简报、资料整理、分镜剪辑、配音字幕、审阅和导出。支持连接 AI 模型辅助创作，也可导入已有素材编辑。
+Video Quickly 是面向通用视频制作的本地创作工作台，覆盖策划分镜、素材配音、剪辑动画、审阅和导出。支持连接 AI 模型辅助创作，也可导入已有素材编辑。
+
+新项目采用四个制作阶段：**策划与分镜 → 素材与配音 → 剪辑与动画 → 审阅与导出**。每个阶段集中配置相关任务的模型与提示词，一次保存；创作方案和最终小样各保留一次人工审阅。运行时仍按任务依赖执行，支持分别查看产物、定位错误和恢复制作。已有项目保留其保存的流程。
 
 ## 核心功能
 
@@ -15,10 +17,10 @@ Video Quickly 是本地视频创作工作台，覆盖创意简报、资料整理
 
 ## 安装运行
 
-准备 Node.js 24 和 pnpm 10，具体版本以仓库配置为准。桌面外壳使用 Electron，自带 Chromium，无需 Rust 或系统 WebView。以下命令均在项目根目录执行。
+准备 Node.js 24 和 pnpm 10，具体版本以仓库配置为准。桌面客户端使用 Electron 和随附 Chromium，通过独立 Node 执行器管理项目、生成与媒体处理。以下命令均在项目根目录执行。
 
 ```sh
-pnpm install
+pnpm install --frozen-lockfile
 ```
 
 ### Windows 10／11 x64
@@ -69,7 +71,16 @@ macOS ZIP 未签名，最低系统版本为 13.5；可运行 `node scripts/verif
 
 浏览器回归使用 `pnpm test:e2e`，默认端口为 1421。多个工作目录同时验证时，可通过 `VIDEO_QUICKLY_PORT` 指定不同端口；各次运行的数据目录独立。
 
-Electron 使用独立的 `VideoQuickly-Electron` 数据目录；本轮按开发阶段要求不迁移旧 Tauri 数据，旧目录保持原样。详见 [Electron 架构与验收](docs/electron-migration.md)。
+## 数据与文档
+
+Windows 默认工作区为 `%APPDATA%\VideoQuickly-Electron`，macOS 为 `~/Library/Application Support/VideoQuickly-Electron`。Chromium 配置与编辑草稿位于工作区的 `electron-session`；系统凭据保存在操作系统凭据库。
+
+- [Electron 架构与验收](docs/electron-desktop.md)
+- [功能现状与开发边界](docs/development-plan.md)
+- [读取、编辑与恢复契约](docs/workspace-editing.md)
+- [持久化执行契约](docs/durable-execution.md)
+- [Windows 验收](docs/windows-verification.md)与 [macOS 验收](docs/macos-verification.md)
+- [外部服务与性能验收](docs/release-validation.md)
 
 ## 日志与排查
 

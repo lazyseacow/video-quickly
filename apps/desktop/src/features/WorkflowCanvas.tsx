@@ -1,12 +1,13 @@
 import { primaryModifier } from '../lib/desktop';
 import { memo, useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
-import { Background, Controls, Handle, Panel, Position, ReactFlow, SelectionMode, addEdge, applyEdgeChanges, applyNodeChanges, type AriaLabelConfig, type Connection, type Edge, type IsValidConnection, type Node, type NodeProps, type NodeTypes, type OnEdgesChange, type OnInit, type OnNodesChange, type OnSelectionChangeFunc, type ReactFlowInstance } from '@xyflow/react';
-import { BookOpen, Check, GitBranch, Image, Layers, Mic, Plus, Sparkles, Trash2, Save } from 'lucide-react';
-import { nodeKindSchema, type ModelProfile, type WorkflowDefinition, type WorkflowNode } from '@video-quickly/contracts';
+import { Background, ControlButton, Controls, Handle, Panel, Position, ReactFlow, SelectionMode, addEdge, applyEdgeChanges, applyNodeChanges, type AriaLabelConfig, type Connection, type Edge, type IsValidConnection, type Node, type NodeProps, type NodeTypes, type OnEdgesChange, type OnInit, type OnNodesChange, type OnSelectionChangeFunc, type ReactFlowInstance } from '@xyflow/react';
+import { BookOpen, Check, GitBranch, Image, Layers, Maximize, Mic, Plus, Sparkles, Trash2, Save } from 'lucide-react';
+import { nodeKindSchema, resolveWorkflowStages, type ModelProfile, type ResolvedWorkflowStage, type WorkflowDefinition, type WorkflowNode } from '@video-quickly/contracts';
 import { Button, Field, IconButton, Notice, Select } from '../components/Primitives';
 import ToolBindings from '../components/ToolBindings';
 import WorkflowComposition, { SubflowInputBindings } from '../components/WorkflowComposition';
 import { sameWorkflow } from '../lib/project-edits';
+import { beginGuideAction } from '../lib/guide-actions';
 import { matchingStepModels, stepGuidance, stepModelLabel } from '../lib/workflow-guidance';
 import WorkflowStepHelp from '../components/WorkflowStepHelp';
 import './workflow-canvas.css';
@@ -39,8 +40,10 @@ interface Props {
   workflow: WorkflowDefinition; models: ModelProfile[]; dirty: boolean; saving: boolean; conflicted: boolean;
   onChange: (workflow: WorkflowDefinition, label: string, group?: string) => void;
   onEndGroup: () => void; onSave: () => Promise<boolean>; onHistory: (direction: 'undo' | 'redo') => void;
+  onConfigure?: (node: WorkflowNode) => void;
+  onConfigureStage?: (stage: ResolvedWorkflowStage) => void;
 }
-export default function WorkflowCanvas({ workflow, models, dirty, saving, conflicted, onChange, onEndGroup, onSave, onHistory }: Props) {
+export default function WorkflowCanvas({ workflow, models, dirty, saving, conflicted, onChange, onEndGroup, onSave, onHistory, onConfigure, onConfigureStage }: Props) {
   const [nodes, setNodes] = useState<FlowNode[]>(() => flowNodes(workflow));
   const [edges, setEdges] = useState<Edge[]>(() => flowEdges(workflow));
   const [selectedId, setSelectedId] = useState<string>();
@@ -49,8 +52,24 @@ export default function WorkflowCanvas({ workflow, models, dirty, saving, confli
   const canvas = useRef<ReactFlowInstance<FlowNode> | null>(null);
   const container = useRef<HTMLDivElement>(null);
   const initializeCanvas = useCallback<OnInit<FlowNode>>(instance => { canvas.current = instance; }, []);
-  const focusNode = useCallback((_: React.MouseEvent, node: FlowNode) => {
-    void canvas.current?.fitView({ nodes: [{ id: node.id }], padding: .8, minZoom: .7, maxZoom: 1, duration: 0 });
+  const fitCanvas = useCallback(() => {
+    const instance = canvas.current;
+    if (!instance) return;
+    const visibleNodes = instance.getNodes().filter(node => {
+      const measured = instance.getInternalNode(node.id)?.measured;
+      return !node.hidden && measured?.width && measured.height;
+    });
+    if (!visibleNodes.length) return;
+    // These nodes are already measured. fitView queues another node update and
+    // frame, which can arrive after a new pointer gesture and overwrite its pan.
+    // Keep the default Controls padding and the instance's zoom limits.
+    void instance.fitBounds(instance.getNodesBounds(visibleNodes), { padding: .1, duration: 0 });
+  }, []);
+  const focusNode = useCallback(async (_: React.MouseEvent, node: FlowNode) => {
+    const instance = canvas.current;
+    if (!instance) return;
+    const completed = beginGuideAction('workflow-selected');
+    if (await instance.fitView({ nodes: [{ id: node.id }], padding: .8, minZoom: .7, maxZoom: 1, duration: 0 })) completed();
   }, []);
   useEffect(() => {
     const element = container.current; if (!element) return;
@@ -83,6 +102,7 @@ export default function WorkflowCanvas({ workflow, models, dirty, saving, confli
     workflowRef.current = next; onChange(next, label, group);
   }, [onChange]);
   const selected = nodes.find(node => node.id === selectedId)?.data.node;
+  const selectedStage = selected && workflow.stages?.length ? resolveWorkflowStages(workflow).find(stage => stage.nodeIds.includes(selected.id)) : undefined;
   const stepModels = selected ? matchingStepModels(selected, models) : [];
   const updateSelected = useCallback((patch: Partial<WorkflowNode>) => {
     const next = nodesRef.current.map(node => node.id === selectedId ? { ...node, ariaLabel: `${patch.label ?? node.data.node.label}，${typeLabels[patch.kind ?? node.data.node.kind]}`, data: { node: { ...node.data.node, ...patch } } } : node);
@@ -148,7 +168,7 @@ export default function WorkflowCanvas({ workflow, models, dirty, saving, confli
     if (!saved) setError(sameWorkflow(captured, workflowRef.current) ? '流程未保存，编辑内容已保留。请修正后重试。' : '保存期间有新修改，继续保存即可。');
     return saved;
   }
-  return <div className="flow-layout" onKeyUpCapture={event => { if (event.key.startsWith('Arrow')) onEndGroup(); }} onKeyDownCapture={event => {
+  return <div data-guide="workflow" className="flow-layout" onKeyUpCapture={event => { if (event.key.startsWith('Arrow')) onEndGroup(); }} onKeyDownCapture={event => {
     if ((event.ctrlKey || event.metaKey) && event.code === 'KeyS') { event.preventDefault(); event.stopPropagation(); void save(); }
     if ((event.ctrlKey || event.metaKey) && ['z', 'y'].includes(event.key.toLowerCase())) {
       const target = event.target;
@@ -158,7 +178,7 @@ export default function WorkflowCanvas({ workflow, models, dirty, saving, confli
   }}>
     <div className="flow-container" ref={container}><div className="flow-viewport">
       <ReactFlow<FlowNode> nodes={nodes} edges={edges} nodeTypes={nodeTypes} onInit={initializeCanvas} onNodeDoubleClick={focusNode} onNodeDragStart={onEndGroup} onNodeDragStop={onEndGroup} zoomOnDoubleClick={false} onNodesChange={changeNodes} onEdgesChange={changeEdges} onConnect={connect} onSelectionChange={changeSelection} onBeforeDelete={beforeDelete} isValidConnection={validConnection} fitView fitViewOptions={fitViewOptions} minZoom={.2} maxZoom={1.5} deleteKeyCode={deleteKeys} ariaLabelConfig={ariaLabels} panOnScroll selectionMode={SelectionMode.Partial} panOnDrag={panButtons} zoomOnScroll={false} zoomActivationKeyCode={primaryModifier().key} multiSelectionKeyCode={primaryModifier().key} connectionRadius={24} nodeDragThreshold={3}>
-        <Background gap={22} size={1} color="var(--border)" /><Controls showInteractive={false} />
+        <Background gap={22} size={1} color="var(--border)" /><Controls showInteractive={false} showFitView={false}><ControlButton className="react-flow__controls-fitview" title={ariaLabels['controls.fitView.ariaLabel']} aria-label={ariaLabels['controls.fitView.ariaLabel']} onClick={fitCanvas}><Maximize size={16} aria-hidden="true" /></ControlButton></Controls>
         <Panel position="top-left" className="flow-gestures">拖动空白处平移 · {primaryModifier().label} + 滚轮缩放<span>Shift + 拖动框选 · 双击步骤聚焦</span></Panel>
       </ReactFlow>
     </div></div>
@@ -167,6 +187,8 @@ export default function WorkflowCanvas({ workflow, models, dirty, saving, confli
       {error && <Notice kind="error">{error}</Notice>}
       <WorkflowComposition workflow={workflow} models={models} onChange={onChange} />
       {selected ? <>
+        {onConfigure && <Button className="button-full" onClick={() => onConfigure(selected)}>配置与执行步骤</Button>}
+        {selectedStage && onConfigureStage && <Button className="button-full" onClick={() => onConfigureStage(selectedStage)}>配置所属阶段</Button>}
         <WorkflowStepHelp node={selected} workflow={workflow} />
         <Field label="步骤名称"><input value={selected.label} onChange={event => updateSelected({ label: event.target.value })} /></Field>
         <Field label="步骤类型"><Select value={selected.kind} onChange={event => updateSelected({ kind: nodeKindSchema.parse(event.target.value) })}>{Object.entries(typeLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</Select></Field>
