@@ -1,4 +1,4 @@
-import { Captions, ChevronRight, Layers, Music2, Save, SlidersHorizontal } from 'lucide-react';
+import { Captions, ChevronRight, Layers, Music2, Save } from 'lucide-react';
 import { Button } from './Primitives';
 import './project-settings-panel.css';
 
@@ -7,7 +7,6 @@ const projectActions = {
   series: { label: '应用模板', name: '应用系列模板', icon: Layers },
   saveSeries: { label: '保存为模板', name: '保存当前系列为模板', icon: Save },
   music: { label: '背景音乐', name: '背景音乐', icon: Music2 },
-  mix: { label: '混音', name: '项目混音设置', icon: SlidersHorizontal },
 };
 export type ProjectSettingsAction = keyof typeof projectActions;
 

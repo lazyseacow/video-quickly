@@ -66,7 +66,7 @@ function RecordedStageRun({ runId, stageId, nodeIds, configurableNodeIds = nodeI
     {error && <Notice kind="error">{error}</Notice>}
     {!data && !inspection.error && <p role="status">正在读取本次制作…</p>}
     {data && <>
-      <header className="stage-run-view__summary"><div><h3>本次制作</h3><p>{new Date(data.run.createdAt).toLocaleString('zh-CN')}</p></div><Status value={data.run.status} /></header>
+      <header className="stage-run-view__summary"><time dateTime={data.run.createdAt}>{new Date(data.run.createdAt).toLocaleString('zh-CN')}</time><Status value={data.run.status} /></header>
       {!data.snapshotAvailable && <Notice>这次历史制作没有保存流程快照，无法确认本阶段的步骤与配置。</Notice>}
       {data.snapshotAvailable && !data.checkpointAvailable && <Notice>这次制作没有可验证的步骤进度，产物按实际保存情况展示。</Notice>}
       {stageChanged && <Notice>当前阶段设置已变更，这里按本次制作保存的阶段展示步骤。</Notice>}

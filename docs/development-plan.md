@@ -11,7 +11,7 @@
 | 桌面与交付 | Windows x64、macOS arm64／x64；沙箱预加载、独立 Node 执行器、系统凭据、原生路径选择、媒体协议、进程退出与重连；独立媒体组件和安装数据保留 | [Electron 架构](electron-desktop.md)、[Windows](windows-verification.md)、[macOS](macos-verification.md) |
 | 大项目读取 | 轻量工作区摘要、条件项目详情、服务端分页、后台刷新合并、迟到结果隔离；镜头与轨道按行复用，保持最新操作及全片引用上下文；只为可见缩略图读取真实帧，限制并发与缓存 | [读取与编辑契约](workspace-editing.md#读取契约)、`benchmark:workspace`、`editor-row-rendering.spec.ts`、`media-performance.spec.ts` |
 | 编辑与恢复 | 统一增量命令、连续输入合并、最多 50 步撤销／重做、IndexedDB 草稿；保存前意图落盘、保存期间新输入、外部修订冲突与重启恢复 | [编辑与恢复](workspace-editing.md#编辑与恢复)、`project-editing.spec.ts`、`draft-save-ordering.spec.ts` |
-| 剪辑与声音 | 多选、成组移动／复制／删除、分割、入出点、吸附；真实波形、字幕编辑、配音识别、音乐、增益／降噪、响度及旁白压低音乐；视频原声独立增益与静音 | [剪辑与混音](workspace-editing.md#镜头剪辑区间)、`clip-editing.spec.ts`、`audio-processing.spec.ts` |
+| 剪辑与声音 | 多选、成组移动／复制／删除、分割、入出点、吸附；真实波形、字幕编辑、背景音乐及视频原声开关 | [剪辑与声音](workspace-editing.md#镜头剪辑区间)、`clip-editing.spec.ts`、`video-original-audio.spec.ts` |
 | 文稿剪辑 | 来源匹配的逐词／句段时间戳、手选区间、真实停顿检测；Source／Plan 同步裁切画面、音频和字幕，恢复当前源窗口 | [文稿与备份](workspace-editing.md#文稿剪辑与源窗口恢复)、`transcript-editing.spec.ts` |
 | 模型与候选 | 文本、图片、视频和音频连接；协议参数与高级 JSON；单镜头生成候选、对比、按字段应用、修订与素材保护 | [角色、参数与费用](workspace-editing.md#角色模型参数与费用)、`model-protocols.spec.ts`、`shot-regeneration.spec.ts` |
 | 制作前检查 | 已保存项目的模型、步骤、角色、素材及引擎检查，错误聚合与修复入口；可取消、显式重新检查，独立标识供应商尚未联系 | [制作前检查](workspace-editing.md#制作前检查)、`project-readiness.spec.ts` |

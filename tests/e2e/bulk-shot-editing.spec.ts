@@ -33,13 +33,14 @@ async function select(page: Page, indices: number[]) {
   for (let index = 0; index < indices.length; index++) await outline(page).locator('.outline-shot').nth(indices[index]).click({ modifiers: index ? [selectionModifier] : [] });
 }
 async function selection(page: Page, indices: number[]) {
+  await expect(page.locator('.track--audio:not(.track--music)')).toHaveCount(0);
   await expect(outline(page).locator('.outline-selection')).toContainText(`已选 ${indices.length} 个镜头`);
   await expect(timeline(page).locator('.timeline-selection-count')).toHaveText(`已选 ${indices.length} 个镜头`);
   for (let index = 0; index < 6; index++) {
     const pressed = String(indices.includes(index));
     await expect(outline(page).locator('.outline-shot').nth(index)).toHaveAttribute('aria-pressed', pressed);
     await expect(videoClip(page, index)).toHaveAttribute('aria-pressed', pressed);
-    await expect(page.locator('.track--audio:not(.track--music) .timeline-clip__select').nth(index)).toHaveAttribute('aria-pressed', pressed);
+
   }
 }
 async function openBulk(page: Page) { await timeline(page).getByRole('button', { name: '批量编辑镜头', exact: true }).click(); const dialog = page.getByRole('dialog', { name: '批量编辑镜头', exact: true }); await expect(dialog).toBeVisible(); return dialog; }
@@ -90,12 +91,12 @@ async function gateFirstSave(page: Page, reject: boolean) {
   return { entered, release, writes: () => writes };
 }
 
-test('shares modifier and range selection across outline, picture and narration while preserving native input shortcuts', async ({ page, request }, info) => {
+test('shares modifier and range selection across outline and picture while preserving native input shortcuts', async ({ page, request }, info) => {
   const errors = observe(page), project = await fixture(request, '多选与键盘范围验收'); await openProject(page, project.title);
   await outline(page).locator('.outline-shot').nth(1).click(); await outline(page).locator('.outline-shot').nth(3).click({ modifiers: [selectionModifier] }); await selection(page, [1, 3]);
   await outline(page).locator('.outline-shot').nth(1).click(); await selection(page, [1, 3]); await expect(page.getByLabel('镜头标题', { exact: true })).toHaveValue('多选镜头 2');
   await outline(page).locator('.outline-shot').nth(4).click({ modifiers: ['Shift'] }); await selection(page, [3, 4]);
-  await page.locator('.track--audio:not(.track--music) .timeline-clip__select').nth(0).click({ modifiers: [selectionModifier] }); await selection(page, [0, 3, 4]); await expect(page.locator('.timeline-drop-marker')).toHaveCount(0);
+  await outline(page).locator('.outline-shot').nth(0).click({ modifiers: [selectionModifier] }); await selection(page, [0, 3, 4]); await expect(page.locator('.timeline-drop-marker')).toHaveCount(0);
   const title = page.getByLabel('镜头标题', { exact: true }); await title.press('Control+a'); await selection(page, [0, 3, 4]); await title.press(`${selectionModifier}+a`); expect(await title.evaluate((element: HTMLInputElement) => [element.selectionStart, element.selectionEnd])).toEqual([0, '多选镜头 1'.length]); await title.press('Escape'); await selection(page, [0, 3, 4]);
   await expect(timeline(page).getByRole('button', { name: '在播放头处分割镜头', exact: true })).toBeDisabled(); await expect(page.getByRole('slider', { name: '镜头入点', exact: true })).toHaveCount(0);
   await videoClip(page, 0).focus(); await page.keyboard.press('Control+a'); await selection(page, [0, 1, 2, 3, 4, 5]); await page.keyboard.press('Escape'); await selection(page, []); await expect(title).toHaveValue('多选镜头 1');
@@ -120,7 +121,7 @@ test('copies appearance from another shot while retaining each target topic, evi
 
 test('moves, duplicates, removes and drags whole selections with cancelable pointer capture', async ({ page, request }) => {
   const errors = observe(page), project = await fixture(request, '镜头组排序与取消验收'); await openProject(page, project.title); await select(page, [1, 3]); const track = page.locator('.track--video .track-clips'), bounds = await track.boundingBox(); if (!bounds) throw new Error('时间轴不可见'); let clip = videoClip(page, 1);
-  const pointerId = await startDrag(page, clip, bounds.width / 4); const transformed = await page.locator('.timeline-clip.selected').evaluateAll(elements => elements.map(element => (element as HTMLElement).style.transform)); expect(transformed).toHaveLength(4); expect(new Set(transformed).size).toBe(1); expect(transformed[0]).toContain('translateX'); await clip.dispatchEvent('pointercancel', { pointerId, pointerType: 'mouse', isPrimary: true }); expect(await clip.evaluate((element, id) => element.hasPointerCapture(id), pointerId)).toBe(false); await page.mouse.up(); await expect(page.locator('.timeline-drop-marker')).toHaveCount(0); expect(await saved(request, project.id)).toEqual(project);
+  const pointerId = await startDrag(page, clip, bounds.width / 4); const transformed = await page.locator('.timeline-clip.selected').evaluateAll(elements => elements.map(element => (element as HTMLElement).style.transform)); expect(transformed).toHaveLength(2); expect(new Set(transformed).size).toBe(1); expect(transformed[0]).toContain('translateX'); await clip.dispatchEvent('pointercancel', { pointerId, pointerType: 'mouse', isPrimary: true }); expect(await clip.evaluate((element, id) => element.hasPointerCapture(id), pointerId)).toBe(false); await page.mouse.up(); await expect(page.locator('.timeline-drop-marker')).toHaveCount(0); expect(await saved(request, project.id)).toEqual(project);
   await startDrag(page, clip, bounds.width / 4); await page.keyboard.press('Escape'); await page.mouse.up(); await selection(page, []); await expect(page.locator('.timeline-drop-marker')).toHaveCount(0); expect(await saved(request, project.id)).toEqual(project);
   await select(page, [1, 3]); clip = videoClip(page, 1); await startDrag(page, clip, bounds.width / 2); await page.mouse.up(); await expect.poll(async () => (await saved(request, project.id)).shots.map(shot => shot.id)).toEqual(['bulk-0', 'bulk-2', 'bulk-4', 'bulk-5', 'bulk-1', 'bulk-3']); expect((await saved(request, project.id)).revision).toBe(project.revision + 1); await undo(page); await expect.poll(async () => (await saved(request, project.id)).shots).toEqual(project.shots);
   await select(page, [1, 3]); await timeline(page).getByRole('button', { name: '将镜头前移', exact: true }).click(); await expect.poll(async () => (await saved(request, project.id)).shots.map(shot => shot.id)).toEqual(['bulk-1', 'bulk-0', 'bulk-3', 'bulk-2', 'bulk-4', 'bulk-5']); await undo(page); await expect.poll(async () => (await saved(request, project.id)).shots).toEqual(project.shots);
@@ -155,7 +156,7 @@ test('keeps the active shot aligned with the remaining selection after an extern
   const errors = observe(page), project = await fixture(request, '外部移除主选镜头区间验收'); await openProject(page, project.title); await select(page, [1, 3]); await expect(page.getByLabel('镜头标题', { exact: true })).toHaveValue('多选镜头 4');
   const remote = await rpc<ProjectDocument>(request, 'project.update', { projectId: project.id, revision: project.revision, patch: { shots: project.shots.filter(shot => shot.id !== 'bulk-3') } });
   await expect(page.locator('.project-heading-copy')).toHaveAttribute('data-revision', String(remote.revision)); await expect(outline(page).locator('.outline-selection')).toContainText('已选 1 个镜头'); await expect(page.getByLabel('镜头标题', { exact: true })).toHaveValue('多选镜头 2'); await expect(outline(page).locator('.outline-shot')).toHaveCount(5);
-  for (let index = 0; index < 5; index++) { const pressed = String(index === 1); await expect(outline(page).locator('.outline-shot').nth(index)).toHaveAttribute('aria-pressed', pressed); await expect(videoClip(page, index)).toHaveAttribute('aria-pressed', pressed); await expect(page.locator('.track--audio:not(.track--music) .timeline-clip__select').nth(index)).toHaveAttribute('aria-pressed', pressed); }
+  for (let index = 0; index < 5; index++) { const pressed = String(index === 1); await expect(outline(page).locator('.outline-shot').nth(index)).toHaveAttribute('aria-pressed', pressed); await expect(videoClip(page, index)).toHaveAttribute('aria-pressed', pressed); }
   await page.getByLabel('素材入点（秒）', { exact: true }).fill('0.8'); await page.getByLabel('素材出点（秒）', { exact: true }).fill('2.3'); const apply = page.getByRole('button', { name: '应用入出点', exact: true }); await expect(apply).toBeEnabled(); await apply.click();
   await expect.poll(async () => (await saved(request, project.id)).shots.find(shot => shot.id === 'bulk-1')?.durationUs).toBe(1_500_000); const next = await saved(request, project.id); expect(next.shots[0]).toEqual(remote.shots[0]); expect(next.shots[1]).toEqual({ ...remote.shots[1], sourceInUs: 800_000, sceneInUs: 800_000, durationUs: 1_500_000 }); expect(next.shots.slice(2)).toEqual(remote.shots.slice(2));
   await undo(page); await expect.poll(async () => (await saved(request, project.id)).shots).toEqual(remote.shots); await page.getByRole('button', { name: '重做', exact: true }).click(); await expect.poll(async () => (await saved(request, project.id)).shots).toEqual(next.shots); await healthy(page, errors);

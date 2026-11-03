@@ -76,7 +76,7 @@ export function StepDetail({ inspection, step, version, onOpenOutput, defaultTab
   const help = stepGuidance(detail?.node ?? { kind: step.kind, config: {} });
   const tabs = [{ id: 'output', label: '步骤产物' }, { id: 'status', label: '制作信息' }] as const;
   return <section className="run-inspector__detail" aria-label={`步骤详情：${step.label}`}>
-    <header className="run-inspector__step-heading"><div><h3>{step.label}</h3><p>{step.description || help.purpose}</p></div><StepStatus step={step} /></header>
+    <header className="run-inspector__step-heading"><div><h3>{step.label}</h3>{tab === 'status' && <p>{step.description || help.purpose}</p>}</div>{tab === 'status' && <StepStatus step={step} />}</header>
     <div className="run-inspector__tabs" role="tablist" aria-label="步骤详情视图">{tabs.map(item => <button key={item.id} id={`${id}-${item.id}`} type="button" role="tab" aria-selected={tab === item.id} aria-controls={`${id}-panel`} tabIndex={tab === item.id ? 0 : -1} onClick={() => setTab(item.id)} onKeyDown={event => {
       const index = tabs.findIndex(item => item.id === tab);
       const next = event.key === 'ArrowRight' ? (index + 1) % tabs.length : event.key === 'ArrowLeft' ? (index + tabs.length - 1) % tabs.length : event.key === 'Home' ? 0 : event.key === 'End' ? tabs.length - 1 : undefined;
@@ -116,7 +116,6 @@ function StepOutputs({ inspection, step, version, onOpenOutput }: { inspection: 
   const applicable = ['script', 'style', 'assets', 'animation', 'research'].includes(step.kind);
   const open = (runId: string) => onOpenOutput({ projectId: inspection.run.projectId, runId, nodeId: step.id, kind: step.kind });
   return <>{output.error && <Notice kind="error">{output.error}<Button aria-label="重试读取产物" onClick={output.refresh}>重试</Button></Notice>}
-    <div className="run-inspector__output-actions"><Button aria-expanded={historyOpen} onClick={() => setHistoryOpen(value => !value)}><History size={16} />历史产物</Button>{applicable && output.data?.available && <Button aria-label="在项目中查看与应用" variant="primary" onClick={() => open(inspection.run.id)}>在工作台使用</Button>}</div>
     {historyOpen && <OutputVersions runId={inspection.run.id} nodeId={step.id} comparisonId={comparisonId} onCompare={setComparisonId} />}
     {!output.data && !output.error && <p role="status">正在读取步骤产物…</p>}
     {output.data && !output.data.available && <p>这个步骤尚未保存产物。</p>}
@@ -124,6 +123,7 @@ function StepOutputs({ inspection, step, version, onOpenOutput }: { inspection: 
       {output.data?.available && <section aria-label="本次产物">{comparisonId && <h4>本次产物</h4>}<StepResultView value={output.data.value} kind={step.kind} /></section>}
       {comparisonId && <HistoricalOutput key={comparisonId} runId={comparisonId} nodeId={step.id} kind={step.kind} applicable={applicable} onOpen={() => open(comparisonId)} onClose={() => setComparisonId('')} />}
     </div>
+    <div className="run-inspector__output-actions"><Button variant="ghost" aria-expanded={historyOpen} onClick={() => setHistoryOpen(value => !value)}><History size={16} />历史产物</Button>{applicable && output.data?.available && <Button aria-label="在项目中查看与应用" onClick={() => open(inspection.run.id)}>在工作台使用</Button>}</div>
   </>;
 }
 

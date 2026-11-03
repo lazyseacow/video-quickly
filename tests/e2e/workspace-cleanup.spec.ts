@@ -49,8 +49,8 @@ test('keeps recovery feedback and editing actions on a compact light workspace w
   await expect(page.locator('.track-header--video svg, .track-header--video .track-header__type')).toHaveCount(0);
   await expect(page.locator('.track-header--video strong')).toHaveText('画面');
   await expect(page.locator('.track-header--video small')).toHaveText('1 个片段');
-  await expect(page.locator('.track-header--audio .track-header__type')).toContainText('A1'); await expect(heading.getByText(/^(历史手绘|视频项目|·)$/)).toHaveCount(0);
-  for (const name of ['画面与素材', '运镜', '配音']) await expect(page.getByRole('heading', { level: 3, name, exact: true })).toBeVisible();
+  await expect(page.locator('.track-header--audio')).toHaveCount(0); await expect(heading.getByText(/^(历史手绘|视频项目|·)$/)).toHaveCount(0);
+  for (const name of ['画面与素材', '运镜', '字幕与文稿']) await expect(page.getByRole('heading', { level: 3, name, exact: true })).toBeVisible();
   let rejected = false;
   await page.route('**/__desktop_rpc', async route => { if (!rejected && route.request().postDataJSON()?.method === 'project.update') { rejected = true; await route.abort('failed'); return; } await route.continue(); });
   await page.getByLabel('镜头标题', { exact: true }).fill('连接恢复后应保留的镜头草稿'); await page.getByRole('button', { name: '保存镜头', exact: true }).click(); await expect(page.getByText('本地执行组件已断开', { exact: true })).toBeVisible(); await expect(page.locator('.runtime-connection-notice')).toContainText('重新连接'); await expect(page.getByLabel('镜头标题', { exact: true })).toHaveValue('连接恢复后应保留的镜头草稿'); await expect(page.locator('.unsaved-dot')).toHaveText('未保存');

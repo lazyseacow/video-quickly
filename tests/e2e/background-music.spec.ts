@@ -107,7 +107,7 @@ test('edits real music through the UI, restores history and follows project time
   const saved = await savedProject(request, project.id);
   expect(saved.revision).toBe(project.revision + 1);
   expect(saved.musicClips?.[0]).toMatchObject({ assetId: asset.id, startUs: 1_000_000, sourceInUs: 500_000, durationUs: 4_000_000, gainDb: -6, fadeInUs: 1_000_000, fadeOutUs: 1_000_000, loop: true });
-  await expect(page.locator('.timeline-track-headers')).toContainText('A2');
+  await expect(page.locator('.timeline-track-headers')).toContainText('A1');
   const waveform = page.locator('.track--music .audio-waveform');
   await expect(waveform).toHaveAttribute('data-status', 'ready');
   await expect(waveform).toHaveAttribute('data-source-in-us', '500000');

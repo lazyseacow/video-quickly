@@ -45,7 +45,7 @@ export default memo(function Timeline({ project, assets, shots, timeline, select
   const singleSelected = selected.size === 1 && Boolean(selectedId && selected.has(selectedId));
   const audioCount = shots.filter(shot => shot.audioAssetId).length;
   const originalCount = shots.filter(usesVideoAudio).length;
-  const tracks = originalCount ? ['video', 'audio', 'original'] as const : ['video', 'audio'] as const;
+  const tracks = ['video' as const, ...(audioCount ? ['audio' as const] : []), ...(originalCount ? ['original' as const] : [])];
   const assetById = useMemo(() => new Map(assets.map(asset => [asset.id, asset])), [assets]);
   const musicClips = project.musicClips ?? [];
   const trimmingDisabled = editingDisabled || !singleSelected || Boolean(shots[selectedIndex]?.locked) || sourceStatus === 'loading' || sourceStatus === 'error';
@@ -184,11 +184,11 @@ export default memo(function Timeline({ project, assets, shots, timeline, select
     </div>
     <div className="timeline-body">
       <div className="timeline-track-headers" aria-label="轨道信息">
-        <div className="track-header-ruler"><span>轨道</span><span>{2 + (musicClips.length ? 1 : 0) + (originalCount ? 1 : 0)}</span></div>
+        <div className="track-header-ruler"><span>轨道</span><span>{tracks.length + (musicClips.length ? 1 : 0)}</span></div>
         <div className="track-header track-header--video"><strong>画面</strong><small>{shots.length} 个片段</small></div>
-        <div className="track-header track-header--audio"><span className="track-header__type"><Mic size={14} /><b>A1</b></span><strong>旁白</strong><small>{audioCount ? `${audioCount} 段音频` : '待添加'}</small></div>
-        {originalCount > 0 && <div className="track-header track-header--audio"><span className="track-header__type"><Volume2 size={14} /><b>A2</b></span><strong>原声</strong><small>{originalCount} 段</small></div>}
-        {musicClips.length > 0 && <div className="track-header track-header--audio"><span className="track-header__type"><Music2 size={14} /><b>{originalCount ? 'A3' : 'A2'}</b></span><strong>背景音乐</strong><small>{musicClips.length} 段音频</small></div>}
+        {audioCount > 0 && <div className="track-header track-header--audio"><span className="track-header__type"><Mic size={14} /><b>A1</b></span><strong>旁白</strong><small>{audioCount} 段音频</small></div>}
+        {originalCount > 0 && <div className="track-header track-header--audio"><span className="track-header__type"><Volume2 size={14} /><b>A{audioCount ? 2 : 1}</b></span><strong>原声</strong><small>{originalCount} 段</small></div>}
+        {musicClips.length > 0 && <div className="track-header track-header--audio"><span className="track-header__type"><Music2 size={14} /><b>A{1 + Number(audioCount > 0) + Number(originalCount > 0)}</b></span><strong>背景音乐</strong><small>{musicClips.length} 段音频</small></div>}
       </div>
       <div className="timeline-scroll" ref={scroller}><div className="timeline-content" style={{ width: `${zoom * 100}%` }}>
         <TimelinePosition clock={clock} rate={rate} totalUs={totalUs} zoom={zoom} />
