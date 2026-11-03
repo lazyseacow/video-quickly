@@ -12,13 +12,5 @@
 .caption-editor__cue input { font-variant-numeric: tabular-nums; }
 .caption-editor__cue .field:last-child { margin-bottom: 0; }
 .caption-editor__empty { grid-column: 1 / -1; padding: var(--space-6) var(--space-3); color: var(--text-secondary); text-align: center; }
-.caption-editor__recognition { margin-top: var(--space-5); padding-top: var(--space-4); border-top: 1px solid var(--border); }
-.caption-editor__recognition-controls { display: flex; flex-wrap: wrap; align-items: end; gap: var(--space-3); }
-.caption-editor__recognition-controls > .field { flex: 1; min-width: 180px; margin-bottom: 0; }
-.caption-editor__recognition-controls > .button { flex-shrink: 0; }
-.caption-editor__recognition > .tiny-meta { margin-top: var(--space-3); }
-.caption-editor__candidate { margin-top: var(--space-3); padding: var(--space-3); border: 1px solid var(--border); border-radius: var(--radius-small); background: var(--surface-raised); }
-.caption-editor__candidate > p { margin: 0 0 var(--space-2); font-size: var(--text-size-caption); line-height: var(--line-height-label); overflow-wrap: anywhere; }
-.caption-editor__candidate > p + p { color: var(--text-secondary); }
 .caption-editor .dialog__body > .notice:last-child { margin-top: var(--space-4); }
-@media (max-width: 640px) { .caption-editor__cues { grid-template-columns: minmax(0, 1fr); } .caption-editor__recognition-controls > .button { width: 100%; } }
+@media (max-width: 640px) { .caption-editor__cues { grid-template-columns: minmax(0, 1fr); } }

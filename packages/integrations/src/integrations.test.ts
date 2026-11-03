@@ -1,9 +1,10 @@
+import { fixtureNativeVideo } from '../../../tests/fixtures/native-video';
 import { createServer, type RequestListener, type Server } from 'node:http';
 import { mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { basename, join, relative } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { createHistoryWorkflow, DEFAULT_VIDEO_PROFILE, type ModelProfile, type ProjectDocument } from '@video-quickly/contracts';
+import { createNativeVideoWorkflow, DEFAULT_VIDEO_PROFILE, type ModelProfile, type ProjectDocument } from '@video-quickly/contracts';
 import { createActivityExecutor, type MediaActivityContext } from './index';
 
 const temporaryDirectories: string[] = [];
@@ -20,10 +21,10 @@ async function contextFor(baseUrl: string): Promise<MediaActivityContext> {
   const project: ProjectDocument = {
     id: 'project-example', title: '示例', brief: '检查素材恢复', revision: 1, templateId: 'history-handdrawn',
     profile: DEFAULT_VIDEO_PROFILE, claims: [], style: '手绘', createdAt: now, updatedAt: now, archived: false,
-    workflow: createHistoryWorkflow(), shots: [{ id: 'shot-1', title: '镜头一', narration: '示例旁白', visualPrompt: '树木和纸张', durationUs: 1_000_000, claimIds: [], locked: false, animation: { panX: 0, panY: 0, zoom: 1, transition: 'cut' } }],
+    workflow: createNativeVideoWorkflow(), shots: [{ id: 'shot-1', title: '镜头一', narration: '示例旁白', visualPrompt: '树木和纸张', durationUs: 1_000_000, claimIds: [], locked: false, animation: { panX: 0, panY: 0, zoom: 1, transition: 'cut' } }],
   };
-  const model: ModelProfile = { id: 'model-1', name: '本地接口夹具', provider: 'openai-compatible', baseUrl, model: 'fixture-image', capabilities: ['image'], parameters: {}, enabled: true, hasSecret: false, createdAt: now, updatedAt: now };
-  return { project, node: project.workflow.nodes.find(node => node.kind === 'assets')!, runId: 'run-1', operationId: 'run-1:assets', signal: new AbortController().signal, dataDirectory, assets: [], model, persistRemoteTask() {} };
+  const model: ModelProfile = { id: 'model-1', name: '本地接口夹具', provider: 'openai-compatible', baseUrl, model: 'fixture-image', connectionType: 'image', capabilities: ['image'], parameters: {}, enabled: true, hasSecret: false, createdAt: now, updatedAt: now };
+  return { project, node: { ...project.workflow.nodes.find(node => node.kind === 'assets')!, config: { operation: 'prepare-references', referenceMode: 'generate' } }, runId: 'run-1', operationId: 'run-1:assets', signal: new AbortController().signal, dataDirectory, assets: [], model, persistRemoteTask() {} };
 }
 
 async function listen(handler: RequestListener): Promise<string> {
@@ -36,20 +37,37 @@ async function listen(handler: RequestListener): Promise<string> {
 }
 
 describe('media generation request receipts', () => {
-  it('routes native Doubao speech through durable media receipts and restores completed audio without resubmission', async () => {
-    let calls = 0;
-    const baseUrl = await listen((request, response) => {
-      calls++; expect(request.url).toBe('/tts/unidirectional'); request.resume();
-      response.end(`${JSON.stringify({ code: 0, data: Buffer.from('fixture-audio').toString('base64') })}\n${JSON.stringify({ code: 20000000, usage: { text_words: 4 } })}`);
-    });
-    const context = await contextFor(baseUrl); context.node = context.project.workflow.nodes.find(node => node.kind === 'voice')!;
-    context.model = { ...context.model!, provider: 'volcengine-tts', connectionType: 'audio', model: 'seed-tts-2.0', capabilities: ['tts'], parameters: { voice: 'fixture-speaker' } };
-    const executor = createActivityExecutor();
-    await expect(executor(context)).rejects.toThrow('API Key'); expect(calls).toBe(0);
-    context.apiKey = 'fixture-key'; const result = await executor(context);
-    expect(result).toMatchObject({ source: 'model', assets: [{ kind: 'audio', shotId: 'shot-1' }], providerUsage: { source: 'provider', characters: 4 } });
-    context.apiKey = undefined; expect(await executor(context)).toEqual(result); expect(calls).toBe(1);
+  it('prepares the local timeline and rejects a generation model on the editing step', async () => {
+    const context = await contextFor('http://127.0.0.1:1');
+    context.node = context.project.workflow.nodes.find(node => node.config.operation === 'prepare-edit')!;
+    await expect(createActivityExecutor()(context)).rejects.toThrow('剪辑准备使用本地时间轴');
+    context.model = undefined;
+    await expect(createActivityExecutor()(context)).resolves.toMatchObject({ source: 'local', shots: 1 });
   });
+  it.each(['openai-compatible', 'custom-http', 'comfyui'] as const)('passes the configured visual prompt to %s with the current shot output', async provider => {
+    const requests: Record<string, unknown>[] = [];
+    const baseUrl = await listen(async (request, response) => {
+      response.setHeader('Content-Type', 'application/json');
+      if (request.method === 'POST') {
+        let body = ''; for await (const chunk of request) body += chunk;
+        requests.push(JSON.parse(body));
+        response.end(JSON.stringify(provider === 'comfyui' ? { prompt_id: 'comfy-task' } : provider === 'custom-http' ? { image: 'aW1hZ2UtZml4dHVyZQ==' } : { data: [{ b64_json: 'aW1hZ2UtZml4dHVyZQ==' }] }));
+      } else if (request.url === '/history/comfy-task') response.end(JSON.stringify({ 'comfy-task': { outputs: { output: { images: [{ filename: 'generated.png', subfolder: '', type: 'output' }] } } } }));
+      else response.end('image-fixture');
+    });
+    const context = await contextFor(baseUrl); context.node = { ...context.node, prompt: '保留右上角留白。', config: { operation: 'regenerate', shotId: 'shot-1', instruction: '保留右上角留白。' } };
+    context.model = { ...context.model!, provider, parameters: provider === 'custom-http' ? { requestPath: 'generate', requestTemplate: { prompt: '{{prompt}}', narration: '{{narration}}', instruction: '{{instruction}}' }, resultBase64Path: 'image' } : provider === 'comfyui' ? { workflow: { '6': { inputs: { text: '' } } }, inputMapping: { prompt: '6.text' } } : {} };
+    await createActivityExecutor()(context);
+    const prompt = provider === 'comfyui' ? (requests[0].prompt as { '6': { inputs: { text: string } } })['6'].inputs.text : requests[0].prompt;
+    expect(prompt).toBe('手绘\n树木和纸张\n保留右上角留白。');
+    if (provider === 'custom-http') expect(requests[0]).toMatchObject({ narration: '示例旁白', instruction: '保留右上角留白。' });
+  });
+
+
+
+
+
+
 
   it('restores only the download after a generation request has completed', async () => {
     let submits = 0, downloads = 0;
@@ -160,22 +178,24 @@ describe('media generation request receipts', () => {
   it('downloads a completed compatible video through its authenticated content endpoint', async () => {
     let contentAuthorization: string | undefined;
     let contentType: string | undefined;
-    const baseUrl = await listen((request, response) => {
+    let generationRequest = '';
+    const baseUrl = await listen(async (request, response) => {
       if (request.url === '/videos' && request.method === 'POST') {
-        contentType = request.headers['content-type']; request.resume();
+        contentType = request.headers['content-type']; for await (const chunk of request) generationRequest += chunk;
         response.setHeader('Content-Type', 'application/json'); response.end(JSON.stringify({ id: 'video-fixture', status: 'queued' }));
       } else if (request.url === '/videos/video-fixture') {
         response.setHeader('Content-Type', 'application/json'); response.end(JSON.stringify({ id: 'video-fixture', status: 'completed' }));
       } else if (request.url === '/videos/video-fixture/content') {
-        contentAuthorization = request.headers.authorization; response.setHeader('Content-Type', 'video/mp4'); response.end('media-contract-fixture');
+        contentAuthorization = request.headers.authorization; response.setHeader('Content-Type', 'video/mp4'); response.end(fixtureNativeVideo());
       } else { response.writeHead(404); response.end(); }
     });
     const context = await contextFor(baseUrl);
-    context.node = context.project.workflow.nodes.find(node => node.kind === 'animation')!;
-    context.model!.capabilities = ['video'];
+    context.node = { ...context.project.workflow.nodes.find(node => node.kind === 'animation')!, prompt: '镜头缓慢推进，保持人物一致。' };
+    context.model!.capabilities = ['video']; context.model!.connectionType = 'video';
     context.apiKey = 'fixture-only-secret';
     const result = await createActivityExecutor()(context);
     expect(contentType).toMatch(/^multipart\/form-data;/);
+    expect(generationRequest.replaceAll('\r\n', '\n')).toContain('手绘\n树木和纸张\n镜头缓慢推进，保持人物一致。');
     expect(contentAuthorization).toBe('Bearer fixture-only-secret');
     expect(result).toMatchObject({ assets: [{ kind: 'video', shotId: 'shot-1' }] });
   });

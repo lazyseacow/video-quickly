@@ -18,17 +18,13 @@ async function fixture(request: APIRequestContext) {
   const address = server.address(); if (!address || typeof address === 'string') throw new Error('夹具服务没有启动');
   try {
     let project = await rpc<ProjectDocument>(request, 'project.create', { title: `步骤详情验收 ${randomUUID().slice(0, 8)}`, brief: '冻结的创作输入' });
-    const model = await rpc<{ id: string }>(request, 'model.save', { model: { name: '执行时的模型', model: 'inspector-fixture', provider: 'openai-compatible', baseUrl: `http://127.0.0.1:${address.port}/v1`, capabilities: ['text'] }, secret: 'inspector-fixture-secret' });
-    project = await rpc<ProjectDocument>(request, 'workflow.save', { projectId: project.id, workflow: { id: 'inspector-flow', version: 1, name: '验收流程', nodes: [{ id: 'style', kind: 'style', label: '冻结风格步骤', description: '固定本次创作的视觉风格', modelId: model.id, prompt: '按照创作输入生成风格' }, { id: 'review', kind: 'review', label: '人工核对', requiresReview: true }], edges: [{ id: 'style-review', source: 'style', target: 'review' }] } });
+    const model = await rpc<{ id: string }>(request, 'model.save', { model: { name: '执行时的模型', model: 'inspector-fixture', provider: 'openai-compatible', baseUrl: `http://127.0.0.1:${address.port}/v1`, connectionType: 'text', capabilities: ['text'] }, secret: 'inspector-fixture-secret' });
+    project = await rpc<ProjectDocument>(request, 'workflow.save', { projectId: project.id, workflow: { id: 'inspector-flow', version: 1, name: '验收流程', production: { mode: 'native-video', referenceMode: 'none', soundPrompt: '', subtitleMode: 'off' }, nodes: [{ id: 'style', kind: 'style', label: '冻结风格步骤', description: '固定本次创作的视觉风格', modelId: model.id, prompt: '按照创作输入生成风格' }, { id: 'review', kind: 'review', label: '自动检查', requiresReview: true }], edges: [{ id: 'style-review', source: 'style', target: 'review' }] } });
     async function start() {
-      const run = await rpc<{ id: string }>(request, 'run.start', { projectId: project.id });
-      await expect.poll(async () => (await rpc<RunSummary>(request, 'run.get', { runId: run.id })).status).toBe('waiting_review'); return run;
+      const run = await rpc<{ id: string }>(request, 'run.start', { projectId: project.id, nodeId: 'style' });
+      await expect.poll(async () => (await rpc<RunSummary>(request, 'run.get', { runId: run.id })).status).toBe('succeeded'); return run;
     }
-    async function approve(runId: string) {
-      await rpc(request, 'run.review', { runId, approved: true });
-      await expect.poll(async () => (await rpc<RunSummary>(request, 'run.get', { runId })).status).toBe('succeeded');
-    }
-    return { project, model, start, approve, server, calls: () => calls };
+    return { project, model, start, server, calls: () => calls };
   } catch (error) { await close(server); throw error; }
 }
 async function open(page: Page, runId: string) {
@@ -46,15 +42,17 @@ test.afterEach(async ({ page }) => { expect(pageErrors).toEqual([]); expect(cons
 test('shows visual results without execution inputs, compares versions, exports diagnostics and applies a selected version with undo', async ({ page, request }, info) => {
   const source = await fixture(request);
   try {
-    const older = await source.start(); await source.approve(older.id); const newer = await source.start();
+    const older = await source.start(); const newer = await source.start();
     const calls: Array<{ method: string; kind?: string }> = [];
     page.on('request', request => { if (request.url().endsWith('/__desktop_rpc')) { const input = request.postDataJSON(); calls.push({ method: input.method, kind: input.params?.kind }); } });
     const dialog = await open(page, newer.id);
-    await expect(dialog.getByRole('navigation', { name: '冻结流程步骤' })).toContainText('等待审阅');
+    await expect(dialog.getByRole('navigation', { name: '冻结流程步骤' })).toContainText('已完成');
+    await dialog.getByRole('tab', { name: '制作信息', exact: true }).click();
+    await expect(dialog).not.toContainText('人工审阅');
     expect(calls.filter(call => call.kind === 'input')).toEqual([]); expect(calls.map(call => call.method)).not.toContain('run.step.versions'); expect(calls.map(call => call.method)).not.toContain('run.events');
     await expect(dialog.getByRole('tab', { name: '制作信息', exact: true })).toHaveAttribute('aria-selected', 'true');
-    await expect(dialog.getByRole('button', { name: '在项目中查看与应用', exact: true })).toHaveCount(0);
     await dialog.getByRole('navigation', { name: '冻结流程步骤' }).getByRole('button', { name: /冻结风格步骤/ }).click();
+    await dialog.getByRole('tab', { name: '步骤产物', exact: true }).click();
     await expect(dialog.getByRole('tab', { name: '步骤产物', exact: true })).toHaveAttribute('aria-selected', 'true');
     await expect(dialog.getByRole('tab', { name: '执行输入', exact: true })).toHaveCount(0);
     await expect(dialog).not.toContainText('完整产物数据');
@@ -80,7 +78,7 @@ test('shows visual results without execution inputs, compares versions, exports 
     const downloadPromise = page.waitForEvent('download'); await dialog.getByRole('link', { name: '下载诊断文件', exact: true }).click();
     const path = info.outputPath('run-diagnostic.json.gz'); await (await downloadPromise).saveAs(path);
     const diagnostic = runDiagnosticBundleSchema.parse(JSON.parse(gunzipSync(await readFile(path)).toString()));
-    expect(diagnostic.inspection.run.id).toBe(newer.id); expect(diagnostic.steps).toHaveLength(2);
+    expect(diagnostic.inspection.run.id).toBe(newer.id); expect(diagnostic.steps).toHaveLength(1);
     expect(JSON.stringify(diagnostic)).toContain('冻结的创作输入'); expect(JSON.stringify(diagnostic)).toContain('按照创作输入生成风格');
     await dialog.locator('.run-inspector__tools > summary').click();
     expect(JSON.stringify(diagnostic)).not.toContain('inspector-fixture-secret'); expect(source.calls()).toBe(2);
@@ -102,7 +100,7 @@ test('keeps late historical reads scoped and retains manual edits when an older 
   const source = await fixture(request); let release!: () => void;
   const gate = new Promise<void>(resolve => { release = resolve; });
   try {
-    const first = await source.start(); await source.approve(first.id); const second = await source.start(); await source.approve(second.id); const current = await source.start();
+    const first = await source.start(); const second = await source.start(); const current = await source.start();
     const dialog = await open(page, current.id);
     await dialog.getByRole('navigation', { name: '冻结流程步骤' }).getByRole('button', { name: /冻结风格步骤/ }).click();
     await dialog.getByRole('tab', { name: '步骤产物', exact: true }).click(); await dialog.getByRole('button', { name: '历史产物', exact: true }).click();
@@ -167,7 +165,7 @@ test('recovers a failed detail read explicitly and keeps tabs, tokens and action
 test('keeps new live steps out of older runs and uses the frozen kind for a renamed step output', async ({ page, request }) => {
   const source = await fixture(request);
   try {
-    const run = await source.start(); await source.approve(run.id);
+    const run = await source.start();
     const live = await rpc<ProjectDocument>(request, 'project.update', { projectId: source.project.id, revision: source.project.revision, patch: { workflow: { ...source.project.workflow, nodes: [...source.project.workflow.nodes.map(node => node.id === 'style' ? { ...node, label: '改名后的步骤', kind: 'brief' } : node), { id: 'new-step', kind: 'brief', label: '后加步骤', position: { x: 640, y: 0 } }] } } });
     await page.goto('/'); await openProjectFromList(page, source.project.title);
     await expect(page.getByLabel('项目名称', { exact: true })).toHaveValue(source.project.title);

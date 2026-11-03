@@ -4,7 +4,7 @@ import { once } from 'node:events';
 import { mkdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { basename, dirname, join } from 'node:path';
 import { createCanvas, loadImage, GlobalFonts } from '@napi-rs/canvas';
-import { effectiveCaptionStyle, firstFrameAtUs, videoProfileSchema, type AssetRecord, type PreparedAudioMix, type ProjectDocument, type Shot } from '@video-quickly/contracts';
+import { captionsEnabled, effectiveCaptionStyle, firstFrameAtUs, videoProfileSchema, type AssetRecord, type PreparedAudioMix, type ProjectDocument, type Shot } from '@video-quickly/contracts';
 import { buildTimeline, captionGeometry, captionPages, createSubtitleCues, createTimedSrt, drawSceneFrame, frameTimeUs, type SceneFrame } from './index.js';
 import { clipEditSource, resolveShotSpans } from './clip-edits.js';
 import { audioMixProjectionKey, prepareAudioMix, resolveAudioProject } from './audio-mix.js';
@@ -179,9 +179,9 @@ export async function renderProject(options: RenderOptions): Promise<RenderResul
     captionContext.font=layout.font;
     return captionPages(text,value=>captionContext.measureText(value).width,layout.textWidth,layout.maxLines);
   };
-  const subtitles=createTimedSrt(shots,pages,project);
+  const subtitles=captionsEnabled(project)?createTimedSrt(shots,pages,project):'';
   await writeFile(subtitlePath,subtitles,'utf8');
-  const styledCaptions=shots.some(shot=>Boolean(shot.captionStyle));
+  const styledCaptions=captionsEnabled(project)&&shots.some(shot=>Boolean(shot.captionStyle));
   if(styledCaptions){
     const timeline=buildTimeline(shots);let index=0;
     const cues=createSubtitleCues(shots,pages,project).map(cue=>{

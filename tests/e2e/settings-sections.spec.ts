@@ -1,6 +1,6 @@
 import { expect, test, type APIRequestContext } from '@playwright/test';
 import type { ModelProfile, SeriesTemplate } from '@video-quickly/contracts';
-import { addModelConnection, settingField, showSettingsPreview } from './settings';
+import { selectModel, addModelConnection, settingField, showSettingsPreview } from './settings';
 import { modelCatalog } from './model-catalog';
 
 async function rpc<T>(request: APIRequestContext, method: string, params: unknown = {}): Promise<T> {
@@ -55,7 +55,8 @@ test('opens the required model section on submit and retains parameter changes',
     await page.goto('/'); await page.getByRole('button', { name: '模型连接', exact: true }).click(); const dialog = await addModelConnection(page);
     await expect(dialog.getByRole('button', { name: '保存连接', exact: true })).toBeDisabled();
     await (await settingField(dialog, '模型平台')).selectOption('custom'); await (await settingField(dialog, '服务地址')).fill(catalog.baseUrl);
-    await (await settingField(dialog, '模型 ID')).selectOption('fixture-model');
+    await dialog.getByRole('button', { name: '获取模型列表', exact: true }).click();
+    await selectModel(dialog, 'fixture-model');
     await dialog.getByRole('tab', { name: '文本参数', exact: true }).click(); await dialog.getByLabel('文本温度', { exact: true }).fill('0.55');
     await dialog.getByRole('button', { name: '保存连接', exact: true }).click();
     await expect(dialog.getByRole('tab', { name: '基本连接', exact: true })).toHaveAttribute('aria-selected', 'true');

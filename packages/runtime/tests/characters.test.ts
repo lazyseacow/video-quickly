@@ -2,7 +2,7 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { createHistoryWorkflow, DEFAULT_VIDEO_PROFILE, projectSchema, type AssetRecord, type CharacterProfile, type RecordPage } from '@video-quickly/contracts';
+import { createNativeVideoWorkflow, DEFAULT_VIDEO_PROFILE, projectSchema, type AssetRecord, type CharacterProfile, type RecordPage } from '@video-quickly/contracts';
 import { createCharacterLibrary } from '../src/characters.js';
 import { DocumentStore, openDatabase } from '../src/database.js';
 
@@ -78,7 +78,7 @@ describe('shared character library', () => {
   it('reads only selected characters and refuses archiving any character referenced by a project shot', async () => {
     const { store, library, image, save } = await fixture();
     const selected = save('本镜头角色'), unused = save('未选择角色', []);
-    const project = projectSchema.parse({ id: 'project', title: '角色引用', brief: '', revision: 1, profile: DEFAULT_VIDEO_PROFILE, workflow: createHistoryWorkflow(), createdAt: '', updatedAt: '', shots: [{ id: 's', title: '镜头', narration: '', visualPrompt: '', durationUs: 1_000_000, characterIds: [selected.id] }] });
+    const project = projectSchema.parse({ id: 'project', title: '角色引用', brief: '', revision: 1, profile: DEFAULT_VIDEO_PROFILE, workflow: createNativeVideoWorkflow(), createdAt: '', updatedAt: '', shots: [{ id: 's', title: '镜头', narration: '', visualPrompt: '', durationUs: 1_000_000, characterIds: [selected.id] }] });
     store.put('project', project.id, project);
     expect(library.profilesFor(project)).toEqual({ characters: [selected], assets: [image] });
     expect(() => library.dispatch('character.archive', { characterId: selected.id, revision: selected.revision })).toThrow('仍有项目镜头');

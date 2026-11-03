@@ -1,4 +1,4 @@
-import { Annotation, Command, END, interrupt, START, StateGraph } from '@langchain/langgraph';
+import { Annotation, END, START, StateGraph } from '@langchain/langgraph';
 import { SqliteSaver } from '@langchain/langgraph-checkpoint-sqlite';
 import type { JsonValue, WorkflowDefinition, WorkflowNode } from '@video-quickly/contracts';
 import type Database from 'better-sqlite3';
@@ -7,14 +7,11 @@ const ExecutionState = Annotation.Root({
   completed: Annotation<string[]>({ reducer: (_, value) => value, default: () => [] }),
   skipped: Annotation<string[]>({ reducer: (_, value) => value, default: () => [] }),
   currentNodeId: Annotation<string>({ reducer: (_, value) => value, default: () => '' }),
-  pendingReview: Annotation<boolean>({ reducer: (_, value) => value, default: () => false }),
   outputs: Annotation<Record<string, JsonValue>>({ reducer: (previous, next) => ({ ...previous, ...next }), default: () => ({}) }),
 });
 
 export interface GraphCallbacks {
   execute(node: WorkflowNode): Promise<JsonValue>;
-  waiting(node: WorkflowNode): void;
-  reviewed(node: WorkflowNode, approved: boolean): void;
   advanced(node: WorkflowNode): void;
 }
 
@@ -55,23 +52,10 @@ export function createExecutionGraph(database: Database.Database, workflow: Work
       if (!node) throw new Error('步骤不存在。');
       const result = await callbacks.execute(node);
       callbacks.advanced(node);
-      return { outputs: { [node.id]: result }, completed: node.requiresReview ? state.completed : [...state.completed, node.id], pendingReview: node.requiresReview };
-    })
-    .addNode('review', state => {
-      const node = byId.get(state.currentNodeId);
-      if (!node) throw new Error('待审阅步骤不存在。');
-      callbacks.waiting(node);
-      const answer: unknown = interrupt({ nodeId: node.id, label: node.label, output: state.outputs[node.id] ?? null });
-      const approved = answer === true || !!(answer && typeof answer === 'object' && 'approved' in answer && answer.approved === true);
-      callbacks.reviewed(node, approved);
-      if (!approved) throw new Error('审阅未通过，请修改项目后创建新的运行。');
-      return { completed: [...state.completed, node.id], pendingReview: false };
+      return { outputs: { [node.id]: result }, completed: [...state.completed, node.id] };
     })
     .addEdge(START, 'dispatch')
-    .addConditionalEdges('dispatch', state => !state.currentNodeId ? END : byId.get(state.currentNodeId)?.kind === 'review' ? 'review' : 'execute')
-    .addConditionalEdges('execute', state => state.pendingReview ? 'review' : 'dispatch')
-    .addEdge('review', 'dispatch');
+    .addConditionalEdges('dispatch', state => !state.currentNodeId ? END : 'execute')
+    .addEdge('execute', 'dispatch');
   return builder.compile({ checkpointer });
 }
-
-export { Command };

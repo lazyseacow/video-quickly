@@ -1,3 +1,4 @@
+import { fixtureNativeVideo } from './fixtures/native-video';
 import { mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
@@ -24,7 +25,7 @@ async function fixture(options: Partial<RuntimeOptions> = {}) {
   return { runtime, project, directory };
 }
 async function workflow(runtime: ReturnType<typeof createRuntime>, projectId: string, nodes: WorkflowNode[], edges: { id: string; source: string; target: string; condition?: string }[] = [], stages?: WorkflowStage[]) {
-  return projectSchema.parse(await runtime.dispatch('workflow.save', { projectId, workflow: { id: 'inspector-flow', version: 1, name: '步骤详情验收', nodes, edges, stages } }));
+  return projectSchema.parse(await runtime.dispatch('workflow.save', { projectId, workflow: { id: 'inspector-flow', version: 1, name: '步骤详情验收', production: { mode: 'native-video', referenceMode: 'none', soundPrompt: '', subtitleMode: 'off' }, nodes, edges, stages } }));
 }
 async function start(runtime: ReturnType<typeof createRuntime>, projectId: string) {
   const run = runSchema.parse(await runtime.dispatch('run.start', { projectId })); await runtime.waitForIdle(); return run;
@@ -32,18 +33,24 @@ async function start(runtime: ReturnType<typeof createRuntime>, projectId: strin
 async function inspect(runtime: ReturnType<typeof createRuntime>, runId: string, nodeId?: string) { return runInspectionSchema.parse(await runtime.dispatch('run.inspect', { runId, nodeId })); }
 async function payload(runtime: ReturnType<typeof createRuntime>, runId: string, nodeId: string, kind: 'input' | 'output') { return runStepPayloadSchema.parse(await runtime.dispatch('run.step.payload', { runId, nodeId, kind })); }
 
-it('inspects frozen labels, real effective inputs and native human review without executing or applying anything', async () => {
+it('inspects frozen labels and effective inputs without executing or applying anything, then automatically resumes', async () => {
   const calls: { name: string; prompt: string }[] = [];
-  const { runtime, project, directory } = await fixture({ provider: async request => { calls.push({ name: request.model.name, prompt: request.prompt }); return '运行生成的视觉风格'; } });
-  const model = modelSchema.parse(await runtime.dispatch('model.save', { model: { name: '冻结模型', provider: 'openai-compatible', baseUrl: 'http://localhost:1234/v1', model: 'fixture', capabilities: ['text'] } }));
+  let exited = false;
+  const provider: NonNullable<RuntimeOptions['provider']> = async request => { calls.push({ name: request.model.name, prompt: request.prompt }); return '运行生成的视觉风格'; };
+  const setup = await fixture({ provider, failpoint(point, activityId) { if (!exited && point === 'after-commit' && activityId === 'style:one') { exited = true; throw new SimulatedProcessExit(); } } });
+  const { project, directory } = setup;
+  let runtime = setup.runtime;
+  const model = modelSchema.parse(await runtime.dispatch('model.save', { model: { name: '冻结模型', provider: 'openai-compatible', baseUrl: 'http://localhost:1234/v1', model: 'fixture', connectionType: 'text', capabilities: ['text'] } }));
   const first = workflowNodeSchema.parse({ id: 'style:one', kind: 'style', label: '原步骤名称', modelId: model.id, requiresReview: true });
   const second = workflowNodeSchema.parse({ id: 'brief:two', kind: 'brief', label: '读取上游风格', modelId: model.id });
   const stages = [{ id: 'planning', label: '原策划阶段', description: '冻结的阶段说明', nodeIds: [first.id, second.id] }];
   const frozen = await workflow(runtime, project.id, [first, second], [{ id: 'next', source: first.id, target: second.id }], stages);
   const run = await start(runtime, project.id);
+  await runtime.close(); runtimes.splice(runtimes.indexOf(runtime), 1);
+  runtime = createRuntime({ dataDirectory: directory, seed: false, provider }); runtimes.push(runtime);
   let detail = await inspect(runtime, run.id, first.id);
-  expect(detail.steps.map(step => step.status)).toEqual(['waiting_review', 'pending']);
-  expect(detail.recovery).toMatchObject({ review: true, resume: false });
+  expect(detail.steps.map(step => step.status)).toEqual(['pending', 'pending']);
+  expect(detail.recovery).toMatchObject({ review: false, resume: true });
   expect(detail.steps[0]).toMatchObject({ inputAvailable: true, outputAvailable: true, unknownSubmission: false, activityCount: 1 });
   expect(detail.steps[1]).toMatchObject({ inputAvailable: false, outputAvailable: false });
   expect(detail.stages).toEqual(stages);
@@ -60,7 +67,7 @@ it('inspects frozen labels, real effective inputs and native human review withou
   expect((await payload(runtime, run.id, first.id, 'output')).value).toMatchObject({ text: '运行生成的视觉风格' });
   const afterDb = openDatabase(directory); expect(afterDb.prepare('SELECT count(*) AS count FROM execution_events').get()).toEqual(before); afterDb.close();
   expect(calls).toHaveLength(1);
-  await runtime.dispatch('run.review', { runId: run.id, approved: true }); await runtime.waitForIdle();
+  await runtime.dispatch('run.resume', { runId: run.id }); await runtime.waitForIdle();
   expect((await payload(runtime, run.id, second.id, 'input')).value).toMatchObject({ project: { title: '执行时的项目', style: '运行生成的视觉风格' }, model: { name: '冻结模型' } });
   expect((await inspect(runtime, run.id)).steps.every(step => step.status === 'succeeded')).toBe(true); expect(calls).toHaveLength(2);
   const current = projectDetailSchema.parse(await runtime.dispatch('project.get', { projectId: project.id })).project!;
@@ -89,7 +96,7 @@ it('uses the persisted branch state to distinguish skipped steps from completed 
 it('keeps an unknown external submission blocked across restart and never repeats it while inspecting', async () => {
   let calls = 0;
   const first = await fixture({ provider: async () => { calls++; return 'result'; }, failpoint(point) { if (point === 'after-dispatch') throw new SimulatedProcessExit(); } });
-  const model = modelSchema.parse(await first.runtime.dispatch('model.save', { model: { name: '原模型', provider: 'openai-compatible', baseUrl: 'http://localhost:1234/v1', model: 'fixture', capabilities: ['text'] } }));
+  const model = modelSchema.parse(await first.runtime.dispatch('model.save', { model: { name: '原模型', provider: 'openai-compatible', baseUrl: 'http://localhost:1234/v1', model: 'fixture', connectionType: 'text', capabilities: ['text'] } }));
   await workflow(first.runtime, first.project.id, [workflowNodeSchema.parse({ id: 'brief', kind: 'brief', label: '提交生成', modelId: model.id })]);
   const run = await start(first.runtime, first.project.id); await first.runtime.close();
   const second = createRuntime({ dataDirectory: first.directory, seed: false, provider: async () => { calls++; return 'duplicate'; } }); runtimes.push(second);
@@ -105,7 +112,7 @@ it('keeps an unknown external submission blocked across restart and never repeat
 it('does not label a saved result as an advanced checkpoint and resumes it without another external call', async () => {
   let calls = 0;
   const first = await fixture({ provider: async () => { calls++; return 'saved response'; }, failpoint(point) { if (point === 'after-commit') throw new SimulatedProcessExit(); } });
-  const model = modelSchema.parse(await first.runtime.dispatch('model.save', { model: { name: 'fixture', provider: 'openai-compatible', baseUrl: 'http://localhost:1234/v1', model: 'fixture', capabilities: ['text'] } }));
+  const model = modelSchema.parse(await first.runtime.dispatch('model.save', { model: { name: 'fixture', provider: 'openai-compatible', baseUrl: 'http://localhost:1234/v1', model: 'fixture', connectionType: 'text', capabilities: ['text'] } }));
   await workflow(first.runtime, first.project.id, [workflowNodeSchema.parse({ id: 'brief', kind: 'brief', label: '已保存结果', modelId: model.id })]);
   const run = await start(first.runtime, first.project.id);
   // Simulate a pre-inspector run: its committed response exists, but it never
@@ -140,7 +147,7 @@ it('filters and paginates actual nested receipts and logs without confusing step
 it('pages historical output versions by frozen project, node and kind without applying them', async () => {
   let calls = 0;
   const { runtime, project } = await fixture({ provider: async () => `版本 ${++calls}` });
-  const model = modelSchema.parse(await runtime.dispatch('model.save', { model: { name: 'fixture', provider: 'openai-compatible', baseUrl: 'http://localhost:1234/v1', model: 'fixture', capabilities: ['text'] } }));
+  const model = modelSchema.parse(await runtime.dispatch('model.save', { model: { name: 'fixture', provider: 'openai-compatible', baseUrl: 'http://localhost:1234/v1', model: 'fixture', connectionType: 'text', capabilities: ['text'] } }));
   const node = workflowNodeSchema.parse({ id: 'brief', kind: 'brief', label: '版本对比', modelId: model.id });
   await workflow(runtime, project.id, [node]); const first = await start(runtime, project.id), second = await start(runtime, project.id);
   const page = recordPageSchema(stepOutputVersionSchema).parse(await runtime.dispatch('run.step.versions', { runId: first.id, nodeId: node.id, limit: 1 }));
@@ -152,7 +159,7 @@ it('pages historical output versions by frozen project, node and kind without ap
 it('exports all selected-run records with credential, URL, argument and text redaction while retaining zero counters', async () => {
   const secret = 'fixture-private-credential', secrets = new Map<string, string>(); let calls = 0;
   const { runtime, project, directory } = await fixture({ secretStore: { async get(key) { return secrets.get(key); }, async set(key, value) { secrets.set(key, value); }, async delete(key) { secrets.delete(key); } }, provider: async () => { calls++; return `result ${secret}`; } });
-  const model = modelSchema.parse(await runtime.dispatch('model.save', { model: { name: 'fixture', provider: 'openai-compatible', baseUrl: 'http://localhost:1234/v1', model: 'fixture', capabilities: ['text'], parameters: { vendor_extension: { apiKey: secret, inputTokens: 0 } } }, secret }));
+  const model = modelSchema.parse(await runtime.dispatch('model.save', { model: { name: 'fixture', provider: 'openai-compatible', baseUrl: 'http://localhost:1234/v1', model: 'fixture', connectionType: 'text', capabilities: ['text'], parameters: { vendor_extension: { apiKey: secret, inputTokens: 0 } } }, secret }));
   await workflow(runtime, project.id, [workflowNodeSchema.parse({ id: 'brief', kind: 'brief', label: '诊断', modelId: model.id, prompt: `api_key="${secret}"` })]);
   const run = await start(runtime, project.id), db = openDatabase(directory), store = new DocumentStore(db), journal = new ActivityJournal(db);
   for (let index = 0; index < 130; index++) await journal.execute(run.id, `brief:tool:${index}`, { index }, 'local', async () => ({ apiKey: secret, args: ['--token', secret], url: `https://user:${secret}@example.test/result?token=${secret}`, inputTokens: 0 }));
@@ -180,7 +187,9 @@ async function mediaVersions() {
   } });
   const saved = projectSchema.parse(await runtime.dispatch('project.update', { projectId: project.id, revision: project.revision, patch: { shots: [{ id: 'target', title: '保留的人工标题', narration: '', visualPrompt: '', durationUs: 1_000_000 }] } }));
   const baseline = await workflow(runtime, saved.id, ['image-a', 'image-b'].map(id => workflowNodeSchema.parse({ id, kind: 'assets', label: id })), [{ id: 'a-b', source: 'image-a', target: 'image-b' }]);
-  const run = await start(runtime, saved.id); return { runtime, baseline, run, assets };
+  const preview = await runtime.dispatch('run.plan', { projectId: saved.id, selection: { nodeId: 'image-a', mode: 'downstream' } }) as { digest: string };
+  const run = runSchema.parse(await runtime.dispatch('run.start', { projectId: saved.id, selection: { nodeId: 'image-a', mode: 'downstream', previewDigest: preview.digest } }));
+  await runtime.waitForIdle(); return { runtime, baseline, run, assets };
 }
 
 it('applies the selected media step instead of the final downstream project and preserves the selected output through inspection', async () => {
@@ -202,17 +211,18 @@ async function mediaReuseFixture(options: Partial<RuntimeOptions> = {}, lockShot
   const { runtime, project, directory } = await fixture({ executeActivity: createActivityExecutor(), ...options });
   const initial = projectSchema.parse(await runtime.dispatch('project.update', { projectId: project.id, revision: project.revision, patch: { shots: [{ id: 'locked-image', title: '已经确认的画面', narration: '', visualPrompt: '', durationUs: 1_000_000 }] } }));
   const path = join(directory, `locked-media.${kind === 'image' ? 'svg' : kind === 'audio' ? 'wav' : 'mp4'}`);
-  if (kind === 'image') await writeFile(path, '<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64"><rect width="64" height="64" fill="red"/></svg>');
+  if (kind === 'video') await writeFile(path, fixtureNativeVideo());
+  else if (kind === 'image') await writeFile(path, '<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64"><rect width="64" height="64" fill="red"/></svg>');
   else execFileSync(process.env.VIDEO_QUICKLY_FFMPEG ?? 'ffmpeg', ['-hide_banner', '-loglevel', 'error', '-y', '-f', 'lavfi', '-i', kind === 'audio' ? 'anullsrc=r=8000:cl=mono' : 'color=c=blue:s=64x64:r=10:d=2', '-t', '2', ...(kind === 'audio' ? ['-c:a', 'pcm_s16le'] : ['-an', '-c:v', 'libx264', '-preset', 'ultrafast', '-pix_fmt', 'yuv420p']), path], { windowsHide: true });
   const asset = assetSchema.parse(await runtime.dispatch('asset.import', { projectId: initial.id, shotId: initial.shots[0].id, path, kind }));
   const imported = projectDetailSchema.parse(await runtime.dispatch('project.get', { projectId: initial.id })).project!;
   const locked = projectSchema.parse(await runtime.dispatch('project.update', { projectId: imported.id, revision: imported.revision, patch: { shots: imported.shots.map(shot => ({ ...shot, locked: lockShot, sourceInUs: 250_000, sceneInUs: 125_000, audioInUs: 333_000, videoInUs: 222_000 })) } }));
-  const model = kind === 'video' ? modelSchema.parse(await runtime.dispatch('model.save', { model: { name: '仅复用锁定视频的模型夹具', provider: 'custom-http', baseUrl: 'http://127.0.0.1:1', model: 'locked-existing', capabilities: ['video'] } })) : undefined;
+  const model = kind === 'video' ? modelSchema.parse(await runtime.dispatch('model.save', { model: { name: '仅复用锁定视频的模型夹具', provider: 'custom-http', baseUrl: 'http://127.0.0.1:1', model: 'locked-existing', connectionType: 'video', capabilities: ['video'], parameters: {  } } })) : undefined;
   const baseline = await workflow(runtime, locked.id, [workflowNodeSchema.parse({ id: 'assets', kind: kind === 'image' ? 'assets' : kind === 'audio' ? 'voice' : 'animation', modelId: model?.id, label: '复用已经确认的素材' })]);
   return { runtime, baseline, asset };
 }
 
-it.each(['image', 'audio', 'video'] as const)('reuses locked %s through the actual media executor without replacing its binding or source offsets', async kind => {
+it.each(['image', 'video'] as const)('reuses locked %s through the actual media executor without replacing its binding or source offsets', async kind => {
   const { runtime, baseline, asset } = await mediaReuseFixture({}, true, kind);
   const run = await start(runtime, baseline.id);
   expect((await inspect(runtime, run.id)).run.status).toBe('succeeded');

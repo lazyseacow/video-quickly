@@ -1,3 +1,4 @@
+import { fixtureNativeVideo } from './fixtures/native-video';
 import { createServer, type Server } from 'node:http';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -41,7 +42,7 @@ async function fixture(options: Partial<RuntimeOptions> = {}) {
     if (state.dropRequests) { response.destroy(); return; }
     if (path.endsWith('/images/generations')) response.end(JSON.stringify({ data: [{ b64_json: png }] }));
     else if (path.endsWith('/audio/speech')) response.end(Buffer.from('generated audio bytes'));
-    else if (path.endsWith('/video')) response.end(JSON.stringify({ data: Buffer.from('generated video bytes').toString('base64') }));
+    else if (path.endsWith('/video')) response.end(JSON.stringify({ data: fixtureNativeVideo().toString('base64') }));
     else if (path.endsWith('/chat/completions')) response.end(JSON.stringify({ choices: [{ message: { content: JSON.stringify({ shots: state.scriptShots }) } }] }));
     else { response.statusCode = 404; response.end(); }
   })().catch(error => response.destroy(error instanceof Error ? error : undefined)); });
@@ -49,7 +50,7 @@ async function fixture(options: Partial<RuntimeOptions> = {}) {
   const address = server.address(); if (!address || typeof address === 'string') throw new Error('测试服务地址无效');
   const baseUrl = `http://127.0.0.1:${address.port}/v1`;
   const runtime = open(directory, options);
-  const original = projectSchema.parse(await runtime.dispatch('project.create', { title: '单镜头候选' }));
+  const original = projectSchema.parse(await runtime.dispatch('project.create', { templateId: 'history-handdrawn', title: '单镜头候选' }));
   let project = projectSchema.parse(await runtime.dispatch('project.update', { projectId: original.id, revision: original.revision, patch: { shots: [0, 1, 2].map(index => ({ id: `shot-${index}`, title: `原始镜头 ${index}`, narration: `原始旁白 ${index}`, visualPrompt: `原始画面 ${index}`, durationUs: 2_000_000, ...(index === 1 ? { sourceInUs: 500_000, sceneInUs: 500_000, sceneDurationUs: 3_000_000 } : {}) })) } }));
   const oldAssets: Partial<Record<'image' | 'audio' | 'video', AssetRecord>> = {};
   for (const [kind, extension] of [['image', 'png'], ['audio', 'mp3'], ['video', 'mp4']] as const) {
@@ -61,8 +62,8 @@ async function fixture(options: Partial<RuntimeOptions> = {}) {
   project = projectSchema.parse(await runtime.dispatch('project.update', { projectId: project.id, revision: project.revision, patch: { shots: project.shots.map((shot, index) => index === 1 ? { ...shot, audioInUs: undefined, videoInUs: undefined } : shot) } }));
   project = await current(runtime, project.id);
   const models = {} as Record<ShotCandidateKind, ModelProfile>;
-  for (const [kind, capability] of [['script', 'text'], ['image', 'image'], ['audio', 'tts'], ['video', 'video']] as const) {
-    models[kind] = await runtime.dispatch('model.save', { model: { name: `候选${kind}`, provider: kind === 'video' ? 'custom-http' : 'openai-compatible', baseUrl, model: `fixture-${kind}`, capabilities: [capability], parameters: kind === 'video' ? { requestPath: 'video', requestTemplate: { prompt: '{{prompt}}', instruction: '{{instruction}}' }, resultBase64Path: 'data' } : {} } }) as ModelProfile;
+  for (const [kind, capability] of [['script', 'text'], ['image', 'image'], ['video', 'video']] as const) {
+    models[kind] = await runtime.dispatch('model.save', { model: { name: `候选${kind}`, provider: kind === 'video' ? 'custom-http' : 'openai-compatible', baseUrl, model: `fixture-${kind}`, connectionType: (([capability]) as readonly string[]).includes('text') ? 'text' : (([capability]) as readonly string[]).includes('video') ? 'video' : 'image', capabilities: [capability], parameters: kind === 'video' ? { requestPath: 'video', requestTemplate: { prompt: '{{prompt}}', instruction: '{{instruction}}' }, resultBase64Path: 'data' } : {} } }) as ModelProfile;
   }
   return { runtime, directory, project, models, requests, oldAssets, state, script };
 }
@@ -82,19 +83,7 @@ it('generates only the selected existing-media shot and applies an image while p
   expect(applied.shots[1].videoAssetId).toBeUndefined(); expect(applied.shots[0]).toEqual(edited.shots[0]); expect(applied.shots[2]).toEqual(edited.shots[2]);
 });
 
-it('rejects relevant voice edits and starts a new voice at zero while preserving the old video trim', async () => {
-  const { runtime, project, models, requests, oldAssets } = await fixture();
-  await regenerate(runtime, project, 'audio', models.audio.id, '语气平和');
-  const first = (await candidates(runtime, project)).items[0];
-  expect(requests[0].body).toMatchObject({ input: '原始旁白 1', instructions: '语气平和' });
-  const edited = projectSchema.parse(await runtime.dispatch('project.update', { projectId: project.id, revision: project.revision, patch: { shots: project.shots.map((shot, index) => index === 1 ? { ...shot, narration: '人工修改旁白' } : shot) } }));
-  await expect(runtime.dispatch('shot.candidate.apply', { projectId: project.id, candidateId: first.id, revision: edited.revision })).rejects.toThrow('已修改');
-  await regenerate(runtime, edited, 'audio', models.audio.id);
-  const fresh = (await candidates(runtime, edited)).items.find(candidate => candidate.id !== first.id)!;
-  const applied = projectSchema.parse(await runtime.dispatch('node.apply', { runId: fresh.runId, nodeId: 'regenerate', revision: edited.revision }));
-  expect(applied.shots[1]).toMatchObject({ narration: '人工修改旁白', audioAssetId: fresh.shot.audioAssetId, audioInUs: 0, videoAssetId: oldAssets.video?.id, sourceInUs: 500_000, sceneInUs: 500_000 });
-  expect(applied.shots[1].videoInUs).toBeUndefined(); expect(applied.shots[0]).toEqual(project.shots[0]);
-});
+
 
 it('uses the template model and only the selected script fields, rejecting multi-shot output', async () => {
   const { runtime, project: initial, models, requests, state, script } = await fixture();
@@ -113,17 +102,7 @@ it('uses the template model and only the selected script fields, rejecting multi
   expect(snapshot.runs.find(run => run.id === invalid.id)?.status).not.toBe('succeeded'); expect((await candidates(runtime, applied)).total).toBe(1); expect(requests).toHaveLength(2);
 });
 
-it('requires a real compatible model, current revision and an unlocked target before starting a request', async () => {
-  const { runtime, project, models, requests } = await fixture();
-  await expect(regenerate(runtime, project, 'image')).rejects.toThrow('模型');
-  await expect(regenerate(runtime, project, 'image', models.script.id)).rejects.toThrow('模型');
-  const qwen = await runtime.dispatch('model.save', { model: { ...models.audio, id: undefined, provider: 'qwen-tts', name: 'Qwen不支持调整指令' } }) as ModelProfile;
-  await expect(regenerate(runtime, project, 'audio', qwen.id, '不要忽略这条指令')).rejects.toThrow('不支持单镜头调整要求');
-  await expect(regenerate(runtime, { ...project, revision: project.revision - 1 }, 'image', models.image.id)).rejects.toThrow('其他视图修改');
-  const locked = projectSchema.parse(await runtime.dispatch('project.update', { projectId: project.id, revision: project.revision, patch: { shots: project.shots.map((shot, index) => index === 1 ? { ...shot, locked: true } : shot) } }));
-  await expect(regenerate(runtime, locked, 'image', models.image.id)).rejects.toThrow('解锁');
-  expect(requests).toHaveLength(0); expect((await candidates(runtime, project)).total).toBe(0);
-});
+
 
 it.each(['after-result', 'after-commit'] as const)('restores a single durable candidate after %s without repeating the media request', async point => {
   let crashed = false;
@@ -141,14 +120,14 @@ it.each(['after-result', 'after-commit'] as const)('restores a single durable ca
   expect((await candidates(second, project)).total).toBe(1); expect(requests).toHaveLength(1); expect(await current(second, project.id)).toEqual(project);
 });
 
-it('paginates candidates by the target shot and preserves the old audio when applying a new video', async () => {
+it('paginates candidates by the target shot and uses generated video sound when applying a new video', async () => {
   const { runtime, project, models, requests, oldAssets } = await fixture();
   for (let index = 0; index < 3; index++) await regenerate(runtime, project, 'video', models.video.id, `版本 ${index}`);
   const first = await candidates(runtime, project, { limit: 1 }), second = await candidates(runtime, project, { limit: 1, offset: 1 });
   expect(first.total).toBe(3); expect(first.items).toHaveLength(1); expect(second.items).toHaveLength(1); expect(second.items[0].id).not.toBe(first.items[0].id);
   expect((await candidates(runtime, project, { offset: 3 })).items).toEqual([]); expect((await candidates(runtime, project, { shotId: project.shots[0].id })).total).toBe(0);
   const applied = projectSchema.parse(await runtime.dispatch('shot.candidate.apply', { projectId: project.id, candidateId: first.items[0].id, revision: project.revision }));
-  expect(applied.shots[1]).toMatchObject({ videoAssetId: first.items[0].shot.videoAssetId, videoInUs: 0, audioAssetId: oldAssets.audio?.id, sourceInUs: 500_000 }); expect(applied.shots[1].audioInUs).toBeUndefined(); expect(requests).toHaveLength(3);
+  expect(applied.shots[1]).toMatchObject({ videoAssetId: first.items[0].shot.videoAssetId, videoInUs: 0, audioAssetId: undefined, sourceInUs: 500_000 }); expect(applied.shots[1].audioInUs).toBeUndefined(); expect(requests).toHaveLength(3);
 });
 
 it('checks candidate asset integrity and rejects deletion interleaved with apply', async () => {
@@ -188,24 +167,7 @@ it('rechecks project revision after asynchronous asset validation instead of ove
   await rejected; expect(await current(runtime, project.id)).toEqual(edited);
 });
 
-it('resets only newly associated media offsets and refuses inactive manual selections', async () => {
-  const { runtime, project, oldAssets, directory } = await fixture();
-  const same = projectSchema.parse(await runtime.dispatch('asset.select', { projectId: project.id, shotId: project.shots[1].id, assetId: oldAssets.audio!.id, revision: project.revision }));
-  expect(same.shots[1].audioInUs).toBeUndefined(); expect(same.shots[1].videoInUs).toBeUndefined(); expect(same.shots[1].sourceInUs).toBe(500_000);
-  const shifted = projectSchema.parse(await runtime.dispatch('project.update', { projectId: project.id, revision: same.revision, patch: { shots: same.shots.map((shot, index) => index === 1 ? { ...shot, audioInUs: 250_000, videoInUs: 750_000 } : shot) } }));
-  const videoPath = join(directory, 'replacement.mp4'); await writeFile(videoPath, 'replacement video');
-  const video = assetSchema.parse(await runtime.dispatch('asset.import', { projectId: project.id, shotId: project.shots[1].id, kind: 'video', path: videoPath }));
-  const imported = await current(runtime, project.id);
-  expect(imported.revision).toBe(shifted.revision + 1); expect(imported.shots[1]).toMatchObject({ videoAssetId: video.id, videoInUs: 0, audioInUs: 250_000, sourceInUs: 500_000 });
-  const audioPath = join(directory, 'replacement.mp3'); await writeFile(audioPath, 'replacement audio');
-  const audio = assetSchema.parse(await runtime.dispatch('asset.import', { projectId: project.id, kind: 'audio', path: audioPath }));
-  const selected = projectSchema.parse(await runtime.dispatch('asset.select', { projectId: project.id, shotId: project.shots[1].id, assetId: audio.id, revision: imported.revision }));
-  expect(selected.shots[1]).toMatchObject({ audioAssetId: audio.id, audioInUs: 0, videoInUs: 0, sourceInUs: 500_000 });
-  const unused = assetSchema.parse(await runtime.dispatch('asset.import', { projectId: project.id, kind: 'audio', path: audioPath }));
-  await runtime.dispatch('asset.delete', { assetId: unused.id });
-  await expect(runtime.dispatch('asset.select', { projectId: project.id, shotId: project.shots[1].id, assetId: unused.id, revision: selected.revision })).rejects.toThrow('已移除');
-  expect(await current(runtime, project.id)).toEqual(selected);
-});
+
 
 it('never resubmits an unknown single-shot provider request after restart', async () => {
   const { runtime: first, directory, project, models, requests, state } = await fixture();

@@ -10,7 +10,7 @@ export async function committedPhaseRun(dispatch: Dispatch, projectId: string, p
     for (const run of page.items) {
       if (run.projectId !== projectId || run.projectRevision !== revision) continue;
       const inspection = runInspectionSchema.parse(await dispatch('run.inspect', { runId: run.id, nodeId }));
-      if (inspection.steps.length === 1 && inspection.steps[0].id === nodeId && (!phase.startsWith('asr:') || inspection.selected?.node.config.shotId === phase.slice(4))) matches.push(run.id);
+      if (inspection.steps.length === 1 && inspection.steps[0].id === nodeId) matches.push(run.id);
     }
     if (matches.length > 1) throw new Error('发现多个原阶段运行，需人工核对，未重新提交。');
     if (page.nextCursor === null) return matches[0];
@@ -23,6 +23,6 @@ export async function resumePhaseRun(dispatch: Dispatch, id: string) {
   const run = runSummarySchema.parse(await dispatch('run.get', { runId: id }));
   if (run.status === 'succeeded' || run.status === 'running') return;
   const inspection = runInspectionSchema.parse(await dispatch('run.inspect', { runId: id }));
-  if (inspection.steps.some(step => step.unknownSubmission) || !inspection.recovery.resume) throw new Error('原运行需要核对提交结果或人工审阅，未自动再次 POST。');
+  if (inspection.steps.some(step => step.unknownSubmission) || !inspection.recovery.resume) throw new Error('原运行需要核对提交结果，未自动再次 POST。');
   await dispatch('run.resume', { runId: id });
 }

@@ -203,10 +203,10 @@ test('protects referenced public music and restores it as an independent asset t
   await expect(card.getByRole('button', { name: `移除素材“${asset.name}”`, exact: true })).toBeDisabled();
   const rejected = await request.post('/__desktop_rpc', { data: { method: 'asset.delete', params: { assetId: asset.id } } });
   expect((await rejected.json()).error).toContain('正在使用或已保留');
-  await openProjectFromList(page, project.title);
-  await page.getByRole('button', { name: '项目设置', exact: true }).click();
+  await page.getByRole('button', { name: '我的项目', exact: true }).click();
+  const projectCard = page.locator('.project-card').filter({ has: page.getByRole('heading', { name: project.title, exact: true }) });
   const pendingBackup = page.waitForResponse(response => response.url().endsWith('/__desktop_rpc') && response.request().postDataJSON()?.method === 'project.backup');
-  await (await projectSettingAction(page, '备份项目与素材', {exact: true})).click();
+  await projectCard.getByRole('button', { name: `备份“${project.title}”`, exact: true }).click();
   const backup = (await (await pendingBackup).json()).result as { path: string; assets: number };
   expect(backup.assets).toBe(1);
   const portable = JSON.parse(await readFile(`${backup.path}/project.json`, 'utf8'));

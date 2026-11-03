@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { createCanvas } from '@napi-rs/canvas';
 import { afterEach, expect, it } from 'vitest';
-import { createHistoryWorkflow, DEFAULT_VIDEO_PROFILE, shotSchema, type AssetRecord, type ProjectDocument } from '@video-quickly/contracts';
+import { createNativeVideoWorkflow, DEFAULT_VIDEO_PROFILE, shotSchema, type AssetRecord, type ProjectDocument } from '@video-quickly/contracts';
 import { drawSceneFrame, frameTimeUs, type SceneFrame } from '../src/index.js';
 import { probeMedia, renderProject, runMedia } from '../src/node.js';
 
@@ -37,7 +37,7 @@ it.skipIf(!mediaAvailable)('exports the selected picture and audio interval with
   const metadata = { projectId: 'ranges', path: sourcePath, size: bytes.length, sha256: createHash('sha256').update(bytes).digest('hex'), version: 1, createdAt: '', provenance: 'isolated real media fixture', active: true, retained: false };
   const assets: AssetRecord[] = [{ ...metadata, id: 'video', name: 'source.mp4', kind: 'video', mimeType: 'video/mp4' }, { ...metadata, id: 'voice', name: 'source.m4a', kind: 'audio', mimeType: 'audio/mp4' }];
   const shot = shotSchema.parse({ id: 'trimmed', title: '裁剪片段', narration: '', visualPrompt: '', durationUs: 1_000_000, sourceInUs: 1_000_000, sceneInUs: 1_000_000, sceneDurationUs: 2_000_000, videoAssetId: 'video', audioAssetId: 'voice', animation: { transition: 'cut' } });
-  const project: ProjectDocument = { id: 'ranges', title: '真实区间验收', brief: '', templateId: 'generic', revision: 1, profile, shots: [shot], claims: [], style: '', archived: false, createdAt: '', updatedAt: '', workflow: createHistoryWorkflow() };
+  const project: ProjectDocument = { id: 'ranges', title: '真实区间验收', brief: '', templateId: 'generic', revision: 1, profile, shots: [shot], claims: [], style: '', archived: false, createdAt: '', updatedAt: '', workflow: { ...createNativeVideoWorkflow(), production: { ...createNativeVideoWorkflow().production, subtitleMode: 'script' } } };
   const trimmed = await renderProject({ project, assets, outputDirectory: join(directory, 'trimmed'), ffmpegPath: ffmpeg, ffprobePath: ffprobe });
   const output = await probeMedia(trimmed.videoPath, ffprobe);
   expect(output.videoDuration).toBeCloseTo(1, 1); expect(output.audioDuration).toBeCloseTo(1, 1);

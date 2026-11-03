@@ -77,7 +77,7 @@ async function fixture(media?: { image: Buffer; audio: Buffer; video: Buffer }) 
 async function model(request: APIRequestContext, url: string, kind: ShotCandidate['kind']) {
   return rpc<ModelProfile>(request, 'model.save', { model: {
     name: `隔离候选服务 ${kind}`, provider: kind === 'video' ? 'custom-http' : 'openai-compatible', baseUrl: url, model: `candidate-${kind}`,
-    capabilities: [kind === 'script' ? 'text' : kind === 'audio' ? 'tts' : kind],
+    connectionType: (([kind === 'script' ? 'text' : kind]) as readonly string[]).includes('text') ? 'text' : (([kind === 'script' ? 'text' : kind]) as readonly string[]).includes('video') ? 'video' : 'image', capabilities: [kind === 'script' ? 'text' : kind],
     ...(kind === 'video' ? { parameters: { requestPath: 'generate-video', requestTemplate: { prompt: '{{prompt}}' }, resultUrlPath: 'url' } } : {}),
   } });
 }
@@ -180,11 +180,11 @@ function mediaBytes() {
   return {
     image: run(['-f', 'lavfi', '-i', 'color=c=red:s=64x64:d=0.1', '-frames:v', '1', '-threads', '1', '-c:v', 'png', '-f', 'image2pipe', 'pipe:1']),
     audio: run(['-f', 'lavfi', '-i', 'sine=frequency=440:sample_rate=44100:duration=2', '-c:a', 'libmp3lame', '-f', 'mp3', 'pipe:1']),
-    video: run(['-f', 'lavfi', '-i', 'color=c=blue:s=64x64:r=30:d=2', '-threads', '1', '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-movflags', 'frag_keyframe+empty_moov', '-f', 'mp4', 'pipe:1']),
+    video: run(['-f', 'lavfi', '-i', 'color=c=blue:s=64x64:r=30:d=2', '-f', 'lavfi', '-i', 'sine=frequency=440:sample_rate=44100:duration=2', '-threads', '1', '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-c:a', 'aac', '-movflags', 'frag_keyframe+empty_moov', '-f', 'mp4', 'pipe:1']),
   };
 }
 
-test('previews real image, audio and video candidates within the clip window and preserves other media on apply', async ({ page, request }, info) => {
+test('previews image and native video candidates within the clip window and applies generated sound', async ({ page, request }, info) => {
   const errors = observeErrors(page), media = mediaBytes(), service = await fixture(media);
   try {
     let project = await createProject(request, '镜头真实媒体候选验收');
@@ -194,7 +194,7 @@ test('previews real image, audio and video candidates within the clip window and
     const oldVideo = await rpc<AssetRecord>(request, 'asset.import', { projectId: project.id, shotId: 'target-1', path: videoPath, kind: 'video' });
     project = await savedProject(request, project.id);
     project = await rpc<ProjectDocument>(request, 'project.update', { projectId: project.id, revision: project.revision, patch: { shots: project.shots.map((shot, index) => index ? shot : { ...shot, durationUs: 1_000_000, sourceInUs: 400_000, audioInUs: 500_000, videoInUs: 200_000, captionTrack: { timeBase: 'source', alignment: 'manual', cues: [{ id: 'keep', startUs: 400_000, endUs: 1_400_000, text: '保留已有字幕' }] } }) } });
-    const connections = { image: await model(request, service.url, 'image'), audio: await model(request, service.url, 'audio'), video: await model(request, service.url, 'video') };
+    const connections = { image: await model(request, service.url, 'image'), video: await model(request, service.url, 'video') };
     await openProject(page, project.title);
     let dialog = await openCandidates(page);
     await dialog.getByLabel('生成内容', { exact: true }).selectOption('image'); await dialog.getByLabel('生成模型', { exact: true }).selectOption(connections.image.id);
@@ -209,20 +209,6 @@ test('previews real image, audio and video candidates within the clip window and
     await page.getByRole('button', { name: '撤销', exact: true }).click();
     await expect.poll(async () => (await savedProject(request, project.id)).shots[0].videoAssetId).toBe(oldVideo.id);
     dialog = await openCandidates(page);
-    await dialog.getByLabel('生成内容', { exact: true }).selectOption('audio'); await dialog.getByLabel('生成模型', { exact: true }).selectOption(connections.audio.id);
-    await dialog.getByRole('button', { name: '生成候选', exact: true }).click();
-    const audio = dialog.getByLabel('候选旁白', { exact: true });
-    await expect.poll(() => audio.evaluate(element => (element as HTMLAudioElement).readyState)).toBeGreaterThanOrEqual(1);
-    await expect.poll(() => dialog.getByLabel('当前旁白', { exact: true }).evaluate(element => (element as HTMLAudioElement).currentTime)).toBeCloseTo(.5, 2);
-    await audio.evaluate(element => { (element as HTMLAudioElement).currentTime = 1.8; });
-    await expect.poll(() => audio.evaluate(element => (element as HTMLAudioElement).currentTime)).toBeLessThanOrEqual(1);
-    await expect(dialog).toContainText('现有字幕会保留');
-    await dialog.getByRole('button', { name: '应用所选候选', exact: true }).click();
-    await expect.poll(async () => (await savedProject(request, project.id)).shots[0].audioAssetId).not.toBe(oldAudio.id);
-    saved = await savedProject(request, project.id);
-    expect(saved.shots[0]).toMatchObject({ audioInUs: 0, videoAssetId: oldVideo.id, videoInUs: 200_000, captionTrack: project.shots[0].captionTrack });
-    const newAudio = saved.shots[0].audioAssetId;
-    dialog = await openCandidates(page);
     await dialog.getByLabel('生成内容', { exact: true }).selectOption('video'); await dialog.getByLabel('生成模型', { exact: true }).selectOption(connections.video.id);
     await dialog.getByRole('button', { name: '生成候选', exact: true }).click();
     const video = dialog.getByLabel('候选视频', { exact: true });
@@ -235,7 +221,8 @@ test('previews real image, audio and video candidates within the clip window and
     await dialog.getByRole('button', { name: '应用所选候选', exact: true }).click();
     await expect.poll(async () => (await savedProject(request, project.id)).shots[0].videoAssetId).not.toBe(oldVideo.id);
     saved = await savedProject(request, project.id);
-    expect(saved.shots[0]).toMatchObject({ videoInUs: 0, audioAssetId: newAudio, audioInUs: 0, captionTrack: project.shots[0].captionTrack });
+    expect(saved.shots[0]).toMatchObject({ videoInUs: 0, audioProcessing: { version: 2, videoAudio: { enabled: true } } });
+    expect(saved.shots[0].audioAssetId).toBeUndefined(); expect(saved.shots[0].audioInUs).toBeUndefined(); expect(saved.shots[0].captionTrack).toBeUndefined();
     expect(saved.shots[1]).toEqual(project.shots[1]);
     await expectHealthy(page, errors);
   } finally { await service.close(); }

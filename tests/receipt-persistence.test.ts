@@ -45,8 +45,8 @@ async function fixture(executeActivity = createActivityExecutor()) {
   const address = server.address(); if (!address || typeof address === 'string') throw new Error('Missing receipt fixture address'); base = `http://127.0.0.1:${address.port}`;
   const directory = await mkdtemp(join(tmpdir(), 'vq-receipt-persistence-')); directories.push(directory);
   const runtime = open(directory, executeActivity), created = projectSchema.parse(await runtime.dispatch('project.create', { title: '回执替换验收' }));
-  const model = modelSchema.parse(await runtime.dispatch('model.save', { model: { name: '本地回执接口', provider: 'custom-http', baseUrl: base, model: 'fixture', capabilities: ['image'], parameters: { requestPath: 'generate', requestTemplate: { name: '{{narration}}' }, resultUrlPath: 'url' } } }));
-  const project = projectSchema.parse(await runtime.dispatch('project.update', { projectId: created.id, revision: created.revision, patch: { shots: [{ id: 'shot-0', title: '回执镜头', narration: 'shot-0', visualPrompt: '', durationUs: 1_000_000 }], workflow: { id: 'receipt', version: 1, name: '回执提交', nodes: [{ id: 'images', kind: 'assets', label: '画面', modelId: model.id, requiresReview: true }], edges: [], execution: { maxConcurrentShots: 2, modelLimits: { [model.id]: 2 } } } } }));
+  const model = modelSchema.parse(await runtime.dispatch('model.save', { model: { name: '本地回执接口', provider: 'custom-http', baseUrl: base, model: 'fixture', connectionType: 'image', capabilities: ['image'], parameters: { requestPath: 'generate', requestTemplate: { name: '{{narration}}' }, resultUrlPath: 'url' } } }));
+  const project = projectSchema.parse(await runtime.dispatch('project.update', { projectId: created.id, revision: created.revision, patch: { shots: [{ id: 'shot-0', title: '回执镜头', narration: 'shot-0', visualPrompt: '', durationUs: 1_000_000 }], workflow: { id: 'receipt', version: 1, name: '回执提交', production: { mode: 'native-video', referenceMode: 'none', soundPrompt: '', subtitleMode: 'off' }, nodes: [{ id: 'images', kind: 'assets', label: '画面', modelId: model.id, requiresReview: true }], edges: [], execution: { maxConcurrentShots: 2, modelLimits: { [model.id]: 2 } } } } }));
   return { directory, runtime, project, calls: () => ({ posts, downloads }) };
 }
 async function receipt(directory: string, projectId: string) {
@@ -58,7 +58,7 @@ async function receipt(directory: string, projectId: string) {
 }
 const locked = (code: string) => Object.assign(new Error(`Fixture file replacement failed: ${code}`), { code });
 
-it.each(['EPERM', 'EACCES', 'EBUSY'])('commits an external result after temporary %s without another POST, then reopens the original review', async code => {
+it.each(['EPERM', 'EACCES', 'EBUSY'])('automatically completes an external result after temporary %s and reopens without another POST', async code => {
   const { directory, runtime, project, calls } = await fixture();
   const replacements: string[] = [], priorStates: string[] = [];
   vi.mocked(rename).mockImplementation(async (from, to) => {
@@ -70,11 +70,11 @@ it.each(['EPERM', 'EACCES', 'EBUSY'])('commits an external result after temporar
   });
   const run = runSchema.parse(await runtime.dispatch('run.start', { projectId: project.id })); await runtime.waitForIdle();
   const before = runInspectionSchema.parse(await runtime.dispatch('run.inspect', { runId: run.id }));
-  expect(before.run.status, before.run.error).toBe('waiting_review');
+  expect(before.run.status, before.run.error).toBe('succeeded');
   expect(priorStates).toEqual(['prepared', 'prepared']); expect(replacements).toHaveLength(3); expect(new Set(replacements).size).toBe(1);
   const saved = await receipt(directory, project.id); expect(saved.value).toMatchObject({ state: 'completed', providerUsage: { source: 'provider', inputTokens: 3, outputTokens: 2, totalTokens: 5 } }); expect(calls()).toEqual({ posts: 1, downloads: 1 });
   await close(runtime);
-  const recovered = open(directory); await recovered.dispatch('run.review', { runId: run.id, approved: true }); await recovered.waitForIdle();
+  const recovered = open(directory); await recovered.waitForIdle();
   expect(runInspectionSchema.parse(await recovered.dispatch('run.inspect', { runId: run.id })).run.status).toBe('succeeded');
   expect(await readFile(saved.path, 'utf8')).toBe(JSON.stringify(saved.value)); expect(calls()).toEqual({ posts: 1, downloads: 1 });
 });

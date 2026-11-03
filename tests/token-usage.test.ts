@@ -22,7 +22,7 @@ it('does not invent media batch totals when only some calls reported a counter',
   expect(sumProviderUsage([{ source: 'provider', inputTokens: 10, cachedInputTokens: 0 }, { source: 'provider', inputTokens: 20 }])?.cachedInputTokens).toBeUndefined();
   expect(sumProviderUsage([{ source: 'provider', inputTokens: 10 }, undefined])).toBeUndefined();
   expect(sumProviderUsage([])).toBeUndefined();
-  expect(sumProviderUsage([{ source: 'provider', characters: 4 }, { source: 'provider', characters: 6 }])).toEqual({ source: 'provider', characters: 10 });
+  expect(sumProviderUsage([{ source: 'provider', videoSeconds: 4 }, { source: 'provider', videoSeconds: 6 }])).toEqual({ source: 'provider', videoSeconds: 10 });
 });
 
 it('aggregates counters across every task record, keeps partial coverage and preserves counts through recovery without duplication', async () => {
@@ -30,7 +30,7 @@ it('aggregates counters across every task record, keeps partial coverage and pre
   const database = openDatabase(directory), store = new DocumentStore(database);
   try {
     const ledger = createCostLedger({ database, store });
-    const model = modelSchema.parse({ id: 'model', name: '模型', provider: 'openai-compatible', platform: 'deepseek', baseUrl: 'http://localhost:1234', model: 'fixture', capabilities: ['text'], pricing: { currency: 'USD', inputPerMillionTokens: 9 }, createdAt: 'now', updatedAt: 'now' });
+    const model = modelSchema.parse({ id: 'model', name: '模型', provider: 'openai-compatible', platform: 'deepseek', baseUrl: 'http://localhost:1234', model: 'fixture', connectionType: 'text', capabilities: ['text'], pricing: { currency: 'USD', inputPerMillionTokens: 9 }, createdAt: 'now', updatedAt: 'now' });
     const base = { runId: 'task', projectId: 'project', nodeId: 'brief', model, capability: 'text' as const, requestMetrics: { source: 'request' as const, requestCount: 1 } };
     const first = ledger.begin({ ...base, operationId: 'first' });
     const usage = { source: 'provider' as const, inputTokens: 100, outputTokens: 20, cachedInputTokens: 0, cachedOutputTokens: 5 };
@@ -59,9 +59,9 @@ it('infers legacy platform identities and keeps an explicit platform on a custom
 });
 
 it('separates new platform defaults from stored protocols and filters adapters by all selected media capabilities', () => {
-  const legacy = modelSchema.parse({ id: 'legacy', name: '旧连接', platform: 'anthropic', provider: 'openai-compatible', baseUrl: 'http://localhost/v1', model: 'fixture', capabilities: ['text'], createdAt: '', updatedAt: '' });
+  const legacy = modelSchema.parse({ id: 'legacy', name: '旧连接', platform: 'anthropic', provider: 'openai-compatible', baseUrl: 'http://localhost/v1', model: 'fixture', connectionType: 'text', capabilities: ['text'], createdAt: '', updatedAt: '' });
   expect(legacy.textProtocol).toBeUndefined(); expect(modelPlatforms.find(platform => platform.id === 'anthropic')?.textProtocol).toBe('messages');
   expect(modelSchema.safeParse({ ...legacy, textProtocol: 'unknown' }).success).toBe(false);
   expect(getMediaAdapters(['text', 'image', 'video']).map(adapter => adapter.id)).toEqual(['openai-compatible', 'comfyui', 'custom-http']);
-  expect(getMediaAdapters(['asr']).map(adapter => adapter.id)).toEqual(['openai-compatible', 'volcengine-asr']); expect(getMediaAdapters(['text'])).toEqual([]);
+  expect(getMediaAdapters([])).toEqual([]); expect(getMediaAdapters(['text'])).toEqual([]);
 });

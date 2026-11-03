@@ -115,15 +115,17 @@
   .workspace-shell .outline-footer { display: block; padding: var(--space-1) var(--space-2); }
   .workspace-shell .outline-shot .shot-thumbnail { width: 96px; }
   .workspace-shell .project-heading { position: relative; padding: var(--space-3); }
-  .workspace-shell .project-heading-copy { padding-right: calc(var(--control-hit-size) + var(--space-3)); }
   .workspace-shell .editor-layout-actions .icon-button:last-child { display: none; }
   .workspace-shell .project-heading-actions > .icon-button { display: none; }
-  .workspace-shell .project-heading-actions > .project-settings-trigger { display: inline-grid; position: absolute; right: var(--space-3); top: var(--space-3); }
   .workspace-shell .project-heading-actions > .editing-history-control { display: inline-grid; grid-row: 2; }
-  .workspace-shell .project-heading-actions { display: grid; grid-template-columns: 40px 40px minmax(0, 1fr) auto; gap: var(--space-2); }
+  .workspace-shell .project-heading-actions { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: var(--space-2); }
   .workspace-shell .project-heading-actions .tabs { grid-column: 1/4; grid-row: 1; margin: 0; justify-self: start; }
   .workspace-shell .editor-layout-actions { grid-column: 4; grid-row: 1; justify-self: end; border: 0; padding: 0; }
-  .workspace-shell .project-heading-actions > .button { grid-row: 2; justify-self: stretch; min-width: 0; margin: 0; padding-inline: var(--space-2); }
+  .workspace-shell .project-heading-actions > .button { grid-row: 3; justify-self: stretch; min-width: 0; margin: 0; padding-inline: var(--space-2); }
+  .workspace-shell .project-heading-actions > .production-settings-trigger { grid-column: 3 / 5; grid-row: 2; }
+  .workspace-shell .project-heading-actions > [data-guide="check"] { grid-column: 1; }
+  .workspace-shell .project-heading-actions > [data-guide="produce"] { grid-column: 2 / 4; }
+  .workspace-shell .project-heading-actions > .button:last-child { grid-column: 4; }
   .workspace-shell .project-title-input { font-size: var(--text-size-title); }
   .workspace-shell .preview-surface { padding: var(--space-2) var(--space-3) var(--space-4); }
   .workspace-shell .inspector-body { display: block; }

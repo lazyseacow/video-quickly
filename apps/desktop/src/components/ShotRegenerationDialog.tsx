@@ -5,7 +5,6 @@ import { candidateKindLabels, candidateRunActive, readCandidateAssets, readShotC
 import { getAssetUrl, rpc } from '../lib/client';
 import { Button, Dialog, Field, Notice, Status, Select } from './Primitives';
 import { ScenePreview } from './ScenePreview';
-import { sourceCaptionTrack } from '@video-quickly/video/clip-edits';
 import { candidatePreviewProject } from '../lib/clip-preview';
 import { readAudioLevels, usePreparedProjectMix } from '../lib/audio-mix';
 import { PlaybackClock, usePlayback } from '../lib/playback';
@@ -20,7 +19,7 @@ export interface ShotRegenerationDialogProps {
 }
 const fieldLabels: Record<ShotCandidateField, string> = { title: '标题', narration: '旁白', visualPrompt: '画面要求', durationUs: '时长' };
 const scriptFields: ShotCandidateField[] = ['title', 'narration', 'visualPrompt', 'durationUs'];
-const capabilities = { script: 'text', image: 'image', audio: 'tts', video: 'video' } as const;
+const capabilities = { script: 'text', image: 'image', video: 'video' } as const;
 
 export default function ShotRegenerationDialog({ project, shot, models, assets, onClose, onGenerate, onApply }: ShotRegenerationDialogProps) {
   const [kind, setKind] = useState<ShotCandidateKind>('script');
@@ -142,8 +141,8 @@ export default function ShotRegenerationDialog({ project, shot, models, assets, 
     } catch (error) { if (alive.current) setError(error instanceof Error ? error.message : String(error)); }
     finally { if (alive.current) setApplying(false); }
   }
-  const currentAsset = candidate?.kind === 'audio' ? allAssets.find(asset => asset.id === shot.audioAssetId) : shot.sceneTemplate ? undefined : allAssets.find(asset => asset.id === (shot.videoAssetId ?? shot.assetId));
-  const candidateAsset = candidate?.kind === 'audio' ? allAssets.find(asset => asset.id === candidate.shot.audioAssetId) : candidate?.kind === 'video' ? allAssets.find(asset => asset.id === candidate.shot.videoAssetId) : allAssets.find(asset => asset.id === candidate?.shot.assetId);
+  const currentAsset = shot.sceneTemplate ? undefined : allAssets.find(asset => asset.id === (shot.videoAssetId ?? shot.assetId));
+  const candidateAsset = candidate?.kind === 'video' ? allAssets.find(asset => asset.id === candidate.shot.videoAssetId) : allAssets.find(asset => asset.id === candidate?.shot.assetId);
 
   return <Dialog title="镜头候选" onClose={onClose} className="shot-regeneration-dialog">
     <div className="dialog__body">
@@ -164,8 +163,8 @@ export default function ShotRegenerationDialog({ project, shot, models, assets, 
         </aside>
         <section className="shot-regeneration__comparison" aria-label="当前与候选对比">
           {reading ? <p className="tiny-meta" role="status">正在读取候选内容…</p> : candidate?.kind === 'script' ? <div className="shot-regeneration__fields">{scriptFields.map(field => <section className="shot-regeneration__field" key={field}><label><input type="checkbox" checked={fields.includes(field)} disabled={applying || candidate.shot[field] === shot[field]} aria-label={`应用候选${fieldLabels[field]}`} onChange={event => setFields(current => event.target.checked ? [...current, field] : current.filter(value => value !== field))} />{fieldLabels[field]}</label><div><section><span>当前</span><p>{field === 'durationUs' ? `${shot[field] / 1e6} 秒` : shot[field] || '（空）'}</p></section><section><span>候选</span><p>{field === 'durationUs' ? `${candidate.shot[field] / 1e6} 秒` : candidate.shot[field] || '（空）'}</p></section></div></section>)}</div> : candidate ? <>
-            <div className="shot-regeneration__media">{shot.clipEdit ? <CandidateClipPreview label="当前" project={project} shot={shot} assets={allAssets} audioOnly={candidate.kind === 'audio'} /> : <CandidateMedia label="当前" asset={currentAsset} sourceInUs={candidate.kind === 'audio' ? shot.audioInUs ?? shot.sourceInUs ?? 0 : shot.videoInUs ?? shot.sourceInUs ?? 0} durationUs={shot.durationUs} fallback={candidate.kind !== 'audio' ? <span className="shot-regeneration__scene" style={{ aspectRatio: `${project.profile.width}/${project.profile.height}` }}><ScenePreview project={project} shot={shot} shotIndex={Math.max(0, project.shots.findIndex(value => value.id === shot.id))} assets={allAssets} /></span> : undefined} />}{preview?.project ? <CandidateClipPreview label="候选" project={preview.project} shot={preview.project.shots.find(value => value.id === candidate.shotId)!} assets={allAssets} audioOnly={candidate.kind === 'audio'} /> : preview?.error ? <figure><figcaption>候选</figcaption><Notice kind="error">{preview.error}</Notice></figure> : <CandidateMedia label="候选" asset={candidateAsset} sourceInUs={0} durationUs={candidate.shot.durationUs} />}</div>
-            {candidate.kind === 'audio' && sourceCaptionTrack(shot, project) && <Notice>应用候选旁白后需重新对齐字幕，现有字幕会保留。</Notice>}{shot.sceneTemplate && ['image', 'video'].includes(candidate.kind) && <Notice>应用此候选将替换当前模板画面。</Notice>}
+            <div className="shot-regeneration__media">{shot.clipEdit ? <CandidateClipPreview label="当前" project={project} shot={shot} assets={allAssets} /> : <CandidateMedia label="当前" asset={currentAsset} sourceInUs={shot.videoInUs ?? shot.sourceInUs ?? 0} durationUs={shot.durationUs} fallback={<span className="shot-regeneration__scene" style={{ aspectRatio: `${project.profile.width}/${project.profile.height}` }}><ScenePreview project={project} shot={shot} shotIndex={Math.max(0, project.shots.findIndex(value => value.id === shot.id))} assets={allAssets} /></span>} />}{preview?.project ? <CandidateClipPreview label="候选" project={preview.project} shot={preview.project.shots.find(value => value.id === candidate.shotId)!} assets={allAssets} /> : preview?.error ? <figure><figcaption>候选</figcaption><Notice kind="error">{preview.error}</Notice></figure> : <CandidateMedia label="候选" asset={candidateAsset} sourceInUs={0} durationUs={candidate.shot.durationUs} />}</div>
+            {shot.sceneTemplate && ['image', 'video'].includes(candidate.kind) && <Notice>应用此候选将替换当前模板画面。</Notice>}
           </> : <p className="shot-regeneration__empty">选择一个候选，与当前镜头比较。</p>}
         </section>
       </div>
@@ -175,7 +174,7 @@ export default function ShotRegenerationDialog({ project, shot, models, assets, 
   </Dialog>;
 }
 
-function CandidateClipPreview({ label, project, shot, assets, audioOnly }: { label: string; project: ProjectDocument; shot: Shot; assets: AssetRecord[]; audioOnly: boolean }) {
+function CandidateClipPreview({ label, project, shot, assets }: { label: string; project: ProjectDocument; shot: Shot; assets: AssetRecord[] }) {
   const solo = useMemo(() => ({ ...project, shots: [shot], musicClips: [] }), [project, shot]);
   const [clock] = useState(() => new PlaybackClock(shot.durationUs, project.profile.frameRate));
   const { timeUs, playing } = usePlayback(clock);
@@ -184,11 +183,11 @@ function CandidateClipPreview({ label, project, shot, assets, audioOnly }: { lab
   useEffect(() => { clock.configure(shot.durationUs, project.profile.frameRate); clock.seek(0); setFailure(''); }, [clock, shot.durationUs, shot.clipEdit?.planId, shot.audioAssetId, shot.videoAssetId, project.profile.frameRate.numerator, project.profile.frameRate.denominator]);
   useEffect(() => () => clock.dispose(), [clock]);
   useEffect(() => { if (document.hidden) clock.pause(); const pause = () => { if (document.hidden) clock.pause(); }; document.addEventListener('visibilitychange', pause); return () => document.removeEventListener('visibilitychange', pause); }, [clock]);
-  return <figure aria-label={`${label}剪后片段`}><figcaption>{label}</figcaption>{!audioOnly && <span className="shot-regeneration__scene" style={{ aspectRatio: `${project.profile.width}/${project.profile.height}` }}><ScenePreview project={solo} shot={shot} shotIndex={Math.max(0, project.shots.findIndex(value => value.id === shot.id))} assets={assets} timeUs={timeUs} playing={playing} /></span>}
+  return <figure aria-label={`${label}剪后片段`}><figcaption>{label}</figcaption><span className="shot-regeneration__scene" style={{ aspectRatio: `${project.profile.width}/${project.profile.height}` }}><ScenePreview project={solo} shot={shot} shotIndex={Math.max(0, project.shots.findIndex(value => value.id === shot.id))} assets={assets} timeUs={timeUs} playing={playing} /></span>
     {hasAudio && mix.status === 'pending' && <p className="tiny-meta" role="status">正在准备{label}剪后试听…</p>}
     {mix.mix && <PreparedMixPreview mix={mix.mix} onLevels={readAudioLevels} playing={playing} timeUs={timeUs} controls={false} onReadyChange={setAudioReady} onError={message => { clock.pause(); setFailure(message); }} />}
     {(failure || mix.error) && <Notice kind="error">{failure || mix.error}<Button aria-label="重试片段试听" onClick={() => { setFailure(''); mix.retry(); }}>重试</Button></Notice>}
-    <Button disabled={audioOnly && !hasAudio || hasAudio && (mix.status !== 'ready' || !audioReady)} onClick={clock.toggle}>{playing ? <Pause size={13} /> : <Play size={13} />}{playing ? `暂停${label}片段` : `播放${label}片段`}</Button>
+    <Button disabled={hasAudio && (mix.status !== 'ready' || !audioReady)} onClick={clock.toggle}>{playing ? <Pause size={13} /> : <Play size={13} />}{playing ? `暂停${label}片段` : `播放${label}片段`}</Button>
     <input type="range" aria-label={`${label}剪后播放位置`} min={0} max={shot.durationUs / 1000} value={Math.round(timeUs / 1000)} step={1} onChange={event => clock.seek(Number(event.target.value) * 1000)} />
     <p className="tiny-meta">剪后 {(shot.durationUs / 1e6).toFixed(3)} 秒 · 保留各源区间</p>
   </figure>;
@@ -230,5 +229,5 @@ function CandidateMedia({ label, asset, sourceInUs, durationUs, fallback }: { la
     if (element.currentTime >= range.end) { element.pause(); element.currentTime = Math.max(range.start, range.end - .001); }
   }
   const previewKey = `${key}:${sourceInUs}:${durationUs}`;
-  return <figure><figcaption>{label}</figcaption>{!asset ? fallback ?? <p className="tiny-meta">尚未关联素材</p> : current?.error ? <Notice kind="error">{current.error}</Notice> : !current?.url ? <p className="tiny-meta" role="status">正在读取素材…</p> : asset.kind === 'image' ? <img src={current.url} alt={`${label}画面`} onError={fail} /> : asset.kind === 'audio' ? <audio key={previewKey} ref={element => { media.current = element; }} src={current.url} controls preload="metadata" aria-label={`${label}旁白`} onLoadedMetadata={event => position(event.currentTarget)} onSeeking={event => constrain(event.currentTarget)} onPlay={event => constrain(event.currentTarget, true)} onTimeUpdate={event => timeUpdate(event.currentTarget)} onError={fail} /> : <video key={previewKey} ref={element => { media.current = element; }} src={current.url} controls preload="metadata" playsInline aria-label={`${label}视频`} onLoadedMetadata={event => position(event.currentTarget)} onSeeking={event => constrain(event.currentTarget)} onPlay={event => constrain(event.currentTarget, true)} onTimeUpdate={event => timeUpdate(event.currentTarget)} onError={fail} />}{asset && <p className="tiny-meta">{asset.name}</p>}</figure>;
+  return <figure><figcaption>{label}</figcaption>{!asset ? fallback ?? <p className="tiny-meta">尚未关联素材</p> : current?.error ? <Notice kind="error">{current.error}</Notice> : !current?.url ? <p className="tiny-meta" role="status">正在读取素材…</p> : asset.kind === 'image' ? <img src={current.url} alt={`${label}画面`} onError={fail} /> : <video key={previewKey} ref={element => { media.current = element; }} src={current.url} controls preload="metadata" playsInline aria-label={`${label}视频`} onLoadedMetadata={event => position(event.currentTarget)} onSeeking={event => constrain(event.currentTarget)} onPlay={event => constrain(event.currentTarget, true)} onTimeUpdate={event => timeUpdate(event.currentTarget)} onError={fail} />}{asset && <p className="tiny-meta">{asset.name}</p>}</figure>;
 }

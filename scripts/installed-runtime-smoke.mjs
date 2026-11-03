@@ -4,7 +4,12 @@ import { createRequire } from 'node:module';
 import { readFile, writeFile } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
 import assert from 'node:assert/strict';
-import { fixtureSecretCall } from './installed-upgrade-fixture.mjs';
+function fixtureSecretCall(method, params, values) {
+  if (method === 'host.secret.set') { values.set(params.key, params.value); return null; }
+  if (method === 'host.secret.get') return values.get(params.key) ?? null;
+  if (method === 'host.secret.delete') { values.delete(params.key); return null; }
+  throw new Error('不支持的安装夹具系统调用');
+}
 
 // This fixture writes only to the fresh CI account's application data directory.
 if (process.env.GITHUB_ACTIONS !== 'true' || !['Windows','macOS'].includes(process.env.RUNNER_OS)) throw new Error('安装验收只能在隔离的 Windows/macOS CI 环境执行');
@@ -16,7 +21,7 @@ if (mode === 'inspect') {
   const require = createRequire(join(sidecar, 'package.json'));
   const Database = require('better-sqlite3');
   const db = new Database(join(dataDirectory, 'workspace.sqlite'), { readonly: true });
-  try { assert.equal(db.pragma('user_version', { simple: true }), 8); assert.equal(db.pragma('quick_check', { simple: true }), 'ok'); } finally { db.close(); }
+  try { assert.equal(db.pragma('user_version', { simple: true }), 11); assert.equal(db.pragma('quick_check', { simple: true }), 'ok'); } finally { db.close(); }
   console.log('原生客户端已完成数据库迁移');
   process.exit(0);
 }
@@ -52,7 +57,7 @@ async function runAt(id, status) {
   while (Date.now() < deadline) {
     const snapshot = await rpc('workspace.snapshot');
     const run = snapshot.runs.find(run => run.id === id);
-    if (run?.status === status) return run;
+    if ((Array.isArray(status) ? status : [status]).includes(run?.status)) return run;
     if (run?.status === 'failed') throw new Error(run.error);
     await new Promise(resolve => setTimeout(resolve, 30));
   }
@@ -65,31 +70,20 @@ try {
   const snapshot = await rpc('workspace.snapshot');
   assert.equal(snapshot.system.ffmpegAvailable, true);
   if (mode === 'prepare') {
-    const project = await rpc('project.create', { title: '中文路径 安装升级验收', templateId: 'history-handdrawn' });
+    let project = await rpc('project.create', { title: '中文路径 安装验收' });
+    project = await rpc('project.update', { projectId: project.id, revision: project.revision, patch: { workflow: { ...project.workflow, id: 'installation-local-check', stages: undefined, nodes: [{ id: 'style', kind: 'style', label: '本地风格确认', config: {} }], edges: [] } } });
     const run = await rpc('run.start', { projectId: project.id, nodeId: 'style' });
-    const review = await runAt(run.id, 'waiting_review');
-    assert.equal(review.activities.length, 1);
-    // waiting_review is visible before LangGraph necessarily commits its native
-    // interrupt. Observe the durable row before terminating this fixture process.
-    const fromSidecar = createRequire(join(sidecar, 'package.json'));
-    const Database = fromSidecar('better-sqlite3'), checkpoint = new Database(join(dataDirectory, 'workspace.sqlite'), { readonly: true });
-    try {
-      const deadline = Date.now() + 20_000;
-      while (!checkpoint.prepare("SELECT 1 FROM writes WHERE thread_id = ? AND channel = '__interrupt__' LIMIT 1").get(run.id)) {
-        if (Date.now() >= deadline) throw new Error('安装夹具的原生审阅检查点尚未提交');
-        await new Promise(resolveWait => setTimeout(resolveWait, 30));
-      }
-    } finally { checkpoint.close(); }
+    const prepared = await runAt(run.id, 'succeeded');
+    assert.equal(prepared.activities.length, 1);
     const image = `${evidence}.png`;
     await writeFile(image, Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9ZlS8AAAAASUVORK5CYII=', 'base64'));
     const asset = await rpc('asset.import', { projectId: project.id, path: image, kind: 'image' });
-    await writeFile(evidence, JSON.stringify({ projectId: project.id, runId: run.id, asset }));
+    await writeFile(evidence, JSON.stringify({ projectId: project.id, runId: run.id, runStatus: prepared.status, asset }));
   } else {
     const saved = JSON.parse(await readFile(evidence, 'utf8'));
-      assert.equal(snapshot.projects.find(project => project.id === saved.projectId)?.title, '中文路径 安装升级验收');
-      const review = snapshot.runs.find(run => run.id === saved.runId);
-      assert.equal(review.status, 'waiting_review'); assert.equal(review.activities.length, 1);
-      await rpc('run.review', { runId: saved.runId, approved: true });
+      assert.equal(snapshot.projects.find(project => project.id === saved.projectId)?.title, '中文路径 安装验收');
+      const original = snapshot.runs.find(run => run.id === saved.runId);
+      assert.equal(original.status, 'succeeded'); assert.equal(original.activities.length, 1);
       assert.equal((await runAt(saved.runId, 'succeeded')).activities.length, 1);
     const exporter = await rpc('project.create', { title: '安装后导出', profile: { width: 320, height: 180, frameRate: { numerator: 30, denominator: 1 }, fitMode: 'contain', previewScale: .5 } });
     await rpc('project.saveShot', { projectId: exporter.id, shot: { id: 'installed-shot', title: '安装后的实际画面', narration: '安装后的本地小样', visualPrompt: '', durationUs: 500_000 } });

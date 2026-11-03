@@ -26,17 +26,15 @@ export const modelPlatforms: readonly ModelPlatformPreset[] = [
   { id: 'comfyui', label: 'ComfyUI', provider: 'comfyui', baseUrl: 'http://127.0.0.1:8188', capabilities: ['image'] },
   { id: 'seedream', label: '即梦 Seedream', provider: 'seedream', baseUrl: 'https://ark.cn-beijing.volces.com/api/v3', capabilities: ['image'] },
   { id: 'seedance', label: '即梦 Seedance', provider: 'seedance', baseUrl: 'https://ark.cn-beijing.volces.com/api/v3', capabilities: ['video'] },
-  { id: 'qwen-tts', label: 'Qwen TTS', provider: 'qwen-tts', baseUrl: '', capabilities: ['tts'], addressPlaceholder: 'https://工作空间ID.cn-beijing.maas.aliyuncs.com/api/v1', addressHint: '从百炼控制台复制所在地域的原生 API 服务地址，包含工作空间 ID。' },
   { id: 'custom', label: '自定义服务', provider: 'openai-compatible', baseUrl: '', capabilities: ['text'] },
 ];
 
-export function platformForConnection(platform: ModelPlatform, type?: ModelConnectionType): ModelPlatformPreset {
+export function platformForConnection(platform: ModelPlatform, _type?: ModelConnectionType): ModelPlatformPreset {
   const preset = modelPlatforms.find(item => item.id === platform)!;
-  return platform === 'volcengine' && type === 'audio' ? { ...preset, label: '豆包语音 / 火山引擎', provider: 'volcengine-tts', baseUrl: 'https://openspeech.bytedance.com/api/v3', capabilities: ['tts'], addressHint: '使用豆包语音控制台的 API Key；旧版控制台可在参数中填写 App ID，并将 Access Token 填入密钥。' } : preset;
+  return preset;
 }
 
 export function getModelPlatform(model: Pick<ModelProfile, 'platform' | 'provider' | 'baseUrl'>): ModelPlatformPreset {
-  if (model.provider === 'volcengine-tts' || model.provider === 'volcengine-asr') return platformForConnection('volcengine', 'audio');
   const explicit = model.platform && modelPlatforms.find(item => item.id === model.platform);
   if (explicit) return explicit;
   if (model.provider !== 'openai-compatible') return modelPlatforms.find(item => item.provider === model.provider) ?? modelPlatforms.at(-1)!;

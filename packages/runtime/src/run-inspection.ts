@@ -90,7 +90,7 @@ export function createRunInspector(options: {
     const documents = database.prepare("SELECT kind, id FROM documents WHERE kind IN ('node-project', 'node-result') AND id IN (SELECT value FROM json_each(?))").all(JSON.stringify(keys)) as { kind: string; id: string }[];
     const has = (kind: string, id: string) => documents.some(row => row.kind === kind && row.id === `${runId}:${id}`);
     const unknown = run.status !== 'running' && rows.some(row => row.unknown_count > 0);
-    const resume = ['failed', 'needs_attention', 'waiting_external', 'retry_scheduled', 'queued'].includes(run.status) && !unknown;
+    const resume = ['failed', 'needs_attention', 'waiting_external', 'retry_scheduled', 'queued', 'waiting_review'].includes(run.status) && !unknown;
     const steps: RunStepSummary[] = nodes.map(node => {
       const receipt = byNode.get(node.id), current = run.currentNodeId === node.id;
       const nodeThread = saved?.inspectionThreads[node.id] ?? runId;
@@ -108,7 +108,7 @@ export function createRunInspector(options: {
       else if (!nodeState.available && !['queued', 'running'].includes(run.status)) status = 'not_recorded';
       else if (run.status === 'canceled' && status === 'pending') status = 'canceled';
       const error = current && run.error ? run.error : receipt?.error ? String(redact(receipt.error)) : undefined;
-      const reason = status === 'waiting_review' ? '等待审阅这个步骤的产物。'
+      const reason = status === 'waiting_review' ? '历史步骤已暂停，继续后自动执行后续步骤。'
         : unknown && receipt?.unknown_count ? '上次外部提交的结果尚未确认，请先核对服务端任务；这里不会重新提交。'
         : status === 'waiting_external' ? '等待已有外部任务的结果，继续时优先查询原任务。'
         : status === 'retry_scheduled' ? '执行已安排重试。'
@@ -126,7 +126,7 @@ export function createRunInspector(options: {
     });
     const selectedNode = nodeId ? store.get<WorkflowNode>('node-definition', `${runId}:${nodeId}`) ?? saved?.nodes.find(node => node.id === nodeId) : undefined, model = selectedNode?.modelId ? saved?.models.find(value => value.id === selectedNode.modelId) : undefined;
     return runInspectionSchema.parse({ run: reads.runSummary(run), projectTitle: saved?.title ?? '历史制作', snapshotAvailable: !!saved, checkpointAvailable: state.available, steps, stages: saved?.stages,
-      recovery: { review: run.status === 'waiting_review', resume, cancel: ['running', 'queued', 'waiting_external', 'retry_scheduled', 'needs_attention'].includes(run.status), restart: run.status === 'canceled', reason: unknown ? '存在结果未确认的外部提交，请先核对原任务。' : '' },
+      recovery: { review: false, resume, cancel: ['running', 'queued', 'waiting_review', 'waiting_external', 'retry_scheduled', 'needs_attention'].includes(run.status), restart: run.status === 'canceled', reason: unknown ? '存在结果未确认的外部提交，请先核对原任务。' : '' },
       selected: selectedNode && saved ? { node: redact(json(selectedNode)), dependencies: saved.edges.filter(edge => edge.target === nodeId).map(edge => edge.source),
         model: model ? { id: model.id, name: model.name, provider: model.provider, model: model.model } : undefined,
         skills: saved.skills.filter(skill => selectedNode.skillIds.includes(skill.id)).map(skill => ({ id: skill.id, name: skill.name, version: skill.version, enabled: skill.enabled })), handlerVersion: saved.handlerVersion } : undefined,

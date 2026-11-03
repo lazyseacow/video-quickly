@@ -22,7 +22,7 @@ export function providerReportedUsage(value: Record<string, unknown>, ollama = f
 
 /** A batch total is known only when every submitted call reported that counter. */
 export function sumProviderUsage(values: readonly (ProviderUsage | undefined)[]): ProviderUsage | undefined {
-  const metrics = ['inputTokens', 'outputTokens', 'totalTokens', 'cachedInputTokens', 'cachedOutputTokens', 'characters', 'audioSeconds', 'images', 'videoSeconds'] as const;
+  const metrics = ['inputTokens', 'outputTokens', 'totalTokens', 'cachedInputTokens', 'cachedOutputTokens', 'images', 'videoSeconds'] as const;
   const totals = Object.fromEntries(metrics.flatMap(metric => values.length && values.every(value => value?.[metric] !== undefined) ? [[metric, values.reduce((sum, value) => sum + value![metric]!, 0)]] : []));
   return Object.keys(totals).length ? { source: 'provider', ...totals } : undefined;
 }

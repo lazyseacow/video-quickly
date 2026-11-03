@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { audioWaveformSchema, captionTrackSchema, createHistoryWorkflow, DEFAULT_VIDEO_PROFILE, frameAtTime, musicClipSchema, projectSchema, shotSchema, timeAtFrame, videoProfileSchema } from '@video-quickly/contracts';
+import { audioWaveformSchema, captionTrackSchema, createNativeVideoWorkflow, DEFAULT_VIDEO_PROFILE, frameAtTime, musicClipSchema, projectSchema, shotSchema, timeAtFrame, videoProfileSchema } from '@video-quickly/contracts';
 
 describe('video output time and dimensions', () => {
   it('keeps fractional frame indexing aligned over a two-hour edit', () => {
@@ -44,7 +44,7 @@ describe('caption and project audio contracts', () => {
   });
 
   it('keeps audio fields optional in old projects and applies defaults only to new music clips', () => {
-    const project = projectSchema.parse({ id: 'p', title: '项目', brief: '', revision: 1, profile: DEFAULT_VIDEO_PROFILE, workflow: createHistoryWorkflow(), shots: [], createdAt: '', updatedAt: '' });
+    const project = projectSchema.parse({ id: 'p', title: '项目', brief: '', revision: 1, profile: DEFAULT_VIDEO_PROFILE, workflow: createNativeVideoWorkflow(), shots: [], createdAt: '', updatedAt: '' });
     expect(project.musicClips).toBeUndefined();
     const music = musicClipSchema.parse({ id: 'm', assetId: 'audio', durationUs: 2_000_000 });
     expect(music).toEqual({ id: 'm', assetId: 'audio', durationUs: 2_000_000, startUs: 0, sourceInUs: 0, gainDb: -18, fadeInUs: 0, fadeOutUs: 0, loop: false });

@@ -1,5 +1,5 @@
 import { expect, it } from 'vitest';
-import { assetSchema, createHistoryWorkflow, createSceneTemplate, DEFAULT_AUDIO_PROCESSING, DEFAULT_VIDEO_PROFILE, projectSchema, type AudioWaveform, type ShotCandidate } from '@video-quickly/contracts';
+import { assetSchema, createNativeVideoWorkflow, createSceneTemplate, DEFAULT_AUDIO_PROCESSING, DEFAULT_VIDEO_PROFILE, projectSchema, type AudioWaveform, type ShotCandidate } from '@video-quickly/contracts';
 import { deleteShotRanges, resolveShotSpans } from '../packages/video/src/clip-edits';
 import { trimShot } from '../packages/video/src/editing';
 import { captionAtTime } from '../packages/video/src/captions';
@@ -11,7 +11,7 @@ import { editContent } from '../apps/desktop/src/lib/project-edits';
 
 function fixture() {
   const assets = [['voice', 'audio'], ['video', 'video'], ['new-voice', 'audio'], ['new-video', 'video']].map(([id, kind]) => assetSchema.parse({ id, kind, projectId: 'p', shotId: 'shot', name: id, path: `/fixture/${id}`, sha256: 'a'.repeat(64), version: 1, size: 1, mimeType: 'application/octet-stream', createdAt: '', provenance: '', active: true, retained: false }));
-  const project = projectSchema.parse({ id: 'p', revision: 1, title: 'EDL消费', brief: '', profile: DEFAULT_VIDEO_PROFILE, workflow: createHistoryWorkflow(), createdAt: '', updatedAt: '', shots: [{ id: 'shot', title: '原镜头', narration: '', visualPrompt: '', durationUs: 8_000_000, sourceInUs: 0, audioAssetId: 'voice', videoAssetId: 'video', captionTrack: { timeBase: 'source', alignment: 'speech', granularity: 'word', sourceAssetId: 'voice', sourceSha256: assets[0].sha256, cues: Array.from({ length: 8 }, (_, index) => ({ id: `w${index}`, text: `词${index}`, startUs: index * 1_000_000, endUs: (index + 1) * 1_000_000 })) } }] });
+  const project = projectSchema.parse({ id: 'p', revision: 1, title: 'EDL消费', brief: '', profile: DEFAULT_VIDEO_PROFILE, workflow: createNativeVideoWorkflow(), createdAt: '', updatedAt: '', shots: [{ id: 'shot', title: '原镜头', narration: '', visualPrompt: '', durationUs: 8_000_000, sourceInUs: 0, audioAssetId: 'voice', videoAssetId: 'video', captionTrack: { timeBase: 'source', alignment: 'speech', granularity: 'word', sourceAssetId: 'voice', sourceSha256: assets[0].sha256, cues: Array.from({ length: 8 }, (_, index) => ({ id: `w${index}`, text: `词${index}`, startUs: index * 1_000_000, endUs: (index + 1) * 1_000_000 })) } }] });
   let counter = 0; const edited = deleteShotRanges(project, 'shot', [{ startUs: 2_000_000, endUs: 4_000_000 }], project.profile.frameRate, assets, kind => `${kind}-${++counter}`);
   return { project: edited, assets };
 }
@@ -33,7 +33,7 @@ it('projects waveform windows through trims and tail extension without filling d
   expect(project.clipEditPlans).toHaveLength(1);
 });
 
-it.each(['audio', 'video'] as const)('creates a private %s candidate plan while preserving the original and the other stream', kind => {
+it.each(['video'] as const)('creates a private %s candidate plan while preserving the original and the other stream', kind => {
   const { project, assets } = fixture(), baseline = project.shots[0], asset = assets[kind === 'audio' ? 2 : 3];
   const candidate: ShotCandidate = { id: 'candidate', projectId: project.id, shotId: baseline.id, baseline, shot: { ...baseline, [kind === 'audio' ? 'audioAssetId' : 'videoAssetId']: asset.id }, kind, runId: 'run', nodeId: 'regenerate', createdAt: '', assetIds: [asset.id] };
   const snapshot = JSON.stringify(project), preview = candidatePreviewProject(project, candidate, assets), spans = resolveShotSpans(preview.shots[0], preview);
@@ -42,15 +42,7 @@ it.each(['audio', 'video'] as const)('creates a private %s candidate plan while 
   expect(() => candidatePreviewProject({ ...project, clipEditPlans: [] }, candidate, assets)).toThrow('计划缺失');
 });
 
-it('does not alias an existing imported plan when allocating candidate preview identities', () => {
-  const { project, assets } = fixture(), baseline = project.shots[0];
-  const collision = { ...project.clipEditPlans![0], id: 'candidate-preview-candidate-plan-1' };
-  const document = { ...project, clipEditPlans: [...project.clipEditPlans!, collision] };
-  const candidate: ShotCandidate = { id: 'candidate', projectId: project.id, shotId: baseline.id, baseline, shot: { ...baseline, audioAssetId: assets[2].id }, kind: 'audio', runId: 'run', nodeId: 'regenerate', createdAt: '', assetIds: [assets[2].id] };
-  const preview = candidatePreviewProject(document, candidate, assets);
-  expect(preview.shots[0].clipEdit?.planId).not.toBe(collision.id);
-  expect(resolveShotSpans(preview.shots[0], preview).map(span => span.audioInUs)).toEqual([0, 2_000_000]);
-});
+
 
 it('extends only the selected private bulk plan and retains the sibling and both source-duration checks', () => {
   const { project } = fixture(), original = project.shots[0], baseline = editContent({ ...project, shots: [original, { ...original, id: 'sibling' }] });

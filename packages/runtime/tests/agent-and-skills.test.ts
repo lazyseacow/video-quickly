@@ -64,9 +64,9 @@ describe('Deep Agents integration', () => {
     const address = server.address(); if (!address || typeof address === 'string') throw new Error('测试服务未启动。');
     const runtime = createRuntime({ dataDirectory: await directory() }); runtimes.push(runtime);
     const initial = await runtime.dispatch('workspace.snapshot') as WorkspaceSnapshot;
-    const model = await runtime.dispatch('model.save', { model: { name: 'Agent fixture', provider: 'openai-compatible', baseUrl: `http://127.0.0.1:${address.port}/v1`, model: 'fixture', capabilities: ['text', 'tools'] } }) as ModelProfile;
+    const model = await runtime.dispatch('model.save', { model: { name: 'Agent fixture', provider: 'openai-compatible', baseUrl: `http://127.0.0.1:${address.port}/v1`, model: 'fixture', connectionType: 'text', capabilities: ['text', 'tools'] } }) as ModelProfile;
     const agent = workflowNodeSchema.parse({ id: 'agent', kind: 'agent', label: 'Agent', modelId: model.id });
-    await runtime.dispatch('workflow.save', { projectId: initial.projects[0].id, workflow: { id: 'agent', version: 1, name: 'Agent fixture', nodes: [agent], edges: [] } });
+    await runtime.dispatch('workflow.save', { projectId: initial.projects[0].id, workflow: { id: 'agent', version: 1, name: 'Agent fixture', production: { mode: 'native-video', referenceMode: 'none', soundPrompt: '', subtitleMode: 'off' }, nodes: [agent], edges: [] } });
     const run = await runtime.dispatch('run.start', { projectId: initial.projects[0].id }) as RunRecord;
     await runtime.waitForIdle();
     const snapshot = await runtime.dispatch('workspace.snapshot') as WorkspaceSnapshot;
@@ -116,9 +116,9 @@ createInterface({ input: process.stdin }).on('line', line => {
     servers.push(server); await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
     const address = server.address(); if (!address || typeof address === 'string') throw new Error('测试服务未启动。');
     const initial = await runtime.dispatch('workspace.snapshot') as WorkspaceSnapshot;
-    const model = await runtime.dispatch('model.save', { model: { name: 'fixture', provider: 'openai-compatible', baseUrl: `http://127.0.0.1:${address.port}/v1`, model: 'fixture', capabilities: ['text', 'tools'] } }) as ModelProfile;
+    const model = await runtime.dispatch('model.save', { model: { name: 'fixture', provider: 'openai-compatible', baseUrl: `http://127.0.0.1:${address.port}/v1`, model: 'fixture', connectionType: 'text', capabilities: ['text', 'tools'] } }) as ModelProfile;
     const agent = workflowNodeSchema.parse({ id: 'agent', kind: 'agent', label: 'Agent', modelId: model.id, config: { mcpServerIds: [registered.id] } });
-    await runtime.dispatch('workflow.save', { projectId: initial.projects[0].id, workflow: { id: 'mcp', version: 1, name: 'MCP fixture', nodes: [agent], edges: [] } });
+    await runtime.dispatch('workflow.save', { projectId: initial.projects[0].id, workflow: { id: 'mcp', version: 1, name: 'MCP fixture', production: { mode: 'native-video', referenceMode: 'none', soundPrompt: '', subtitleMode: 'off' }, nodes: [agent], edges: [] } });
     const run = await runtime.dispatch('run.start', { projectId: initial.projects[0].id }) as RunRecord;
     await runtime.waitForIdle();
     const after = await runtime.dispatch('workspace.snapshot') as WorkspaceSnapshot;
@@ -142,8 +142,8 @@ createInterface({ input: process.stdin }).on('line', line => {
     const dataDirectory = await directory(); let crashed = false;
     const first = createRuntime({ dataDirectory, failpoint(point, id) { if (!crashed && point === 'after-commit' && id.startsWith('agent:model:')) { crashed = true; throw new SimulatedProcessExit(); } } });
     const initial = await first.dispatch('workspace.snapshot') as WorkspaceSnapshot;
-    const model = await first.dispatch('model.save', { model: { name: 'fixture', provider: 'openai-compatible', baseUrl: `http://127.0.0.1:${address.port}/v1`, model: 'fixture', capabilities: ['text', 'tools'] } }) as ModelProfile;
-    await first.dispatch('workflow.save', { projectId: initial.projects[0].id, workflow: { id: 'durable-agent', version: 1, name: 'durable Agent', nodes: [workflowNodeSchema.parse({ id: 'agent', kind: 'agent', label: 'Agent', modelId: model.id })], edges: [] } });
+    const model = await first.dispatch('model.save', { model: { name: 'fixture', provider: 'openai-compatible', baseUrl: `http://127.0.0.1:${address.port}/v1`, model: 'fixture', connectionType: 'text', capabilities: ['text', 'tools'] } }) as ModelProfile;
+    await first.dispatch('workflow.save', { projectId: initial.projects[0].id, workflow: { id: 'durable-agent', version: 1, name: 'durable Agent', production: { mode: 'native-video', referenceMode: 'none', soundPrompt: '', subtitleMode: 'off' }, nodes: [workflowNodeSchema.parse({ id: 'agent', kind: 'agent', label: 'Agent', modelId: model.id })], edges: [] } });
     const run = await first.dispatch('run.start', { projectId: initial.projects[0].id }) as RunRecord;
     await first.waitForIdle();
     expect(calls).toBe(1);

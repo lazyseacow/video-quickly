@@ -8,7 +8,7 @@ import { DocumentStore, openDatabase } from '../src/database';
 
 const directories: string[] = [];
 afterEach(async () => { await Promise.all(directories.splice(0).map(directory => rm(directory, { recursive: true, force: true }))); });
-const model: ModelProfile = { id: 'model', name: '画面模型', provider: 'openai-compatible', baseUrl: 'http://localhost:1234/v1', model: 'image-fixture', capabilities: ['image'], parameters: {}, pricing: { currency: 'USD', perImage: .1 }, enabled: true, hasSecret: false, createdAt: '', updatedAt: '' };
+const model: ModelProfile = { id: 'model', name: '画面模型', provider: 'openai-compatible', baseUrl: 'http://localhost:1234/v1', model: 'image-fixture', connectionType: 'image', capabilities: ['image'], parameters: {}, pricing: { currency: 'USD', perImage: .1 }, enabled: true, hasSecret: false, createdAt: '', updatedAt: '' };
 async function fixture() {
   const directory = await mkdtemp(join(tmpdir(), 'vq-cost-tasks-')); directories.push(directory);
   const database = openDatabase(directory), store = new DocumentStore(database), ledger = createCostLedger({ database, store });

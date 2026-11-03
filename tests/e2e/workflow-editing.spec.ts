@@ -1,7 +1,8 @@
 import { openProjectFromList } from './workspace-navigation';
 import { expect, test, type APIRequestContext, type Locator, type Page } from '@playwright/test';
 import { randomUUID } from 'node:crypto';
-import type { ProjectDocument } from '@video-quickly/contracts';
+import { createServer, type ServerResponse } from 'node:http';
+import type { ProjectDocument, RunInspection, RunSummary } from '@video-quickly/contracts';
 
 async function rpc<T>(request: APIRequestContext, method: string, params: unknown = {}): Promise<T> {
   const response = await request.post('/__desktop_rpc', { data: { method, params } });
@@ -11,7 +12,7 @@ async function fixture(request: APIRequestContext, title: string) {
   const project = await rpc<ProjectDocument>(request, 'project.create', { title: `${title} ${randomUUID().slice(0, 8)}` });
   return rpc<ProjectDocument>(request, 'project.update', { projectId: project.id, revision: project.revision, patch: {
     profile: { ...project.profile, width: 640, height: 360 }, shots: [{ id: 'shot', title: '画布验收镜头', narration: '', visualPrompt: '', durationUs: 1_000_000 }],
-    workflow: { id: 'editable-flow', name: '画布验收流程', version: 1, nodes: [{ id: 'a', kind: 'brief', label: '简报 A', position: { x: 0, y: 0 } }, { id: 'b', kind: 'brief', label: '提案 B', position: { x: 360, y: 0 } }], edges: [{ id: 'ab', source: 'a', target: 'b' }] },
+    workflow: { id: 'editable-flow', name: '画布验收流程', version: 1, production: { mode: 'native-video', referenceMode: 'none', soundPrompt: '', subtitleMode: 'off' }, nodes: [{ id: 'a', kind: 'brief', label: '简报 A', position: { x: 0, y: 0 } }, { id: 'b', kind: 'brief', label: '提案 B', position: { x: 360, y: 0 } }], edges: [{ id: 'ab', source: 'a', target: 'b' }] },
   } });
 }
 async function current(request: APIRequestContext, projectId: string) { return (await rpc<{ project: ProjectDocument }>(request, 'project.get', { projectId })).project; }
@@ -208,26 +209,27 @@ test('retains input added during a committed save and keeps the view open until 
 
 test('shares step-setting history with the graph and preserves input when the same step changes elsewhere', async ({ page, request }) => {
   const project = await fixture(request, '步骤设置统一历史'); await open(page, project.title, false);
-  await page.getByRole('button', { name: '配置步骤：简报 A', exact: true }).click();
+  await page.getByRole('button', { name: '打开步骤：简报 A', exact: true }).click();
   const dialog = page.getByRole('dialog', { name: '简报 A', exact: true });
   await dialog.getByLabel('提示词与补充要求').fill('人工设置的提示词'); await dialog.getByRole('button', { name: '保存', exact: true }).click();
   await expect(dialog).toHaveCount(0); await history(page, '撤销');
   await expect.poll(async () => (await current(request, project.id)).workflow.nodes[0].prompt).toBe('');
   await history(page, '重做');
   await expect.poll(async () => (await current(request, project.id)).workflow.nodes[0].prompt).toBe('人工设置的提示词');
-  await page.getByRole('button', { name: '配置步骤：简报 A', exact: true }).click(); await dialog.getByLabel('提示词与补充要求').fill('尚未应用的输入');
+  await page.getByRole('button', { name: '打开步骤：简报 A', exact: true }).click(); await dialog.getByLabel('提示词与补充要求').fill('尚未应用的输入');
   const saved = await current(request, project.id);
   const remote = await rpc<ProjectDocument>(request, 'project.update', { projectId: project.id, revision: saved.revision, patch: { workflow: { ...saved.workflow, nodes: saved.workflow.nodes.map(node => node.id === 'a' ? { ...node, prompt: '另一视图的提示词' } : node) } } });
   await expect(page.locator('.project-heading-copy')).toHaveAttribute('data-revision', String(remote.revision));
   await dialog.getByRole('button', { name: '保存', exact: true }).click();
-  await expect(dialog.getByRole('alert')).toContainText('步骤已在其他视图更新');
+  await expect(dialog.getByRole('alert')).toContainText('当前输入已保留');
+  await expect(page.getByText('步骤已在其他视图更新，当前输入已保留，请核对后重新打开。', { exact: true })).toBeVisible();
   await expect(dialog.getByLabel('提示词与补充要求')).toHaveValue('尚未应用的输入');
   expect((await current(request, project.id)).workflow.nodes[0].prompt).toBe('另一视图的提示词');
 });
 
 test('keeps newer step input after a committed save and requires confirmation before executing it', async ({ page, request }) => {
   const project = await fixture(request, '步骤保存期间继续输入'); await open(page, project.title, false);
-  await page.getByRole('button', { name: '配置步骤：简报 A', exact: true }).click();
+  await page.getByRole('button', { name: '打开步骤：简报 A', exact: true }).click();
   const dialog = page.getByRole('dialog', { name: '简报 A', exact: true }), prompt = dialog.getByLabel('提示词与补充要求');
   await prompt.fill('先提交的步骤要求');
   let release!: () => void, entered!: () => void, held = false;
@@ -252,19 +254,19 @@ test('keeps newer step input after a committed save and requires confirmation be
   } finally { release(); }
 });
 
-test('persists branch, model and review settings and supports keyboard edge history while preserving native input undo', async ({ page, request }) => {
+test('persists branch and model settings and supports keyboard edge history while preserving native input undo', async ({ page, request }) => {
   const project = await fixture(request, '流程条件与键盘操作');
-  const model = await rpc<{ id: string }>(request, 'model.save', { model: { name: '仅保存不执行的连接', provider: 'openai-compatible', model: 'fixture', baseUrl: 'http://127.0.0.1:19999/v1', capabilities: ['text'] } });
+  const model = await rpc<{ id: string }>(request, 'model.save', { model: { name: '仅保存不执行的连接', provider: 'openai-compatible', model: 'fixture', baseUrl: 'http://127.0.0.1:19999/v1', connectionType: 'text', capabilities: ['text'] } });
   await rpc(request, 'project.update', { projectId: project.id, revision: project.revision, patch: { workflow: { ...project.workflow, nodes: project.workflow.nodes.map(node => node.id === 'a' ? { ...node, kind: 'condition' } : node) } } });
   await open(page, project.title); await node(page, 'b').click();
   await page.getByLabel('使用模型', { exact: true }).selectOption(model.id);
   await node(page, 'a').click();
   await page.getByLabel('条件分支结果', { exact: true }).selectOption('true');
   await expect(page.getByLabel('使用模型', { exact: true })).toHaveCount(0);
-  await page.getByLabel('完成后人工审阅', { exact: true }).check();
+  await expect(page.getByLabel('完成后人工审阅', { exact: true })).toHaveCount(0);
   await page.getByLabel('提案 B', { exact: true }).selectOption('true'); await save(page);
   const saved = await current(request, project.id);
-  expect(saved.workflow.nodes[0]).toMatchObject({ requiresReview: true, config: { value: true } });
+  expect(saved.workflow.nodes[0]).toMatchObject({ requiresReview: false, config: { value: true } });
   expect(saved.workflow.nodes[0].modelId).toBeUndefined(); expect(saved.workflow.nodes[1].modelId).toBe(model.id);
   expect(saved.workflow.edges[0].condition).toBe('true');
   await node(page, 'a').focus(); await page.keyboard.press('Control+z');
@@ -318,4 +320,41 @@ test('keeps unfinished shot fields reachable while retaining the workflow draft 
   await expect.poll(async () => (await current(request, project.id)).workflow.nodes[0].label).toBe('保留的流程草稿');
   expect((await current(request, project.id)).shots[0].title).toBe('修正后的镜头');
   expect((await rpc<{ items: unknown[] }>(request, 'run.list', { projectId: project.id })).items).toEqual([]);
+});
+
+
+test('freezes settings during start submission and saves subsequent task input for the next run', async ({ page, request }) => {
+  const pending: ServerResponse[] = [], errors: string[] = [];
+  const server = createServer((incoming, response) => { incoming.resume(); incoming.on('end', () => pending.push(response)); });
+  await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
+  const address = server.address(); if (!address || typeof address === 'string') throw new Error('单任务生成夹具未启动');
+  let entered!: () => void, release!: () => void, runId: string | undefined;
+  const accepted = new Promise<void>(resolve => { entered = resolve; }), gate = new Promise<void>(resolve => { release = resolve; });
+  try {
+    const created = await fixture(request, '启动期间保留单任务输入');
+    const model = await rpc<{ id: string }>(request, 'model.save', { model: { name: '单任务启动边界', provider: 'openai-compatible', model: 'single-task-fixture', baseUrl: `http://127.0.0.1:${address.port}/v1`, connectionType: 'text', capabilities: ['text'] } });
+    const project = await rpc<ProjectDocument>(request, 'project.update', { projectId: created.id, revision: created.revision, patch: { workflow: { ...created.workflow, stages: [{ id: 'planning', label: '策划', nodeIds: created.workflow.nodes.map(node => node.id) }], nodes: created.workflow.nodes.map(node => node.id === 'a' ? { ...node, modelId: model.id } : node) } } });
+    page.on('pageerror', error => errors.push(error.message));
+    await page.route('**/__desktop_rpc', async route => {
+      if (route.request().postDataJSON()?.method === 'run.start') {
+        const response = await route.fetch(); const payload = await response.json(); runId = payload.result.id; entered(); await gate; await route.fulfill({ response }); return;
+      }
+      await route.continue();
+    });
+    await open(page, project.title, false); await page.getByRole('button', { name: '打开阶段：策划', exact: true }).click();
+    const dialog = page.getByRole('dialog', { name: '制作设置', exact: true }); await dialog.locator('summary:visible').click(); const prompt = dialog.getByLabel('简报 A补充要求', { exact: true });
+    await prompt.fill('这次执行使用已保存的输入'); await dialog.getByRole('button', { name: '保存并开始制作', exact: true }).click(); await accepted;
+    await expect.poll(() => pending.length).toBe(1); await expect(prompt).toBeDisabled(); release(); await expect(dialog).toHaveCount(0);
+    await page.getByRole('button', { name: '制作设置', exact: true }).click(); await dialog.locator('summary:visible').click(); await prompt.fill('请求在途期间补充的下一次输入');
+    const inspection = await rpc<RunInspection>(request, 'run.inspect', { runId, nodeId: 'a' });
+    expect(inspection.selected?.node.prompt).toBe('这次执行使用已保存的输入'); expect(inspection.run.status).toBe('running');
+    const before = await current(request, project.id); expect(before.workflow.nodes[0].prompt).toBe('这次执行使用已保存的输入');
+    await dialog.getByRole('button', { name: '保存待用配置', exact: true }).click(); await expect(dialog).toHaveCount(0);
+    expect(await current(request, project.id)).toEqual(before); expect((await rpc<{ items: RunSummary[] }>(request, 'run.list', { projectId: project.id })).items).toHaveLength(1);
+    await page.getByRole('button', { name: '制作设置', exact: true }).click(); await dialog.locator('summary:visible').click(); await expect(prompt).toHaveValue('请求在途期间补充的下一次输入');
+    await dialog.getByRole('button', { name: '关闭对话框', exact: true }).click(); expect(errors).toEqual([]);
+  } finally {
+    release(); if (runId) await rpc(request, 'run.cancel', { runId });
+    await page.unrouteAll({ behavior: 'ignoreErrors' }); server.closeAllConnections(); await new Promise<void>(resolve => server.close(() => resolve()));
+  }
 });

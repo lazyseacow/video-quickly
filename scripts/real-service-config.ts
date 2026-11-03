@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { modelSchema, validateModelConnection, validateModelParameters, type ModelProfile } from '@video-quickly/contracts';
 
-export const serviceRoles = ['text', 'image', 'tts', 'video', 'asr'] as const;
+export const serviceRoles = ['text', 'image', 'video'] as const;
 export type ServiceRole = typeof serviceRoles[number];
 export interface ServiceConnection { model: ModelProfile; secretEnv?: string }
 export interface RealServiceConfig { title: string; brief: string; roles: Record<ServiceRole, ServiceConnection> }
@@ -20,6 +20,7 @@ export function parseRealServiceConfig(input: unknown): RealServiceConfig {
   if (!record(input) || !record(input.roles)) throw new Error('验收配置需要 roles。');
   noInlineSecrets(input);
   const configuredRoles = input.roles;
+  if (Object.keys(configuredRoles).some(role => !serviceRoles.includes(role as ServiceRole))) throw new Error('仅支持 text、image、video 模型。');
   const roles = Object.fromEntries(serviceRoles.map(role => {
     const entry = configuredRoles[role];
     if (!record(entry) || !record(entry.model)) throw new Error(`缺少 ${role} 模型。`);

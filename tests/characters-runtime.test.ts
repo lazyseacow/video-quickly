@@ -36,7 +36,7 @@ async function fixture(extra: Partial<RuntimeOptions> = {}) {
   }
   const original = projectSchema.parse(await runtime.dispatch('project.create', { title: '角色快照' }));
   const project = projectSchema.parse(await runtime.dispatch('project.update', { projectId: original.id, revision: original.revision, patch: { shots: profiles.map((profile, index) => ({ id: `shot-${index}`, title: `镜头 ${index}`, narration: '示例旁白', visualPrompt: '示例画面', durationUs: 1_000_000, characterIds: [profile.id] })) } }));
-  const model = await runtime.dispatch('model.save', { model: { name: '图像角色模型', provider: 'openai-compatible', baseUrl: `http://127.0.0.1:${address.port}/v1`, model: 'gpt-image-fixture', capabilities: ['image'], pricing: { currency: 'USD', perImage: .4 } } }) as ModelProfile;
+  const model = await runtime.dispatch('model.save', { model: { name: '图像角色模型', provider: 'openai-compatible', baseUrl: `http://127.0.0.1:${address.port}/v1`, model: 'gpt-image-fixture', connectionType: 'image', capabilities: ['image'], pricing: { currency: 'USD', perImage: .4 } } }) as ModelProfile;
   return { runtime, directory, project, profiles, assets, model, requests };
 }
 async function generate(runtime: ReturnType<typeof createRuntime>, project: ProjectDocument, model: ModelProfile) { const run = await runtime.dispatch('shot.regenerate', { projectId: project.id, shotId: project.shots[0].id, revision: project.revision, kind: 'image', modelId: model.id }) as RunRecord; await runtime.waitForIdle(); return run; }
@@ -83,8 +83,8 @@ it('rejects changed reference bytes and unsupported image references before jour
 it('retains existing character bindings through an ordinary script to image pipeline', async () => {
   const { runtime, project, model, profiles, requests } = await fixture();
   const single = projectSchema.parse(await runtime.dispatch('project.update', { projectId: project.id, revision: project.revision, patch: { shots: [project.shots[0]] } }));
-  const text = await runtime.dispatch('model.save', { model: { ...model, id: undefined, name: '文字角色模型', model: 'text-fixture', capabilities: ['text'], pricing: null } }) as ModelProfile;
-  await runtime.dispatch('workflow.save', { projectId: project.id, workflow: { id: 'character-pipeline', version: 1, name: '角色连贯性', nodes: [workflowNodeSchema.parse({ id: 'script', kind: 'script', label: '脚本', modelId: text.id }), workflowNodeSchema.parse({ id: 'assets', kind: 'assets', label: '图片', modelId: model.id })], edges: [{ id: 'next', source: 'script', target: 'assets' }] } });
+  const text = await runtime.dispatch('model.save', { model: { ...model, id: undefined, name: '文字角色模型', model: 'text-fixture', connectionType: 'text', capabilities: ['text'], pricing: null } }) as ModelProfile;
+  await runtime.dispatch('workflow.save', { projectId: project.id, workflow: { id: 'character-pipeline', version: 1, name: '角色连贯性', production: { mode: 'native-video', referenceMode: 'none', soundPrompt: '', subtitleMode: 'off' }, nodes: [workflowNodeSchema.parse({ id: 'script', kind: 'script', label: '脚本', modelId: text.id }), workflowNodeSchema.parse({ id: 'assets', kind: 'assets', label: '图片', modelId: model.id })], edges: [{ id: 'next', source: 'script', target: 'assets' }] } });
   const run = await runtime.dispatch('run.start', { projectId: single.id }) as RunRecord; await runtime.waitForIdle();
   const snapshot = await runtime.dispatch('workspace.snapshot') as WorkspaceSnapshot;
   expect(snapshot.runs.find(record => record.id === run.id)?.status).toBe('succeeded');

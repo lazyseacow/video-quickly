@@ -26,7 +26,7 @@ const target = shotSchema.parse({ id: 'target', title: '当前镜头', narration
 const other = shotSchema.parse({ id: 'other', title: '另一个镜头', narration: '', visualPrompt: '', durationUs: 2_000_000 });
 const source = { id: 'research', title: '资料', kind: 'text', content: 'alpha fact', sha256: 'a'.repeat(64), capturedAt: '2026-01-01T00:00:00.000Z' };
 const claim = { id: 'claim', text: 'alpha', source: '资料', locator: '第一句', status: 'verified', evidence: [{ sourceId: source.id, sourceSha256: source.sha256, startOffset: 0, endOffset: 5, quote: 'alpha' }] };
-let props = { project: { profile, shots: [target, other], referenceDisplay: 'hidden', claims: [claim], researchSources: [source], captionStyle: { ...DEFAULT_CAPTION_STYLE } }, shot: target, shotIndex: 0, thumbnail: true, assets: [], onRepair: () => repairs[0]++ };
+let props = { project: { profile, workflow: { production: { mode: 'native-video', subtitleMode: 'script' } }, shots: [target, other], referenceDisplay: 'hidden', claims: [claim], researchSources: [source], captionStyle: { ...DEFAULT_CAPTION_STYLE } }, shot: target, shotIndex: 0, thumbnail: true, assets: [], onRepair: () => repairs[0]++ };
 const root = createRoot(document.getElementById('fixture'));
 const clearRect = CanvasRenderingContext2D.prototype.clearRect;
 CanvasRenderingContext2D.prototype.clearRect = function (...args) { paints++; return clearRect.apply(this, args); };
@@ -72,7 +72,7 @@ let bundle: string;
 test.beforeAll(async () => {
   const result = await build({
     absWorkingDir: resolve('apps/desktop'), stdin: { contents: fixtureSource, resolveDir: resolve('apps/desktop'), sourcefile: 'scene-preview-fixture.ts' },
-    bundle: true, write: false, platform: 'browser', format: 'esm', target: 'es2022',
+    bundle: true, write: false, platform: 'browser', format: 'esm', target: 'es2022', loader: { '.css': 'empty' },
     define: { 'process.env.NODE_ENV': '"production"', 'import.meta.env': '{"MODE":"browser-test","DEV":false}' },
   });
   bundle = result.outputFiles[0].text;

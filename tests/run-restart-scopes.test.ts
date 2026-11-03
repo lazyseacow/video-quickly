@@ -6,7 +6,7 @@ import { basename, dirname, join, resolve } from 'node:path';
 import { afterEach, expect, it, vi } from 'vitest';
 import { assetSchema, DEFAULT_VIDEO_PROFILE, exportBatchSchema, projectSchema, runInspectionSchema, runSchema, type AssetRecord, type ModelProfile, type ProjectDocument, type ShotCandidate, type UsageRecord, type WorkflowNode } from '@video-quickly/contracts';
 import { createActivityExecutor } from '../packages/integrations/src';
-import { createRuntime, type ActivityExecutionContext, type RuntimeOptions } from '../packages/runtime/src';
+import { createRuntime, SimulatedProcessExit, type ActivityExecutionContext, type RuntimeOptions } from '../packages/runtime/src';
 import { openDatabase } from '../packages/runtime/src/database';
 
 const directories: string[] = [], servers: Server[] = [];
@@ -23,11 +23,15 @@ afterEach(async () => {
 async function setup(options: Partial<RuntimeOptions> = {}, templateId?: 'history-handdrawn') {
   const directory = await mkdtemp(join(tmpdir(), 'video-quickly-run-restart-')); directories.push(directory);
   const runtime = createRuntime({ dataDirectory: directory, seed: false, ffmpegPath: '/unused-by-restart-tests', executeActivity: createActivityExecutor(), ...options }); runtimes.add(runtime);
-  const original = projectSchema.parse(await runtime.dispatch('project.create', { title: '原项目', ...(templateId ? { templateId } : {}) }));
-  const project = projectSchema.parse(await runtime.dispatch('project.update', { projectId: original.id, revision: original.revision, patch: { ...(templateId ? { workflow: { ...original.workflow, id: 'restart-custom-review', nodes: original.workflow.nodes.map(node => node.id === 'style' ? { ...node, requiresReview: true } : node) } } : {}), shots: [0, 1, 2].map(index => ({ id: `shot-${index}`, title: `镜头${index}`, narration: `旁白${index}`, visualPrompt: `画面${index}`, durationUs: 1_000_000 })) } }));
+  const original = projectSchema.parse(await runtime.dispatch('project.create', { title: '原项目', templateId: templateId ?? 'history-handdrawn' }));
+  const project = projectSchema.parse(await runtime.dispatch('project.update', { projectId: original.id, revision: original.revision, patch: { ...(templateId ? { workflow: { ...original.workflow, id: 'restart-custom-review', nodes: original.workflow.nodes.map(node => node.id === 'style' ? { ...node, requiresReview: true, config: {} } : node) } } : {}), shots: [0, 1, 2].map(index => ({ id: `shot-${index}`, title: `镜头${index}`, narration: `旁白${index}`, visualPrompt: `画面${index}`, durationUs: 1_000_000 })) } }));
   return { directory, runtime, project };
 }
 async function current(runtime: ReturnType<typeof createRuntime>, projectId: string) { return (await runtime.dispatch('project.get', { projectId }) as { project: ProjectDocument }).project; }
+function pauseAfterCommit(nodeId: string): RuntimeOptions['failpoint'] {
+  let exited = false;
+  return (point, activityId) => { if (!exited && point === 'after-commit' && activityId === nodeId) { exited = true; throw new SimulatedProcessExit(); } };
+}
 async function reopenLegacyRun(runtime: ReturnType<typeof createRuntime>, directory: string, runId: string, options: Partial<RuntimeOptions> = {}) {
   await runtime.close(); runtimes.delete(runtime);
   const database = openDatabase(directory);
@@ -59,12 +63,12 @@ async function serverFixture() {
 it('restarts a canceled shot candidate with its original target, model and instruction against the current revision', async () => {
   const { requests, received, baseUrl } = await serverFixture();
   const { runtime, project } = await setup();
-  const model = await runtime.dispatch('model.save', { model: { name: '原图像模型', provider: 'openai-compatible', baseUrl, model: 'original-image-model', capabilities: ['image'] } }) as ModelProfile;
+  const model = await runtime.dispatch('model.save', { model: { name: '原图像模型', provider: 'openai-compatible', baseUrl, model: 'original-image-model', connectionType: 'image', capabilities: ['image'] } }) as ModelProfile;
   const parent = runSchema.parse(await runtime.dispatch('shot.regenerate', { projectId: project.id, shotId: 'shot-1', kind: 'image', modelId: model.id, instruction: '固定调整要求', revision: project.revision }));
   await received;
   expect(requests).toHaveLength(1);
   await runtime.dispatch('run.cancel', { runId: parent.id }); await runtime.waitForIdle();
-  const otherModel = await runtime.dispatch('model.save', { model: { name: '后改默认模型', provider: 'openai-compatible', baseUrl, model: 'different-image-model', capabilities: ['image'] } }) as ModelProfile;
+  const otherModel = await runtime.dispatch('model.save', { model: { name: '后改默认模型', provider: 'openai-compatible', baseUrl, model: 'different-image-model', connectionType: 'image', capabilities: ['image'] } }) as ModelProfile;
   const afterWorkflow = projectSchema.parse(await runtime.dispatch('workflow.save', { projectId: project.id, revision: project.revision, workflow: { ...project.workflow, nodes: project.workflow.nodes.map(node => node.kind === 'assets' ? { ...node, modelId: otherModel.id } : node) } }));
   const edited = projectSchema.parse(await runtime.dispatch('project.update', { projectId: project.id, revision: afterWorkflow.revision, patch: { shots: project.shots.map(shot => shot.id === 'shot-1' ? { ...shot, title: '当前目标标题', narration: '当前目标旁白', visualPrompt: '当前目标画面' } : shot) } }));
   await expect(runtime.dispatch('run.start', { projectId: project.id, parentRunId: parent.id, revision: project.revision })).rejects.toThrow('其他视图修改');
@@ -81,22 +85,7 @@ it('restarts a canceled shot candidate with its original target, model and instr
   await expect(runtime.dispatch('run.start', { projectId: project.id, parentRunId: parent.id, revision: removed.revision })).rejects.toThrow('镜头不存在'); expect(requests).toHaveLength(2);
 });
 
-it('restarts canceled transcription only for its original shot and ASR model without invoking the project workflow', async () => {
-  const { requests, received, baseUrl } = await serverFixture();
-  const { runtime, directory, project } = await setup();
-  const path = join(directory, 'voice.wav'); await writeFile(path, 'actual multipart fixture bytes');
-  const audio = assetSchema.parse(await runtime.dispatch('asset.import', { projectId: project.id, shotId: 'shot-1', path, kind: 'audio' }));
-  const linked = await current(runtime, project.id);
-  const model = await runtime.dispatch('model.save', { model: { name: '原ASR模型', provider: 'openai-compatible', baseUrl, model: 'original-asr-model', capabilities: ['asr'] } }) as ModelProfile;
-  const parent = runSchema.parse(await runtime.dispatch('caption.transcribe', { projectId: project.id, shotId: 'shot-1', modelId: model.id, revision: linked.revision }));
-  await received; expect(requests).toHaveLength(1); await runtime.dispatch('run.cancel', { runId: parent.id }); await runtime.waitForIdle();
-  const edited = projectSchema.parse(await runtime.dispatch('project.update', { projectId: project.id, revision: linked.revision, patch: { title: '识别前的新项目标题' } }));
-  const restarted = runSchema.parse(await runtime.dispatch('run.start', { projectId: project.id, parentRunId: parent.id })); await runtime.waitForIdle();
-  expect(restarted).toMatchObject({ parentRunId: parent.id, projectRevision: edited.revision }); expect(requests).toHaveLength(2); expect(requests.every(request => request.path === '/v1/audio/transcriptions')).toBe(true);
-  expect(requests[1].body).toContain('original-asr-model');
-  const result = await runtime.dispatch('node.result', { runId: restarted.id, nodeId: 'caption' }) as { captionTrack: unknown; shotId: string };
-  expect(result).toMatchObject({ shotId: 'shot-1', captionTrack: { sourceAssetId: audio.id, cues: [{ text: '新识别字幕' }] } }); expect(await current(runtime, project.id)).toEqual(edited);
-});
+
 
 async function localArtifacts(context: ActivityExecutionContext) {
   const directory = join(context.dataDirectory, 'local-export', context.runId); await mkdir(directory, { recursive: true });
@@ -109,9 +98,9 @@ async function localArtifacts(context: ActivityExecutionContext) {
 }
 
 it('restarts an older single-step task without executing the rest of the current workflow', async () => {
-  const { runtime, directory, project } = await setup({}, 'history-handdrawn');
+  const { runtime, directory, project } = await setup({ failpoint: pauseAfterCommit('style') }, 'history-handdrawn');
   const parent = runSchema.parse(await runtime.dispatch('run.start', { projectId: project.id, nodeId: 'style' })); await runtime.waitForIdle();
-  expect(await runtime.dispatch('run.get', { runId: parent.id })).toMatchObject({ status: 'waiting_review' });
+  expect(await runtime.dispatch('run.get', { runId: parent.id })).toMatchObject({ status: 'running' });
   await runtime.dispatch('run.cancel', { runId: parent.id }); await runtime.waitForIdle();
   const restored = await reopenLegacyRun(runtime, directory, parent.id);
   const edited = projectSchema.parse(await restored.dispatch('project.update', { projectId: project.id, revision: project.revision, patch: { title: '旧任务之后的新标题', workflow: { ...project.workflow, nodes: [...project.workflow.nodes, { ...project.workflow.nodes[0], id: 'new-unrelated', label: '新增独立步骤' }] } } }));
@@ -144,7 +133,7 @@ it('keeps a standalone export scope, exact fractional profile and destination af
 });
 
 it.each(['removed', 'kind'] as const)('rejects an older single-step restart when the selected node was %s without creating a broader task', async change => {
-  const { runtime, directory, project } = await setup({}, 'history-handdrawn');
+  const { runtime, directory, project } = await setup({ failpoint: pauseAfterCommit('style') }, 'history-handdrawn');
   const parent = runSchema.parse(await runtime.dispatch('run.start', { projectId: project.id, nodeId: 'style' })); await runtime.waitForIdle(); await runtime.dispatch('run.cancel', { runId: parent.id });
   const restored = await reopenLegacyRun(runtime, directory, parent.id);
   const workflow = change === 'removed'
@@ -156,8 +145,8 @@ it.each(['removed', 'kind'] as const)('rejects an older single-step restart when
 });
 
 it('keeps a full one-node workflow distinct from an older partial single-step task', async () => {
-  const { runtime, project } = await setup();
-  const single = projectSchema.parse(await runtime.dispatch('workflow.save', { projectId: project.id, revision: project.revision, workflow: { id: 'one', name: '原完整流程', version: 1, nodes: [{ id: 'one', kind: 'brief', label: '原步骤', requiresReview: true }], edges: [] } }));
+  const { runtime, project } = await setup({ failpoint: pauseAfterCommit('one') });
+  const single = projectSchema.parse(await runtime.dispatch('workflow.save', { projectId: project.id, revision: project.revision, workflow: { id: 'one', name: '原完整流程', version: 1, production: { mode: 'native-video', referenceMode: 'none', soundPrompt: '', subtitleMode: 'off' }, nodes: [{ id: 'one', kind: 'brief', label: '原步骤', requiresReview: true }], edges: [] } }));
   const parent = runSchema.parse(await runtime.dispatch('run.start', { projectId: project.id })); await runtime.waitForIdle(); await runtime.dispatch('run.cancel', { runId: parent.id });
   await runtime.dispatch('workflow.save', { projectId: project.id, revision: single.revision, workflow: { ...single.workflow, nodes: [{ ...single.workflow.nodes[0], requiresReview: false }, { id: 'two', kind: 'brief', label: '新步骤' }] } });
   const restarted = runSchema.parse(await runtime.dispatch('run.start', { projectId: project.id, parentRunId: parent.id })); await runtime.waitForIdle();
@@ -193,7 +182,7 @@ it('keeps ordinary canceled workflow restarts as new full runs and rejects cross
     if (hold) await new Promise<void>((_resolve, reject) => { request.signal?.addEventListener('abort', () => reject(new Error('cancel text request')), { once: true }); providerEntered(); });
     return '普通工作流文本';
   } });
-  const model = await runtime.dispatch('model.save', { model: { name: '本地注入模型', provider: 'openai-compatible', baseUrl: 'http://127.0.0.1:1/v1', model: 'text-fixture', capabilities: ['text'] } }) as ModelProfile;
+  const model = await runtime.dispatch('model.save', { model: { name: '本地注入模型', provider: 'openai-compatible', baseUrl: 'http://127.0.0.1:1/v1', model: 'text-fixture', connectionType: 'text', capabilities: ['text'] } }) as ModelProfile;
   const nodes = project.workflow.nodes.filter(node => node.kind === 'brief' || node.kind === 'style').map(node => ({ ...node, modelId: model.id, requiresReview: false })); expect(nodes).toHaveLength(2);
   const ready = projectSchema.parse(await runtime.dispatch('workflow.save', { projectId: project.id, revision: project.revision, workflow: { ...project.workflow, nodes, edges: [{ id: 'brief-to-style', source: nodes[0].id, target: nodes[1].id }] } }));
   const parent = runSchema.parse(await runtime.dispatch('run.start', { projectId: project.id })); await entered;

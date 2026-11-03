@@ -4,14 +4,14 @@ import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, expect, it } from 'vitest';
-import { projectSchema, DEFAULT_VIDEO_PROFILE, createHistoryWorkflow } from '@video-quickly/contracts';
+import { projectSchema, DEFAULT_VIDEO_PROFILE, createNativeVideoWorkflow } from '@video-quickly/contracts';
 import { parseResearchResult, readResearchSource, searchWikipedia, selectResearchPassages } from './research.js';
 import { chineseResearchPdf, researchPdf } from '../../../tests/research-fixtures.js';
 
 const directories: string[] = [], servers: Server[] = [];
 afterEach(async () => { await Promise.all(servers.splice(0).map(server => new Promise<void>((resolve, reject) => { server.closeAllConnections(); server.close(error => error ? reject(error) : resolve()); }))); await Promise.all(directories.splice(0).map(path => rm(path, { recursive: true, force: true }))); });
 async function directory() { const path = await mkdtemp(join(tmpdir(), 'video-quickly-research-')); directories.push(path); return path; }
-function project() { return projectSchema.parse({ id: 'project', title: '核验资料', brief: 'paper', profile: DEFAULT_VIDEO_PROFILE, createdAt: '', updatedAt: '', revision: 1, workflow: createHistoryWorkflow(), shots: [{ id: 'shot', title: '引用镜头', narration: '待写旁白', visualPrompt: '', durationUs: 1_000_000 }] }); }
+function project() { return projectSchema.parse({ id: 'project', title: '核验资料', brief: 'paper', profile: DEFAULT_VIDEO_PROFILE, createdAt: '', updatedAt: '', revision: 1, workflow: createNativeVideoWorkflow(), shots: [{ id: 'shot', title: '引用镜头', narration: '待写旁白', visualPrompt: '', durationUs: 1_000_000 }] }); }
 
 it('reads real text and two-page PDFs with exact captured hashes and refuses scanned, oversized and ambiguous inputs', async () => {
   const path = await directory(), text = join(path, 'source.md'), pdf = join(path, 'source.pdf');

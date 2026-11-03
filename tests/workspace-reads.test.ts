@@ -72,18 +72,20 @@ describe('on-demand workspace reads', () => {
     } finally { database.close(); }
   });
 
-  it.each(['failed', 'needs_attention'] as const)('follows a resumed older %s run through execution and review, then returns to the newest completed run', async failureStatus => {
+  it.each(['failed', 'needs_attention'] as const)('follows a resumed older %s run through automatic execution, then returns to the newest completed run', async failureStatus => {
     const directory = await mkdtemp(join(tmpdir(), 'vq-current-run-')); directories.push(directory);
-    let release!: () => void, attempts = 0;
+    let release!: () => void, releaseOther!: () => void, attempts = 0;
     const gate = new Promise<void>(resolve => { release = resolve; });
-    const runtime = createRuntime({ dataDirectory: directory, seed: false, executeActivity: async () => {
+    const otherGate = new Promise<void>(resolve => { releaseOther = resolve; });
+    const runtime = createRuntime({ dataDirectory: directory, seed: false, executeActivity: async context => {
+      if (context.project.title === '另一项目的活动制作') { await otherGate; return { source: 'other isolated activity' }; }
       if (++attempts === 1) throw new Error(failureStatus === 'failed' ? 'isolated retryable failure' : '请重试隔离的本地任务');
       await gate;
       return { source: 'isolated activity' };
     } }); runtimes.push(runtime);
     try {
-      const project = projectSchema.parse(await runtime.dispatch('project.create', { title: '恢复较早的制作' }));
-      await runtime.dispatch('workflow.save', { projectId: project.id, revision: project.revision, workflow: { ...project.workflow, id: 'read-custom-review', nodes: project.workflow.nodes.map(node => node.id === 'animation' ? { ...node, requiresReview: true } : node) } });
+      const project = projectSchema.parse(await runtime.dispatch('project.create', { templateId: 'history-handdrawn', title: '恢复较早的制作' }));
+      await runtime.dispatch('workflow.save', { projectId: project.id, revision: project.revision, workflow: { ...project.workflow, id: 'read-custom-review', nodes: project.workflow.nodes.map(node => node.id === 'brief' ? { ...node, config: {} } : node.id === 'animation' ? { ...node, requiresReview: true } : node) } });
       const older = await runtime.dispatch('run.start', { projectId: project.id, nodeId: 'animation' }) as RunRecord;
       await runtime.waitForIdle();
       expect(runSummarySchema.parse(await runtime.dispatch('run.get', { runId: older.id })).status).toBe(failureStatus);
@@ -92,21 +94,22 @@ describe('on-demand workspace reads', () => {
       expect(projectDetailSchema.parse(await runtime.dispatch('project.get', { projectId: project.id })).latestRun).toMatchObject({ id: newer.id, status: 'succeeded' });
 
       const other = projectSchema.parse(await runtime.dispatch('project.create', { title: '另一项目的活动制作' }));
-      await runtime.dispatch('workflow.save', { projectId: other.id, revision: other.revision, workflow: { ...other.workflow, id: 'other-custom-review', nodes: other.workflow.nodes.map(node => node.id === 'brief' ? { ...node, requiresReview: true } : node) } });
-      const otherRun = await runtime.dispatch('run.start', { projectId: other.id, nodeId: 'brief' }) as RunRecord;
-      await runtime.waitForIdle();
+      await runtime.dispatch('workflow.save', { projectId: other.id, revision: other.revision, workflow: { ...other.workflow, id: 'other-custom-review', nodes: other.workflow.nodes.map(node => node.id === 'animation' ? { ...node, requiresReview: true } : node) } });
+      const otherRun = await runtime.dispatch('run.start', { projectId: other.id, nodeId: 'animation' }) as RunRecord;
+      await expect.poll(async () => runSummarySchema.parse(await runtime.dispatch('run.get', { runId: otherRun.id })).status).toBe('running');
       expect(projectDetailSchema.parse(await runtime.dispatch('project.get', { projectId: project.id })).latestRun?.id).toBe(newer.id);
       await runtime.dispatch('run.resume', { runId: older.id });
       await expect.poll(() => attempts).toBe(2);
       expect(projectDetailSchema.parse(await runtime.dispatch('project.get', { projectId: project.id })).latestRun).toMatchObject({ id: older.id, status: 'running' });
-      expect(projectDetailSchema.parse(await runtime.dispatch('project.get', { projectId: other.id })).latestRun).toMatchObject({ id: otherRun.id, status: 'waiting_review' });
+      expect(projectDetailSchema.parse(await runtime.dispatch('project.get', { projectId: other.id })).latestRun).toMatchObject({ id: otherRun.id, status: 'running' });
 
-      release(); await runtime.waitForIdle();
-      expect(projectDetailSchema.parse(await runtime.dispatch('project.get', { projectId: project.id })).latestRun).toMatchObject({ id: older.id, status: 'waiting_review' });
-      await runtime.dispatch('run.review', { runId: older.id, approved: true }); await runtime.waitForIdle();
+      release();
+      await expect.poll(async () => runSummarySchema.parse(await runtime.dispatch('run.get', { runId: older.id })).status).toBe('succeeded');
       expect(runSummarySchema.parse(await runtime.dispatch('run.get', { runId: older.id })).status).toBe('succeeded');
       expect(projectDetailSchema.parse(await runtime.dispatch('project.get', { projectId: project.id })).latestRun).toMatchObject({ id: newer.id, status: 'succeeded' });
-    } finally { release(); }
+      expect(projectDetailSchema.parse(await runtime.dispatch('project.get', { projectId: other.id })).latestRun).toMatchObject({ id: otherRun.id, status: 'running' });
+      releaseOther(); await runtime.waitForIdle();
+    } finally { release(); releaseOther(); }
   });
 
   it('reads a current project once for a full editor save without caching it across revisions', async () => {

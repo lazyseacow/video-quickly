@@ -79,7 +79,7 @@ test('aggregates blockers and repairs the exact step, model and project media wi
   const database = openDatabase(workspace.system.dataDirectory), store = new DocumentStore(database);
   const missingPath = join(workspace.system.dataDirectory, 'assets', `${project.id}-missing.png`); expectedMissingMedia.add(missingPath);
   try {
-    for (const [id, name, parameters] of [['readiness-image', '检查图片连接', {}], ['readiness-invalid', '检查参数连接', { size: 'invalid-size' }]] as const) store.put('model', id, modelSchema.parse({ id, name, provider: 'openai-compatible', baseUrl: catalog.baseUrl, model: 'fixture', capabilities: ['image'], parameters, createdAt: '', updatedAt: '' }));
+    for (const [id, name, parameters] of [['readiness-image', '检查图片连接', {}], ['readiness-invalid', '检查参数连接', { size: 'invalid-size' }]] as const) store.put('model', id, modelSchema.parse({ id, name, provider: 'openai-compatible', baseUrl: catalog.baseUrl, model: 'fixture', connectionType: 'image', capabilities: ['image'], parameters, createdAt: '', updatedAt: '' }));
     store.put('asset', 'readiness-missing', { id: 'readiness-missing', name: '检查缺失画面', kind: 'image', path: missingPath, mimeType: 'image/png', projectId: project.id, shotId: 'shot', size: 1, sha256: createHash('sha256').update('x').digest('hex'), version: 1, createdAt: '', provenance: 'fixture', retained: false, active: true });
   } finally { database.close(); }
   project = await rpc<ProjectDocument>(request, 'project.update', { projectId: project.id, revision: project.revision, patch: { shots: [{ ...project.shots[0], assetId: 'readiness-missing' }] } });
@@ -95,7 +95,9 @@ test('aggregates blockers and repairs the exact step, model and project media wi
   await dialog.locator('li').filter({ hasText: '需要修正参数的画面' }).getByRole('button', { name: '配置模型', exact: true }).click();
   const model = page.getByRole('dialog', { name: '编辑模型连接', exact: true }); await expect(model).toBeVisible(); await expect(model.getByLabel('连接名称', { exact: true })).toHaveValue('检查参数连接');
   await expect(model.getByLabel('模型 ID', { exact: true })).toHaveValue('fixture');
+  await model.getByLabel('模型 ID', { exact: true }).click();
   await expect(model.getByRole('option', { name: 'fixture', exact: true })).toHaveCount(1);
+  await page.keyboard.press('Escape');
   await model.getByRole('button', { name: '取消', exact: true }).click();
   await openProjectFromList(page); await check.click();
   dialog = page.getByRole('dialog', { name: '制作前检查', exact: true });

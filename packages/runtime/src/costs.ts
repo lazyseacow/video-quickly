@@ -35,13 +35,11 @@ export interface CostStart {
 
 export function requestCostMetrics(project: ProjectDocument, node: WorkflowNode, model: ModelProfile): CostRequestMetrics {
   const base: CostRequestMetrics = { source: 'request', requestCount: 1 };
-  if (node.config.operation === 'transcribe') return base;
-  if (!['assets', 'voice', 'animation'].includes(node.kind)) return base;
+  if (!['assets', 'animation'].includes(node.kind)) return base;
   // Locked shots may reuse existing receipts or assets. Without submission evidence, do not count them as requests.
   if (project.shots.some(shot => shot.locked)) return { source: 'request' };
   const count = project.shots.length;
   if (node.kind === 'assets') return { source: 'request', requestCount: count, images: count };
-  if (node.kind === 'voice') return { source: 'request', requestCount: count, characters: project.shots.reduce((total, shot) => total + Array.from(shot.narration).length, 0) };
   const parameters = requestModelParameters(model, 'video');
   const configured = model.provider === 'openai-compatible' ? parameters.seconds : model.provider === 'seedance' ? parameters.duration : undefined;
   let duration: number | undefined;

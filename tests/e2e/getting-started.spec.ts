@@ -6,14 +6,14 @@ import { stat } from 'node:fs/promises';
 import { expect, test, type APIRequestContext, type Page, type TestInfo } from '@playwright/test';
 import { createSceneTemplate, type ModelProfile, type ProjectDocument, type RunSummary } from '@video-quickly/contracts';
 import { test as isolatedTest } from './isolated-workspace';
-import { settingField } from './settings';
+import { selectModel, settingField } from './settings';
 
 const preference = 'vq-onboarding-v1';
 const targets: Record<string, string[]> = {
   '新建创作项目': ['create-project'], '打开模型连接': ['models'], '添加模型连接': ['model-connection'], '打开我的项目': ['projects'], '进入创作工作台': ['project-open'],
   '分镜与流程': ['view'], '展开镜头导航': ['outline-toggle'], '整理镜头': ['shots'], '预览画面': ['preview'],
   '安排镜头节奏': ['timeline'], '展开属性面板': ['inspector-toggle'], '编辑属性': ['inspector'], '当前流程画布': ['workflow'],
-  '制作前检查': ['check'], '制作与人工审阅': ['produce'], '导出成片': ['export'], '随时重开指引': ['help'],
+  '制作前检查': ['check'], '自动制作': ['produce'], '导出成片': ['export'], '随时重开指引': ['help'],
 };
 function freshProfile(origin: string, theme = 'dark') {
   return { cookies: [], origins: [{ origin: new URL(origin).origin, localStorage: [{ name: 'vq-theme', value: theme }] }] };
@@ -269,7 +269,7 @@ test('isolates editor shortcuts and preserves an unsaved project draft throughou
   const ruler = page.getByRole('slider', { name: '预览播放位置', exact: true }); await ruler.focus(); for (let index = 0; index < 10; index++) await ruler.press('ArrowRight');
   const time = await page.locator('.preview-controls .timecode b').innerText(); await expect(page.getByRole('button', { name: '播放预览', exact: true })).toBeEnabled();
   await title.fill('尚未保存的定位指引草稿'); await expect(page.getByRole('button', { name: '保存修改', exact: true })).toBeEnabled();
-  await openGuide(page); await opened(page); await reach(page, '制作与人工审阅');
+  await openGuide(page); await opened(page); await reach(page, '自动制作');
   await guide(page).getByRole('heading').focus();
   for (const key of ['ControlOrMeta+s', 's', 'Space', 'ArrowRight', 'ArrowLeft']) await page.keyboard.press(key);
   await page.keyboard.press('Escape'); await expect(guide(page)).toHaveCount(0); await expect(settings(page)).toBeFocused();
@@ -321,7 +321,8 @@ test('navigates to current model controls, saves a real local connection and ret
     const dialog = page.getByRole('dialog', { name: '添加文本模型', exact: true }), name = `导览本地模型 ${randomUUID().slice(0, 8)}`;
     await (await settingField(dialog, '模型平台')).selectOption('custom'); await (await settingField(dialog, '连接名称')).fill(name);
     await (await settingField(dialog, 'API Key')).fill('guide-local-fixture-key'); await (await settingField(dialog, '服务地址')).fill(provider.baseUrl);
-    const model = dialog.getByLabel('模型 ID', { exact: true }); await expect(model).toBeEnabled(); await model.selectOption('guide-local-text');
+    await dialog.getByRole('button', { name: '获取模型列表', exact: true }).click();
+    const model = dialog.getByLabel('模型 ID', { exact: true }); await expect(model).toBeEnabled(); await selectModel(dialog, 'guide-local-text');
     const pending = await holdNextRpc(page, 'model.save'); await dialog.getByRole('button', { name: '保存连接', exact: true }).click(); await pending.entered;
     await expect(guide(page)).toHaveCount(0); pending.release(); await expect(dialog).toHaveCount(0); await atStep(page, '打开我的项目');
     const summary = await rpc<{ models: ModelProfile[] }>(request, 'workspace.summary'); expect(summary.models.find(model => model.name === name)).toMatchObject({ model: 'guide-local-text', baseUrl: provider.baseUrl });
@@ -359,7 +360,7 @@ test('waits for an explicit dirty save to persist and lets a failed save retry i
   const report = page.getByRole('dialog', { name: '制作前检查', exact: true }); await expect(report.getByText('隔离的检查失败', { exact: true })).toBeVisible();
   await report.getByRole('button', { name: '关闭', exact: true }).click(); await atStep(page, '制作前检查');
   await active(page).click(); await expect(report.locator('.readiness-summary')).toBeVisible(); await expect(guide(page)).toHaveCount(0);
-  await report.getByRole('button', { name: '关闭', exact: true }).click(); await atStep(page, '制作与人工审阅');
+  await report.getByRole('button', { name: '关闭', exact: true }).click(); await atStep(page, '自动制作');
   expect((await savedProject(request, project.id)).revision).toBe(project.revision + 1); expect(observed.writes).toEqual(['project.update', 'project.update']); expect(observed.errors).toEqual([]);
 });
 
@@ -379,16 +380,16 @@ test('ignores late save completions after manually advancing or closing the guid
 test('starts production only on the user click and advances only when the real runtime accepts it', async ({ page, request }) => {
   const provider = await localProvider();
   try {
-    const source = await projectFixture(request, '导览本地制作'), model = await rpc<ModelProfile>(request, 'model.save', { model: { name: `导览制作 ${randomUUID().slice(0, 8)}`, model: 'guide-local-text', provider: 'openai-compatible', baseUrl: provider.baseUrl, capabilities: ['text'] } });
-    const project = await rpc<ProjectDocument>(request, 'project.update', { projectId: source.id, revision: source.revision, patch: { workflow: { id: 'guide-local-production', name: '导览本地制作', version: 1, nodes: [{ id: 'style', kind: 'style', label: '本地制作确认', modelId: model.id, requiresReview: true }], edges: [] } } });
-    const observed = observe(page); await page.emulateMedia({ reducedMotion: 'reduce' }); await openProjectTour(page, project); await reach(page, '制作与人工审阅');
+    const source = await projectFixture(request, '导览本地制作'), model = await rpc<ModelProfile>(request, 'model.save', { model: { name: `导览制作 ${randomUUID().slice(0, 8)}`, model: 'guide-local-text', provider: 'openai-compatible', baseUrl: provider.baseUrl, connectionType: 'text', capabilities: ['text'] } });
+    const project = await rpc<ProjectDocument>(request, 'project.update', { projectId: source.id, revision: source.revision, patch: { workflow: { id: 'guide-local-production', name: '导览本地制作', version: 1, production: { mode: 'native-video', referenceMode: 'none', soundPrompt: '', subtitleMode: 'off' }, nodes: [{ id: 'style', kind: 'style', label: '本地制作确认', modelId: model.id, requiresReview: true }], edges: [] } } });
+    const observed = observe(page); await page.emulateMedia({ reducedMotion: 'reduce' }); await openProjectTour(page, project); await reach(page, '自动制作');
     expect(provider.calls).toEqual([]); expect(observed.writes).toEqual([]);
-    const failed = await holdNextRpc(page, 'run.start', '隔离的制作接收失败'); await active(page).click(); await failed.entered; await atStep(page, '制作与人工审阅'); failed.release();
-    await expect(page.getByText('隔离的制作接收失败', { exact: true })).toBeVisible(); await atStep(page, '制作与人工审阅'); expect(provider.calls).toEqual([]);
+    const failed = await holdNextRpc(page, 'run.start', '隔离的制作接收失败'); await active(page).click(); await failed.entered; await atStep(page, '自动制作'); failed.release();
+    await expect(page.getByText('隔离的制作接收失败', { exact: true })).toBeVisible(); await atStep(page, '自动制作'); expect(provider.calls).toEqual([]);
     const accepted = await holdNextRpc(page, 'run.start'), response = page.waitForResponse(response => response.url().endsWith('/__desktop_rpc') && response.request().postDataJSON()?.method === 'run.start');
-    await active(page).click(); await accepted.entered; await atStep(page, '制作与人工审阅'); accepted.release();
+    await active(page).click(); await accepted.entered; await atStep(page, '自动制作'); accepted.release();
     const run: RunSummary = (await (await response).json()).result; expect(run.id).toBeTruthy(); await atStep(page, '导出成片');
-    await expect.poll(async () => (await rpc<{ items: RunSummary[] }>(request, 'run.list', { projectId: project.id })).items.find(item => item.id === run.id)?.status).toBe('waiting_review');
+    await expect.poll(async () => (await rpc<{ items: RunSummary[] }>(request, 'run.list', { projectId: project.id })).items.find(item => item.id === run.id)?.status).toBe('succeeded');
     expect(provider.calls.filter(call => call.method === 'POST')).toHaveLength(1); expect(observed.writes).toEqual(['run.start', 'run.start']); expect(observed.errors).toEqual([]);
   } finally { await provider.close(); }
 });

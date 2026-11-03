@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { INITIAL_SCHEMA, openDatabase, DocumentStore, WORKSPACE_MIGRATIONS, thumbnailShot } from '../src/database.js';
 import { DatabaseMigrationError, migrateDatabase } from '../src/migrations.js';
-import { createHistoryWorkflow, DEFAULT_CAPTION_STYLE, DEFAULT_VIDEO_PROFILE, projectSchema, projectSummarySchema } from '@video-quickly/contracts';
+import { createNativeVideoWorkflow, DEFAULT_CAPTION_STYLE, DEFAULT_VIDEO_PROFILE, projectSchema, projectSummarySchema } from '@video-quickly/contracts';
 import { createReadModels } from '../src/read-models.js';
 
 const directories: string[] = [];
@@ -23,7 +23,7 @@ describe('workspace database upgrades', () => {
     });
     migrateDatabase(previous, path, WORKSPACE_MIGRATIONS.filter(migration => migration.version <= 7));
     const store = new DocumentStore(previous);
-    const project = projectSchema.parse({ id: 'v7-project', title: '保留现有项目', brief: '', revision: 4, profile: DEFAULT_VIDEO_PROFILE, workflow: createHistoryWorkflow(), shots: [], createdAt: '', updatedAt: '' });
+    const project = projectSchema.parse({ id: 'v7-project', title: '保留现有项目', brief: '', revision: 4, profile: DEFAULT_VIDEO_PROFILE, workflow: createNativeVideoWorkflow(), shots: [], createdAt: '', updatedAt: '' });
     store.put('project', project.id, project);
     store.put('model', 'saved-connection', { id: 'saved-connection', credentialRef: 'opaque-reference' });
     store.put('asset', 'saved-asset', { id: 'saved-asset', projectId: project.id, path: '/isolated-fixture/keep.svg' });
@@ -57,7 +57,7 @@ describe('workspace database upgrades', () => {
       return JSON.stringify(thumbnailShot(JSON.parse(body)));
     });
     migrateDatabase(previous, path, WORKSPACE_MIGRATIONS.filter(migration => migration.version <= 6));
-    const project = projectSchema.parse({ id: 'v6-project', title: '升级前的项目', brief: '', revision: 3, profile: DEFAULT_VIDEO_PROFILE, workflow: createHistoryWorkflow(), shots: [], createdAt: '', updatedAt: '' });
+    const project = projectSchema.parse({ id: 'v6-project', title: '升级前的项目', brief: '', revision: 3, profile: DEFAULT_VIDEO_PROFILE, workflow: createNativeVideoWorkflow(), shots: [], createdAt: '', updatedAt: '' });
     const store = new DocumentStore(previous); store.put('project', project.id, project);
     store.put('model', 'connection', { id: 'connection', credentialRef: 'opaque-reference' });
     previous.exec("CREATE TABLE checkpoints (thread_id TEXT PRIMARY KEY, checkpoint BLOB); INSERT INTO checkpoints VALUES ('original-run', X'010203');");
@@ -79,7 +79,7 @@ describe('workspace database upgrades', () => {
   it('creates a versioned database and does not back up on every reopen', async () => {
     const path = await directory(); const db = openDatabase(path);
     expect(db.pragma('user_version', { simple: true })).toBe(currentVersion);
-    expect(db.prepare('SELECT name FROM schema_migrations ORDER BY version').all()).toEqual([{ name: 'workspace-baseline' }, { name: 'execution-event-index' }, { name: 'workspace-read-models' }, { name: 'audio-asset-references' }, { name: 'project-summary-caption-style' }, { name: 'clip-edit-references-and-first-frame' }, { name: 'workflow-composition-and-keyframe-capabilities' }, { name: 'active-project-runs-index' }, { name: 'compact-built-in-production-workflows' }]);
+    expect(db.prepare('SELECT name FROM schema_migrations ORDER BY version').all()).toEqual([{ name: 'workspace-baseline' }, { name: 'execution-event-index' }, { name: 'workspace-read-models' }, { name: 'audio-asset-references' }, { name: 'project-summary-caption-style' }, { name: 'clip-edit-references-and-first-frame' }, { name: 'workflow-composition-and-keyframe-capabilities' }, { name: 'active-project-runs-index' }, { name: 'workflow-layout' }, { name: 'native-video-production' }, { name: 'production-reference-audio' }]);
     db.close(); openDatabase(path).close();
     expect(await readdir(path)).not.toContain('database-backups');
   });
@@ -126,7 +126,7 @@ describe('workspace database upgrades', () => {
   it('backfills project summaries and asset references when upgrading the previous version', async () => {
     const path = await directory(); const db = new Database(join(path, 'workspace.sqlite'));
     db.exec(`${INITIAL_SCHEMA} CREATE INDEX execution_events_run_sequence ON execution_events(run_id, sequence); PRAGMA user_version = 2;`);
-    const project = projectSchema.parse({ id: 'legacy', title: '旧项目', brief: '', revision: 7, profile: DEFAULT_VIDEO_PROFILE, workflow: createHistoryWorkflow(), createdAt: '', updatedAt: '', shots: [{ id: 's', title: '旧镜头', narration: '', visualPrompt: '', durationUs: 2_000_000, assetId: 'used-image', audioAssetId: 'used-audio', captionTrack: { timeBase: 'source', alignment: 'manual', sourceAssetId: 'caption-origin-audio', cues: [] } }], musicClips: [{ id: 'legacy-music', assetId: 'used-music', durationUs: 2_000_000 }] });
+    const project = projectSchema.parse({ id: 'legacy', title: '旧项目', brief: '', revision: 7, profile: DEFAULT_VIDEO_PROFILE, workflow: createNativeVideoWorkflow(), createdAt: '', updatedAt: '', shots: [{ id: 's', title: '旧镜头', narration: '', visualPrompt: '', durationUs: 2_000_000, assetId: 'used-image', audioAssetId: 'used-audio', captionTrack: { timeBase: 'source', alignment: 'manual', sourceAssetId: 'caption-origin-audio', cues: [] } }], musicClips: [{ id: 'legacy-music', assetId: 'used-music', durationUs: 2_000_000 }] });
     new DocumentStore(db).put('project', project.id, project); db.close();
     const upgraded = openDatabase(path);
     try {
@@ -141,7 +141,7 @@ describe('workspace database upgrades', () => {
   it('upgrades legacy v3 read models that predate the asset reference table', async () => {
     const path = await directory(), previous = new Database(join(path, 'workspace.sqlite'));
     migrateDatabase(previous, path, WORKSPACE_MIGRATIONS.filter(migration => migration.version <= 3));
-    const project = projectSchema.parse({ id: 'legacy-v3', title: '保留旧版项目', brief: '', revision: 4, profile: DEFAULT_VIDEO_PROFILE, workflow: createHistoryWorkflow(), createdAt: '', updatedAt: '', shots: [{ id: 'shot', title: '镜头', narration: '', visualPrompt: '', durationUs: 2_000_000, assetId: 'image', audioAssetId: 'audio', videoAssetId: 'video', captionTrack: { timeBase: 'source', alignment: 'manual', sourceAssetId: 'caption-audio', cues: [] } }], musicClips: [{ id: 'music', assetId: 'music-audio', durationUs: 2_000_000 }] });
+    const project = projectSchema.parse({ id: 'legacy-v3', title: '保留旧版项目', brief: '', revision: 4, profile: DEFAULT_VIDEO_PROFILE, workflow: createNativeVideoWorkflow(), createdAt: '', updatedAt: '', shots: [{ id: 'shot', title: '镜头', narration: '', visualPrompt: '', durationUs: 2_000_000, assetId: 'image', audioAssetId: 'audio', videoAssetId: 'video', captionTrack: { timeBase: 'source', alignment: 'manual', sourceAssetId: 'caption-audio', cues: [] } }], musicClips: [{ id: 'music', assetId: 'music-audio', durationUs: 2_000_000 }] });
     const oldStore = new DocumentStore(previous); oldStore.put('project', project.id, project);
     oldStore.put('run', 'review', { status: 'waiting_review' }); oldStore.put('model', 'connection', { credentialRef: 'reference-only' });
     // The original v3 only maintained summaries. Its version and migration
@@ -193,7 +193,7 @@ describe('workspace database upgrades', () => {
     const path = await directory(), previous = new Database(join(path, 'workspace.sqlite'));
     migrateDatabase(previous, path, WORKSPACE_MIGRATIONS.filter(migration => migration.version <= 4));
     const oldStore = new DocumentStore(previous), content = '资料正文不得进入后台摘要。'.repeat(2_000);
-    const project = projectSchema.parse({ id: 'styled-v4', title: '旧版样式项目', brief: '', revision: 7, profile: DEFAULT_VIDEO_PROFILE, captionStyle: { ...DEFAULT_CAPTION_STYLE, fontId: 'serif', position: 'top' }, workflow: createHistoryWorkflow(), createdAt: '', updatedAt: '', researchSources: [{ id: 'source', title: '资料标题', kind: 'text', content, sha256: createHash('sha256').update(content).digest('hex'), capturedAt: '2026-10-30T00:00:00.000Z' }], claims: [{ id: 'claim', text: '主张全文不得出现在摘要中', source: '资料标题', status: 'pending' }], shots: [{ id: 'shot', title: '旧镜头', narration: '', visualPrompt: '', durationUs: 2_000_000, assetId: 'used-image', audioAssetId: 'used-audio', claimIds: ['claim'], captionTrack: { timeBase: 'source', alignment: 'manual', sourceAssetId: 'caption-origin-audio', cues: [] } }], musicClips: [{ id: 'music', assetId: 'used-music', durationUs: 2_000_000 }] });
+    const project = projectSchema.parse({ id: 'styled-v4', title: '旧版样式项目', brief: '', revision: 7, profile: DEFAULT_VIDEO_PROFILE, captionStyle: { ...DEFAULT_CAPTION_STYLE, fontId: 'serif', position: 'top' }, workflow: createNativeVideoWorkflow(), createdAt: '', updatedAt: '', researchSources: [{ id: 'source', title: '资料标题', kind: 'text', content, sha256: createHash('sha256').update(content).digest('hex'), capturedAt: '2026-10-30T00:00:00.000Z' }], claims: [{ id: 'claim', text: '主张全文不得出现在摘要中', source: '资料标题', status: 'pending' }], shots: [{ id: 'shot', title: '旧镜头', narration: '', visualPrompt: '', durationUs: 2_000_000, assetId: 'used-image', audioAssetId: 'used-audio', claimIds: ['claim'], captionTrack: { timeBase: 'source', alignment: 'manual', sourceAssetId: 'caption-origin-audio', cues: [] } }], musicClips: [{ id: 'music', assetId: 'used-music', durationUs: 2_000_000 }] });
     oldStore.put('project', project.id, project);
     const assets = ['used-image', 'used-audio', 'used-music', 'caption-origin-audio'].map(id => ({ id, name: id, projectId: project.id, kind: id === 'used-image' ? 'image' : 'audio', path: `/fixture/${id}`, mimeType: 'application/octet-stream', size: 1, sha256: createHash('sha256').update(id).digest('hex'), version: 1, createdAt: '', provenance: 'migration fixture', retained: false, active: true }));
     for (const asset of assets) oldStore.put('asset', asset.id, asset);

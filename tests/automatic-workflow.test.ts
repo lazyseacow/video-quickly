@@ -1,0 +1,110 @@
+import { createHash } from 'node:crypto';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { afterEach, expect, it, vi } from 'vitest';
+import { createNativeVideoWorkflow, assetSchema, projectSchema, runInspectionSchema, runSchema, type ProjectDocument } from '@video-quickly/contracts';
+import { createRuntime, SimulatedProcessExit, type ActivityExecutionContext, type RuntimeOptions } from '../packages/runtime/src';
+
+const directories: string[] = [], runtimes = new Set<ReturnType<typeof createRuntime>>();
+afterEach(async () => {
+  await Promise.all([...runtimes].map(runtime => runtime.close())); runtimes.clear();
+  await Promise.all(directories.splice(0).map(directory => rm(directory, { recursive: true, force: true })));
+});
+async function current(runtime: ReturnType<typeof createRuntime>, projectId: string) {
+  return (await runtime.dispatch('project.get', { projectId }) as { project: ProjectDocument }).project;
+}
+async function fixture(extra: Partial<RuntimeOptions> = {}) {
+  const directory = await mkdtemp(join(tmpdir(), 'vq-automatic-workflow-')); directories.push(directory);
+  const provider = vi.fn<NonNullable<RuntimeOptions['provider']>>(async ({ prompt }) => {
+    if (prompt.includes('自动视频制作步骤：创意简报')) return '面向新手介绍雨水循环，三幕叙事，时长六秒。';
+    if (prompt.includes('自动视频制作步骤：风格与角色')) {
+      expect(prompt).toContain('面向新手介绍雨水循环'); return '蓝绿色水彩，柔和光线，角色与场景连续。';
+    }
+    expect(prompt).toContain('蓝绿色水彩'); expect(prompt).toContain('上游已完成步骤的实际产物');
+    return JSON.stringify({ shots: [{ title: '水滴的旅程', narration: '水汽遇冷形成雨滴。', visualPrompt: '水彩雨滴从白云落向湖面', durationUs: 6_000_000 }] });
+  });
+  const media = vi.fn(async (context: ActivityExecutionContext) => {
+    expect(context.project.brief).toContain('三幕叙事'); expect(context.project.style).toContain('蓝绿色水彩');
+    const shot = context.project.shots[0]; expect(shot.title).toBe('水滴的旅程');
+    if (context.node.kind !== 'assets') expect(context.assets.some(asset => asset.id === shot.assetId)).toBe(true);
+    if (context.node.kind === 'export') {
+      expect(context.assets.some(asset => asset.id === shot.videoAssetId)).toBe(true);
+      return { completed: true, shotIds: context.project.shots.map(shot => shot.id) };
+    }
+    if (context.node.config.operation === 'prepare-edit') return { source: 'local', shots: context.project.shots.length };
+    const kind = context.node.kind === 'assets' ? 'image' : 'video';
+    const bytes = Buffer.from(`controlled ${kind} boundary`), path = join(directory, `${kind}.fixture`);
+    await writeFile(path, bytes);
+    const asset = assetSchema.parse({ id: `generated-${kind}`, projectId: context.project.id, shotId: shot.id, name: kind, kind, path,
+      mimeType: `${kind}/fixture`, size: bytes.length, sha256: createHash('sha256').update(bytes).digest('hex'), durationUs: 6_000_000,
+      version: 1, createdAt: '', provenance: 'controlled activity boundary', retained: false, active: true });
+    return { assets: [asset] };
+  });
+  const options: RuntimeOptions = { dataDirectory: directory, seed: false, provider, executeActivity: media, ...extra };
+  const runtime = createRuntime(options); runtimes.add(runtime);
+  const created = projectSchema.parse(await runtime.dispatch('project.create', { title: '雨水循环', brief: '介绍雨水循环' }));
+  const model = await runtime.dispatch('model.save', { model: { name: '本地测试边界', provider: 'ollama', baseUrl: 'http://127.0.0.1:1', model: 'fixture', connectionType: 'text', capabilities: ['text'] } }) as { id: string };
+  const image = await runtime.dispatch('model.save', { model: { name: '参考图片边界', provider: 'openai-compatible', connectionType: 'image', capabilities: ['image'], baseUrl: 'http://127.0.0.1:1', model: 'fixture-image' } }) as { id: string };
+  const video = await runtime.dispatch('model.save', { model: { name: '视频边界', provider: 'openai-compatible', connectionType: 'video', capabilities: ['video'], baseUrl: 'http://127.0.0.1:1', model: 'fixture-video', parameters: {  } } }) as { id: string };
+  const project = projectSchema.parse(await runtime.dispatch('workflow.save', { projectId: created.id, revision: created.revision, workflow: {
+    ...createNativeVideoWorkflow(), production: { ...createNativeVideoWorkflow().production, textModelId: model.id, imageModelId: image.id, videoModelId: video.id, referenceMode: 'generate' }, nodes: createNativeVideoWorkflow().nodes.map(node => ['brief', 'style', 'script'].includes(node.kind) ? { ...node, modelId: model.id } : node),
+  } }));
+  return { runtime, directory, project, provider, media, options };
+}
+
+it('automatically chains all seven tasks, forwards generated text and media, and saves the finished project', async () => {
+  const { runtime, project, provider, media } = await fixture();
+  const run = runSchema.parse(await runtime.dispatch('run.start', { projectId: project.id })); await runtime.waitForIdle();
+  const inspection = runInspectionSchema.parse(await runtime.dispatch('run.inspect', { runId: run.id }));
+  expect(inspection.run.status, inspection.run.error).toBe('succeeded'); expect(inspection.steps.every(step => step.status === 'succeeded')).toBe(true);
+  expect(provider).toHaveBeenCalledTimes(3); expect(media.mock.calls.map(([context]) => context.node.kind)).toEqual(['assets', 'animation', 'animation', 'export']);
+  const saved = await current(runtime, project.id);
+  expect(saved).toMatchObject({ revision: project.revision + 1, brief: expect.stringContaining('三幕叙事'), style: expect.stringContaining('蓝绿色水彩'),
+    shots: [{ assetId: 'generated-image', videoAssetId: 'generated-video' }] });
+  expect((await runtime.dispatch('run.get', { runId: run.id }) as { events?: { type: string }[] }).events?.some(event => event.type === 'review.waiting')).not.toBe(true);
+});
+
+it('continues after a committed media result across reopening without regenerating earlier steps', async () => {
+  let interrupted = false;
+  const { runtime, project, provider, media, options } = await fixture({ failpoint(point, activityId) {
+    if (!interrupted && point === 'after-commit' && activityId === 'assets') { interrupted = true; throw new SimulatedProcessExit(); }
+  } });
+  const run = runSchema.parse(await runtime.dispatch('run.start', { projectId: project.id })); await runtime.waitForIdle();
+  await runtime.close(); runtimes.delete(runtime);
+  const recovered = createRuntime({ ...options, failpoint: undefined }); runtimes.add(recovered);
+  await recovered.dispatch('run.resume', { runId: run.id }); await recovered.waitForIdle();
+  expect(runSchema.parse(await recovered.dispatch('run.get', { runId: run.id })).status).toBe('succeeded');
+  expect(provider).toHaveBeenCalledTimes(3); expect(media.mock.calls.map(([context]) => context.node.kind)).toEqual(['assets', 'animation', 'animation', 'export']);
+  expect((await current(recovered, project.id)).shots[0].videoAssetId).toBe('generated-video');
+});
+
+it('saves a complete production workflow whose only top-level node calls a multi-step subflow', async () => {
+  const { runtime, project } = await fixture();
+  const nodes = project.workflow.nodes.filter(node => ['brief', 'style'].includes(node.kind));
+  const configured = projectSchema.parse(await runtime.dispatch('workflow.save', { projectId: project.id, revision: project.revision, workflow: {
+    id: 'subflow-production', name: '完整子流程制作', version: 1,
+    production: { mode: 'native-video', referenceMode: 'none', soundPrompt: '', subtitleMode: 'off' }, nodes: [{ id: 'production', kind: 'subflow', label: '自动制作', subflow: { id: 'planning', version: 1, inputs: {} } }], edges: [],
+    subflows: [{ id: 'planning', name: '生成简报与风格', version: 1, inputs: [], outputs: [], nodes, edges: [{ id: 'bs', source: 'brief', target: 'style' }] }],
+  } }));
+  const run = runSchema.parse(await runtime.dispatch('run.start', { projectId: project.id })); await runtime.waitForIdle();
+  const inspection = runInspectionSchema.parse(await runtime.dispatch('run.inspect', { runId: run.id }));
+  expect(inspection.run.status, inspection.run.error).toBe('succeeded');
+  expect(await current(runtime, project.id)).toMatchObject({ revision: configured.revision + 1, brief: expect.stringContaining('三幕叙事'), style: expect.stringContaining('蓝绿色水彩') });
+});
+
+it('preserves edits made during production while retaining the complete generated outputs', async () => {
+  let entered!: () => void, release!: () => void;
+  const started = new Promise<void>(resolve => { entered = resolve; }), gate = new Promise<void>(resolve => { release = resolve; });
+  const { runtime, project } = await fixture({ provider: async () => { entered(); await gate; return '新的风格'; } });
+  const configured = projectSchema.parse(await runtime.dispatch('workflow.save', { projectId: project.id, revision: project.revision, workflow: {
+    ...project.workflow, nodes: project.workflow.nodes.filter(node => ['brief', 'style'].includes(node.kind)), edges: [{ id: 'bs', source: 'brief', target: 'style' }], stages: undefined,
+  } }));
+  const run = runSchema.parse(await runtime.dispatch('run.start', { projectId: project.id })); await started;
+  const edited = projectSchema.parse(await runtime.dispatch('project.update', { projectId: project.id, revision: configured.revision, patch: { title: '制作期间修改的标题' } }));
+  release(); await runtime.waitForIdle();
+  expect(await current(runtime, project.id)).toEqual(edited);
+  expect(runSchema.parse(await runtime.dispatch('run.get', { runId: run.id })).status).toBe('succeeded');
+  expect(await runtime.dispatch('node.result', { runId: run.id, nodeId: 'style' })).toMatchObject({ text: '新的风格' });
+  expect(await runtime.dispatch('run.events', { runId: run.id })).toMatchObject({ items: expect.arrayContaining([expect.objectContaining({ type: 'project.apply_conflict' })]) });
+});

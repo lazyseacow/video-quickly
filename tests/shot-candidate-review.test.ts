@@ -12,8 +12,5 @@ describe('candidate input dependency protection', () => {
     expect(() => applyShotCandidate({ ...baseline, assetId: 'reference-after' }, candidate('video'))).toThrow('已修改');
   });
 
-  it('keeps an unrelated reference image edit when applying a voice candidate', () => {
-    const current = { ...baseline, assetId: 'reference-after' };
-    expect(applyShotCandidate(current, candidate('audio'))).toEqual({ ...current, audioAssetId: 'generated', audioInUs: 0 });
-  });
+
 });

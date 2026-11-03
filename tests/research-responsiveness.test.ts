@@ -20,7 +20,7 @@ it('serves persisted run history while a cold PDF is being parsed and drains tha
       let interval;
       try {
         const project = await runtime.dispatch('project.create', { title: '并发 PDF 与记录读取' });
-        await runtime.dispatch('workflow.save', { projectId: project.id, workflow: { id: 'review', name: '只核对', version: 1, nodes: [{ id: 'review', kind: 'review', label: '人工核对', requiresReview: true }], edges: [] } });
+        await runtime.dispatch('workflow.save', { projectId: project.id, workflow: { ...project.workflow, id: 'automatic-check', name: '自动检查', version: 1, nodes: [{ id: 'check', kind: 'review', label: '内容检查', requiresReview: true }], edges: [] } });
         const run = await runtime.dispatch('run.start', { projectId: project.id });
         await runtime.waitForIdle();
         const order = []; let previous = performance.now(), maximumMainThreadDelayMs = 0;
@@ -40,7 +40,7 @@ it('serves persisted run history while a cold PDF is being parsed and drains tha
     const { stdout } = await promisify(execFile)(process.execPath, ['--import', 'tsx', '--input-type=module', '-e', probe], { cwd: resolve('.'), timeout: 20_000, maxBuffer: 256 * 1024 });
     const result = JSON.parse(stdout.trim());
     expect(result.order).toEqual(['history', 'pdf']);
-    expect(result.runs).toEqual([expect.objectContaining({ id: result.runId, status: 'waiting_review' })]);
+    expect(result.runs).toEqual([expect.objectContaining({ id: result.runId, status: 'succeeded' })]);
     expect(result.source.content).toContain('【第 1 页】\nFirst page evidence about paper.');
     expect(result.source.content).toContain('【第 2 页】\nSecond page evidence about printing.');
     expect(result.finalSource.content).toBe(result.source.content);

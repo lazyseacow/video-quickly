@@ -1,7 +1,7 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { drawSceneFrame } from '@video-quickly/video';
 import { resolveShotSpans, resolveShotTime } from '@video-quickly/video/clip-edits';
-import { effectiveCaptionStyle, type AssetRecord, type ProjectDocument, type Shot } from '@video-quickly/contracts';
+import { captionsEnabled, effectiveCaptionStyle, type AssetRecord, type ProjectDocument, type Shot } from '@video-quickly/contracts';
 import { getAssetUrl } from '../lib/client';
 import { CircleAlert, LoaderCircle, RefreshCw, Upload } from 'lucide-react';
 import { createPreviewVideoController, loadPreviewImage, previewAssetKey } from './preview-media';
@@ -10,7 +10,7 @@ import { videoThumbnails, type ThumbnailFrame } from './preview-thumbnails';
 import { useThumbnailVisibility } from './thumbnail-visibility';
 import { assetAvailabilityUrl, useAssetAvailabilityKey } from '../lib/asset-availability';
 
-export type ScenePreviewProject = Pick<ProjectDocument, 'profile'> & Partial<Pick<ProjectDocument, 'captionStyle' | 'clipEditSources' | 'clipEditPlans'>>;
+export type ScenePreviewProject = Pick<ProjectDocument, 'profile'> & Partial<Pick<ProjectDocument, 'captionStyle' | 'clipEditSources' | 'clipEditPlans'>> & { workflow?: Pick<ProjectDocument['workflow'], 'production'> };
 
 interface ScenePreviewProps {
   project: ScenePreviewProject;
@@ -31,7 +31,7 @@ const previewPropKeys = Object.keys({
   shot: true, shotIndex: true, timeUs: true, className: true, thumbnail: true, assets: true, playing: true, onRepair: true,
 } satisfies Record<PreviewPropKey, true>) as PreviewPropKey[];
 const previewProjectKeys = Object.keys({
-  profile: true, captionStyle: true, clipEditSources: true, clipEditPlans: true,
+  profile: true, captionStyle: true, clipEditSources: true, clipEditPlans: true, workflow: true,
 } satisfies Record<PreviewProjectKey, true>) as PreviewProjectKey[];
 
 function samePreviewProps(previous: ScenePreviewProps, next: ScenePreviewProps) {
@@ -166,10 +166,10 @@ export const ScenePreview = memo(function ScenePreview({ project, shot, shotInde
       if (hasVideo && !videoFrame) return;
       if (target.width !== profile.width) target.width = profile.width;
       if (target.height !== profile.height) target.height = profile.height;
-      drawSceneFrame(target, { title: shot.title, narration: shot.narration, sceneTemplate: shot.sceneTemplate, captionTrack: shot.captionTrack, clipEdit: shot.clipEdit, clipEditContext: project, sourceInUs: shot.sourceInUs, audioInUs: shot.audioInUs, videoInUs: shot.videoInUs, shotIndex, sceneIndex: shot.sceneIndex, profile, durationUs: shot.durationUs, sceneInUs: shot.sceneInUs, sceneDurationUs: shot.sceneDurationUs, animation: shot.animation, image: videoFrame ?? activeImage, captionStyle }, timeUs);
+      drawSceneFrame(target, { title: shot.title, narration: shot.narration, sceneTemplate: shot.sceneTemplate, captionTrack: captionsEnabled(project) ? shot.captionTrack : { timeBase: 'scene', alignment: 'manual', cues: [] }, clipEdit: shot.clipEdit, clipEditContext: project, sourceInUs: shot.sourceInUs, audioInUs: shot.audioInUs, videoInUs: shot.videoInUs, shotIndex, sceneIndex: shot.sceneIndex, profile, durationUs: shot.durationUs, sceneInUs: shot.sceneInUs, sceneDurationUs: shot.sceneDurationUs, animation: shot.animation, image: videoFrame ?? activeImage, captionStyle }, timeUs);
     };
     requestRender();
-  }, [profile, shot.title, shot.narration, shot.sceneTemplate, shot.captionTrack, shot.clipEdit, project.clipEditSources, project.clipEditPlans, shot.sourceInUs, shot.audioInUs, shot.videoInUs, shot.durationUs, shot.sceneInUs, shot.sceneDurationUs, hasVideo, shot.animation, shotIndex, shot.sceneIndex, timeUs, activeImage, activeVideo, activeStill, thumbnail, visible, videoRange?.startUs, videoRange?.endUs, error, loading, captionStyle, requestRender]);
+  }, [profile, shot.title, shot.narration, shot.sceneTemplate, shot.captionTrack, shot.clipEdit, project.workflow?.production?.subtitleMode, project.clipEditSources, project.clipEditPlans, shot.sourceInUs, shot.audioInUs, shot.videoInUs, shot.durationUs, shot.sceneInUs, shot.sceneDurationUs, hasVideo, shot.animation, shotIndex, shot.sceneIndex, timeUs, activeImage, activeVideo, activeStill, thumbnail, visible, videoRange?.startUs, videoRange?.endUs, error, loading, captionStyle, requestRender]);
 
   useEffect(() => {
     document.addEventListener('visibilitychange', requestRender);

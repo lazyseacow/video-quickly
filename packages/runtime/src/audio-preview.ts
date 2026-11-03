@@ -27,7 +27,7 @@ export function compactAudioProject(project: ProjectDocument): ProjectDocument {
     clipEditPlans: structuredClone(plans),
     clipEditSources: (project.clipEditSources ?? []).filter(source => sourceIds.has(source.id)).map(source => ({ ...source, original: { ...source.original, captionTrack: source.original.captionTrack ? { ...source.original.captionTrack, cues: [] } : undefined }, assetHashes: structuredClone(source.assetHashes) })),
     audioMix: structuredClone(project.audioMix), musicClips: structuredClone(project.musicClips),
-    workflow: workflowSchema.parse({ id: 'audio-preview', version: 1, name: '声音试听', nodes: [{ id: 'audio-preview', kind: 'export', label: '声音试听' }], edges: [] }) };
+    workflow: workflowSchema.parse({ production: project.workflow.production, id: 'audio-preview', version: 1, name: '声音试听', nodes: [{ id: 'audio-preview', kind: 'export', label: '声音试听' }], edges: [] }) };
 }
 
 export function createAudioPreview(options: {

@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { configDigest, parseRealServiceConfig, redactServiceFailure, servicePreflight, serviceRoles } from '../scripts/real-service-config';
 
-const configured = () => ({ roles: Object.fromEntries(serviceRoles.map(role => [role, { secretEnv: `VQ_${role.toUpperCase()}_KEY`, model: { provider: 'openai-compatible', baseUrl: 'https://example.invalid/v1', model: `configured-${role}`, capabilities: [role] } }])) });
+const configured = () => ({ roles: Object.fromEntries(serviceRoles.map(role => [role, { secretEnv: `VQ_${role.toUpperCase()}_KEY`, model: { provider: 'openai-compatible', baseUrl: 'https://example.invalid/v1', model: `configured-${role}`, connectionType: (([role]) as readonly string[]).includes('text') ? 'text' : (([role]) as readonly string[]).includes('video') ? 'video' : 'image', capabilities: [role] } }])) });
 
 describe('real service validation configuration', () => {
   it('uses production model validation and exposes only credential availability in preflight', () => {
@@ -25,8 +25,8 @@ describe('real service validation configuration', () => {
     expect(() => parseRealServiceConfig(secret)).toThrow('凭据');
     const query = configured(); query.roles.text.model.baseUrl += '?key=private-value';
     expect(() => parseRealServiceConfig(query)).toThrow('服务地址');
-    const incomplete = configured(); Reflect.deleteProperty(incomplete.roles, 'asr');
-    expect(() => parseRealServiceConfig(incomplete)).toThrow('asr');
+    const incomplete = configured(); Reflect.deleteProperty(incomplete.roles, 'video');
+    expect(() => parseRealServiceConfig(incomplete)).toThrow('video');
   });
 
   it('redacts configured secrets from failures without hiding the HTTP failure category', () => {

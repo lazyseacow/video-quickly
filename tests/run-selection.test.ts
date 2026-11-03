@@ -26,7 +26,7 @@ async function setup(options: Partial<RuntimeOptions> = {}) {
   const project = projectSchema.parse(await runtime.dispatch('project.update', { projectId: created.id, revision: created.revision, patch: {
     shots: [{ id: 'locked', title: '已经确认的镜头', narration: '人工旁白', visualPrompt: '', durationUs: 1_000_000, locked: true }, { id: 'editable', title: '可编辑镜头', narration: '另一段人工旁白', visualPrompt: '', durationUs: 1_000_000 }],
     workflow: { id: 'scope', name: '分支与汇合', version: 1,
-      nodes: [node('tail'), node('no'), node('outside'), node('root', 'condition', { config: { value: true } }), node('yes'), node('join', 'join'), node('upstream'), node('unrelated')],
+      production: { mode: 'native-video', referenceMode: 'none', soundPrompt: '', subtitleMode: 'off' }, nodes: [node('tail'), node('no'), node('outside'), node('root', 'condition', { config: { value: true } }), node('yes'), node('join', 'join'), node('upstream'), node('unrelated')],
       edges: [{ id: 'ur', source: 'upstream', target: 'root' }, { id: 'ry', source: 'root', target: 'yes', condition: 'true' }, { id: 'rn', source: 'root', target: 'no', condition: 'false' }, { id: 'yj', source: 'yes', target: 'join' }, { id: 'nj', source: 'no', target: 'join' }, { id: 'oj', source: 'outside', target: 'join' }, { id: 'jt', source: 'join', target: 'tail' }],
     },
   } }));
@@ -59,7 +59,7 @@ it('previews all possible descendants and boundary inputs without starting tasks
   expect((await runtime.dispatch('workspace.summary') as WorkspaceSummary).version).toBe(before.version);
   expect(await current()).toEqual(project); expect(provider).not.toHaveBeenCalled();
   const withReview = projectSchema.parse(await runtime.dispatch('project.update', { projectId: project.id, revision: project.revision, patch: { workflow: { ...project.workflow, nodes: [...project.workflow.nodes, node('manual', 'review')] } } }));
-  expect((await plan(runtime, withReview, 'manual', 'node')).steps[0].requiresReview).toBe(true);
+  expect((await plan(runtime, withReview, 'manual', 'node')).steps[0].requiresReview).toBe(false);
 });
 
 it('runs only the confirmed induced graph and lets native conditions skip the inactive branch', async () => {
@@ -77,7 +77,7 @@ it('runs only the confirmed induced graph and lets native conditions skip the in
 it.each(['project', 'workflow', 'model', 'skill', 'asset', 'character'] as const)('rejects an obsolete preview after a relevant %s change without creating a run', async change => {
   const provider = vi.fn(async () => 'must not submit');
   const { runtime, directory, project, current } = await setup({ provider });
-  const model = modelSchema.parse(await runtime.dispatch('model.save', { model: { name: '步骤模型', provider: 'ollama', baseUrl: 'http://127.0.0.1:1', model: 'scope-test', capabilities: ['text'] } }));
+  const model = modelSchema.parse(await runtime.dispatch('model.save', { model: { name: '步骤模型', provider: 'ollama', baseUrl: 'http://127.0.0.1:1', model: 'scope-test', connectionType: 'text', capabilities: ['text'] } }));
   const skillPath = join(directory, 'skill'); await mkdir(skillPath); await writeFile(join(skillPath, 'SKILL.md'), '---\nname: scoped-style\ndescription: A reproducible style fixture\n---\nUse the saved project.');
   const skill = skillSchema.parse(await runtime.dispatch('skill.import', { path: skillPath }));
   const character = characterProfileSchema.parse(await runtime.dispatch('character.save', { character: { name: '已绑定角色', description: '', referenceAssetIds: [] } }));
@@ -99,7 +99,7 @@ it.each(['project', 'workflow', 'model', 'skill', 'asset', 'character'] as const
 
 it('does not invalidate the chosen scope when an unrelated model is added', async () => {
   const { runtime, project } = await setup(); const preview = await plan(runtime, project);
-  await runtime.dispatch('model.save', { model: { name: '未绑定模型', provider: 'ollama', baseUrl: 'http://127.0.0.1:1', model: 'unrelated', capabilities: ['text'] } });
+  await runtime.dispatch('model.save', { model: { name: '未绑定模型', provider: 'ollama', baseUrl: 'http://127.0.0.1:1', model: 'unrelated', connectionType: 'text', capabilities: ['text'] } });
   expect((await plan(runtime, project)).digest).toBe(preview.digest);
   expect((await inspection(runtime, (await start(runtime, preview)).id)).run.status).toBe('succeeded');
 });
@@ -107,7 +107,7 @@ it('does not invalidate the chosen scope when an unrelated model is added', asyn
 it('gives explicitly repeated generation new run and activity identifiers while preserving current manual content', async () => {
   const provider = vi.fn<NonNullable<RuntimeOptions['provider']>>(async () => '新的风格候选');
   const { runtime, project, current } = await setup({ provider });
-  const model = modelSchema.parse(await runtime.dispatch('model.save', { model: { name: '风格模型', provider: 'ollama', baseUrl: 'http://127.0.0.1:1', model: 'style', capabilities: ['text'] } }));
+  const model = modelSchema.parse(await runtime.dispatch('model.save', { model: { name: '风格模型', provider: 'ollama', baseUrl: 'http://127.0.0.1:1', model: 'style', connectionType: 'text', capabilities: ['text'] } }));
   const value = projectSchema.parse(await runtime.dispatch('project.update', { projectId: project.id, revision: project.revision, patch: { workflow: { ...project.workflow, nodes: [...project.workflow.nodes, node('style', 'style', { modelId: model.id })] } } }));
   const preview = await plan(runtime, value, 'style', 'node'); const first = await start(runtime, preview), second = await start(runtime, preview);
   expect(first.id).not.toBe(second.id); expect(provider).toHaveBeenCalledTimes(2);
@@ -130,7 +130,7 @@ it('passes newly generated upstream media into later scoped activities alongside
   } });
   const path = join(directory, 'input.svg'); await writeFile(path, '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16"/>');
   await runtime.dispatch('asset.import', { projectId: project.id, path });
-  const value = projectSchema.parse(await runtime.dispatch('project.update', { projectId: project.id, revision: project.revision, patch: { workflow: { ...project.workflow, nodes: [node('image', 'assets'), node('voice', 'voice')], edges: [{ id: 'iv', source: 'image', target: 'voice' }] } } }));
+  const value = projectSchema.parse(await runtime.dispatch('project.update', { projectId: project.id, revision: project.revision, patch: { workflow: { ...project.workflow, nodes: [node('image', 'assets'), { ...node('animation', 'animation'), config: { operation: 'prepare-edit' } }], edges: [{ id: 'iv', source: 'image', target: 'animation' }] } } }));
   const run = await start(runtime, await plan(runtime, value, 'image'));
   expect((await inspection(runtime, run.id)).run.status).toBe('succeeded'); expect(received).toBe(true); expect(await current()).toEqual(value);
   const applied = projectSchema.parse(await runtime.dispatch('node.apply', { runId: run.id, nodeId: 'image', revision: value.revision }));
@@ -141,7 +141,7 @@ it('passes newly generated upstream media into later scoped activities alongside
 it('resumes the same frozen selection after a process exit without repeating a completed provider call', async () => {
   const provider = vi.fn(async () => '已持久化的候选风格'); let exited = false;
   const { runtime, directory, project } = await setup({ provider, failpoint(point, activityId) { if (!exited && point === 'after-commit' && activityId === 'style') { exited = true; throw new SimulatedProcessExit(); } } });
-  const model = modelSchema.parse(await runtime.dispatch('model.save', { model: { name: '恢复模型', provider: 'ollama', baseUrl: 'http://127.0.0.1:1', model: 'style', capabilities: ['text'] } }));
+  const model = modelSchema.parse(await runtime.dispatch('model.save', { model: { name: '恢复模型', provider: 'ollama', baseUrl: 'http://127.0.0.1:1', model: 'style', connectionType: 'text', capabilities: ['text'] } }));
   const value = projectSchema.parse(await runtime.dispatch('project.update', { projectId: project.id, revision: project.revision, patch: { workflow: { ...project.workflow, nodes: [node('upstream'), node('style', 'style', { modelId: model.id }), node('tail')], edges: [{ id: 'us', source: 'upstream', target: 'style' }, { id: 'st', source: 'style', target: 'tail' }] } } }));
   const run = await start(runtime, await plan(runtime, value, 'style')); expect(exited).toBe(true); expect(provider).toHaveBeenCalledTimes(1);
   await runtime.close(); runtimes.splice(runtimes.indexOf(runtime), 1);
@@ -153,7 +153,8 @@ it('resumes the same frozen selection after a process exit without repeating a c
 });
 
 it('requires a current, matching preview to restart a canceled scoped run and reports active-run blocking', async () => {
-  const { runtime, project } = await setup();
+  let exited = false;
+  const { runtime, project } = await setup({ failpoint(point, activityId) { if (!exited && point === 'after-commit' && activityId === 'root') { exited = true; throw new SimulatedProcessExit(); } } });
   const value = projectSchema.parse(await runtime.dispatch('project.update', { projectId: project.id, revision: project.revision, patch: { workflow: { ...project.workflow, nodes: project.workflow.nodes.map(node => node.id === 'root' ? { ...node, requiresReview: true } : node) } } }));
   const preview = await plan(runtime, value), parent = await start(runtime, preview);
   expect((await plan(runtime, value)).blockedReason).toContain('未完成');
@@ -173,7 +174,7 @@ it('keeps locked shots and manually selected media when a scoped script candidat
   const path = join(directory, 'chosen.svg'); await writeFile(path, '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16"/>');
   const asset = assetSchema.parse(await runtime.dispatch('asset.import', { projectId: project.id, shotId: 'editable', path }));
   const imported = await current();
-  const model = modelSchema.parse(await runtime.dispatch('model.save', { model: { name: '脚本模型', provider: 'ollama', baseUrl: 'http://127.0.0.1:1', model: 'script', capabilities: ['text'] } }));
+  const model = modelSchema.parse(await runtime.dispatch('model.save', { model: { name: '脚本模型', provider: 'ollama', baseUrl: 'http://127.0.0.1:1', model: 'script', connectionType: 'text', capabilities: ['text'] } }));
   const value = projectSchema.parse(await runtime.dispatch('project.update', { projectId: project.id, revision: imported.revision, patch: { workflow: { ...project.workflow, nodes: [node('script', 'script', { modelId: model.id }), node('tail')], edges: [{ id: 'st', source: 'script', target: 'tail' }] } } }));
   const run = await start(runtime, await plan(runtime, value, 'script'));
   expect((await inspection(runtime, run.id)).run.status).toBe('succeeded'); expect(await current()).toEqual(value);
@@ -184,7 +185,7 @@ it('keeps locked shots and manually selected media when a scoped script candidat
 it('stops a shortened script result from dropping a later locked shot or running its downstream steps', async () => {
   const provider = vi.fn(async () => JSON.stringify({ shots: [{ title: '唯一的新镜头', narration: '新的旁白', visualPrompt: '' }] }));
   const { runtime, project, current } = await setup({ provider });
-  const model = modelSchema.parse(await runtime.dispatch('model.save', { model: { name: '脚本模型', provider: 'ollama', baseUrl: 'http://127.0.0.1:1', model: 'script', capabilities: ['text'] } }));
+  const model = modelSchema.parse(await runtime.dispatch('model.save', { model: { name: '脚本模型', provider: 'ollama', baseUrl: 'http://127.0.0.1:1', model: 'script', connectionType: 'text', capabilities: ['text'] } }));
   const value = projectSchema.parse(await runtime.dispatch('project.update', { projectId: project.id, revision: project.revision, patch: { shots: project.shots.map(shot => ({ ...shot, locked: shot.id === 'editable' })), workflow: { ...project.workflow, nodes: [node('script', 'script', { modelId: model.id }), node('tail')], edges: [{ id: 'st', source: 'script', target: 'tail' }] } } }));
   const run = await start(runtime, await plan(runtime, value, 'script')), detail = await inspection(runtime, run.id);
   expect(detail.run).toMatchObject({ status: 'needs_attention', error: expect.stringContaining('锁定镜头') });

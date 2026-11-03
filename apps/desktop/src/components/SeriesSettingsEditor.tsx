@@ -1,4 +1,4 @@
-import { createVideoWorkflow, createSceneTemplate, DEFAULT_VIDEO_PROFILE, projectSchema, shotSchema, type ScenePreset, type SeriesSettings } from '@video-quickly/contracts';
+import { createNativeVideoWorkflow, createSceneTemplate, DEFAULT_VIDEO_PROFILE, projectSchema, shotSchema, type ScenePreset, type SeriesSettings } from '@video-quickly/contracts';
 import { Field, Select } from './Primitives';
 import CaptionStyleEditor, { CaptionStylePreview } from './CaptionStyleEditor';
 import './series-templates.css';
@@ -15,7 +15,7 @@ export default function SeriesSettingsEditor({ value, disabled = false, section,
 export function SeriesSettingsPreview({ settings }: { settings: SeriesSettings }) {
   const sceneTemplate = settings.scenePreset ? { ...createSceneTemplate(settings.scenePreset.kind), palette: settings.scenePreset.palette, motion: settings.scenePreset.motion } : undefined;
   const shot = shotSchema.parse({ id: 'series-preview-shot', title: '系列样式示例', narration: '', visualPrompt: '', durationUs: 4_000_000, sceneTemplate });
-  const project = { ...projectSchema.parse({ id: 'series-preview', title: '系列样式示例', brief: '', templateId: 'generic', style: settings.style, revision: 1, profile: { ...DEFAULT_VIDEO_PROFILE, width: 640, height: 360, previewScale: 1 }, shots: [shot], workflow: createVideoWorkflow(), createdAt: '', updatedAt: '' }), captionStyle: settings.captionStyle };
+  const project = { ...projectSchema.parse({ id: 'series-preview', title: '系列样式示例', brief: '', templateId: 'generic', style: settings.style, revision: 1, profile: { ...DEFAULT_VIDEO_PROFILE, width: 640, height: 360, previewScale: 1 }, shots: [shot], workflow: createNativeVideoWorkflow(), createdAt: '', updatedAt: '' }), captionStyle: settings.captionStyle };
   return <div className="series-settings-preview"><CaptionStylePreview project={project} shot={shot} assets={[]} value={settings.captionStyle} /><p className="tiny-meta">示例数据仅用于预览字幕与画面；风格文字用于后续生成。</p></div>;
 }
 

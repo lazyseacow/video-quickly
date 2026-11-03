@@ -1,11 +1,10 @@
-import { legacyHistoryWorkflow } from './fixtures/legacy-workflow';
 import { createHash } from 'node:crypto';
 import { createServer, type Server } from 'node:http';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, expect, it } from 'vitest';
-import { applyResearchClaims, createHistoryWorkflow, projectSchema, researchResultSchema, runSchema, type ModelProfile, type ProjectDocument, type ResearchSource, type UsageRecord } from '@video-quickly/contracts';
+import { applyResearchClaims, createNativeVideoWorkflow, projectSchema, researchResultSchema, runSchema, type ModelProfile, type ProjectDocument, type ResearchSource, type UsageRecord } from '@video-quickly/contracts';
 import { createRuntime, SimulatedProcessExit, type RuntimeOptions } from '../packages/runtime/src';
 
 const directories: string[] = [], servers: Server[] = [];
@@ -28,7 +27,7 @@ async function fixture(options: Partial<RuntimeOptions> = {}) {
   const runtime = open(directory, options), original = projectSchema.parse(await runtime.dispatch('project.create', { title: '研究核验项目' }));
   const source = await runtime.dispatch('research.source.read', { text: '真实资料：纸张由植物纤维构成。\n其他原文供人工核验。', title: '真实原文' }) as ResearchSource; state.sourceId = source.id;
   const project = projectSchema.parse(await runtime.dispatch('project.update', { projectId: original.id, revision: original.revision, patch: { researchSources: [source], shots: [1, 2].map(index => ({ id: `shot-${index}`, title: `镜头${index}`, narration: '原始旁白', visualPrompt: '', durationUs: 1_000_000 })) } }));
-  const model = await runtime.dispatch('model.save', { model: { name: '研究HTTP夹具', provider: 'openai-compatible', baseUrl: `http://127.0.0.1:${address.port}/v1`, model: 'research-fixture', capabilities: ['text'], pricing: { currency: 'USD', inputPerMillionTokens: 1, outputPerMillionTokens: 2 } } }) as ModelProfile;
+  const model = await runtime.dispatch('model.save', { model: { name: '研究HTTP夹具', provider: 'openai-compatible', baseUrl: `http://127.0.0.1:${address.port}/v1`, model: 'research-fixture', connectionType: 'text', capabilities: ['text'], pricing: { currency: 'USD', inputPerMillionTokens: 1, outputPerMillionTokens: 2 } } }) as ModelProfile;
   return { runtime, directory, project, source, model, requests, state, requestReceived };
 }
 async function analyze(runtime: ReturnType<typeof createRuntime>, project: ProjectDocument, model: ModelProfile, extra = {}) { return runSchema.parse(await runtime.dispatch('research.analyze', { projectId: project.id, revision: project.revision, modelId: model.id, ...extra })); }
@@ -92,14 +91,7 @@ it('round-trips captured sources and references in backups, rejecting corrupted 
   const path = join(backup.path, 'project.json'), manifest = JSON.parse(await readFile(path, 'utf8')) as { project: ProjectDocument }; manifest.project.researchSources![0].content += '破坏正文'; await writeFile(path, JSON.stringify(manifest)); await expect(runtime.dispatch('project.importBackup', { path: backup.path })).rejects.toThrow('校验失败');
 });
 
-it('preserves legacy data while excluding citations from new script prompts', async () => {
-  const { runtime, project, source, model } = await fixture({ provider: async request => { expect(request.prompt).not.toContain('已核对主张'); expect(request.prompt).not.toContain('claimIds'); return JSON.stringify({ shots: [{ title: '模型新标题', narration: '新旁白', visualPrompt: '新画面', claimIds: ['model-invented'] }] }); } });
-  const linked = projectSchema.parse(await runtime.dispatch('project.update', { projectId: project.id, revision: project.revision, patch: { workflow: { ...legacyHistoryWorkflow(), id: 'custom-research' }, claims: [{ id: 'manual-claim', text: '已核对主张', source: source.title, locator: '', status: 'verified' }], shots: project.shots.map((shot, index) => index ? shot : { ...shot, claimIds: ['manual-claim'] }) } }));
-  const local = runSchema.parse(await runtime.dispatch('run.start', { projectId: project.id, nodeId: 'research' })); await runtime.waitForIdle(); expect(await runtime.dispatch('node.result', { runId: local.id, nodeId: 'research' })).toMatchObject({ kind: 'research-summary', readonly: true, claims: [{ status: 'verified' }] });
-  const ready = projectSchema.parse(await runtime.dispatch('workflow.save', { projectId: project.id, revision: linked.revision, workflow: { ...linked.workflow, nodes: linked.workflow.nodes.map(node => node.kind === 'script' ? { ...node, modelId: model.id, requiresReview: false } : node) } }));
-  const scripted = runSchema.parse(await runtime.dispatch('run.start', { projectId: project.id, nodeId: 'script' })); await runtime.waitForIdle(); const output = await runtime.dispatch('node.result', { runId: scripted.id, nodeId: 'script' }) as { shots: ProjectDocument['shots'] }; expect(output.shots[0].claimIds).toEqual(['manual-claim']);
-  const applied = projectSchema.parse(await runtime.dispatch('node.apply', { runId: scripted.id, nodeId: 'script', revision: ready.revision })); expect(applied.shots[0].claimIds).toEqual(['manual-claim']);
-});
+
 
 it('guards only the target candidate facts and source metadata while allowing unrelated research edits', async () => {
   const { runtime, project, source, model, state } = await fixture(); state.script = true;

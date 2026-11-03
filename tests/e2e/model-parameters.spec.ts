@@ -1,4 +1,4 @@
-import { addModelConnection, settingField } from './settings';
+import { selectModel, addModelConnection, settingField } from './settings';
 import { createServer } from 'node:http';
 import { expect, test, type APIRequestContext, type Locator, type Page } from '@playwright/test';
 import type { ModelProfile, ProjectDocument, RunSummary, WorkspaceSnapshot } from '@video-quickly/contracts';
@@ -18,11 +18,12 @@ async function newModel(page: Page, name: string, url = catalog.baseUrl, type = 
   const dialog = await addModelConnection(page, type);
   await (await settingField(dialog, '模型平台')).selectOption('custom');
   await (await settingField(dialog, '连接名称')).fill(name); await (await settingField(dialog, '服务地址')).fill(url);
-  await (await settingField(dialog, '模型 ID')).selectOption('fixture-parameters'); return dialog;
+  await dialog.getByRole('button', { name: '获取模型列表', exact: true }).click();
+  await selectModel(dialog, 'fixture-parameters'); return dialog;
 }
 async function reopen(page: Page, name: string) { await page.getByRole('button', { name: `编辑“${name}”`, exact: true }).click(); return page.getByRole('dialog', { name: '编辑模型连接', exact: true }); }
-async function legacyModel(page: Page, request: APIRequestContext, name: string, url = catalog.baseUrl, capabilities = ['text', 'image', 'video', 'tts', 'asr']) {
-  await rpc(request, 'model.save', { model: { name, provider: 'openai-compatible', baseUrl: url, model: 'fixture-parameters', capabilities } });
+async function configuredModel(page: Page, request: APIRequestContext, name: string, url = catalog.baseUrl, capabilities = ['image']) {
+  await rpc(request, 'model.save', { model: { name, provider: 'openai-compatible', baseUrl: url, model: 'fixture-parameters', connectionType: ((capabilities) as readonly string[]).includes('text') ? 'text' : ((capabilities) as readonly string[]).includes('video') ? 'video' : 'image', capabilities } });
   return reopen(page, name);
 }
 async function advanced(dialog: Locator) { await dialog.getByRole('tab', { name: '高级设置', exact: true }).click(); return dialog.getByLabel('模型参数 JSON', { exact: true }); }
@@ -38,6 +39,7 @@ for (const { width, theme } of [{ width: 1536, theme: 'dark' }, { width: 390, th
   const show = dialog.getByRole('button', { name: '显示密钥', exact: true });
   await expect(key).toHaveAttribute('type', 'password'); await expect(show).toBeDisabled();
   await key.fill('fixture-key-for-visibility');
+  await dialog.getByRole('button', { name: '获取模型列表', exact: true }).click();
   await (await settingField(dialog, '模型 ID')).focus();
   await expect(show).toBeVisible(); await expect(show).toBeEnabled();
   await key.click(); await show.click();
@@ -74,7 +76,8 @@ test('offers branded platform presets and a persisted Gemini-compatible connecti
     await platform.selectOption('google');
     await expect(dialog.locator('.capability-grid')).toHaveCount(0);
     await (await settingField(dialog, '服务地址')).fill(`http://127.0.0.1:${address.port}/v1beta/openai`);
-    await (await settingField(dialog, '模型 ID')).selectOption('fixture-gemini');
+    await dialog.getByRole('button', { name: '获取模型列表', exact: true }).click();
+    await selectModel(dialog, 'fixture-gemini');
     await dialog.getByRole('button', { name: '保存连接', exact: true }).click(); await expect(dialog).toHaveCount(0);
     const card = page.locator('.list-card').filter({ has: page.getByRole('heading', { name, exact: true }) });
     await expect(card).toContainText('Gemini'); await expect(card.locator('.platform-icon')).toBeVisible();
@@ -86,50 +89,31 @@ test('offers branded platform presets and a persisted Gemini-compatible connecti
   } finally { server.closeAllConnections(); await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve())); }
 });
 
-test('round-trips structured fields, common image sizes and custom dimensions while retaining advanced JSON', async ({ page, request }, info) => {
-  // The multiple save/reopen flow completed its assertions in 30.55s on Intel CI.
-  test.setTimeout(60_000);
-  const errors = observe(page), name = '表单与高级参数往返'; await openModels(page); let dialog = await legacyModel(page, request, name);
-  await expect(dialog.locator('.capability-grid')).toHaveCount(0);
-  expect(await (await settingField(dialog, '图片与视频尺寸')).count()).toBe(1);
-  const json = await advanced(dialog); await (await advanced(dialog)).fill(JSON.stringify({ vendor_extension: { mode: 'keep-me' }, temperature: .1, size: '1280x720' }));
-  await expect((await settingField(dialog, '文本温度'))).toHaveValue('0.1'); await (await settingField(dialog, '文本温度')).fill('0.35');
-  await (await settingField(dialog, '最大输出 Token')).fill('93'); await (await settingField(dialog, '图片质量')).selectOption('high');
-  await (await settingField(dialog, '视频时长（秒）')).fill('8'); await (await settingField(dialog, '配音音色')).fill('alloy'); await (await settingField(dialog, '配音语速')).fill('1.25');
-  await (await settingField(dialog, '识别时间粒度')).selectOption('word'); await (await settingField(dialog, '识别返回格式')).selectOption('verbose_json'); await (await settingField(dialog, '识别语言')).fill('zh');
-  const parameters = JSON.parse(await json.inputValue()); expect(parameters).toEqual({ vendor_extension: { mode: 'keep-me' }, temperature: .35, size: '1280x720', max_tokens: 93, quality: 'high', seconds: 8, voice: 'alloy', speed: 1.25, timestampGranularity: 'word', asrResponseFormat: 'verbose_json', language: 'zh' });
+test('round-trips image sizes and quality while retaining advanced JSON', async ({ page, request }, info) => {
+  const errors = observe(page), name = '图片参数往返'; await openModels(page); let dialog = await configuredModel(page, request, name);
+  await (await advanced(dialog)).fill(JSON.stringify({ vendor_extension: { mode: 'keep-me' }, size: '1280x720', quality: 'auto' }));
+  await (await settingField(dialog, '图片质量')).selectOption('high');
+  await expect(dialog.getByRole('tab')).toHaveText(['基本连接', '图片参数', '高级设置']);
   await dialog.getByRole('button', { name: '保存连接', exact: true }).click(); await expect(dialog).toHaveCount(0);
-  expect(await savedModel(request, name)).toMatchObject({ parameters });
-  expect((await savedModel(request, name)).pricing).toBeUndefined();
+  expect((await savedModel(request, name)).parameters).toEqual({ vendor_extension: { mode: 'keep-me' }, size: '1280x720', quality: 'high' });
   await page.reload(); await page.getByRole('button', { name: '模型连接', exact: true }).click(); dialog = await reopen(page, name);
-  await expect((await settingField(dialog, '文本温度'))).toHaveValue('0.35');
-  await expect((await settingField(dialog, '图片与视频尺寸'))).toHaveValue('1280x720');
-  await (await settingField(dialog, '图片与视频尺寸')).selectOption('1024x1024');
-  const updatedJson = await advanced(dialog);
-  expect(JSON.parse(await updatedJson.inputValue()).size).toBe('1024x1024');
-  await (await settingField(dialog, '图片与视频尺寸')).selectOption('custom');
-  await (await settingField(dialog, '自定义图片与视频尺寸')).fill('1920x1080');
-  expect(JSON.parse(await updatedJson.inputValue()).vendor_extension).toEqual({ mode: 'keep-me' });
+  await (await settingField(dialog, '图片尺寸')).selectOption('custom'); await (await settingField(dialog, '自定义图片尺寸')).fill('1920x1080');
   await dialog.getByRole('button', { name: '保存连接', exact: true }).click(); await expect(dialog).toHaveCount(0);
-  expect((await savedModel(request, name)).parameters).toEqual({ ...parameters, size: '1920x1080' });
-  dialog = await reopen(page, name); await expect((await settingField(dialog, '自定义图片与视频尺寸'))).toHaveValue('1920x1080');
-  await (await settingField(dialog, '配音音色')).scrollIntoViewIfNeeded(); await expect(dialog.getByRole('button', { name: '保存连接', exact: true })).toBeInViewport({ ratio: 1 });
-  await page.screenshot({ path: info.outputPath('model-parameters-dark.png') });
-  expect(errors).toEqual([]);
+  expect((await savedModel(request, name)).parameters).toEqual({ vendor_extension: { mode: 'keep-me' }, size: '1920x1080', quality: 'high' });
+  dialog = await reopen(page, name); await expect(await settingField(dialog, '自定义图片尺寸')).toHaveValue('1920x1080');
+  await page.screenshot({ path: info.outputPath('image-parameters.png') }); expect(errors).toEqual([]);
 });
 
 test('shows protocol-specific controls and rejects malformed values in both UI and model.save', async ({ page, request }, info) => {
-  const errors = observe(page); await openModels(page); const dialog = await legacyModel(page, request, '协议参数边界', 'http://127.0.0.1:1/v1', ['text', 'tts', 'asr']);
+  const errors = observe(page); await openModels(page); const dialog = await configuredModel(page, request, '协议参数边界', 'http://127.0.0.1:1/v1', ['text']);
   const json = await advanced(dialog); await (await advanced(dialog)).fill('{"temperature":3}'); await expect(dialog.getByRole('alert')).toContainText('文本温度'); await expect(dialog.getByRole('button', { name: '保存连接', exact: true })).toBeDisabled();
   await (await advanced(dialog)).fill('{"vendor_extension":"preserved"}'); await (await settingField(dialog, '模型平台')).selectOption('ollama'); await (await settingField(dialog, '文本温度')).fill('0.4'); await (await settingField(dialog, '最大输出 Token')).fill('61');
   expect(JSON.parse(await json.inputValue())).toEqual({ vendor_extension: 'preserved', options: { temperature: .4, num_predict: 61 } });
-  await (await settingField(dialog, '模型平台')).selectOption('qwen-tts');
-  await expect((await settingField(dialog, '配音语速'))).toHaveCount(0); await expect((await settingField(dialog, '配音语言'))).toBeVisible(); await (await settingField(dialog, '配音语言')).selectOption('English');
   await (await settingField(dialog, '模型平台')).selectOption('openai');
-  await (await advanced(dialog)).fill('{"timestampGranularity":"word","asrResponseFormat":"diarized_json"}'); await expect(dialog.getByRole('alert')).toContainText('diarized_json 不支持逐词时间戳'); await expect(dialog.getByRole('button', { name: '保存连接', exact: true })).toBeDisabled();
-  const response = await request.post('/__desktop_rpc', { data: { method: 'model.save', params: { model: { name: '非法参数不得保存', provider: 'openai-compatible', baseUrl: 'http://127.0.0.1:1/v1', model: 'invalid', capabilities: ['tts'], parameters: { speed: -1 } } } } });
-  expect(response.ok()).toBe(false); expect((await response.json()).error).toContain('配音语速'); expect(await savedModel(request, '非法参数不得保存')).toBeUndefined();
-  await page.setViewportSize({ width: 600, height: 900 }); await (await advanced(dialog)).fill('{}'); await expect(dialog.locator('.dialog__surface')).toHaveCSS('opacity', '1'); await (await settingField(dialog, '配音音色')).scrollIntoViewIfNeeded(); await expect(dialog.getByRole('button', { name: '保存连接', exact: true })).toBeInViewport({ ratio: 1 });
+  await (await advanced(dialog)).fill('{"temperature":3}'); await expect(dialog.getByRole('alert')).toContainText('文本温度'); await expect(dialog.getByRole('button', { name: '保存连接', exact: true })).toBeDisabled();
+  const response = await request.post('/__desktop_rpc', { data: { method: 'model.save', params: { model: { name: '非法参数不得保存', provider: 'openai-compatible', baseUrl: 'http://127.0.0.1:1/v1', model: 'invalid', connectionType: 'text', capabilities: ['text'], parameters: { temperature: 3 } } } } });
+  expect(response.ok()).toBe(false); expect((await response.json()).error).toContain('文本温度'); expect(await savedModel(request, '非法参数不得保存')).toBeUndefined();
+  await page.setViewportSize({ width: 600, height: 900 }); await (await advanced(dialog)).fill('{}'); await expect(dialog.locator('.dialog__surface')).toHaveCSS('opacity', '1'); await (await settingField(dialog, '文本温度')).scrollIntoViewIfNeeded(); await expect(dialog.getByRole('button', { name: '保存连接', exact: true })).toBeInViewport({ ratio: 1 });
   await page.screenshot({ path: info.outputPath('model-parameters-600.png') }); expect(errors).toEqual([]);
 });
 
@@ -168,14 +152,21 @@ for (const delayedProgress of [false, true]) test(`uses the saved structured con
   })().catch(error => response.destroy(error instanceof Error ? error : undefined)); });
   await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve)); const address = server.address(); if (!address || typeof address === 'string') throw new Error('参数服务未启动');
   try {
-    const name = `实际HTTP表单模型${delayedProgress ? ' 延迟进度' : ''}`; await openModels(page); const form = await legacyModel(page, request, name, `http://127.0.0.1:${address.port}/v1`, ['text', 'image', 'tts']);
-    await (await settingField(form, '文本温度')).fill('0.25'); await (await settingField(form, '最大输出 Token')).fill('87'); await (await settingField(form, '图片尺寸')).selectOption('1024x1024'); await (await settingField(form, '图片质量')).selectOption('high'); await (await settingField(form, '配音音色')).fill('alloy'); await (await settingField(form, '配音语速')).fill('1.3');
-    const json = await advanced(form); const values = JSON.parse(await json.inputValue()); await (await advanced(form)).fill(JSON.stringify({ ...values, vendor_tag: 'round-trip' })); await form.getByRole('button', { name: '保存连接', exact: true }).click(); await expect(form).toHaveCount(0); const model = await savedModel(request, name);
+    const name = '实际HTTP表单模型' + (delayedProgress ? ' 延迟进度' : ''); await openModels(page);
+    const connections: Record<string, ModelProfile> = {};
+    for (const role of ['text', 'image']) {
+      const form = await configuredModel(page, request, name + role, 'http://127.0.0.1:' + address.port + '/v1', [role]);
+      if (role === 'text') { await (await settingField(form, '文本温度')).fill('0.25'); await (await settingField(form, '最大输出 Token')).fill('87'); }
+      else { await (await settingField(form, '图片尺寸')).selectOption('1024x1024'); await (await settingField(form, '图片质量')).selectOption('high'); }
+      const json = await advanced(form); await json.fill(JSON.stringify({ ...JSON.parse(await json.inputValue()), vendor_tag: 'round-trip' }));
+      await form.getByRole('button', { name: '保存连接', exact: true }).click(); await expect(form).toHaveCount(0);
+      connections[role === 'text' ? 'script' : role] = await savedModel(request, name + role);
+    }
     let project = await rpc<ProjectDocument>(request, 'project.create', { title: `参数真实请求验收${delayedProgress ? ' 延迟进度' : ''}` }); project = await rpc<ProjectDocument>(request, 'project.update', { projectId: project.id, revision: project.revision, patch: { shots: [{ id: 'parameters-shot', title: '原镜头', narration: '旁白', visualPrompt: '画面', durationUs: 2_000_000 }] } });
     await page.reload(); await page.getByRole('button', { name: '我的项目', exact: true }).click(); await page.locator('.project-card').filter({ hasText: project.title }).getByRole('button', { name: /继续创作/ }).click(); await page.getByRole('button', { name: 'AI 微调', exact: true }).click();
     const dialog = page.getByRole('dialog', { name: '镜头候选', exact: true });
     async function generateAndWait(kind: keyof typeof gates, previousCandidates: number) {
-      await (await settingField(dialog, '生成内容')).selectOption(kind); await (await settingField(dialog, '生成模型')).selectOption(model.id);
+      await (await settingField(dialog, '生成内容')).selectOption(kind); await (await settingField(dialog, '生成模型')).selectOption(connections[kind].id);
       const generated = page.waitForResponse(response => {
         if (!response.url().endsWith('/__desktop_rpc') || response.request().method() !== 'POST') return false;
         const input = response.request().postDataJSON(); return input.method === 'shot.regenerate' && input.params.projectId === project.id && input.params.kind === kind;

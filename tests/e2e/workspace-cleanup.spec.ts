@@ -25,12 +25,12 @@ test('keeps one page heading and functional guidance after removing repeated des
       await expect(page.getByRole('heading', { name: '一个 Skill，一套创作方法', exact: true })).toHaveCount(0); await expect(page.getByRole('heading', { level: 2, name: '工具连接', exact: true })).toBeVisible(); await expect(page.getByText(/任务使用固定的 Skill 版本/)).toBeVisible(); await expect(page.getByText(/工具需要单独启用/)).toBeVisible();
     }
     if (name === '模型连接') {
-      await expect(page.getByText('分别配置文本、图片、视频与音频服务。', { exact: true })).toBeVisible();
+      await expect(page.getByText('配置文本、图片和视频模型。', { exact: true })).toBeVisible();
       const types = page.getByRole('group', { name: '模型类型筛选', exact: true });
-      for (const type of ['文本模型', '图片模型', '视频模型', '音频模型']) await expect(types.getByRole('button', { name: type, exact: true })).toBeEnabled();
+      for (const type of ['文本模型', '图片模型', '视频模型']) await expect(types.getByRole('button', { name: type, exact: true })).toBeEnabled();
       const model = await addModelConnection(page);
       await expect(await settingField(model, 'API Key')).toHaveAttribute('type', 'password');
-      await expect(model.getByText('本地免鉴权服务可留空。', { exact: true })).toBeVisible();
+      await expect(model.getByText('请填写服务的 API Key。', { exact: true })).toBeVisible();
       await model.getByRole('button', { name: '取消', exact: true }).click(); await expect(model).toHaveCount(0);
     }
   }

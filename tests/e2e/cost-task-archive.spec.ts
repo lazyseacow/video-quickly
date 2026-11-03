@@ -23,12 +23,12 @@ async function fixture(request: APIRequestContext, title: string, usage: Record<
   await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
   const address = server.address(); if (!address || typeof address === 'string') throw new Error('夹具服务启动失败');
   const project = await rpc<ProjectDocument>(request, 'project.create', { title });
-  const model = await rpc<ModelProfile>(request, 'model.save', { model: { name: title + '模型', model: 'archive-model', provider: 'openai-compatible', baseUrl: `http://127.0.0.1:${address.port}/v1`, capabilities: ['text'], parameters: { internal_fixture: 'do-not-expose-parameters' } } });
+  const model = await rpc<ModelProfile>(request, 'model.save', { model: { name: title + '模型', model: 'archive-model', provider: 'openai-compatible', baseUrl: `http://127.0.0.1:${address.port}/v1`, connectionType: 'text', capabilities: ['text'], parameters: { internal_fixture: 'do-not-expose-parameters' } } });
   async function start(count: number) {
     let run: RunRecord | undefined, succeeded = false;
     try {
       const nodes = Array.from({ length: count }, (_, index) => ({ id: `archive-step-${index}`, kind: 'brief', label: `归档步骤 ${index + 1}`, modelId: model.id }));
-      await rpc(request, 'workflow.save', { projectId: project.id, workflow: { id: 'archive-workflow', version: 1, name: '归档制作流程', nodes, edges: [] } });
+      await rpc(request, 'workflow.save', { projectId: project.id, workflow: { id: 'archive-workflow', version: 1, name: '归档制作流程', production: { mode: 'native-video', referenceMode: 'none', soundPrompt: '', subtitleMode: 'off' }, nodes, edges: [] } });
       const created = await rpc<RunRecord>(request, 'run.start', { projectId: project.id });
       run = created; const runId = created.id;
       await expect.poll(async () => {

@@ -19,11 +19,11 @@ const booleanFields = new Set(['packaged', 'cached', 'resumed', 'hasRemoteId']);
 const tokenFields = new Set(['eventType', 'state', 'status', 'previousStatus', 'safety', 'reason', 'signal', 'platform', 'arch', 'component']);
 const versionFields = new Set(['appVersion', 'nodeVersion', 'electronVersion']);
 const methodWords = new Set(('workspace snapshot summary project create get update archive restore backup importBackup saveShot shot candidate apply candidates regenerate ' +
-  'run list start cancel resume review replay plan events activities diagnostics inspect step payload versions node result model save delete test discover voices ' +
+  'run list start cancel resume review replay plan events activities diagnostics inspect step payload versions node result model save delete test discover ' +
   'skill import toggle tool register cost task tasks character references workflow workflowTemplate seriesTemplate render batch export research search analyze source read ' +
-  'asset select retain waveform caption transcribe system status runtime reconnect host secret set audio preview levels silence mix prepare edit history undo redo readiness recovery scan confirm').split(' '));
-const builtinNodeIds = new Set(['brief', 'research', 'style', 'script', 'assets', 'voice', 'animation', 'caption', 'export', 'review', 'join', 'condition', 'subflow', 'agent']);
-const errorNames = new Set(['Error', 'TypeError', 'SyntaxError', 'RangeError', 'ReferenceError', 'AggregateError', 'URIError', 'EvalError', 'AbortError', 'ZodError', 'AmbiguousActivityError', 'ActivityInputChangedError', 'LockedShotChangeError', 'TranscriptionTimestampError']);
+  'asset select retain waveform caption system status runtime reconnect host secret set audio preview levels silence mix prepare edit history undo redo readiness recovery scan confirm').split(' '));
+const builtinNodeIds = new Set(['brief', 'research', 'style', 'script', 'assets', 'video', 'animation', 'export', 'review', 'join', 'condition', 'subflow', 'agent']);
+const errorNames = new Set(['Error', 'TypeError', 'SyntaxError', 'RangeError', 'ReferenceError', 'AggregateError', 'URIError', 'EvalError', 'AbortError', 'ZodError', 'AmbiguousActivityError', 'ActivityInputChangedError', 'LockedShotChangeError', 'VideoGenerationError']);
 const errorCodes = new Set([
   'EACCES', 'EADDRINUSE', 'EADDRNOTAVAIL', 'EAGAIN', 'EBADF', 'EBUSY', 'ECANCELED', 'ECONNABORTED', 'ECONNREFUSED', 'ECONNRESET',
   'EEXIST', 'EHOSTUNREACH', 'EINTR', 'EINVAL', 'EIO', 'EISDIR', 'ELOOP', 'EMFILE', 'ENAMETOOLONG', 'ENETDOWN', 'ENETUNREACH',

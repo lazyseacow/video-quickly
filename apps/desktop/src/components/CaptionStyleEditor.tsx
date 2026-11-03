@@ -38,7 +38,8 @@ export function CaptionStylePreview({ project, shot, assets, value, mode = 'proj
   const lastValid = useRef<CaptionStyle | null>(value === null ? null : DEFAULT_CAPTION_STYLE);
   useEffect(() => { if (valid) lastValid.current = value; }, [valid, value]);
   const displayedStyle = valid ? value : lastValid.current;
-  const previewProject: ProjectDocument = mode === 'project' ? { ...project, captionStyle: displayedStyle } : project;
+  const styledProject: ProjectDocument = mode === 'project' ? { ...project, captionStyle: displayedStyle } : project;
+  const previewProject: ProjectDocument = styledProject.workflow.production ? { ...styledProject, workflow: { ...styledProject.workflow, production: { ...styledProject.workflow.production, subtitleMode: 'script' } } } : styledProject;
   const sceneIn = original.clipEdit?.inUs ?? original.sceneInUs ?? 0;
   const previewShot: Shot = { ...original, captionStyle: mode === 'shot' ? displayedStyle : null, captionTrack: { timeBase: original.clipEdit ? 'clip' : 'scene', alignment: 'manual', cues: [{ id: 'caption-style-sample', startUs: sceneIn, endUs: sceneIn + original.durationUs, text: '这是一段字幕样式示例。\n实际字幕内容保持原样。' }] } };
   return <figure className="caption-style-preview"><div style={{ aspectRatio: `${project.profile.width}/${project.profile.height}` }}><ScenePreview project={previewProject} shot={previewShot} shotIndex={Math.max(0, project.shots.findIndex(item => item.id === original.id))} timeUs={Math.round(original.durationUs * .35)} assets={assets} /></div><figcaption>字幕样式示例 · 不修改原字幕文字与时间</figcaption></figure>;

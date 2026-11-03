@@ -4,6 +4,8 @@ import { claimSchema, researchSourceSchema } from './research.js';
 import { captionStyleSchema, scenePresetSchema } from './caption-style.js';
 import { audioMixSettingsSchema, audioProcessingSchema } from './audio-processing.js';
 import { motionKeyframesSchema } from './keyframes.js';
+import { productionSettingsSchema, resolveProductionWorkflow } from './production.js';
+export { productionSettingsSchema, resolveProductionWorkflow, isVideoGenerationNode, captionsEnabled, MAX_REFERENCE_AUDIO_BYTES, MAX_REFERENCE_AUDIOS, type ProductionSettings } from './production.js';
 export * from './asset-recovery.js';
 export { motionKeyframeSchema, motionKeyframesSchema, motionEasingSchema, type MotionKeyframe, type MotionEasing } from './keyframes.js';
 export { modelPlatforms, getModelPlatform, platformForConnection, type ModelPlatformPreset } from './model-platforms.js';
@@ -17,8 +19,8 @@ export { sceneTemplateSchema, processSceneTemplateSchema, comparisonSceneTemplat
 export { clipSourceAssetIds, validateClipEditContent, validateClipEditHistory, type ClipEditContent } from './clip-editing.js';
 
 // A fixed application message is safe to retain across the external-activity boundary.
-export class TranscriptionTimestampError extends Error {
-  constructor() { super('模型没有返回语音时间戳。请选择支持分段时间戳的模型，不能用纯文字结果进行语音对齐。'); }
+export class VideoGenerationError extends Error {
+  constructor() { super('生成结果缺少有效画面或音轨，已保留下载文件，请核对原任务。'); }
 }
 export class LockedShotChangeError extends Error {
   constructor() { super('分镜结果改变了锁定镜头，请保留锁定镜头后重新生成。'); }
@@ -149,6 +151,7 @@ export const clipEditReferenceSchema = z.object({
 
 export const shotSchema = z.object({
   id: z.string().min(1), title: z.string().min(1).max(160), narration: z.string().max(10000), visualPrompt: z.string().max(20000),
+  soundPrompt: z.string().max(10000).optional(),
   durationUs: z.number().int().min(500000).max(600000000),
   sourceInUs: z.number().int().nonnegative().optional(),
   // Independent replacements start at their own source origin; absent overrides retain legacy shared trims.
@@ -180,7 +183,7 @@ export const clipEditSpanSchema = z.object({
 export type ClipEditSpan = z.infer<typeof clipEditSpanSchema>;
 export const clipEditPlanSchema = z.object({ id: z.string().min(1), sourceId: z.string().min(1), spans: z.array(clipEditSpanSchema).min(1).max(2000) });
 export type ClipEditPlan = z.infer<typeof clipEditPlanSchema>;
-export const shotCandidateKindSchema = z.enum(['script', 'image', 'audio', 'video']);
+export const shotCandidateKindSchema = z.enum(['script', 'image', 'video']);
 export type ShotCandidateKind = z.infer<typeof shotCandidateKindSchema>;
 export const shotCandidateFieldSchema = z.enum(['title', 'narration', 'visualPrompt', 'durationUs']);
 export type ShotCandidateField = z.infer<typeof shotCandidateFieldSchema>;
@@ -193,7 +196,7 @@ export const shotCandidateSchema = z.object({
 export type ShotCandidate = z.infer<typeof shotCandidateSchema>;
 export { applyShotCandidate } from './shot-candidates.js';
 export { getModelParameterFields, modelParameterValue, withModelParameter, validateModelParameters, requestModelParameters, type ModelParameterField, type ModelParameterOperation } from './model-parameters.js';
-export const nodeKindSchema = z.enum(['brief', 'research', 'style', 'script', 'assets', 'voice', 'animation', 'review', 'export', 'agent', 'condition', 'join', 'subflow']);
+export const nodeKindSchema = z.enum(['brief', 'research', 'style', 'script', 'assets', 'animation', 'review', 'export', 'agent', 'condition', 'join', 'subflow']);
 export type NodeKind = z.infer<typeof nodeKindSchema>;
 export const workflowValueBindingSchema = z.union([
   z.object({ literal: jsonValueSchema }),
@@ -203,7 +206,7 @@ export const subflowReferenceSchema = z.object({ id: z.string().min(1), version:
 export const workflowNodeSchema = z.object({
   id: z.string().min(1), kind: nodeKindSchema, label: z.string().min(1), description: z.string().default(''),
   prompt: z.string().default(''), modelId: z.string().optional(), skillIds: z.array(z.string()).default([]),
-  config: z.record(z.string(), jsonValueSchema).default({}),
+  config: z.record(z.string(), jsonValueSchema).default({}).refine(config => config.operation === undefined || ['prepare-references', 'generate-native-video', 'prepare-edit', 'regenerate', 'research'].includes(String(config.operation)), '不支持的制作任务类型。'),
   position: z.object({ x: z.number(), y: z.number() }).default({ x: 0, y: 0 }), requiresReview: z.boolean().default(false),
   subflow: subflowReferenceSchema.optional(),
 });
@@ -226,6 +229,7 @@ export const workflowSchema = z.object({
   nodes: z.array(workflowNodeSchema).min(1).max(100),
   edges: workflowEdgesSchema,
   subflows: z.array(subflowDefinitionSchema).max(100).optional(), execution: workflowExecutionSchema.optional(),
+  production: productionSettingsSchema,
   stages: z.array(workflowStageSchema).max(100).refine(stages => new Set(stages.map(stage => stage.id)).size === stages.length, '阶段编号不能重复').optional(),
 });
 export type WorkflowNode = z.infer<typeof workflowNodeSchema>;
@@ -253,46 +257,40 @@ export const projectSchema = z.object({
 export type ProjectDocument = z.infer<typeof projectSchema>;
 export type Project = ProjectDocument;
 
-export const modelCapabilitySchema = z.enum(['text', 'image', 'video', 'tts', 'asr', 'vision', 'tools', 'structured-output']);
+export const modelCapabilitySchema = z.enum(['text', 'image', 'video', 'vision', 'tools', 'structured-output']);
 export type ModelCapability = z.infer<typeof modelCapabilitySchema>;
 export const currencySchema = z.enum(['USD', 'CNY']);
 export const modelPricingSchema = z.object({
   currency: currencySchema,
   inputPerMillionTokens: z.number().nonnegative().optional(), outputPerMillionTokens: z.number().nonnegative().optional(),
   perImage: z.number().nonnegative().optional(), perVideoSecond: z.number().nonnegative().optional(),
-  perThousandCharacters: z.number().nonnegative().optional(), perAudioMinute: z.number().nonnegative().optional(),
 });
 export type ModelPricing = z.infer<typeof modelPricingSchema>;
 export const costRequestMetricsSchema = z.object({
   source: z.literal('request'), requestCount: z.number().int().nonnegative().optional(),
   images: z.number().int().nonnegative().optional(), videoSeconds: z.number().nonnegative().optional(),
-  characters: z.number().int().nonnegative().optional(), audioSeconds: z.number().nonnegative().optional(),
 });
 export type CostRequestMetrics = z.infer<typeof costRequestMetricsSchema>;
 export const providerUsageSchema = z.object({
   source: z.literal('provider'), inputTokens: z.number().int().nonnegative().optional(), outputTokens: z.number().int().nonnegative().optional(),
   totalTokens: z.number().int().nonnegative().optional(), cachedInputTokens: z.number().int().nonnegative().optional(), cachedOutputTokens: z.number().int().nonnegative().optional(),
   images: z.number().int().nonnegative().optional(), videoSeconds: z.number().nonnegative().optional(),
-  characters: z.number().int().nonnegative().optional(), audioSeconds: z.number().nonnegative().optional(),
 });
 export type ProviderUsage = z.infer<typeof providerUsageSchema>;
-export const modelPlatformSchema = z.enum(['openai', 'anthropic', 'google', 'deepseek', 'qwen', 'volcengine', 'moonshot', 'zhipu', 'siliconflow', 'openrouter', 'ollama', 'comfyui', 'seedream', 'seedance', 'qwen-tts', 'custom']);
+export const modelPlatformSchema = z.enum(['openai', 'anthropic', 'google', 'deepseek', 'qwen', 'volcengine', 'moonshot', 'zhipu', 'siliconflow', 'openrouter', 'ollama', 'comfyui', 'seedream', 'seedance', 'custom']);
 export type ModelPlatform = z.infer<typeof modelPlatformSchema>;
 export const textProtocolSchema = z.enum(['chat-completions', 'responses', 'messages']);
 export type TextProtocol = z.infer<typeof textProtocolSchema>;
-export const modelConnectionTypeSchema = z.enum(['text', 'image', 'video', 'audio']);
+export const modelConnectionTypeSchema = z.enum(['text', 'image', 'video']);
 export type ModelConnectionType = z.infer<typeof modelConnectionTypeSchema>;
 export const modelDiscoverySchema = z.object({ source: z.enum(['remote', 'preset', 'workflow']), items: z.array(z.object({ id: z.string(), label: z.string() })), message: z.string().optional() });
 export type ModelDiscovery = z.infer<typeof modelDiscoverySchema>;
-export const voiceDiscoverySchema = modelDiscoverySchema.omit({ source: true }).extend({ source: z.enum(['preset', 'remote', 'mixed']), sourceUrl: z.string().url().optional() });
-export type VoiceDiscovery = z.infer<typeof voiceDiscoverySchema>;
-export { getModelVoiceCatalog, supportsAccountVoices } from './model-voices.js';
 export const modelSchema = z.object({
   id: z.string(), name: z.string().min(1).max(120),
-  provider: z.enum(['openai-compatible', 'ollama', 'comfyui', 'seedream', 'seedance', 'qwen-tts', 'volcengine-tts', 'volcengine-asr', 'custom-http']),
+  provider: z.enum(['openai-compatible', 'ollama', 'comfyui', 'seedream', 'seedance', 'custom-http']),
   platform: modelPlatformSchema.optional(),
   textProtocol: textProtocolSchema.optional(),
-  connectionType: modelConnectionTypeSchema.optional(),
+  connectionType: modelConnectionTypeSchema,
   baseUrl: z.string().url().refine(value => {
     try {
       const url = new URL(value);
@@ -412,6 +410,7 @@ export const assetSchema = z.object({
   id: z.string(), projectId: z.string().optional(), shotId: z.string().optional(), name: z.string(),
   kind: z.enum(['image', 'video', 'audio', 'subtitle', 'document']), path: z.string(), mimeType: z.string(),
   size: z.number().nonnegative(), sha256: z.string(), version: z.number().int().positive(),
+  durationUs: z.number().int().positive().optional(), width: z.number().int().positive().optional(), height: z.number().int().positive().optional(),
   createdAt: z.string(), provenance: z.string(), retained: z.boolean().default(false), active: z.boolean().default(true),
 });
 export type AssetRecord = z.infer<typeof assetSchema>;
@@ -494,31 +493,24 @@ export type RuntimeEvent = z.infer<typeof runtimeEventSchema>;
 export type RpcRequest = { jsonrpc: '2.0'; id: string | number; method: string; params?: unknown };
 export type RpcResponse = { jsonrpc: '2.0'; id: string | number; result?: unknown; error?: { code: number; message: string } };
 
-export function createHistoryWorkflow(): WorkflowDefinition {
-  return { ...createVideoWorkflow(), id: 'history-handdrawn', name: '历史手绘科普' };
-}
-
-export function createVideoWorkflow(): WorkflowDefinition {
-  const definitions: Array<[NodeKind, string, string, boolean]> = [
-    ['brief', '创意简报', '明确主题、观众与核心诉求', false],
-    ['style', '风格与角色', '统一画风、角色与场景要求', false],
-    ['script', '旁白与分镜', '组织旁白、镜头画面与时长，确认创作方案', false],
-    ['assets', '画面素材', '生成或导入镜头对应的画面素材', false],
-    ['voice', '配音与字幕', '准备旁白音频，按需要制作并对齐字幕', false],
-    ['animation', '动画与运镜', '安排镜头视频、运镜、关键帧与转场', false],
-    ['export', '导出成片', '按选定规格生成视频文件', false],
+export function createNativeVideoWorkflow(): WorkflowDefinition {
+  const definitions: Array<Pick<WorkflowNode, 'id' | 'kind' | 'label' | 'description' | 'prompt' | 'config'>> = [
+    { id: 'brief', kind: 'brief', label: '创意简报', description: '明确主题、观众与核心诉求', prompt: '根据项目标题与创意要求，形成可直接用于制作的简报，明确目标观众、核心信息、叙事顺序、时长与表达要求。保留明确约束。', config: { modelBinding: 'default', requiresModel: true } },
+    { id: 'style', kind: 'style', label: '风格与角色', description: '统一画风、角色与场景要求', prompt: '承接创意简报，制定画风、色彩、构图、光线与角色方案，保持全片连续。', config: { modelBinding: 'default', requiresModel: true } },
+    { id: 'script', kind: 'script', label: '旁白与分镜', description: '组织台词、画面和时长', prompt: '根据简报和风格生成完整分镜，按顺序提供标题、完整台词、画面描述、声音要求与微秒时长。保持叙事、角色和声音连续，保留锁定镜头。', config: { modelBinding: 'default', requiresModel: true } },
+    { id: 'assets', kind: 'assets', label: '参考素材准备', description: '按选择准备参考图，也可直接使用文字生成视频。', prompt: '生成适合视频首帧的参考图，保持主体、场景和画风一致，不叠加字幕、水印或文字。', config: { operation: 'prepare-references', modelBinding: 'default' } },
+    { id: 'video', kind: 'animation', label: '镜头视频生成', description: '根据分镜与台词生成画面、人声和环境音。', prompt: '根据当前镜头的画面描述、台词与声音要求生成视频。保持角色、画风和声音连续，完整表达台词，声音与画面同步。不要生成画面字幕、文字标注或水印。', config: { operation: 'generate-native-video', modelBinding: 'default', requiresModel: true } },
+    { id: 'animation', kind: 'animation', label: '剪辑与运镜准备', description: '按分镜顺序准备时间轴、转场与混音。', prompt: '', config: { operation: 'prepare-edit' } },
+    { id: 'export', kind: 'export', label: '导出成片', description: '检查素材并按选定规格导出成片。', prompt: '', config: {} },
   ];
-  const nodes: WorkflowNode[] = definitions.map(([kind, label, description, requiresReview], index) => ({
-    id: kind, kind, label, description, prompt: '', skillIds: [], config: {}, position: { x: index * 270, y: 100 }, requiresReview,
-  }));
-  return {
-    id: 'general-video', version: 1, name: '通用视频制作', nodes,
-    edges: nodes.slice(1).map((node, index) => ({ id: `${nodes[index].id}-${node.id}`, source: nodes[index].id, target: node.id })),
+  const nodes = definitions.map((node, index) => ({ ...node, skillIds: [], position: { x: index * 270, y: 100 }, requiresReview: false }));
+  return resolveProductionWorkflow({ id: 'native-video', version: 1, name: '视频制作', production: productionSettingsSchema.parse({ mode: 'native-video' }), nodes,
+    edges: nodes.slice(1).map((node, index) => ({ id: nodes[index].id + '-' + node.id, source: nodes[index].id, target: node.id })),
     stages: [
       { id: 'planning', label: '策划与分镜', description: '一次确定创作方向、视觉风格与镜头脚本。', nodeIds: ['brief', 'style', 'script'] },
-      { id: 'materials', label: '素材与配音', description: '准备每个镜头的画面、旁白音频与字幕。', nodeIds: ['assets', 'voice'] },
+      { id: 'materials', label: '素材与配音', description: '准备参考素材，生成带人声与环境音的镜头视频。', nodeIds: ['assets', 'video'] },
       { id: 'editing', label: '剪辑与动画', description: '安排镜头节奏、运镜、动画与转场。', nodeIds: ['animation'] },
       { id: 'delivery', label: '审阅与导出', description: '检查内容并按规格导出成片。', nodeIds: ['export'] },
     ],
-  };
+  });
 }

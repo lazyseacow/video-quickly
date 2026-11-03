@@ -2,6 +2,7 @@ import { openProjectFromList } from './workspace-navigation';
 import { setWorkspaceTheme } from './workspace-settings';
 import { createServer } from 'node:http';
 import { expect, test, type APIRequestContext, type Page } from '@playwright/test';
+import type { ProjectDocument } from '@video-quickly/contracts';
 
 async function rpc(request: APIRequestContext, method: string, params: unknown = {}) {
   const response = await request.post('/__desktop_rpc', { data: { method, params } });
@@ -107,15 +108,15 @@ test('keeps generated results editable with undo and rejects reapplying them aft
   const server = createServer((incoming, response) => {
     incoming.resume();
     response.setHeader('Content-Type', 'application/json');
-    response.end(JSON.stringify({ choices: [{ message: { content: JSON.stringify({ shots: [{ id: 'generated', title: '已生成的分镜', narration: '生成的旁白', visualPrompt: '', durationUs: 2_000_000 }] }) } }] }));
+    response.end(JSON.stringify({ choices: [{ message: { content: JSON.stringify({ shots: [{ title: '已生成的分镜', narration: '生成的旁白', visualPrompt: '', durationUs: 2_000_000 }] }) } }] }));
   });
   await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
   const address = server.address();
   if (!address || typeof address === 'string') throw new Error('模型夹具未启动');
   try {
     const original = await createProject(request, '产物应用历史验收');
-    const model = await rpc(request, 'model.save', { model: { name: '隔离的分镜服务', provider: 'openai-compatible', baseUrl: `http://127.0.0.1:${address.port}/v1`, model: 'fixture', capabilities: ['text'] } });
-    const workflow = { ...original.workflow, nodes: original.workflow.nodes.map((node: { kind: string }) => node.kind === 'script' ? { ...node, modelId: model.id } : node) };
+    const model = await rpc(request, 'model.save', { model: { name: '隔离的分镜服务', provider: 'openai-compatible', baseUrl: `http://127.0.0.1:${address.port}/v1`, model: 'fixture', connectionType: 'text', capabilities: ['text'] } });
+    const workflow = { ...original.workflow, nodes: original.workflow.nodes.map((node: ProjectDocument['workflow']['nodes'][number]) => node.kind === 'script' ? { ...node, modelId: model.id, config: { ...node.config, modelOverride: true } } : node) };
     const project = await rpc(request, 'workflow.save', { projectId: original.id, revision: original.revision, workflow });
     const run = await rpc(request, 'run.start', { projectId: project.id, nodeId: 'script' });
     await expect.poll(async () => (await rpc(request, 'project.get', { projectId: project.id })).latestRun.status).toBe('succeeded');

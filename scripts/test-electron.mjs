@@ -120,24 +120,23 @@ async function verifyGenericWorkflow() {
   const snapshot = await rpc('workspace.snapshot');
   const project = snapshot.projects.find(item => item.id === 'example-history');
   assert.ok(project);
-  assert.equal(project.workflow.id, 'general-video');
+  assert.equal(project.workflow.id, 'native-video');
+  assert.equal(project.workflow.production.subtitleMode, 'off');
   assert.equal(project.workflow.nodes.some(node => ['research', 'review'].includes(node.kind) || node.requiresReview), false);
   assert.equal(project.workflow.nodes.length, 7);
   assert.equal(project.workflow.stages.length, 4);
   const guidance = page.getByRole('region', { name: '制作指引', exact: true });
-  await expect(guidance.getByRole('button', { name: /^配置阶段：/ })).toHaveCount(4);
-  await guidance.getByRole('button', { name: '配置阶段：策划与分镜', exact: true }).click();
-  const dialog = page.getByRole('dialog', { name: '策划与分镜', exact: true });
+  await expect(guidance.getByRole('button', { name: /^打开阶段：/ })).toHaveCount(4);
+  await guidance.getByRole('button', { name: '打开阶段：策划与分镜', exact: true }).click();
+  const dialog = page.getByRole('dialog', { name: '制作设置', exact: true });
+  await expect(dialog.getByRole('group', { name: '制作视图', exact: true }).getByRole('button')).toHaveText(['制作设置', '本次制作']);
   await expect(dialog.getByRole('region', { name: '步骤指引', exact: true })).toHaveCount(0);
   await expect(dialog.getByRole('checkbox', { name: /人工审阅|人工审核/ })).toHaveCount(0);
-  for (const label of ['创意简报', '风格与角色', '旁白与分镜']) {
-    await dialog.getByRole('tab', { name: label, exact: true }).click();
-    const model = dialog.getByLabel(`${label}使用模型`, { exact: true });
-    await expect(model).toHaveValue(''); await expect(model).toBeDisabled(); await expect(model.locator('option:checked')).toHaveText('无可用模型');
-    await dialog.getByLabel(`${label}提示词与补充要求`, { exact: true }).fill(`未提交的${label}配置`);
-  }
-  await dialog.getByRole('tab', { name: '创意简报', exact: true }).click();
-  await expect(dialog.getByLabel('创意简报提示词与补充要求', { exact: true })).toHaveValue('未提交的创意简报配置');
+  await expect(dialog.getByRole('combobox', { name: '文本模型', exact: true })).toHaveValue('');
+  await expect(dialog.getByRole('combobox', { name: '视频模型', exact: true })).toHaveValue('');
+  await dialog.locator('summary:visible').click();
+  for (const label of ['创意简报', '风格与角色', '旁白与分镜']) await dialog.getByLabel(`${label}补充要求`, { exact: true }).fill(`未提交的${label}配置`);
+  await expect(dialog.getByLabel('创意简报补充要求', { exact: true })).toHaveValue('未提交的创意简报配置');
   await page.screenshot({ path: join(artifacts, 'desktop-workflow-stage.png') });
   await dialog.getByRole('button', { name: '取消', exact: true }).click();
   await expect(dialog).toHaveCount(0);
@@ -359,7 +358,7 @@ try {
     } finally { other.destroy(); }
   });
   assert.equal(senderDenied, true); checks.senderBoundary = true;
-  credentialModel = await rpc('model.save', { model: { name: '隔离系统凭据验收', provider: 'openai-compatible', baseUrl: `http://127.0.0.1:${credentialServer.address().port}/v1`, model: 'isolated-native-fixture', capabilities: ['text'], enabled: false }, secret: testSecret });
+  credentialModel = await rpc('model.save', { model: { name: '隔离系统凭据验收', provider: 'openai-compatible', baseUrl: `http://127.0.0.1:${credentialServer.address().port}/v1`, model: 'isolated-native-fixture', connectionType: 'text', capabilities: ['text'], enabled: false }, secret: testSecret });
   assert.equal(credentialModel.hasSecret, true);
   credentialReferences.add(credentialModel.credentialRef);
   assert.equal((await rpc('model.test', { modelId: credentialModel.id })).connected, true);

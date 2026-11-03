@@ -12,10 +12,10 @@ import { matchingStepModels, stepGuidance, stepModelLabel, stepModelPlaceholder 
 import './workflow-canvas.css';
 
 type FlowNode = Node<{ node: WorkflowNode }, 'activity'>;
-const typeLabels: Record<string, string> = { brief: '创意简报', research: '资料与史实', style: '风格与角色', script: '旁白与分镜', assets: '画面素材', voice: '配音与字幕', animation: '动画与运镜', review: '人工审阅', export: '导出成片', agent: 'Agent 步骤', condition: '条件分支', join: '汇合', subflow: '子流程' };
+const typeLabels: Record<string, string> = { brief: '创意简报', research: '资料与史实', style: '风格与角色', script: '旁白与分镜', assets: '画面素材', animation: '动画与运镜', review: '自动检查', export: '导出成片', agent: 'Agent 步骤', condition: '条件分支', join: '汇合', subflow: '子流程' };
 const ActivityNode = memo(function ActivityNode({ data, selected }: NodeProps<FlowNode>) {
-  const Icon = data.node.kind === 'assets' ? Image : data.node.kind === 'voice' ? Mic : data.node.kind === 'condition' ? GitBranch : data.node.kind === 'review' ? Check : data.node.kind === 'research' ? BookOpen : data.node.kind === 'animation' ? Layers : Sparkles;
-  return <div className={`flow-node ${selected ? 'selected' : ''}`}><Handle type="target" position={Position.Left} /><div className="flow-node__type">{typeLabels[data.node.kind]}</div><div className="flow-node__title"><Icon size={17} />{data.node.label}</div><div className="flow-node__footer">{data.node.requiresReview ? '完成后等待审阅' : data.node.modelId ? '已指定模型' : '使用步骤配置'}</div><Handle type="source" position={Position.Right} /></div>;
+  const Icon = data.node.kind === 'assets' ? Image : data.node.kind === 'condition' ? GitBranch : data.node.kind === 'review' ? Check : data.node.kind === 'research' ? BookOpen : data.node.kind === 'animation' ? Layers : Sparkles;
+  return <div className={`flow-node ${selected ? 'selected' : ''}`}><Handle type="target" position={Position.Left} /><div className="flow-node__type">{typeLabels[data.node.kind]}</div><div className="flow-node__title"><Icon size={17} />{data.node.label}</div><div className="flow-node__footer">{data.node.modelId ? '已指定模型' : '使用步骤配置'}</div><Handle type="source" position={Position.Right} /></div>;
 });
 const nodeTypes: NodeTypes = { activity: ActivityNode };
 const fitViewOptions = { padding: .2 };
@@ -189,7 +189,7 @@ export default function WorkflowCanvas({ workflow, models, dirty, saving, confli
         {onConfigure && <Button className="button-full" onClick={() => onConfigure(selected)}>配置与执行步骤</Button>}
         {selectedStage && onConfigureStage && <Button className="button-full" onClick={() => onConfigureStage(selectedStage)}>配置所属阶段</Button>}
         <Field label="步骤名称"><input value={selected.label} onChange={event => updateSelected({ label: event.target.value })} /></Field>
-        <Field label="步骤类型"><Select value={selected.kind} onChange={event => updateSelected({ kind: nodeKindSchema.parse(event.target.value) })}>{Object.entries(typeLabels).filter(([value]) => value !== 'research' && (!['history-handdrawn', 'general-video'].includes(workflow.id) || value !== 'review')).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</Select></Field>
+        <Field label="步骤类型"><Select value={selected.kind} onChange={event => updateSelected({ kind: nodeKindSchema.parse(event.target.value) })}>{Object.entries(typeLabels).filter(([value]) => value !== 'research' && (workflow.id !== 'native-video' || value !== 'review')).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</Select></Field>
         <Field label="步骤说明"><textarea value={selected.description} onChange={event => updateSelected({ description: event.target.value })} /></Field>
         <Field label="提示词"><textarea value={selected.prompt} onChange={event => updateSelected({ prompt: event.target.value })} placeholder="补充这个步骤的具体要求" /></Field>
         {(stepGuidance(selected).capability || selected.modelId) && <Field label="使用模型" hint={stepGuidance(selected).requiresModel ? '此步骤需要选择匹配的模型才能执行。' : '未选择模型时使用已有内容或本地处理，不会自动调用 AI。'}><Select value={selected.modelId ?? ''} disabled={!stepModels.length && !selected.modelId} onChange={event => updateSelected({ modelId: event.target.value || undefined })}><option value="">{stepModelPlaceholder(selected, stepModels)}</option>{selected.modelId && !stepModels.some(model => model.id === selected.modelId) && <option value={selected.modelId} disabled>{stepModels.length ? `当前：${stepModelLabel(selected, models)}` : '无可用模型'}</option>}{stepModels.map(model => <option key={model.id} value={model.id}>{model.name}</option>)}</Select></Field>}
@@ -200,7 +200,6 @@ export default function WorkflowCanvas({ workflow, models, dirty, saving, confli
           const condition = event.target.value;
           commit(nodesRef.current, edgesRef.current.map(item => item.id === edge.id ? { ...item, data: { ...item.data, condition }, label: conditionLabel(condition) } : item), '修改分支条件');
         }}><option value="">始终执行</option><option value="true">条件成立时</option><option value="false">条件不成立时</option></Select></Field>)}</div>}
-        {!['history-handdrawn', 'general-video'].includes(workflow.id) && <label className="field-inline"><input type="checkbox" checked={selected.requiresReview} onChange={event => updateSelected({ requiresReview: event.target.checked })} />完成后人工审阅</label>}
         <Button aria-label="移除步骤" variant="danger" className="button-full" disabled={nodes.length <= 1} onClick={() => removeNode(selected.id)}><Trash2 size={15} />移除</Button>
       </> : <p className="list-help">选择步骤编辑设置，拖动连接点设置依赖。</p>}
       <div className="flow-save"><span className="flow-save-state" role="status">{saving ? '正在保存…' : conflicted ? '请先处理修订冲突' : dirty ? '有未保存修改' : '修改已保存'}</span><Button aria-label="保存流程" variant="primary" className="button-full" disabled={!dirty || conflicted} busy={saving} onClick={() => void save()}><Save size={15} />保存</Button><p className="tiny-meta">保存前检查依赖关系。已启动的制作使用其固定版本。</p></div>

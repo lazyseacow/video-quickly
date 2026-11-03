@@ -5,7 +5,7 @@ import { cp, mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from 'node
 import { tmpdir } from 'node:os';
 import { basename, dirname, join, resolve } from 'node:path';
 import { afterEach, expect, it } from 'vitest';
-import { createHistoryWorkflow, firstFrameAtUs, DEFAULT_AUDIO_MIX_SETTINGS, DEFAULT_AUDIO_PROCESSING, DEFAULT_CAPTION_STYLE, DEFAULT_VIDEO_PROFILE, projectSchema, shotSchema, timeAtFrame, type AssetRecord, type ProjectDocument } from '@video-quickly/contracts';
+import { createNativeVideoWorkflow, firstFrameAtUs, DEFAULT_AUDIO_MIX_SETTINGS, DEFAULT_AUDIO_PROCESSING, DEFAULT_CAPTION_STYLE, DEFAULT_VIDEO_PROFILE, projectSchema, shotSchema, timeAtFrame, type AssetRecord, type ProjectDocument } from '@video-quickly/contracts';
 import { captureClipEditSource } from '../src/clip-edits.js';
 import { detectAudioSilence, prepareAudioMix, readAudioLevelWindow } from '../src/audio-mix.js';
 import { probeMedia, renderProject, runMedia } from '../src/node.js';
@@ -36,7 +36,7 @@ async function asset(id: string, path: string, kind: 'audio' | 'video' = 'audio'
   return { id, projectId: 'audio-project', name: id, path, kind, mimeType: kind === 'audio' ? 'audio/wav' : 'video/mp4', size: bytes.length, sha256: createHash('sha256').update(bytes).digest('hex'), version: 1, active: true, retained: false, provenance: 'isolated real sound fixture', createdAt: '' };
 }
 function project(shots: ProjectDocument['shots']): ProjectDocument {
-  return projectSchema.parse({ id: 'audio-project', title: 'Sound timing', brief: '', revision: 1, profile: { ...DEFAULT_VIDEO_PROFILE, width: 320, height: 180, previewScale: 1 }, workflow: createHistoryWorkflow(), createdAt: '', updatedAt: '', shots, audioMix: { ...DEFAULT_AUDIO_MIX_SETTINGS, loudness: { ...DEFAULT_AUDIO_MIX_SETTINGS.loudness, enabled: false } } });
+  return projectSchema.parse({ id: 'audio-project', title: 'Sound timing', brief: '', revision: 1, profile: { ...DEFAULT_VIDEO_PROFILE, width: 320, height: 180, previewScale: 1 }, workflow: { ...createNativeVideoWorkflow(), production: { ...createNativeVideoWorkflow().production, subtitleMode: 'script' } }, createdAt: '', updatedAt: '', shots, audioMix: { ...DEFAULT_AUDIO_MIX_SETTINGS, loudness: { ...DEFAULT_AUDIO_MIX_SETTINGS.loudness, enabled: false } } });
 }
 async function fixture(directory: string) {
   const path = join(directory, 'voice.wav');

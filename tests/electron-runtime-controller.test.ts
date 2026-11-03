@@ -15,21 +15,23 @@ function own(options: ConstructorParameters<typeof RuntimeController>[0]) {
   const controller = new RuntimeController(options); cleanups.push(() => controller.close()); return controller;
 }
 
-it('reconnects the actual Node runtime once and preserves project data and the original review', async () => {
+it('reconnects the actual Node runtime once and preserves project data and the automatically completed result', async () => {
   const path = await directory(), events: unknown[] = [];
   const controller = own({ command: process.execPath, args: ['--import', 'tsx', resolve('packages/runtime/src/main.ts'), '--data-dir', path], cwd: resolve('.'), onEvent: (event: unknown) => events.push(event) });
   expect(await controller.start()).toMatchObject({ state: 'ready', generation: 1 });
   const project = await controller.request('project.create', { title: 'Electron工作区重启恢复', templateId: 'history-handdrawn' });
-  await controller.request('workflow.save', { projectId: project.id, revision: project.revision, workflow: { ...project.workflow, id: 'controller-custom-review', nodes: project.workflow.nodes.map((node: { id: string }) => node.id === 'style' ? { ...node, requiresReview: true } : node) } });
+  await controller.request('workflow.save', { projectId: project.id, revision: project.revision, workflow: { ...project.workflow, id: 'controller-custom-review', nodes: project.workflow.nodes.map((node: { id: string }) => node.id === 'style' ? { ...node, requiresReview: true, config: {} } : node) } });
   const run = await controller.request('run.start', { projectId: project.id, nodeId: 'style' });
-  await expect.poll(async () => (await controller.request('run.inspect', { runId: run.id })).run.status, { timeout: 15_000 }).toBe('waiting_review');
+  await expect.poll(async () => (await controller.request('run.inspect', { runId: run.id })).run.status, { timeout: 15_000 }).toBe('succeeded');
   const before = await controller.request('run.activities', { runId: run.id });
+  expect(before.items).toMatchObject([{ nodeId: 'style', status: 'completed' }]);
+  expect((await controller.request('run.events', { runId: run.id })).items.some((event: { type: string }) => event.type === 'review.waiting')).toBe(false);
   await controller.close();
   const reopened = own({ command: process.execPath, args: ['--import', 'tsx', resolve('packages/runtime/src/main.ts'), '--data-dir', path], cwd: resolve('.') });
   const [first, second] = await Promise.all([reopened.reconnect(), reopened.reconnect()]);
   expect(first.generation).toBe(1); expect(second.generation).toBe(1);
   expect((await reopened.request('project.get', { projectId: project.id })).project.title).toBe(project.title);
-  expect((await reopened.request('run.inspect', { runId: run.id })).run.status).toBe('waiting_review');
+  expect((await reopened.request('run.inspect', { runId: run.id })).run.status).toBe('succeeded');
   expect(await reopened.request('run.activities', { runId: run.id })).toEqual(before);
   expect(events).toContainEqual({ type: 'runtime.ready' });
 }, 30_000);

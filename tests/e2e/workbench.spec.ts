@@ -1,4 +1,4 @@
-import { closeProjectSettings } from './settings';
+import { selectModel, closeProjectSettings } from './settings';
 import { createSceneTemplate, type ProjectDocument } from '@video-quickly/contracts';
 import { openProjectFromList } from './workspace-navigation';
 import { setWorkspaceTheme } from './workspace-settings';
@@ -16,19 +16,19 @@ async function openApp(page: Page) {
   await expect(page.getByRole('navigation', { name: '主导航', exact: true })).toBeVisible();
 }
 
-async function reviewedProject(request: APIRequestContext) {
+async function completedProjectFixture(request: APIRequestContext) {
   const response = await request.post('/__desktop_rpc', { data: { method: 'project.create', params: { title: `自定义审阅回归 ${Date.now()}` } } });
   const project: ProjectDocument = (await response.json()).result;
   const saved = await request.post('/__desktop_rpc', { data: { method: 'project.update', params: { projectId: project.id, revision: project.revision, patch: {
-    workflow: { ...project.workflow, id: `custom-review-${project.id}`, nodes: project.workflow.nodes.map(node => node.id === 'script' ? { ...node, requiresReview: true } : node) },
+    workflow: { ...project.workflow, id: `local-script-${project.id}`, stages: undefined, nodes: project.workflow.nodes.filter(node => node.id === 'script').map(node => ({ ...node, config: {} })), edges: [] },
     shots: [{ id: 'review-fixture-shot', title: '已存在的分镜', narration: '已有旁白', visualPrompt: '', durationUs: 1_000_000, sceneTemplate: createSceneTemplate('process') }],
   } } } });
   expect(saved.ok()).toBe(true); return (await saved.json()).result as ProjectDocument;
 }
 
-test('shows pure run notifications for two seconds without replaying on refresh', async ({ page, request }) => {
+test('completes automatically without review notifications before and after refresh', async ({ page, request }) => {
   await page.emulateMedia({ reducedMotion: 'reduce' });
-  const project = await reviewedProject(request);
+  const project = await completedProjectFixture(request);
   await openApp(page); await openProjectFromList(page, project.title);
   await expect(page.getByLabel('项目名称', { exact: true })).toHaveValue(project.title);
   const started = await request.post('/__desktop_rpc', { data: { method: 'run.start', params: { projectId: project.id, nodeId: 'script' } } });
@@ -37,9 +37,9 @@ test('shows pure run notifications for two seconds without replaying on refresh'
     await expect.poll(async () => {
       const response = await request.post('/__desktop_rpc', { data: { method: 'run.get', params: { runId: run.id } } });
       return (await response.json()).result.status;
-    }).toBe('waiting_review');
+    }).toBe('succeeded');
     const toast = page.locator('.toast[role="status"]');
-    await expect(toast).toHaveText(/等待你的审阅/);
+    await expect(toast).toHaveCount(0);
     await expect(page.getByRole('button', { name: '查看制作记录', exact: true })).toHaveCount(0);
     await expect(toast.getByRole('link')).toHaveCount(0);
     await expect(page.locator('.toast-anchor')).toHaveCount(0, { timeout: 2500 });
@@ -123,7 +123,7 @@ for (const reducedMotion of ['no-preference', 'reduce'] as const) {
     await openProjectFromList(page, title);
     await page.getByLabel('镜头标题').fill('切换时保留的草稿');
     for (let index = 0; index < 4; index++) {
-      await page.getByRole('button', { name: '项目设置', exact: true }).click();
+      await page.locator('.project-heading-actions').getByRole('button', { name: '制作设置', exact: true }).click();
       await closeProjectSettings(page);
     }
     await expect(page.locator('.inspector').getByRole('heading', { name: '镜头属性', exact: true })).toBeVisible();
@@ -163,14 +163,16 @@ for (const reducedMotion of ['no-preference', 'reduce'] as const) {
       await expect(create).toBeFocused();
     }
     // Change the preference in an already-mounted app, then unmount animated surfaces.
-    await page.getByRole('button', { name: '项目设置', exact: true }).click();
+    await page.locator('.project-heading-actions').getByRole('button', { name: '制作设置', exact: true }).click();
     await page.emulateMedia({ reducedMotion: reducedMotion === 'reduce' ? 'no-preference' : 'reduce' });
     await closeProjectSettings(page);
     await expect(page.getByLabel('镜头标题')).toHaveValue('切换时保留的草稿');
-    await page.getByRole('button', { name: '项目设置', exact: true }).click();
+    await page.locator('.project-heading-actions').getByRole('button', { name: '制作设置', exact: true }).click();
     await page.setViewportSize({ width: 600, height: 900 });
     for (const [ratio, expected] of [['9:16', 9 / 16], ['16:9', 16 / 9]] as const) {
       await (await projectSettingField(page, '画面比例', { exact: true })).selectOption(ratio);
+      const settings = page.getByRole('dialog', { name: '制作设置', exact: true });
+      await settings.getByRole('button', { name: '保存设置', exact: true }).click(); await expect(settings).toHaveCount(0);
       const frame = await page.locator('.preview-frame').boundingBox();
       expect(frame).not.toBeNull();
       if (!frame) throw new Error('预览框不可见');
@@ -181,7 +183,7 @@ for (const reducedMotion of ['no-preference', 'reduce'] as const) {
     await page.getByRole('button', { name: '模型连接', exact: true }).click();
     await expect(page.getByRole('heading', { name: '模型连接', exact: true })).toBeVisible();
     await openProjectFromList(page);
-    await expect(page.getByRole('button', { name: '项目设置', exact: true })).toHaveCount(1);
+    await expect(page.locator('.project-heading-actions').getByRole('button', { name: '制作设置', exact: true })).toHaveCount(1);
     await closeProjectSettings(page);
     await expect(page.getByLabel('镜头标题')).toHaveValue('切换时保留的草稿');
     expect(errors.filter(message => !message.includes('400 (Bad Request)'))).toEqual([]);
@@ -300,16 +302,14 @@ test('edits real project state, output profiles, graph and theme', async ({ page
   await page.reload();
   await expect(page.getByLabel('镜头标题')).toHaveValue('一纸登科 · 已编辑');
 
-  await page.getByRole('button', { name: '项目设置', exact: true }).click();
   await (await projectSettingField(page, '画面比例', { exact: true })).selectOption('9:16');
   await (await projectSettingField(page, '视频帧率')).selectOption('60');
   await expect((await projectSettingField(page, '视频宽度'))).toHaveValue('1080');
   await expect((await projectSettingField(page, '视频高度'))).toHaveValue('1920');
   const profileSaved = page.waitForResponse(response => response.url().endsWith('/__desktop_rpc') && response.status() === 200 && response.request().postDataJSON()?.method === 'project.update' && response.request().postDataJSON()?.params.projectId === 'example-history');
-  await page.getByRole('button', { name: '保存项目设置', exact: true }).click();
+  await page.getByRole('button', { name: '保存设置', exact: true }).click();
   expect((await (await profileSaved).json()).error).toBeUndefined();
   await page.reload();
-  await page.getByRole('button', { name: '项目设置', exact: true }).click();
   await expect((await projectSettingField(page, '视频帧率'))).toHaveValue('60');
   await expect((await projectSettingField(page, '视频高度'))).toHaveValue('1920');
 
@@ -407,24 +407,24 @@ test('creates a project and connects a model without exposing credentials', asyn
     await modelDialog.getByLabel('连接名称').fill('本地文本服务');
     await modelDialog.getByLabel('模型平台', { exact: true }).selectOption('custom');
     await modelDialog.getByLabel('服务地址').fill(catalog.baseUrl);
-    await modelDialog.getByLabel('模型 ID').selectOption('local-fixture');
+    await modelDialog.getByRole('button', { name: '获取模型列表', exact: true }).click();
+    await selectModel(modelDialog, 'local-fixture');
     await modelDialog.getByRole('button', { name: '保存连接', exact: true }).click();
     await expect(page.getByText('本地文本服务', { exact: true })).toBeVisible();
   } finally { await catalog.close(); }
 });
 
-test('persists a review decision and supports read-only replay', async ({ page, request }) => {
-  const project = await reviewedProject(request);
+test('persists automatic completion and supports read-only replay', async ({ page, request }) => {
+  const project = await completedProjectFixture(request);
   const started = await request.post('/__desktop_rpc', { data: { method: 'run.start', params: { projectId: project.id, nodeId: 'script' } } });
   const { result: run } = await started.json();
   await openApp(page);
   await page.getByRole('button', { name: '制作记录', exact: true }).click();
   const card = page.locator(`.run-card[data-run-id="${run.id}"]`);
-  await expect(card.getByText('等待审阅', { exact: true })).toBeVisible();
+  await expect(card.getByText('已完成', { exact: true })).toBeVisible();
   await page.reload();
   await page.getByRole('button', { name: '制作记录', exact: true }).click();
-  await expect(card.getByText('等待审阅', { exact: true })).toBeVisible();
-  await request.post('/__desktop_rpc', { data: { method: 'run.review', params: { runId: run.id, approved: true } } });
+  await expect(card.getByText('已完成', { exact: true })).toBeVisible();
   await expect.poll(async () => {
     const response = await request.post('/__desktop_rpc', { data: { method: 'workspace.snapshot' } });
     return (await response.json()).result.runs.find((value: { id: string }) => value.id === run.id).status;

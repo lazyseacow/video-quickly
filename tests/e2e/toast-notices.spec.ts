@@ -13,7 +13,7 @@ async function openModels(page: Page, request: APIRequestContext, title: string)
 
 test('keeps short replacement messages on one line and wraps long notices within a narrow window', async ({ page, request }) => {
   const name = '提示排版验收';
-  const saved = await request.post('/__desktop_rpc', { data: { method: 'model.save', params: { model: { name, provider: 'openai-compatible', baseUrl: 'http://127.0.0.1:1/v1', model: 'notice-layout', capabilities: ['text'] } } } });
+  const saved = await request.post('/__desktop_rpc', { data: { method: 'model.save', params: { model: { name, provider: 'openai-compatible', baseUrl: 'http://127.0.0.1:1/v1', model: 'notice-layout', connectionType: 'text', capabilities: ['text'] } } } });
   expect(saved.ok()).toBe(true);
   let text = '';
   await page.route('**/__desktop_rpc', route => route.request().postDataJSON().method === 'model.test' ? route.fulfill({ status: 200, json: { error: text } }) : route.continue());
@@ -49,7 +49,7 @@ for (const reducedMotion of ['no-preference', 'reduce'] as const) {
     const name = `连续提示 ${reducedMotion}`;
     const errors: string[] = []; page.on('pageerror', error => errors.push(error.message));
     try {
-      const saved = await request.post('/__desktop_rpc', { data: { method: 'model.save', params: { model: { name, provider: 'openai-compatible', baseUrl: `http://127.0.0.1:${address.port}/v1`, model: 'notice-fixture', capabilities: ['text'] } } } });
+      const saved = await request.post('/__desktop_rpc', { data: { method: 'model.save', params: { model: { name, provider: 'openai-compatible', baseUrl: `http://127.0.0.1:${address.port}/v1`, model: 'notice-fixture', connectionType: 'text', capabilities: ['text'] } } } });
       expect(saved.ok()).toBe(true);
       await page.emulateMedia({ reducedMotion });
       const time = new Date('2026-01-01T00:00:00Z');

@@ -1,9 +1,8 @@
 import { openProjectFromList } from './workspace-navigation';
 import { setWorkspaceTheme } from './workspace-settings';
-import { readFile, writeFile } from 'node:fs/promises';
-import { createServer } from 'node:http';
+import { readFile } from 'node:fs/promises';
 import { expect, test, type APIRequestContext, type Page } from '@playwright/test';
-import type { AssetRecord, CaptionTrack, ProjectDocument } from '@video-quickly/contracts';
+import type { CaptionTrack, ProjectDocument } from '@video-quickly/contracts';
 
 async function rpc<T>(request: APIRequestContext, method: string, params: unknown = {}): Promise<T> {
   const response = await request.post('/__desktop_rpc', { data: { method, params } });
@@ -109,7 +108,7 @@ test('adds, sorts, splits and deletes caption cues locally before applying one e
   await openProject(page, project.title);
   const dialog = await editor(page);
   await expect(dialog.locator('.caption-editor__cue')).toHaveCount(0);
-  await expect(dialog.getByRole('button', { name: '识别并对齐', exact: true })).toBeDisabled();
+  await expect(dialog.getByRole('button', { name: '识别并对齐', exact: true })).toHaveCount(0);
   await dialog.getByRole('button', { name: '添加字幕', exact: true }).click();
   await expect(dialog.getByRole('button', { name: '应用字幕', exact: true })).toBeDisabled();
   await dialog.getByLabel('字幕 1 文字', { exact: true }).fill('新增字幕');
@@ -183,63 +182,4 @@ test('projects split captions, preserves hidden source cues during local edits, 
   await expect.poll(async () => (await savedProject(request, project.id)).shots[1].captionTrack?.cues).toEqual([]);
   expect(await downloadSrt(page)).not.toContain('后半句');
   await expectHealthy(page, errors);
-});
-
-function fixtureWav() {
-  const samples = 8000 * 4, bytes = Buffer.alloc(44 + samples * 2);
-  bytes.write('RIFF', 0); bytes.writeUInt32LE(bytes.length - 8, 4); bytes.write('WAVEfmt ', 8);
-  bytes.writeUInt32LE(16, 16); bytes.writeUInt16LE(1, 20); bytes.writeUInt16LE(1, 22);
-  bytes.writeUInt32LE(8000, 24); bytes.writeUInt32LE(16000, 28); bytes.writeUInt16LE(2, 32); bytes.writeUInt16LE(16, 34);
-  bytes.write('data', 36); bytes.writeUInt32LE(samples * 2, 40);
-  for (let index = 0; index < samples; index++) bytes.writeInt16LE(Math.round(Math.sin(index / 8000 * Math.PI * 880) * 6000), 44 + index * 2);
-  return bytes;
-}
-
-test('uses actual timestamped ASR candidates without auto-applying them and rejects text-only results', async ({ page, request }, info) => {
-  const errors = observeErrors(page);
-  let textOnly = false; const requests: Array<{ path?: string; body: string }> = [];
-  const server = createServer((incoming, response) => {
-    const chunks: Buffer[] = []; incoming.on('data', chunk => chunks.push(chunk));
-    incoming.on('end', () => {
-      requests.push({ path: incoming.url, body: Buffer.concat(chunks).toString() });
-      response.setHeader('Content-Type', 'application/json');
-      response.end(JSON.stringify(textOnly ? { text: '没有任何时间戳的纯文字' } : { segments: [
-        { start: .2, end: .8, text: '识别的第一句。' }, { start: 1.2, end: 2, text: '识别的第二句。' },
-      ] }));
-    });
-  });
-  await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
-  const address = server.address(); if (!address || typeof address === 'string') throw new Error('识别夹具服务未启动');
-  try {
-    const project = await createProject(request, '语音识别候选验收');
-    const path = info.outputPath('fixture-voice.wav'); await writeFile(path, fixtureWav());
-    const audio = await rpc<AssetRecord>(request, 'asset.import', { projectId: project.id, shotId: 'caption-shot', path, kind: 'audio' });
-    const model = await rpc<{ id: string }>(request, 'model.save', { model: { name: '隔离的语音识别服务', provider: 'openai-compatible', baseUrl: `http://127.0.0.1:${address.port}/v1`, model: 'timestamp-fixture', capabilities: ['asr'] } });
-    await openProject(page, project.title);
-    let dialog = await editor(page);
-    await dialog.getByLabel('语音识别模型', { exact: true }).selectOption(model.id);
-    await dialog.getByRole('button', { name: '识别并对齐', exact: true }).click();
-    await expect(dialog.getByRole('button', { name: '使用候选', exact: true })).toBeVisible();
-    expect((await savedProject(request, project.id)).shots[0].captionTrack).toBeUndefined();
-    await dialog.getByRole('button', { name: '使用候选', exact: true }).click();
-    await expect(dialog.getByLabel('字幕 1 入点（秒）', { exact: true })).toHaveValue('0.2');
-    await expect(dialog.getByLabel('字幕 2 文字', { exact: true })).toHaveValue('识别的第二句。');
-    await dialog.getByRole('button', { name: '应用字幕', exact: true }).click();
-    await expect.poll(async () => (await savedProject(request, project.id)).shots[0].captionTrack?.alignment).toBe('speech');
-    const saved = await savedProject(request, project.id);
-    expect(saved.shots[0].captionTrack).toMatchObject({ timeBase: 'source', sourceAssetId: audio.id, sourceSha256: audio.sha256, modelId: model.id, cues: [{ startUs: 200_000, endUs: 800_000 }, { startUs: 1_200_000, endUs: 2_000_000 }] });
-    await page.getByRole('button', { name: '撤销', exact: true }).click();
-    await expect.poll(async () => (await savedProject(request, project.id)).shots[0].captionTrack).toBeUndefined();
-    await page.getByRole('button', { name: '重做', exact: true }).click();
-    await expect.poll(async () => (await savedProject(request, project.id)).shots[0].captionTrack).toEqual(saved.shots[0].captionTrack);
-    textOnly = true; dialog = await editor(page);
-    await dialog.getByRole('button', { name: '识别并对齐', exact: true }).click();
-    await expect(dialog.getByRole('alert')).toContainText('没有返回语音时间戳');
-    await expect(dialog.getByRole('button', { name: '使用候选', exact: true })).toHaveCount(0);
-    expect((await savedProject(request, project.id)).shots[0].captionTrack).toEqual(saved.shots[0].captionTrack);
-    expect(requests).toHaveLength(2);
-    expect(requests[0].path).toBe('/v1/audio/transcriptions');
-    expect(requests[0].body).toContain('timestamp-fixture'); expect(requests[0].body).toContain('verbose_json');
-    await expectHealthy(page, errors);
-  } finally { await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve())); }
 });

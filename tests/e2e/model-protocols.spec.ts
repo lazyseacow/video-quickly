@@ -1,14 +1,14 @@
 import { createServer } from 'node:http';
 import { expect, test, type APIRequestContext } from '@playwright/test';
 import type { ModelProfile, ProjectDocument, RunRecord, TextProtocol } from '@video-quickly/contracts';
-import { addModelConnection, settingControl, settingField } from './settings';
+import { selectModel, addModelConnection, settingControl, settingField } from './settings';
 
 async function rpc<T>(request: APIRequestContext, method: string, params: unknown = {}): Promise<T> {
   const response = await request.post('/__desktop_rpc', { data: { method, params } }); const payload = await response.json();
   expect(response.ok()).toBe(true); expect(payload.error).toBeUndefined(); return payload.result;
 }
 
-test('requires a fetched model selection before saving and offers no manual input during discovery', async ({ page, request }) => {
+test('requires a confirmed model selection before saving', async ({ page, request }) => {
   let releaseModels!: () => void, requestedModels!: () => void;
   const released = new Promise<void>(resolve => { releaseModels = resolve; });
   const requested = new Promise<void>(resolve => { requestedModels = resolve; });
@@ -26,10 +26,9 @@ test('requires a fetched model selection before saving and offers no manual inpu
     await (await settingField(dialog, '连接名称')).fill(name);
     await (await settingField(dialog, '模型平台')).selectOption('custom');
     await (await settingField(dialog, '服务地址')).fill(`http://127.0.0.1:${address.port}/v1`);
+    await dialog.getByRole('button', { name: '获取模型列表', exact: true }).click();
     await requested;
-    const selector = dialog.locator('select[aria-label="模型 ID"]');
-    await expect(dialog.locator('input[aria-label="模型 ID"]')).toHaveCount(0);
-    await expect(dialog.getByRole('button', { name: '手动填写', exact: true })).toHaveCount(0);
+    const selector = dialog.getByRole('combobox', { name: '模型 ID', exact: true });
     await expect(selector).toBeDisabled();
     await expect(dialog.getByRole('button', { name: '保存连接', exact: true })).toBeDisabled();
     releaseModels();
@@ -37,8 +36,7 @@ test('requires a fetched model selection before saving and offers no manual inpu
     await expect(selector).toBeEnabled();
     await expect(selector).toHaveValue('');
     await expect(dialog.getByRole('button', { name: '保存连接', exact: true })).toBeDisabled();
-    await expect(selector.locator('option[value="discovered-model"]')).toHaveCount(1);
-    await selector.selectOption('discovered-model');
+    await selectModel(dialog, 'discovered-model');
     await dialog.getByRole('button', { name: '保存连接', exact: true }).click(); await expect(dialog).toHaveCount(0);
     const workspace = await rpc<{ models: ModelProfile[] }>(request, 'workspace.summary');
     expect(workspace.models.find(model => model.name === name)?.model).toBe('discovered-model');
@@ -67,12 +65,13 @@ for (const viewport of [{ width: 1536, height: 960, theme: 'dark' }, { width: 39
         await expect(await settingField(dialog, 'API 协议')).toHaveValue(protocol === 'messages' ? 'messages' : 'chat-completions');
         expect(await (await settingField(dialog, 'API 协议')).locator('option').allTextContents()).toEqual(['Chat Completions', 'Responses API', 'Anthropic Messages']);
         await (await settingField(dialog, '服务地址')).fill(`http://127.0.0.1:${address.port}/proxy/v1`);
-        const models = dialog.locator('select[aria-label="模型 ID"]');
-        await expect(models.locator('option[value="fixture-protocol"]')).toHaveCount(1);
-        await models.selectOption('fixture-protocol');
+        await dialog.getByRole('button', { name: '获取模型列表', exact: true }).click();
+        await selectModel(dialog, 'fixture-protocol');
         await (await settingField(dialog, '最大输出 Token')).fill('128'); await (await settingField(dialog, '文本温度')).fill('0.5');
         await (await settingField(dialog, 'API 协议')).selectOption(protocol); await expect(await settingField(dialog, '最大输出 Token')).toHaveValue('128');
         await dialog.getByRole('tab', { name: '基本连接', exact: true }).click();
+        await dialog.getByRole('button', { name: '获取模型列表', exact: true }).click();
+        await expect(dialog.getByRole('status')).toContainText('已读取 1 个模型');
         await expect(dialog.getByLabel('服务协议', { exact: true })).toHaveCount(0); await expect(dialog.locator('.dialog__footer')).toBeInViewport({ ratio: 1 });
         await expect(page).toHaveTitle(/Video Quickly/); await expect(page.locator('vite-error-overlay')).toHaveCount(0);
         await page.screenshot({ path: info.outputPath('model-api-protocol.png') });
@@ -84,7 +83,7 @@ for (const viewport of [{ width: 1536, height: 960, theme: 'dark' }, { width: 39
         dialog = page.getByRole('dialog', { name: '编辑模型连接', exact: true }); await expect(await settingField(dialog, 'API 协议')).toHaveValue(protocol);
         await dialog.getByRole('button', { name: '取消', exact: true }).click(); await expect(dialog).toHaveCount(0);
         const project = await rpc<ProjectDocument>(request, 'project.create', { title: name });
-        await rpc(request, 'workflow.save', { projectId: project.id, workflow: { id: 'protocol', version: 1, name: '协议验收', nodes: [{ id: 'brief', kind: 'brief', label: '协议验收', modelId: saved.id }], edges: [] } });
+        await rpc(request, 'workflow.save', { projectId: project.id, workflow: { id: 'protocol', version: 1, name: '协议验收', production: { mode: 'native-video', referenceMode: 'none', soundPrompt: '', subtitleMode: 'off' }, nodes: [{ id: 'brief', kind: 'brief', label: '协议验收', modelId: saved.id }], edges: [] } });
         const run = await rpc<RunRecord>(request, 'run.start', { projectId: project.id });
         await expect.poll(async () => (await rpc<{ runs: RunRecord[] }>(request, 'workspace.snapshot')).runs.find(value => value.id === run.id)?.status).toBe('succeeded');
         const generated = calls.find(call => call.path.split('?')[0] !== '/proxy/v1/models')!;
@@ -97,8 +96,8 @@ for (const viewport of [{ width: 1536, height: 960, theme: 'dark' }, { width: 39
   }
 }
 
-test('keeps a legacy Claude connection on its saved protocol and exposes Ollama native API', async ({ page, request }) => {
-  const old = await rpc<ModelProfile>(request, 'model.save', { model: { name: '旧版 Claude 兼容连接', platform: 'anthropic', provider: 'openai-compatible', model: 'fixture', baseUrl: 'http://127.0.0.1:1/v1', capabilities: ['text'] } });
+test('keeps the selected Claude API protocol and exposes Ollama native API', async ({ page, request }) => {
+  const old = await rpc<ModelProfile>(request, 'model.save', { model: { name: 'Claude 协议配置', platform: 'anthropic', provider: 'openai-compatible', model: 'fixture', baseUrl: 'http://127.0.0.1:1/v1', connectionType: 'text', capabilities: ['text'] } });
   await page.goto('/'); await page.getByRole('button', { name: '模型连接', exact: true }).click(); await page.getByRole('button', { name: `编辑“${old.name}”`, exact: true }).click();
   const dialog = page.getByRole('dialog', { name: '编辑模型连接', exact: true }); await expect(await settingField(dialog, 'API 协议')).toHaveValue('chat-completions');
   await (await settingField(dialog, '模型平台')).selectOption('ollama');

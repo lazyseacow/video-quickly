@@ -14,7 +14,7 @@
 .getting-started-guide-popover .driver-popover-btn-disabled { pointer-events: none; }
 .getting-started-guide-popover .driver-popover-close-btn { display: grid; place-items: center; position: absolute; inset: var(--space-2) var(--space-2) auto auto; width: var(--control-hit-size); height: var(--control-hit-size); margin: 0; padding: 0; border: 0; border-radius: var(--radius-pill); background: transparent; color: var(--text-secondary); font-family: var(--font-family-ui); font-size: var(--text-size-project); font-weight: var(--font-weight-regular); line-height: var(--line-height-icon); transition: none; }
 .getting-started-guide-popover .driver-popover-close-btn:hover { background: var(--surface-hover); color: var(--text); }
-.getting-started-guide-popover .driver-popover-close-btn:focus-visible, .getting-started-guide-popover .button:focus-visible { outline: 2px solid var(--accent); outline-offset: var(--space-tight); }
+.getting-started-guide-popover .driver-popover-close-btn:focus-visible:not([data-pointer-focus]), .getting-started-guide-popover .button:focus-visible:not([data-pointer-focus]) { outline: 2px solid var(--accent); outline-offset: var(--space-tight); }
 .getting-started-guide-popover .driver-popover-arrow { border-color: transparent; }
 .getting-started-guide-popover .driver-popover-arrow-side-left { border-left-color: var(--surface); }
 .getting-started-guide-popover .driver-popover-arrow-side-right { border-right-color: var(--surface); }

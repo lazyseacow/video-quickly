@@ -1,22 +1,20 @@
 import { useEffect, useRef, useState } from 'react';
 import { LocateFixed, Scissors, Trash2, ArrowDownWideNarrow, Plus } from 'lucide-react';
-import { captionTrackSchema, frameAtTime, timeAtFrame, type AssetRecord, type CaptionCue, type CaptionTrack, type FrameRate, type ModelProfile, type Shot } from '@video-quickly/contracts';
+import { captionTrackSchema, frameAtTime, timeAtFrame, type AssetRecord, type CaptionCue, type CaptionTrack, type FrameRate, type Shot } from '@video-quickly/contracts';
 import { createEstimatedCaptionTrack, mediaSourceInUs, sourceCaptionTrack, type ClipEditContext } from '@video-quickly/video';
 import { captionTrackForEditor, commitCaptionEditorTrack, localCaptionTrack } from '../lib/caption-editor-track';
-import { Button, Dialog, Field, IconButton, Notice, Select } from './Primitives';
+import { Button, Dialog, Field, IconButton, Notice } from './Primitives';
 import './caption-editor.css';
 
 export interface CaptionEditorProps {
   shot: Shot;
   rate: FrameRate;
-  models: ModelProfile[];
   audioAsset?: AssetRecord;
   disabled?: boolean;
   context?: ClipEditContext;
   onClose: () => void;
   onApply: (track: CaptionTrack) => Promise<boolean | void> | boolean | void;
   onSeek: (localTimeUs: number) => void;
-  onTranscribe?: (modelId: string, signal: AbortSignal) => Promise<CaptionTrack>;
 }
 
 // The form edits clip-local times; persisted cues retain their declared source/scene coordinates.
@@ -30,24 +28,19 @@ function nextGap(cues: CaptionCue[], durationUs: number, minimumUs: number) {
   return durationUs - startUs >= minimumUs ? { startUs, endUs: Math.min(durationUs, startUs + 1_000_000) } : undefined;
 }
 
-export default function CaptionEditor({ shot, rate, models, audioAsset, disabled = false, context = {}, onClose, onApply, onSeek, onTranscribe }: CaptionEditorProps) {
+export default function CaptionEditor({ shot, rate, audioAsset, disabled = false, context = {}, onClose, onApply, onSeek }: CaptionEditorProps) {
   const originalTrack = sourceCaptionTrack(shot, context);
   const [fullTrack, setFullTrack] = useState(() => captionTrackForEditor(shot, context));
   const [draft, setDraft] = useState(() => localCaptionTrack(shot, fullTrack, context));
   const [captionsOff, setCaptionsOff] = useState(false);
   const [initial] = useState(() => ({ draft, fullTrack }));
-  const asrModels = models.filter(model => model.enabled && ['openai-compatible', 'volcengine-asr'].includes(model.provider) && model.capabilities.includes('asr'));
-  const [modelId, setModelId] = useState(asrModels[0]?.id ?? '');
-  const [candidate, setCandidate] = useState<CaptionTrack>();
-  const [transcribing, setTranscribing] = useState(false);
   const [applying, setApplying] = useState(false);
   const [failure, setFailure] = useState('');
-  const controller = useRef<AbortController | undefined>(undefined);
   const active = useRef(true);
   const carets = useRef(new Map<string, number>());
   useEffect(() => {
     active.current = true;
-    return () => { active.current = false; controller.current?.abort(); };
+    return () => { active.current = false; };
   }, []);
   const minimumUs = timeAtFrame(1, rate);
   const offsetUs = shot.clipEdit ? shot.clipEdit.inUs : draft.timeBase === 'source' ? mediaSourceInUs(shot, 'audio', context) : shot.sceneInUs ?? 0;
@@ -98,21 +91,6 @@ export default function CaptionEditor({ shot, rate, models, audioAsset, disabled
     const cue = draft.cues.find(item => item.id === id);
     if (cue) onSeek(cue.startUs);
   }
-  async function transcribe() {
-    if (!onTranscribe || !audioAsset || !modelId) return;
-    controller.current?.abort();
-    const operation = new AbortController(); controller.current = operation;
-    setFailure(''); setCandidate(undefined); setTranscribing(true);
-    try {
-      const track = captionTrackSchema.parse(await onTranscribe(modelId, operation.signal));
-      if (track.alignment !== 'speech' || track.timeBase !== 'source' || track.sourceAssetId !== audioAsset.id || track.sourceSha256 !== audioAsset.sha256) throw new Error('识别结果与当前音频不匹配，请重新识别。');
-      if (active.current && !operation.signal.aborted) setCandidate(track);
-    } catch (error) {
-      if (active.current && !operation.signal.aborted) setFailure(error instanceof Error ? error.message : String(error));
-    } finally {
-      if (active.current && controller.current === operation) { setTranscribing(false); controller.current = undefined; }
-    }
-  }
   async function apply() {
     if (error || staleSpeech || !parsed.success) return;
     setApplying(true); setFailure('');
@@ -127,14 +105,12 @@ export default function CaptionEditor({ shot, rate, models, audioAsset, disabled
     catch (error) { if (active.current) setFailure(error instanceof Error ? error.message : String(error)); }
     finally { if (active.current) setApplying(false); }
   }
-  function close() { controller.current?.abort(); onClose(); }
-
-  return <Dialog title="编辑字幕" onClose={close} className="dialog--wide caption-editor">
+  return <Dialog title="编辑字幕" onClose={onClose} className="dialog--wide caption-editor">
     <div className="dialog__body">
       <div className="caption-editor__summary"><strong>{shot.title}</strong><span>{draft.cues.length} 句 · 时间以当前镜头起点为 0 秒</span></div>
       {draft.alignment === 'estimated' && <Notice>当前字幕按旁白文字估时，尚未按语音对齐。</Notice>}
       {draft.alignment === 'speech' && !staleSpeech && <p className="tiny-meta">已按当前音频识别对齐 · {draft.granularity === 'word' ? '逐词时间' : '逐句时间'}</p>}
-      {staleSpeech && <Notice kind="error">音频已更换，旧语音字幕需要重新识别或手工校准。</Notice>}
+      {staleSpeech && <Notice kind="error">音频已更换，请手工校准字幕。</Notice>}
       {draft.cues.some(cue => Array.from(cue.text).length > 60) && <p className="tiny-meta">较长字幕会在预览与导出时自动分页，页内切换按阅读量估时；需要精确到词时，请拆句校准或使用逐词对齐。</p>}
       <div className="caption-editor__actions">
         <Button aria-label="按旁白估时" disabled={busy || !shot.narration.trim()} onClick={() => useTrack(createEstimatedCaptionTrack(shot))}>按旁白估时</Button>
@@ -154,14 +130,8 @@ export default function CaptionEditor({ shot, rate, models, audioAsset, disabled
         {!draft.cues.length && <p className="caption-editor__empty">{captionsOff ? '当前镜头字幕已关闭。' : fullTrack.cues.length ? '当前区间没有字幕，区间外句段仍保留。' : '当前区间没有字幕。'}可添加句段或从旁白初始化。</p>}
       </div>
       <Button disabled={busy || !gap} title={!gap ? '请先缩短或拆分已有句段，为新字幕留出时间' : undefined} onClick={() => { if (gap) edit([...draft.cues, { id: crypto.randomUUID(), ...gap, text: '' }].toSorted((a, b) => a.startUs - b.startUs)); }}><Plus size={14} />添加字幕</Button>
-      <section className="caption-editor__recognition" aria-label="语音识别">
-        <div className="caption-editor__recognition-controls"><Field label="语音识别模型"><Select value={modelId} disabled={busy || transcribing} onChange={event => setModelId(event.target.value)}><option value="" disabled>选择语音识别模型</option>{asrModels.map(model => <option key={model.id} value={model.id}>{model.name}</option>)}</Select></Field><Button aria-label="识别并对齐" busy={transcribing} disabled={busy || !audioAsset || !modelId || !onTranscribe} onClick={() => void transcribe()}>识别并对齐</Button></div>
-        {!audioAsset ? <p className="tiny-meta">先为当前镜头关联旁白音频，再进行语音识别。</p> : !asrModels.length ? <p className="tiny-meta">请在模型连接中添加具备语音识别能力的模型。</p> : null}
-        {transcribing && <p className="tiny-meta" role="status">正在识别音频，完成后会提供候选字幕。</p>}
-        {candidate && <div className="caption-editor__candidate"><p>识别候选 · {candidate.cues.length} 句</p><p>{candidate.cues.slice(0, 2).map(cue => cue.text).join(' ') || '当前音频未识别到语音。'}</p><Button aria-label="使用候选" disabled={busy} onClick={() => { useTrack(candidate); setCandidate(undefined); }}>使用候选</Button></div>}
-      </section>
       {(failure || error) && <Notice kind="error">{failure || error}</Notice>}
     </div>
-    <div className="dialog__footer"><Button onClick={close}>取消</Button><Button aria-label="应用字幕" variant="primary" busy={applying} disabled={disabled || transcribing || !changed || Boolean(error) || staleSpeech} onClick={() => void apply()}>应用</Button></div>
+    <div className="dialog__footer"><Button onClick={onClose}>取消</Button><Button aria-label="应用字幕" variant="primary" busy={applying} disabled={disabled || !changed || Boolean(error) || staleSpeech} onClick={() => void apply()}>应用</Button></div>
   </Dialog>;
 }

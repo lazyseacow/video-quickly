@@ -1,10 +1,10 @@
 import { expect, it } from 'vitest';
-import { captionStyleSchema, createHistoryWorkflow, createSceneTemplate, DEFAULT_CAPTION_STYLE, DEFAULT_VIDEO_PROFILE, effectiveCaptionStyle, projectSchema, seriesTemplateSchema } from '@video-quickly/contracts';
+import { captionStyleSchema, createNativeVideoWorkflow, createSceneTemplate, DEFAULT_CAPTION_STYLE, DEFAULT_VIDEO_PROFILE, effectiveCaptionStyle, projectSchema, seriesTemplateSchema } from '@video-quickly/contracts';
 import { editContent, ProjectEditSession, savedEditsSchema } from '../apps/desktop/src/lib/project-edits';
 import { applySeriesSettings, DEFAULT_SERIES_APPLY_OPTIONS, seriesSettingsFromProject } from '../apps/desktop/src/lib/series-templates';
 import { applyCaptionStyleEdit, applySeriesEdit, rememberSeriesSubmission } from '../apps/desktop/src/lib/style-edits';
 
-function project() { return projectSchema.parse({ id: 'project', title: '独立题目', brief: '项目内容', revision: 1, profile: DEFAULT_VIDEO_PROFILE, workflow: createHistoryWorkflow(), claims: [{ id: 'claim', text: '人工核验内容', source: '原文' }], shots: [{ id: 'shot', title: '镜头事实', narration: '保留旁白', visualPrompt: '保留画面', durationUs: 1_000_000, claimIds: ['claim'], assetId: 'actual-image', captionTrack: { timeBase: 'scene', alignment: 'manual', cues: [{ id: 'cue', startUs: 0, endUs: 1_000_000, text: '真实字幕内容' }] }, sceneTemplate: { ...createSceneTemplate('bar-chart'), heading: '人工数据', bars: [{ label: '史料A', value: 123 }, { label: '史料B', value: 456 }] } }], createdAt: '', updatedAt: '' }); }
+function project() { return projectSchema.parse({ id: 'project', title: '独立题目', brief: '项目内容', revision: 1, profile: DEFAULT_VIDEO_PROFILE, workflow: createNativeVideoWorkflow(), claims: [{ id: 'claim', text: '人工核验内容', source: '原文' }], shots: [{ id: 'shot', title: '镜头事实', narration: '保留旁白', visualPrompt: '保留画面', durationUs: 1_000_000, claimIds: ['claim'], assetId: 'actual-image', captionTrack: { timeBase: 'scene', alignment: 'manual', cues: [{ id: 'cue', startUs: 0, endUs: 1_000_000, text: '真实字幕内容' }] }, sceneTemplate: { ...createSceneTemplate('bar-chart'), heading: '人工数据', bars: [{ label: '史料A', value: 123 }, { label: '史料B', value: 456 }] } }], createdAt: '', updatedAt: '' }); }
 const alternative = { ...DEFAULT_CAPTION_STYLE, fontId: 'serif' as const, textColor: '#FFEECC', backgroundOpacity: 0, position: 'top' as const };
 
 it('keeps old projects on the legacy style and applies whole-shot overrides with an explicit inherit value', () => {

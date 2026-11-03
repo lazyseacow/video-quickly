@@ -1,6 +1,6 @@
 import type { JsonValue, ModelCapability, ModelProfile } from './index.js';
 
-export type ModelParameterOperation = 'text' | 'image' | 'video' | 'tts' | 'asr';
+export type ModelParameterOperation = 'text' | 'image' | 'video';
 export interface ModelParameterField {
   key: string; label: string; operation: ModelParameterOperation; type: 'text' | 'number' | 'select';
   min?: number; max?: number; integer?: boolean; options?: readonly string[]; hint?: string; customSize?: boolean; required?: boolean;
@@ -32,23 +32,6 @@ export function getModelParameterFields(model: Context): ModelParameterField[] {
     { key: 'duration', label: '视频时长（秒）', operation: 'video', type: 'number', min: 1, max: 600, integer: true },
     { key: 'ratio', label: '视频比例', operation: 'video', type: 'select', options: ['16:9', '4:3', '1:1', '3:4', '9:16', '21:9', 'adaptive'] },
     { key: 'characterReferenceMode', label: '角色参考方式', operation: 'video', type: 'select', options: ['first_frame', 'reference_image'], hint: 'first_frame 仅支持一张首帧；reference_image 须使用支持多模态参考图的 Seedance 2.x 模型。' });
-  if (has('tts') && ['openai-compatible', 'qwen-tts'].includes(model.provider)) {
-    fields.push({ key: 'voice', label: '配音音色', operation: 'tts', type: 'text', hint: '填写所接模型支持的音色 ID。' });
-    if (model.provider === 'openai-compatible') fields.push({ key: 'speed', label: '配音语速', operation: 'tts', type: 'number', min: .25, max: 4 });
-    else fields.push({ key: 'language_type', label: '配音语言', operation: 'tts', type: 'select', options: ['Auto', 'Chinese', 'English', 'German', 'Italian', 'Portuguese', 'Spanish', 'Japanese', 'Korean', 'French', 'Russian'] });
-  }
-  if (has('tts') && model.provider === 'volcengine-tts') fields.push(
-    { key: 'voice', label: '配音音色', operation: 'tts', type: 'text', required: true, hint: '选择当前资源版本的音色，或填写自定义 Speaker ID。' },
-    { key: 'audio_params.speech_rate', label: '配音语速', operation: 'tts', type: 'number', min: -50, max: 100, hint: '0 为正常语速，-50 为 0.5 倍，100 为 2 倍。' },
-    { key: 'audio_params.sample_rate', label: '采样率', operation: 'tts', type: 'select', options: ['8000', '16000', '22050', '24000', '32000', '44100', '48000'] },
-    { key: 'appId', label: 'App ID（旧版控制台）', operation: 'tts', type: 'text', hint: '新版 API Key 鉴权留空；旧版控制台填写 App ID，密钥填写 Access Token。' });
-  if (has('asr') && model.provider === 'volcengine-asr') fields.push(
-    { key: 'timestampGranularity', label: '识别时间粒度', operation: 'asr', type: 'select', options: ['segment', 'word'] },
-    { key: 'appId', label: 'App ID（旧版控制台）', operation: 'asr', type: 'text', hint: '新版 API Key 鉴权留空；旧版控制台填写 App ID，密钥填写 Access Token。' });
-  if (has('asr') && model.provider === 'openai-compatible') fields.push(
-    { key: 'timestampGranularity', label: '识别时间粒度', operation: 'asr', type: 'select', options: ['segment', 'word'] },
-    { key: 'asrResponseFormat', label: '识别返回格式', operation: 'asr', type: 'select', options: ['verbose_json', 'diarized_json'] },
-    { key: 'language', label: '识别语言', operation: 'asr', type: 'text', hint: '例如 zh 或 en，留空由模型识别。' });
   return fields;
 }
 
@@ -96,11 +79,10 @@ export function validateModelParameters(model: WithParameters): void {
     }
     if (keys.length > 1) throw new Error(`${keys.join(' 与 ')} 不能同时配置。`);
   }
-  if (model.provider === 'openai-compatible' && model.capabilities.includes('asr') && model.parameters.asrResponseFormat === 'diarized_json' && model.parameters.timestampGranularity === 'word') throw new Error('diarized_json 不支持逐词时间戳，请改用 segment 或 verbose_json。');
   if (model.provider === 'openai-compatible' && model.capabilities.includes('image') && model.capabilities.includes('video') && model.parameters.size === 'auto') throw new Error('图片与视频共用 size 时须使用宽x高；auto 仅适用于单独的图片连接。');
 }
 
-const known = ['temperature', 'max_tokens', 'max_completion_tokens', 'max_output_tokens', 'size', 'quality', 'seconds', 'duration', 'resolution', 'ratio', 'voice', 'speed', 'language', 'language_type', 'timestampGranularity', 'asrResponseFormat', 'num_predict'];
+const known = ['temperature', 'max_tokens', 'max_completion_tokens', 'max_output_tokens', 'size', 'quality', 'seconds', 'duration', 'resolution', 'ratio', 'num_predict'];
 const configuration = ['workflow', 'inputMapping', 'requestPath', 'requestTemplate', 'resultUrlPath', 'resultBase64Path', 'taskIdPath', 'pollPath', 'statusPath', 'characterReferenceMode', 'pollTimeoutSeconds'];
 
 /** Shared profiles can expose several capabilities without leaking their known controls across API calls. */

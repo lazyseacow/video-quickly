@@ -79,8 +79,8 @@ export function createProjectReadiness(options: {
       if (!model) {
         if (node.kind === 'agent') add({ severity: 'error', category: 'model', nodeId: node.id, message: 'Agent 步骤需要选择具备文本和工具能力的模型。', fix: 'step' }, `agent:${node.id}`);
         if (node.kind === 'script' && !project.shots.length) add({ severity: futureShots ? 'warning' : 'error', category: 'workflow', nodeId: node.id, message: '本地脚本步骤没有可采用的分镜，请先添加镜头或选择文本模型。', fix: 'step' }, `script:${node.id}`);
-        if (node.kind === 'assets' || node.kind === 'voice') {
-          const kind = node.kind === 'assets' ? 'image' : 'audio';
+        if (node.kind === 'assets' && node.config.operation !== 'prepare-references') {
+          const kind = 'image';
           for (const shot of project.shots) {
             const deferred = !shot.locked && (futureShots || (kind === 'image' ? futureImages : futureVoice));
             const asset = options.hasMediaExecutor ? imported.get(`${shot.id}:${kind}`) : assets.get((kind === 'image' ? shot.assetId ?? shot.videoAssetId : shot.audioAssetId) ?? '');
@@ -102,7 +102,7 @@ export function createProjectReadiness(options: {
       if (model && !invalidModels.has(node.id)) {
         if (node.kind === 'script') futureShots = true;
         if (node.kind === 'assets') futureImages = true;
-        if (node.kind === 'voice') futureVoice = true;
+        if (node.config.operation === 'generate-native-video') { futureImages = true; futureVoice = true; }
       }
     }
     for (const { asset, node, severity } of required.values()) {
@@ -119,7 +119,7 @@ export function createProjectReadiness(options: {
       for (const node of nodes) {
         signal.throwIfAborted();
         const model = node.modelId ? models.get(node.modelId) : undefined;
-        if (!model || invalidModels.has(node.id) || !['assets', 'voice', 'animation'].includes(node.kind)) continue;
+        if (!model || invalidModels.has(node.id) || !['assets', 'animation'].includes(node.kind)) continue;
         try { await options.preflight({ project, node, assets: saved.assets, model, characters: saved.characters.filter(character => characterIds.has(character.id)), signal, dataDirectory: options.directory }); }
         catch (failure) { signal.throwIfAborted(); add({ severity: 'error', category: 'model', nodeId: node.id, modelId: model.id, message: failure instanceof Error ? failure.message : '媒体输入条件无法通过本地检查。', fix: 'models' }, `preflight:${node.id}`); }
       }

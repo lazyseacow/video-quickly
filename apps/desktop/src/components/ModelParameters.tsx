@@ -1,17 +1,14 @@
 import { useState } from 'react';
-import { getModelParameterFields, modelParameterValue, withModelParameter, type JsonValue, type ModelCapability, type ModelProfile, type VoiceDiscovery } from '@video-quickly/contracts';
+import { getModelParameterFields, modelParameterValue, withModelParameter, type JsonValue, type ModelCapability, type ModelProfile } from '@video-quickly/contracts';
 import { Field, Select } from './Primitives';
 import './model-editors.css';
-import VoicePicker from './VoicePicker';
 
 export const modelParameterSections = [
   { id: 'text', label: '文本参数' }, { id: 'image', label: '图片参数' }, { id: 'video', label: '视频参数' },
-  { id: 'tts', label: '配音参数' }, { id: 'asr', label: '识别参数' },
 ] as const;
 
-export default function ModelParameters({ provider, capabilities, textProtocol, value, disabled = false, operation, voices, voiceContextKey, voicesLoading, onReloadVoices, onChange }: {
+export default function ModelParameters({ provider, capabilities, textProtocol, value, disabled = false, operation, onChange }: {
   provider: ModelProfile['provider']; textProtocol?: ModelProfile['textProtocol']; capabilities: ModelCapability[]; value: Record<string, JsonValue>; disabled?: boolean; operation?: typeof modelParameterSections[number]['id'];
-  voices?: VoiceDiscovery; voiceContextKey?: string; voicesLoading?: boolean; onReloadVoices?: () => void;
   onChange: (value: Record<string, JsonValue>) => void;
 }) {
   const fields = getModelParameterFields({ provider, capabilities, textProtocol });
@@ -21,7 +18,6 @@ export default function ModelParameters({ provider, capabilities, textProtocol, 
       return group.length ? <fieldset key={id}><legend>{label}</legend><div className="model-editor__grid">{group.map(field => {
         const current = modelParameterValue(value, field.key);
         const text = typeof current === 'string' || typeof current === 'number' ? String(current) : '';
-        if (field.key === 'voice' && voices) return <VoicePicker key={`${field.key}:${voiceContextKey}`} value={text} required={field.required} disabled={disabled} catalog={voices} loading={voicesLoading} onReload={onReloadVoices} onChange={voice => onChange(withModelParameter(value, field.key, voice || undefined))} />;
         if (field.customSize) return <ImageSizeField key={field.key} label={field.label} hint={field.hint} value={text} options={field.options ?? []} disabled={disabled} onChange={size => onChange(withModelParameter(value, field.key, size || undefined))} />;
         return <Field key={field.key} label={field.label} hint={field.hint}>{field.type === 'select' ? <Select value={text} disabled={disabled} onChange={event => onChange(withModelParameter(value, field.key, event.target.value || undefined))}><option value="">使用默认值</option>{field.options?.map(option => <option key={option} value={option}>{option}</option>)}{text && !field.options?.includes(text) && <option value={text}>无效值：{text}</option>}</Select> : <input type={field.type === 'number' ? 'number' : 'text'} value={text} required={field.required} min={field.min} max={field.max} step={field.integer ? '1' : 'any'} disabled={disabled} onChange={event => {
           const raw = event.target.value;
@@ -31,7 +27,7 @@ export default function ModelParameters({ provider, capabilities, textProtocol, 
       })}</div></fieldset> : null;
     })}
     {!fields.length && <p className="tiny-meta">此协议使用高级 JSON 配置工作流或请求映射。</p>}
-    {fields.length > 0 && <p className="tiny-meta">留空使用默认值；尺寸、时长和音色以模型支持范围为准。</p>}
+    {fields.length > 0 && <p className="tiny-meta">留空使用默认值；尺寸和时长以模型支持范围为准。</p>}
   </div>;
 }
 

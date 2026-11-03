@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { afterEach, expect, it } from 'vitest';
 import { createCanvas } from '@napi-rs/canvas';
-import { createHistoryWorkflow, createSceneTemplate, DEFAULT_VIDEO_PROFILE, projectSchema, type AssetRecord } from '@video-quickly/contracts';
+import { createNativeVideoWorkflow, createSceneTemplate, DEFAULT_VIDEO_PROFILE, projectSchema, type AssetRecord } from '@video-quickly/contracts';
 import { probeMedia, renderProject, runMedia } from '../src/node.js';
 import { captionGeometry, captionPages, createTimedSrt } from '../src/index.js';
 import { captionFontFamily } from '../src/caption-layout.js';
@@ -41,7 +41,7 @@ it.skipIf(!mediaAvailable)('ignores legacy citations in video, templates and sam
   const formats = [[320, 180, 'contain'], [180, 320, 'cover'], [256, 256, 'blur']] as const;
   for (const [width, height, fitMode] of formats) {
     const profile = { ...DEFAULT_VIDEO_PROFILE, width, height, fitMode, previewScale: 1 }, outputDirectory = join(directory, fitMode);
-    const project = projectSchema.parse({ id: 'references', title: 'Cited pictures', revision: 1, brief: '', workflow: createHistoryWorkflow(), profile, createdAt: '', updatedAt: '', referenceDisplay: 'numbers',
+    const project = projectSchema.parse({ id: 'references', title: 'Cited pictures', revision: 1, brief: '', workflow: { ...createNativeVideoWorkflow(), production: { ...createNativeVideoWorkflow().production, subtitleMode: 'script' } }, profile, createdAt: '', updatedAt: '', referenceDisplay: 'numbers',
       researchSources: [{ id: 'document', title: 'Captured source', kind: 'text', content, sha256: sourceHash, capturedAt: '2026-10-30T00:00:00.000Z' }],
       claims: [{ id: 'pending', text: 'Result', source: 'Captured source', evidence }, { id: 'reviewed', text: 'Reviewed result', source: 'Captured source', evidence, status: 'verified', reviewedAt: '2026-10-30T01:00:00.000Z' }, { id: 'legacy', text: 'Old statement', source: 'Old book', locator: 'p. 12', status: 'verified' }],
       shots: [{ id: 'video', title: 'Video', narration: '', visualPrompt: '', durationUs: 1_000_000, sourceInUs: 0, videoAssetId: 'video', audioAssetId: 'voice', claimIds: ['pending'], captionTrack: { timeBase: 'scene', alignment: 'manual', cues: [{ id: 'voice-caption', startUs: 0, endUs: 1_000_000, text: 'Voice caption' }] }, animation: { transition: 'cut' } },

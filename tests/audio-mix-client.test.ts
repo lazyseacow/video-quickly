@@ -1,11 +1,11 @@
 import { afterEach, expect, it, vi } from 'vitest';
-import { createHistoryWorkflow, DEFAULT_VIDEO_PROFILE, projectSchema, type AudioMixJob, type PreparedAudioMix } from '@video-quickly/contracts';
+import { createNativeVideoWorkflow, DEFAULT_VIDEO_PROFILE, projectSchema, type AudioMixJob, type PreparedAudioMix } from '@video-quickly/contracts';
 import { rpc } from '../apps/desktop/src/lib/client';
 import { prepareAudioMixPreview, readAudioLevels } from '../apps/desktop/src/lib/audio-mix';
 
 vi.mock('../apps/desktop/src/lib/client', () => ({ rpc: vi.fn() }));
 const request = vi.mocked(rpc), key = 'a'.repeat(64);
-const project = () => projectSchema.parse({ id: 'mix-project', title: '试听', revision: 1, brief: '', profile: DEFAULT_VIDEO_PROFILE, workflow: createHistoryWorkflow(), createdAt: '', updatedAt: '', shots: [1, 2].map(index => ({ id: `shot-${index}`, title: '镜头', narration: '', visualPrompt: '', durationUs: 1_000_000, sourceInUs: 0, audioAssetId: 'voice' })) });
+const project = () => projectSchema.parse({ id: 'mix-project', title: '试听', revision: 1, brief: '', profile: DEFAULT_VIDEO_PROFILE, workflow: createNativeVideoWorkflow(), createdAt: '', updatedAt: '', shots: [1, 2].map(index => ({ id: `shot-${index}`, title: '镜头', narration: '', visualPrompt: '', durationUs: 1_000_000, sourceInUs: 0, audioAssetId: 'voice' })) });
 const result = (): PreparedAudioMix => ({ version: 1, key, path: '/derived/mix.wav', sha256: 'b'.repeat(64), durationUs: 2_000_000, shotDurations: [{ shotId: 'shot-1', durationUs: 1_000_000 }, { shotId: 'shot-2', durationUs: 1_000_000 }], analysis: { sampleRate: 48000, channels: 2 }, warnings: [] });
 const job = (status: AudioMixJob['status'], mix = result()): AudioMixJob => ({ id: 'job', key, status, progress: status === 'succeeded' ? 1 : .5, ...(status === 'succeeded' ? { result: mix } : {}) });
 afterEach(() => { vi.useRealTimers(); vi.resetAllMocks(); });

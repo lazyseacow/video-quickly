@@ -1,11 +1,11 @@
-import { createHistoryWorkflow, DEFAULT_VIDEO_PROFILE, projectSchema, type AssetRecord, type RunRecord } from '@video-quickly/contracts';
+import { createNativeVideoWorkflow, DEFAULT_VIDEO_PROFILE, projectSchema, type AssetRecord, type RunRecord } from '@video-quickly/contracts';
 import { DocumentStore } from '../../packages/runtime/src/database';
 
 export function seedLargeWorkspace(store: DocumentStore, shotCount: number, options = { assets: 1000, runs: 200, eventsPerRun: 100 }) {
   const timestamp = '2026-10-29T00:00:00.000Z';
   const project = projectSchema.parse({
     id: `benchmark-${shotCount}`, title: `${shotCount} 镜头基准`, brief: '隔离的按需读取与编辑基准。', revision: 1,
-    profile: DEFAULT_VIDEO_PROFILE, workflow: createHistoryWorkflow(), createdAt: timestamp, updatedAt: timestamp,
+    profile: DEFAULT_VIDEO_PROFILE, workflow: createNativeVideoWorkflow(), createdAt: timestamp, updatedAt: timestamp,
     shots: Array.from({ length: shotCount }, (_, index) => ({ id: `shot-${index}`, title: `镜头 ${index + 1}`, narration: '这是可重复的长项目基准旁白。'.repeat(8), visualPrompt: '固定画面要求。'.repeat(8), durationUs: 3_000_000 })),
   });
   store.database.transaction(() => {

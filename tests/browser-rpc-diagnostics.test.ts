@@ -101,7 +101,7 @@ test('observes one real text generation without logging its model, prompt, heade
   await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
   const address = server.address(); if (!address || typeof address === 'string') throw new Error('Provider fixture did not listen');
   try {
-    const model: ModelProfile = { id: 'model-sensitive-fixture', name: 'name-sensitive-fixture', model: 'model-sensitive-fixture', provider: 'openai-compatible', baseUrl: `http://127.0.0.1:${address.port}`, capabilities: ['text'], parameters: { fixture: 'parameter-sensitive-fixture' }, enabled: true, hasSecret: false, createdAt: '', updatedAt: '' };
+    const model: ModelProfile = { id: 'model-sensitive-fixture', name: 'name-sensitive-fixture', model: 'model-sensitive-fixture', provider: 'openai-compatible', baseUrl: `http://127.0.0.1:${address.port}`, connectionType: 'text', capabilities: ['text'], parameters: { fixture: 'parameter-sensitive-fixture' }, enabled: true, hasSecret: false, createdAt: '', updatedAt: '' };
     const entries = await captureProvider(async diagnostics => {
       const provider = diagnostics.textProvider(generateText);
       expect(await provider({ model, prompt: 'prompt-sensitive-fixture', secret: 'secret-sensitive-fixture', operationId: `${runId}:node-sensitive-fixture` })).toEqual({ text: 'response-sensitive-fixture', usage: undefined });

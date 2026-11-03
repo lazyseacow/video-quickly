@@ -4,7 +4,7 @@ import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { setTimeout as delay } from 'node:timers/promises';
-import { exportBatchSchema, modelSchema, projectDetailSchema, projectSchema, recordPageSchema, assetSchema, runInspectionSchema, runStepPayloadSchema, runSummarySchema, runSchema, workspaceSummarySchema, type ModelProfile } from '@video-quickly/contracts';
+import { createNativeVideoWorkflow, exportBatchSchema, modelSchema, projectDetailSchema, projectSchema, recordPageSchema, assetSchema, runInspectionSchema, runStepPayloadSchema, runSummarySchema, runSchema, workspaceSummarySchema, type ModelProfile } from '@video-quickly/contracts';
 import { createRuntime } from '../packages/runtime/src/index';
 import { createActivityExecutor, createWaveformReader, validateMediaActivity } from '../packages/integrations/src/index';
 import { audioMixProjectionKey, prepareAudioMix, readAudioLevelWindow, detectAudioSilence } from '../packages/video/src/audio-mix';
@@ -15,7 +15,7 @@ import { committedPhaseRun, resumePhaseRun } from './real-service-progress';
 interface RunEvidence { id?: string; phase: string; nodeId: string; revision: number; applicationId: string; applied: boolean; status?: string; activities?: number }
 
 interface Evidence {
-  version: 1; status: 'running' | 'awaiting_review' | 'passed' | 'failed'; configDigest: string; startedAt: string; completedAt?: string;
+  version: 1; status: 'running' | 'paused' | 'passed' | 'failed'; configDigest: string; startedAt: string; completedAt?: string;
   projectId?: string; projectDigest?: string; phase?: string; runs: RunEvidence[]; models?: Record<ServiceRole, ModelProfile>;
   connections: ReturnType<typeof servicePreflight>; batchId?: string; artifacts?: Array<{ id: string; sha256: string; duration: number; width?: number; height?: number }>;
   automatedChecksOnly: true; error?: string;
@@ -26,10 +26,10 @@ export async function main(args = process.argv.slice(2)) {
   const configPath = argument('--config');
   if (!configPath) throw new Error('需要 --config 配置文件；仅加 --execute 才会调用真实模型。');
   const stopAfter = argument('--stop-after');
-  if (stopAfter !== undefined && !['script', 'assets', 'voice', 'animation', 'asr'].includes(stopAfter)) throw new Error('--stop-after 仅接受 script、assets、voice、animation 或 asr。');
+  if (stopAfter !== undefined && !['brief', 'style', 'script', 'assets', 'video', 'animation'].includes(stopAfter)) throw new Error('--stop-after 仅接受 brief、style、script、assets、video 或 animation。');
   const config = parseRealServiceConfig(JSON.parse(await readFile(resolve(configPath), 'utf8')));
   const connections = servicePreflight(config, process.env);
-  if (!args.includes('--execute')) { console.log(JSON.stringify({ status: 'preflight', connections, calls: '3 镜头：1 次脚本、每镜头图片／配音／视频／识别，另三比例本地导出；不会自动再次 POST', humanReview: '技术验收不代替成片人工审阅和 Windows 原生验收' }, null, 2)); return; }
+  if (!args.includes('--execute')) { console.log(JSON.stringify({ status: 'preflight', connections, calls: '3 镜头：3 次策划、每镜头参考图／视频，另三比例本地导出；不会自动再次 POST', automatedChecksOnly: true }, null, 2)); return; }
   if (connections.some(value => value.credential === 'missing')) throw new Error('缺少配置声明的凭据环境变量，未提交模型请求。');
   const outputArgument = argument('--output');
   if (!outputArgument) throw new Error('执行需要 --output 指定全新的隔离验收目录。');
@@ -62,7 +62,7 @@ export async function main(args = process.argv.slice(2)) {
   process.once('SIGINT', interrupt); process.once('SIGTERM', interrupt);
   const current = async () => projectDetailSchema.parse(await runtime.dispatch('project.get', { projectId: evidence.projectId })).project!;
   const projectDigest = (project: unknown) => createHash('sha256').update(JSON.stringify(project)).digest('hex');
-  const stopForReview = async () => { evidence.status = 'awaiting_review'; await persist(); console.log(JSON.stringify({ status: evidence.status, evidence: join(output, 'evidence.json'), projectId: evidence.projectId, phase: evidence.phase })); };
+  const stopAtPhase = async () => { evidence.status = 'paused'; await persist(); console.log(JSON.stringify({ status: evidence.status, evidence: join(output, 'evidence.json'), projectId: evidence.projectId, phase: evidence.phase })); };
   const waitRun = async (id: string) => {
     for (;;) {
       signal.throwIfAborted(); const run = runSummarySchema.parse(await runtime.dispatch('run.get', { runId: id }));
@@ -114,15 +114,11 @@ export async function main(args = process.argv.slice(2)) {
     const created = evidence.projectId ? await current() : projectSchema.parse(await runtime.dispatch('project.create', { title: config.title })); evidence.projectId = created.id; await persist();
     if (evidence.runs.length && created.workflow.id !== 'real-service-validation') throw new Error('原验收流程已被修改，保留人工内容并停止提交。');
     if (evidence.projectDigest && !evidence.runs.some(item => !item.applied) && evidence.projectDigest !== projectDigest(created)) throw new Error('原验收项目已有后续人工修改，未继续提交。');
-    const kinds = ['script', 'assets', 'voice', 'animation'] as const;
-    const roles = ['text', 'image', 'tts', 'video'] as const;
+    const kinds = ['brief', 'style', 'script', 'assets', 'video', 'animation'] as const;
     const project = created.workflow.id === 'real-service-validation' ? created : projectSchema.parse(await runtime.dispatch('project.update', { projectId: created.id, revision: created.revision, patch: {
       brief: config.brief, profile: { width: 640, height: 360, frameRate: { numerator: 30, denominator: 1 }, fitMode: 'contain', previewScale: .5 },
       shots: Array.from({ length: 3 }, (_, index) => ({ id: `service-shot-${index + 1}`, title: `镜头 ${index + 1}`, narration: '这是一份等待真实模型生成的验收稿。', visualPrompt: config.brief, durationUs: 10_000_000 })),
-      workflow: { id: 'real-service-validation', name: '真实服务隔离验收', version: 1,
-        nodes: kinds.map((kind, index) => ({ id: kind, kind, label: kind, modelId: models[roles[index]].id, prompt: kind === 'script' ? '只返回三个镜头的 JSON，保留镜头编号，每个 durationUs 为 10000000；合计三十秒。旁白适合十秒内自然朗读。' : '' })),
-        edges: kinds.slice(1).map((kind, index) => ({ id: `${kinds[index]}-${kind}`, source: kinds[index], target: kind })),
-      },
+      workflow: { ...createNativeVideoWorkflow(), id: 'real-service-validation', name: '真实服务隔离验收', production: { ...created.workflow.production, textModelId: models.text.id, imageModelId: models.image.id, videoModelId: models.video.id, referenceMode: 'generate', subtitleMode: 'off' } },
     } }));
     if (!evidence.projectDigest) evidence.projectDigest = projectDigest(project);
     await persist();
@@ -130,17 +126,10 @@ export async function main(args = process.argv.slice(2)) {
       await execute(kind, revision => runtime.dispatch('run.start', { projectId: project.id, revision, nodeId: kind }), kind);
       const generated = await current();
       if (generated.shots.length !== 3 || Math.abs(generated.shots.reduce((sum, shot) => sum + shot.durationUs, 0) - 30_000_000) > 1_000_000) throw new Error('实际脚本没有生成约三十秒、三个镜头；停止后续模型提交并保留产物。');
-      if (stopAfter === kind) { await stopForReview(); return; }
+      if (stopAfter === kind) { await stopAtPhase(); return; }
     }
-    const spoken = await current();
-    if (spoken.shots.length !== 3 || Math.abs(spoken.shots.reduce((sum, shot) => sum + shot.durationUs, 0) - 30_000_000) > 1_000_000) throw new Error('实际脚本没有生成约三十秒、三个镜头，保留产物供审阅。');
-    for (const shot of spoken.shots) {
-      if (!shot.assetId || !shot.videoAssetId || !shot.audioAssetId) throw new Error('真实图片、视频或配音未全部绑定，拒绝以样例补齐。');
-      await execute(`asr:${shot.id}`, revision => runtime.dispatch('caption.transcribe', { projectId: project.id, revision, shotId: shot.id, modelId: models.asr.id }), 'caption');
-    }
-    if (stopAfter === 'asr') { await stopForReview(); return; }
     const ready = await current();
-    if (ready.shots.some(shot => shot.captionTrack?.alignment !== 'speech' || !shot.captionTrack.cues.length)) throw new Error('未取得实际语音时间戳字幕。');
+    if (ready.shots.some(shot => !shot.videoAssetId || shot.audioAssetId || shot.audioProcessing?.version !== 2 || !shot.audioProcessing.videoAudio.enabled)) throw new Error('视频镜头尚未完整绑定。');
     evidence.phase = 'export';
     if (!evidence.batchId) {
       const batches: unknown = await runtime.dispatch('render.batch.list', { projectId: ready.id, limit: 100 });
@@ -166,9 +155,9 @@ export async function main(args = process.argv.slice(2)) {
       evidence.artifacts.push({ id: target.id, sha256, duration: media.duration, width: media.width, height: media.height });
     }
     const assets = recordPageSchema(assetSchema).parse(await runtime.dispatch('asset.list', { projectId: ready.id, limit: 100 }));
-    if (!['image', 'audio', 'video'].every(kind => assets.items.some(asset => asset.kind === kind && asset.provenance !== '本地示例'))) throw new Error('缺少实际生成的媒体种类。');
+    if (!['image', 'video'].every(kind => assets.items.some(asset => asset.kind === kind && asset.provenance !== '本地示例'))) throw new Error('缺少实际生成的媒体种类。');
     evidence.status = 'passed'; evidence.completedAt = new Date().toISOString(); await persist();
-    console.log(JSON.stringify({ status: evidence.status, evidence: join(output, 'evidence.json'), projectId: ready.id, batchId: batch.id, humanReviewRequired: true }));
+    console.log(JSON.stringify({ status: evidence.status, evidence: join(output, 'evidence.json'), projectId: ready.id, batchId: batch.id, automatedChecksOnly: true }));
   } catch (error) {
     evidence.status = 'failed'; evidence.completedAt = new Date().toISOString(); evidence.error = redactServiceFailure(error, values); await persist();
     throw new Error(evidence.error);

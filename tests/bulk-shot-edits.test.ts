@@ -1,9 +1,9 @@
 import { expect, it } from 'vitest';
-import { createHistoryWorkflow, createSceneTemplate, DEFAULT_AUDIO_PROCESSING, DEFAULT_CAPTION_STYLE, DEFAULT_VIDEO_PROFILE, projectSchema, type Shot } from '@video-quickly/contracts';
+import { createNativeVideoWorkflow, createSceneTemplate, DEFAULT_AUDIO_PROCESSING, DEFAULT_CAPTION_STYLE, DEFAULT_VIDEO_PROFILE, projectSchema, type Shot } from '@video-quickly/contracts';
 import { applyBulkShotEdit, bulkDuplicateShots, bulkMoveShots, bulkRemoveShots, bulkReorderShots } from '../apps/desktop/src/lib/bulk-shot-edits';
 import { editContent, ProjectEditSession, type EditContent } from '../apps/desktop/src/lib/project-edits';
 
-function project() { return projectSchema.parse({ id: 'bulk-project', title: '批改项目', brief: '', revision: 1, profile: DEFAULT_VIDEO_PROFILE, workflow: createHistoryWorkflow(), createdAt: '', updatedAt: '', shots: ['A', 'B', 'C', 'D', 'E', 'F'].map(id => ({ id, title: id, narration: `旁白${id}`, visualPrompt: `画面${id}`, durationUs: 2_000_000 })) }); }
+function project() { return projectSchema.parse({ id: 'bulk-project', title: '批改项目', brief: '', revision: 1, profile: DEFAULT_VIDEO_PROFILE, workflow: createNativeVideoWorkflow(), createdAt: '', updatedAt: '', shots: ['A', 'B', 'C', 'D', 'E', 'F'].map(id => ({ id, title: id, narration: `旁白${id}`, visualPrompt: `画面${id}`, durationUs: 2_000_000 })) }); }
 function fixture() { return editContent(project()); }
 function patch(content: EditContent, id: string, changes: Partial<Shot>): EditContent { return { ...content, shots: content.shots.map(shot => shot.id === id ? { ...shot, ...changes } : shot) }; }
 const order = (content: EditContent) => content.shots.map(shot => shot.id);

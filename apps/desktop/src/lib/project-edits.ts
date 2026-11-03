@@ -18,6 +18,7 @@ const workflowPatchSchema = z.object({
   id: z.string().optional(), name: z.string().optional(),
   subflows: workflowSchema.shape.subflows.unwrap().nullable().optional(), execution: workflowSchema.shape.execution.unwrap().nullable().optional(),
   stages: workflowSchema.shape.stages.unwrap().nullable().optional(),
+  production: workflowSchema.shape.production.optional(),
   nodes: z.object({ put: z.array(draftWorkflowSchema.shape.nodes.element), remove: z.array(z.string()), order: z.array(z.string()).optional() }).optional(),
   edges: z.object({ put: z.array(workflowSchema.shape.edges.element), remove: z.array(z.string()), order: z.array(z.string()).optional() }).optional(),
 });
@@ -36,8 +37,7 @@ const savedEditFields = {
   undo: z.array(commandSchema).max(50), redo: z.array(commandSchema).max(50), selectedShotId: z.string().optional(),
 };
 const currentSavedEditsSchema = z.object({ ...savedEditFields, version: z.literal(2), base: editContentSchema, present: editContentSchema });
-const legacySavedEditsSchema = z.object({ ...savedEditFields, version: z.literal(1), base: editContentSchema.omit({ workflow: true }), present: editContentSchema.omit({ workflow: true }) });
-export const savedEditsSchema = z.discriminatedUnion('version', [legacySavedEditsSchema, currentSavedEditsSchema]);
+export const savedEditsSchema = currentSavedEditsSchema;
 export type SavedEdits = z.infer<typeof savedEditsSchema>;
 type EditorState = z.infer<typeof currentSavedEditsSchema> & { conflict?: ProjectDocument; recovered: boolean; busy: boolean };
 export type EditConflict = { path: string; label: string; local: unknown; remote: unknown };
@@ -80,6 +80,7 @@ function diff(from: EditContent, to: EditContent): EditPatch {
   if (plans) patch.clipEditPlans = plans;
   const nodes = diffRecords(from.workflow.nodes, to.workflow.nodes), edges = diffRecords(from.workflow.edges, to.workflow.edges);
   if (!sameWorkflow(from.workflow, to.workflow)) patch.workflow = { ...(from.workflow.id !== to.workflow.id ? { id: to.workflow.id } : {}), ...(from.workflow.name !== to.workflow.name ? { name: to.workflow.name } : {}), ...(!sameContent(from.workflow.subflows, to.workflow.subflows) ? { subflows: to.workflow.subflows ?? null } : {}), ...(!sameContent(from.workflow.execution, to.workflow.execution) ? { execution: to.workflow.execution ?? null } : {}), ...(!sameContent(from.workflow.stages, to.workflow.stages) ? { stages: to.workflow.stages ?? null } : {}), ...(nodes ? { nodes } : {}), ...(edges ? { edges } : {}) };
+  if (patch.workflow && !sameContent(from.workflow.production, to.workflow.production)) patch.workflow.production = to.workflow.production ?? null;
   return patch;
 }
 
@@ -100,6 +101,7 @@ function applyRecords<T extends { id: string }>(current: T[], patch?: { put: T[]
 function apply(content: EditContent, patch: EditPatch): EditContent {
   const { shots: changes, workflow: graph, clipEditSources: sources, clipEditPlans: plans, ...settings } = patch;
   const workflow = graph ? { ...content.workflow, ...(graph.id !== undefined ? { id: graph.id } : {}), ...(graph.name !== undefined ? { name: graph.name } : {}), ...(Object.hasOwn(graph, 'subflows') ? { subflows: graph.subflows ?? undefined } : {}), ...(Object.hasOwn(graph, 'execution') ? { execution: graph.execution ?? undefined } : {}), ...(Object.hasOwn(graph, 'stages') ? { stages: graph.stages ?? undefined } : {}), nodes: applyRecords(content.workflow.nodes, graph.nodes), edges: applyRecords(content.workflow.edges, graph.edges) } : content.workflow;
+  if (graph?.production) workflow.production = graph.production;
   const collections = { workflow, clipEditSources: applyRecords(content.clipEditSources, sources), clipEditPlans: applyRecords(content.clipEditPlans, plans) };
   if (!changes) return { ...content, ...settings, ...collections };
   const shots = new Map(content.shots.map(shot => [shot.id, shot]));
@@ -108,7 +110,7 @@ function apply(content: EditContent, patch: EditPatch): EditContent {
   return { ...content, ...settings, ...collections, shots: (changes.order ?? [...shots.keys()]).flatMap(id => { const shot = shots.get(id); return shot ? [shot] : []; }) };
 }
 
-const fieldLabels: Record<string, string> = { clipEdit: '文稿剪辑', clipEditSources: '原始镜头', clipEditPlans: '剪辑计划', audioProcessing: '镜头声音处理', audioMix: '项目混音', captionStyle: '字幕样式', scenePreset: '新镜头模板默认', researchSources: '资料正文', referenceDisplay: '成片引用编号', claimIds: '镜头引用', musicClips: '背景音乐', characterIds: '镜头角色', sceneTemplate: '科普画面模板', captionTrack: '字幕', sourceInUs: '素材入点', audioInUs: '旁白入点', videoInUs: '视频入点', sceneInUs: '场景入点', sceneDurationUs: '原场景时长', title: '标题', brief: '创意简报', profile: '视频规格', width: '宽度', height: '高度', frameRate: '帧率', style: '系列风格', claims: '事实主张', narration: '旁白', visualPrompt: '画面要求', durationUs: '时长', animation: '运镜', zoom: '缩放', panX: '水平移动', panY: '垂直移动', transition: '转场', assetId: '画面素材', videoAssetId: '视频素材', audioAssetId: '旁白音频', locked: '锁定状态' };
+const fieldLabels: Record<string, string> = { clipEdit: '文稿剪辑', clipEditSources: '原始镜头', clipEditPlans: '剪辑计划', audioProcessing: '镜头声音处理', audioMix: '项目混音', captionStyle: '字幕样式', scenePreset: '新镜头模板默认', researchSources: '资料正文', referenceDisplay: '成片引用编号', claimIds: '镜头引用', musicClips: '背景音乐', characterIds: '镜头角色', sceneTemplate: '科普画面模板', captionTrack: '字幕', sourceInUs: '素材入点', audioInUs: '旁白入点', videoInUs: '视频入点', sceneInUs: '场景入点', sceneDurationUs: '原场景时长', title: '标题', brief: '创意简报', profile: '视频规格', width: '宽度', height: '高度', frameRate: '帧率', style: '系列风格', claims: '事实主张', narration: '旁白', visualPrompt: '画面要求', soundPrompt: '镜头声音要求', durationUs: '时长', animation: '运镜', zoom: '缩放', panX: '水平移动', panY: '垂直移动', transition: '转场', assetId: '画面素材', videoAssetId: '视频素材', audioAssetId: '旁白音频', locked: '锁定状态' };
 export function mergeEdits(base: EditContent, local: EditContent, remote: EditContent, choices: Record<string, 'local' | 'remote'> = {}) {
   const conflicts: EditConflict[] = [];
   function merge(original: unknown, mine: unknown, theirs: unknown, path: string, label: string): unknown {
@@ -157,7 +159,7 @@ export class ProjectEditSession {
   state: EditorState;
   constructor(project: ProjectDocument, saved?: SavedEdits) {
     const content = editContent(project);
-    const restored = saved?.projectId !== project.id ? undefined : saved.version === 2 ? saved : { ...saved, version: 2 as const, base: { ...saved.base, workflow: content.workflow }, present: { ...saved.present, workflow: content.workflow } };
+    const restored = saved?.projectId === project.id ? saved : undefined;
     this.state = { version: 2, projectId: project.id, revision: project.revision, base: content, present: content, undo: [], redo: [], selectedShotId: project.shots[0]?.id, recovered: false, busy: false, ...restored };
     this.state.recovered = this.dirty;
     this.receive(project);

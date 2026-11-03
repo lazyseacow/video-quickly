@@ -19,7 +19,7 @@ const {renderProject,probeMedia,runMedia}=await import(pathToFileURL(join(output
 const baseShot={id:'sample-1',title:'一纸功名，从何而来',narration:'这是一段本地生成的手绘示例。视频规格、画面和字幕共用一份时间轴。',visualPrompt:'手绘书院',durationUs:1_300_000,claimIds:[],locked:false,animation:{panX:.035,panY:0,zoom:1.04,transition:'fade'}};
 const results=[];
 for(const profile of [{width:640,height:360,frameRate:{numerator:30,denominator:1},fitMode:'contain',previewScale:.5},{width:360,height:640,frameRate:{numerator:30000,denominator:1001},fitMode:'cover',previewScale:.5}]){
- const project={id:'render-smoke',title:'本地手绘示例',templateId:'history-handdrawn',profile,shots:[baseShot,{...baseShot,id:'sample-2',title:'走进书院',durationUs:1_100_000}],revision:1,brief:'',claims:[],style:'',createdAt:new Date().toISOString(),updatedAt:new Date().toISOString(),archived:false,workflow:{id:'smoke',version:1,name:'smoke',nodes:[],edges:[]}};
+ const project={id:'render-smoke',title:'本地手绘示例',templateId:'history-handdrawn',profile,shots:[baseShot,{...baseShot,id:'sample-2',title:'走进书院',durationUs:1_100_000}],revision:1,brief:'',claims:[],style:'',createdAt:new Date().toISOString(),updatedAt:new Date().toISOString(),archived:false,workflow:{id:'smoke',version:1,name:'smoke',production: { mode: 'native-video', referenceMode: 'none', soundPrompt: '', subtitleMode: 'off' }, nodes:[],edges:[]}};
  const result=await renderProject({project,outputDirectory:join(output,`${profile.width}x${profile.height}`),ffmpegPath:ffmpeg,ffprobePath:ffprobe});
  const probe=await probeMedia(result.videoPath,ffprobe);
  if(probe.width!==profile.width||probe.height!==profile.height)throw new Error('Smoke output size mismatch');
@@ -32,7 +32,7 @@ const records=[];
 for(const [id,path,kind,mimeType] of [['fixture-audio',audio,'audio','audio/wav'],['fixture-video',sourceVideo,'video','video/mp4']]){
  const bytes=await readFile(path);records.push({id,name:id,path,kind,mimeType,size:bytes.length,sha256:createHash('sha256').update(bytes).digest('hex'),version:1,createdAt:new Date().toISOString(),provenance:'local smoke fixture',retained:false,active:true});
 }
-const mediaProject={id:'media-smoke',title:'本地媒体测试',templateId:'generic',profile:{width:480,height:480,frameRate:{numerator:25,denominator:1},fitMode:'blur',previewScale:.5},shots:[{...baseShot,durationUs:500_000,audioAssetId:'fixture-audio',videoAssetId:'fixture-video'}],revision:1,brief:'',claims:[],style:'',createdAt:new Date().toISOString(),updatedAt:new Date().toISOString(),archived:false,workflow:{id:'smoke',version:1,name:'smoke',nodes:[],edges:[]}};
+const mediaProject={id:'media-smoke',title:'本地媒体测试',templateId:'generic',profile:{width:480,height:480,frameRate:{numerator:25,denominator:1},fitMode:'blur',previewScale:.5},shots:[{...baseShot,durationUs:500_000,audioAssetId:'fixture-audio',videoAssetId:'fixture-video'}],revision:1,brief:'',claims:[],style:'',createdAt:new Date().toISOString(),updatedAt:new Date().toISOString(),archived:false,workflow:{id:'smoke',version:1,name:'smoke',production: { mode: 'native-video', referenceMode: 'none', soundPrompt: '', subtitleMode: 'off' }, nodes:[],edges:[]}};
 const mediaResult=await renderProject({project:mediaProject,assets:records,outputDirectory:join(output,'media-fixtures'),ffmpegPath:ffmpeg,ffprobePath:ffprobe});
 const mediaProbe=await probeMedia(mediaResult.videoPath,ffprobe);
 if(mediaProbe.duration<1.215||!mediaProbe.audio||mediaProbe.frameRate!=='25/1')throw new Error('媒体测试未保留完整音频或输出帧率');

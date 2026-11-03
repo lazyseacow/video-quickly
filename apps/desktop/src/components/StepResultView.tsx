@@ -42,8 +42,8 @@ export default function StepResultView({ value, kind }: { value: JsonValue; kind
     {captions.success && <CaptionResult track={captions.data} />}
     {claims.length > 0 && <section className="step-result__claims" aria-label="资料主张"><div className="step-result__summary">{claims.length} 条主张</div>{claims.map((claim, index) => <article key={copy(claim.id) || index}><header><strong>主张 {index + 1}</strong><span>{claim.status === 'verified' && object?.readonly === true ? '已核验' : claim.status === 'disputed' ? '存在争议' : '待核验'}</span></header><p>{copy(claim.text)}</p>{copy(claim.evidence) && <blockquote>{copy(claim.evidence)}</blockquote>}</article>)}</section>}
     {text && !shots.length && !captions.success && !claims.length && <article className="step-result__document" aria-label={kind === 'style' ? '视觉风格' : kind === 'brief' ? '创作简报' : '创作内容'}>{copy(object?.title) && <h3>{copy(object?.title)}</h3>}{text.split(/\n\s*\n/).map((paragraph, index) => <p key={index}>{paragraph}</p>)}</article>}
-    {localCount !== undefined && !assets.length && <div className="step-result__checkpoint"><Check size={22} /><div><strong>已沿用 {localCount} 份{kind === 'voice' ? '旁白录音' : '画面素材'}</strong><p>可在项目预览中查看已关联的内容。</p></div></div>}
-    {!specialized && kind === 'review' ? <div className="step-result__checkpoint"><Check size={24} /><div><strong>成片审阅</strong><p>结合项目预览，核对画面、声音和字幕后确认是否继续。</p></div></div>
+    {localCount !== undefined && !assets.length && <div className="step-result__checkpoint"><Check size={22} /><div><strong>已沿用 {localCount} 份画面素材</strong><p>可在项目预览中查看已关联的内容。</p></div></div>}
+    {!specialized && kind === 'review' ? <div className="step-result__checkpoint"><Check size={24} /><div><strong>自动检查结果</strong><p>检查完成后，流程会自动继续后续步骤。</p></div></div>
       : !specialized && kind === 'join' ? <div className="step-result__checkpoint"><Check size={24} /><strong>上游分支已汇合</strong></div>
         : !specialized && kind === 'condition' ? <div className="step-result__checkpoint"><Check size={24} /><div><strong>{object?.matched === true ? '条件成立' : '条件不成立'}</strong><p>流程将沿对应的连接继续。</p></div></div>
           : !specialized && <ResultFields value={value} />}

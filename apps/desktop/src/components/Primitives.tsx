@@ -1,6 +1,7 @@
 import { cloneElement, createElement, isValidElement, useId, useRef, type ButtonHTMLAttributes, type ComponentProps, type ReactNode } from 'react';
 import { Check, CircleAlert, Info, LoaderCircle, X } from 'lucide-react';
 import { gsap, motion, useGSAP } from '../lib/motion';
+export { default as Combobox } from './Combobox';
 
 export function Button({ children, variant = 'default', className = '', busy = false, static: isStatic = false, ...props }: ButtonHTMLAttributes<HTMLButtonElement> & { variant?: 'default' | 'primary' | 'ghost' | 'danger'; busy?: boolean; static?: boolean }) {
   return <button type="button" {...props} disabled={props.disabled || busy} className={`button button--${variant} ${isStatic ? 'button--static' : ''} ${className}`} aria-busy={busy || undefined}>{busy && <LoaderCircle className="spin" size={16} aria-hidden="true" />}{children}</button>;
@@ -69,7 +70,7 @@ export function EmptyState({ icon, title, description, children }: { icon: React
   return <div className="empty-state"><div className="empty-state__icon">{icon}</div><h3>{title}</h3><p>{description}</p>{children}</div>;
 }
 
-export const statusLabels: Record<string, string> = { draft: '草稿', ready: '就绪', queued: '排队中', running: '制作中', processing: '制作中', planned: '分镜就绪', completed: '已完成', succeeded: '已完成', waiting_review: '等待审阅', awaiting_review: '等待审阅', needs_attention: '需要核对', failed: '执行失败', canceled: '已停止', cancelled: '已停止', archived: '回收站', stale: '需更新', pending: '待执行', waiting_external: '等待结果', retry_scheduled: '等待重试' };
+export const statusLabels: Record<string, string> = { draft: '草稿', ready: '就绪', queued: '排队中', running: '制作中', processing: '制作中', planned: '分镜就绪', completed: '已完成', succeeded: '已完成', waiting_review: '待继续', awaiting_review: '待继续', needs_attention: '需要核对', failed: '执行失败', canceled: '已停止', cancelled: '已停止', archived: '回收站', stale: '需更新', pending: '待执行', waiting_external: '等待结果', retry_scheduled: '等待重试' };
 export function Status({ value }: { value: string }) { return <span className={`status status--${value}`}><span />{statusLabels[value] ?? value}</span>; }
 
 export function formatTime(us: number) {

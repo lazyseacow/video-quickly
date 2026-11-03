@@ -34,7 +34,7 @@ async function logs(directory: string) {
 }
 async function workflow(runtime: ReturnType<typeof createRuntime>, modelId?: string, label = '本地步骤') {
   const project = projectSchema.parse(await runtime.dispatch('project.create', { title: 'private-project-title', brief: 'private-project-brief' }));
-  await runtime.dispatch('workflow.save', { projectId: project.id, workflow: { id: 'logging-fixture', version: 1, name: 'private-workflow-name', nodes: [workflowNodeSchema.parse({ id: 'brief', kind: 'brief', label, modelId, prompt: 'private-node-prompt' })], edges: [] } });
+  await runtime.dispatch('workflow.save', { projectId: project.id, workflow: { id: 'logging-fixture', version: 1, name: 'private-workflow-name', production: { mode: 'native-video', referenceMode: 'none', soundPrompt: '', subtitleMode: 'off' }, nodes: [workflowNodeSchema.parse({ id: 'brief', kind: 'brief', label, modelId, prompt: 'private-node-prompt' })], edges: [] } });
   return project;
 }
 
@@ -57,7 +57,7 @@ it('keeps provider failure diagnostics useful without persisting response text, 
     secretStore: { async get(key) { return secrets.get(key); }, async set(key, value) { secrets.set(key, value); }, async delete(key) { secrets.delete(key); } },
     provider: async () => { throw Object.assign(new Error(`private-provider-response ${secret}`), { code: 'EACCES', status: 503 }); },
   });
-  const modelInput = { name: 'private-model-name', provider: 'openai-compatible', baseUrl: 'https://example.invalid/v1', model: 'fixture', capabilities: ['text'] };
+  const modelInput = { name: 'private-model-name', provider: 'openai-compatible', baseUrl: 'https://example.invalid/v1', model: 'fixture', connectionType: 'text', capabilities: ['text'] };
   await expect(runtime.dispatch('model.save', { model: { ...modelInput, baseUrl: `${modelInput.baseUrl}?token=${secret}` }, secret })).rejects.toThrow('不含凭据');
   const model = modelSchema.parse(await runtime.dispatch('model.save', { model: modelInput, secret }));
   const project = await workflow(runtime, model.id, `private-node-label ${secret}`);

@@ -1,9 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { applyShotCandidate, createHistoryWorkflow, createSceneTemplate, DEFAULT_AUDIO_MIX_SETTINGS, DEFAULT_AUDIO_PROCESSING, DEFAULT_VIDEO_PROFILE, projectSchema, shotCandidateSchema } from '@video-quickly/contracts';
+import { applyShotCandidate, createNativeVideoWorkflow, createSceneTemplate, DEFAULT_AUDIO_MIX_SETTINGS, DEFAULT_AUDIO_PROCESSING, DEFAULT_VIDEO_PROFILE, projectSchema, shotCandidateSchema } from '@video-quickly/contracts';
 import { editContent, mergeEdits, ProjectEditSession, savedEditsSchema, sameContent } from '../apps/desktop/src/lib/project-edits';
 import { deleteShotRanges } from '../packages/video/src/clip-edits';
 
-const project = () => projectSchema.parse({ id: 'p', title: '项目', brief: '', revision: 1, profile: DEFAULT_VIDEO_PROFILE, workflow: createHistoryWorkflow(), createdAt: '2026-10-29', updatedAt: '2026-10-29', shots: [1, 2].map(id => ({ id: `shot-${id}`, title: `镜头 ${id}`, narration: '', visualPrompt: '', durationUs: 1_000_000 })) });
+const project = () => projectSchema.parse({ id: 'p', title: '项目', brief: '', revision: 1, profile: DEFAULT_VIDEO_PROFILE, workflow: createNativeVideoWorkflow(), createdAt: '2026-10-29', updatedAt: '2026-10-29', shots: [1, 2].map(id => ({ id: `shot-${id}`, title: `镜头 ${id}`, narration: '', visualPrompt: '', durationUs: 1_000_000 })) });
 
 describe('unified project edit commands', () => {
   it('restores optional workflow stages and their removal through persisted deltas without losing other draft edits', () => {
@@ -148,22 +148,7 @@ describe('unified project edit commands', () => {
     expect(restored.state.present.shots[0].sceneTemplate?.heading).toBe('  保留输入空格  ');
     restored.undo(); expect(restored.state.present.shots[0].sceneTemplate).toBeUndefined();
   });
-  it('restores a selected audio candidate and independent offsets through persisted undo and redo', () => {
-    const original = project();
-    original.shots[0] = { ...original.shots[0], sourceInUs: 1_000_000, videoAssetId: 'original-video', audioAssetId: 'original-audio' };
-    const session = new ProjectEditSession(original);
-    const baseline = original.shots[0];
-    const candidate = shotCandidateSchema.parse({ id: 'candidate', projectId: original.id, shotId: baseline.id, kind: 'audio', runId: 'run', nodeId: 'regenerate', createdAt: '2026-10-30', baseline, shot: { ...baseline, audioAssetId: 'new-audio', audioInUs: 0 }, assetIds: ['new-audio'] });
-    const selected = applyShotCandidate(baseline, candidate);
-    const applied = projectSchema.parse({ ...original, revision: 2, shots: [selected, original.shots[1]] });
-    session.beginSave(); session.receive(applied); session.applySaved(applied, '应用镜头候选'); session.endSave();
-    const restored = new ProjectEditSession(applied, savedEditsSchema.parse(JSON.parse(JSON.stringify(session.state))));
-    restored.undo(); expect(restored.state.present.shots[0]).toEqual(baseline);
-    restored.redo(); expect(restored.state.present.shots[0]).toEqual(selected);
-    expect(restored.state.present.shots[0].sourceInUs).toBe(1_000_000);
-    expect(restored.state.present.shots[0].audioInUs).toBe(0);
-    expect(restored.state.present.shots[1]).toEqual(original.shots[1]);
-  });
+
   it('restores music added to an old project through saved undo and redo after reload', () => {
     const original = project(); const session = new ProjectEditSession(original);
     const clip = { id: 'music', assetId: 'audio', startUs: 500_000, sourceInUs: 250_000, durationUs: 2_000_000, gainDb: -18, fadeInUs: 200_000, fadeOutUs: 300_000, loop: true };

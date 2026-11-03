@@ -4,7 +4,7 @@ import { mkdtemp, readFile, readdir, rm, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { afterEach, expect, it } from 'vitest';
-import { createHistoryWorkflow, DEFAULT_VIDEO_PROFILE, musicClipSchema, shotSchema, type AssetRecord, type ProjectDocument } from '@video-quickly/contracts';
+import { createNativeVideoWorkflow, DEFAULT_VIDEO_PROFILE, musicClipSchema, shotSchema, type AssetRecord, type ProjectDocument } from '@video-quickly/contracts';
 import { probeMedia, renderProject, runMedia } from '../src/node.js';
 
 const ffmpeg = process.env.VIDEO_QUICKLY_FFMPEG ?? 'ffmpeg';
@@ -24,7 +24,7 @@ it.skipIf(!mediaAvailable)('mixes source-tail loops on project time with fades, 
   }
   const music = await asset('music', musicPath), voice = await asset('voice', voicePath);
   const project: ProjectDocument = {
-    id: 'music-project', title: '真实混音', brief: '', templateId: 'generic', revision: 1, archived: false, claims: [], style: '', createdAt: '', updatedAt: '', workflow: createHistoryWorkflow(),
+    id: 'music-project', title: '真实混音', brief: '', templateId: 'generic', revision: 1, archived: false, claims: [], style: '', createdAt: '', updatedAt: '', workflow: { ...createNativeVideoWorkflow(), production: { ...createNativeVideoWorkflow().production, subtitleMode: 'script' } },
     profile: { ...DEFAULT_VIDEO_PROFILE, width: 320, height: 180, previewScale: 1 },
     shots: [shotSchema.parse({ id: 'shot', title: '混音', narration: '', visualPrompt: '', durationUs: 4_000_000, sourceInUs: 0, audioAssetId: 'voice', animation: { transition: 'cut' }, captionTrack: { timeBase: 'scene', alignment: 'manual', cues: [{ id: 'cue', startUs: 1_000_000, endUs: 3_000_000, text: 'Explicit caption' }] } })],
     musicClips: [musicClipSchema.parse({ id: 'bgm', assetId: 'music', startUs: 500_000, sourceInUs: 1_000_000, durationUs: 3_000_000, gainDb: -6, fadeInUs: 500_000, fadeOutUs: 500_000, loop: true })],

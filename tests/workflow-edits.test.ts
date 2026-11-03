@@ -2,7 +2,7 @@ import { expect, it } from 'vitest';
 import { DEFAULT_VIDEO_PROFILE, projectSchema, workflowSchema, type WorkflowDefinition } from '@video-quickly/contracts';
 import { editContent, mergeEdits, ProjectEditSession, savedEditsSchema } from '../apps/desktop/src/lib/project-edits';
 
-const project = () => projectSchema.parse({ id: 'flow', title: '流程项目', brief: '', revision: 1, profile: DEFAULT_VIDEO_PROFILE, createdAt: '', updatedAt: '', shots: [], workflow: { id: 'graph', version: 1, name: '制作', nodes: [{ id: 'a', kind: 'brief', label: '简报', position: { x: 0, y: 0 } }, { id: 'b', kind: 'agent', label: '文稿', prompt: 'unrelated-prompt-marker'.repeat(1000), position: { x: 300, y: 0 } }], edges: [{ id: 'ab', source: 'a', target: 'b' }] } });
+const project = () => projectSchema.parse({ id: 'flow', title: '流程项目', brief: '', revision: 1, profile: DEFAULT_VIDEO_PROFILE, createdAt: '', updatedAt: '', shots: [], workflow: { id: 'graph', version: 1, name: '制作', production: { mode: 'native-video', referenceMode: 'none', soundPrompt: '', subtitleMode: 'off' }, nodes: [{ id: 'a', kind: 'brief', label: '简报', position: { x: 0, y: 0 } }, { id: 'b', kind: 'agent', label: '文稿', prompt: 'unrelated-prompt-marker'.repeat(1000), position: { x: 300, y: 0 } }], edges: [{ id: 'ab', source: 'a', target: 'b' }] } });
 function edit(session: ProjectEditSession, patch: Partial<WorkflowDefinition>, label = '调整流程', group?: string) {
   session.edit({ ...session.state.present, workflow: { ...session.state.present.workflow, ...patch } }, label, group);
 }
@@ -48,18 +48,13 @@ it('persists unfinished names and invalid graph drafts in version 2 without weak
   restored.redo(); expect(restored.state.present.workflow.edges).toHaveLength(2);
 });
 
-it('migrates legacy drafts and history while adopting the current workflow instead of overwriting it', () => {
+it('rejects drafts from unsupported formats', () => {
   const original = project(), session = new ProjectEditSession(original);
   session.edit({ ...session.state.present, title: '保留的旧草稿' }, '标题');
   session.edit({ ...session.state.present, brief: '可重做的简报' }, '简报'); session.undo();
   const legacy = JSON.parse(JSON.stringify(session.state)); legacy.version = 1;
   delete legacy.base.workflow; delete legacy.present.workflow;
-  const remote = { ...original, revision: 2, workflow: { ...original.workflow, version: 3, name: '新版流程' } };
-  const restored = new ProjectEditSession(remote, savedEditsSchema.parse(legacy));
-  expect(restored.state.version).toBe(2); expect(restored.state.present.title).toBe('保留的旧草稿');
-  expect(restored.state.present.workflow).toEqual(remote.workflow); expect(restored.state.conflict).toBeUndefined();
-  restored.redo(); expect(restored.state.present.brief).toBe('可重做的简报');
-  restored.undo(); restored.undo(); expect(restored.state.present.workflow).toEqual(remote.workflow); expect(restored.state.present.title).toBe(original.title);
+  expect(savedEditsSchema.safeParse(legacy).success).toBe(false);
 });
 
 it('synchronizes workflow version metadata without recording it as an edit', () => {

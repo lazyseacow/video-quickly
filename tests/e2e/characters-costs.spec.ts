@@ -106,7 +106,7 @@ test('sends frozen character settings into generation and records provider token
     let project = await createProject(request, '角色快照与费用验收');
     const character = await rpc<CharacterProfile>(request, 'character.save', { character: { name: '配角阿宁', description: '灰色斗篷，语气平静', referenceAssetIds: [] } });
     project = await rpc<ProjectDocument>(request, 'project.update', { projectId: project.id, revision: project.revision, patch: { shots: project.shots.map(shot => ({ ...shot, characterIds: [character.id] })) } });
-    const model = await rpc<ModelProfile>(request, 'model.save', { model: { name: '费用计量服务', provider: 'openai-compatible', baseUrl: `http://127.0.0.1:${address.port}/v1`, model: 'usage-fixture', capabilities: ['text'], pricing: { currency: 'USD', inputPerMillionTokens: 2, outputPerMillionTokens: 4 } } });
+    const model = await rpc<ModelProfile>(request, 'model.save', { model: { name: '费用计量服务', provider: 'openai-compatible', baseUrl: `http://127.0.0.1:${address.port}/v1`, model: 'usage-fixture', connectionType: 'text', capabilities: ['text'], pricing: { currency: 'USD', inputPerMillionTokens: 2, outputPerMillionTokens: 4 } } });
     await openProject(page, project.title);
     await page.getByRole('button', { name: 'AI 微调', exact: true }).click();
     const candidate = page.getByRole('dialog', { name: '镜头候选', exact: true });

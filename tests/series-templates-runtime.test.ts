@@ -1,3 +1,4 @@
+import { fixtureNativeVideo } from './fixtures/native-video';
 import { createServer, type Server } from 'node:http';
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -62,13 +63,12 @@ async function generationFixture() {
     let text = ''; for await (const chunk of request) text += chunk.toString(); const path = request.url ?? ''; requests.push({ path, body: JSON.parse(text) });
     if (path.endsWith('/chat/completions')) response.end(JSON.stringify({ choices: [{ message: { content: JSON.stringify({ shots: state.shots }) } }] }));
     else if (path.endsWith('/images/generations')) response.end(JSON.stringify({ data: [{ b64_json: 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScLbtAAAAABJRU5ErkJggg==' }] }));
-    else if (path.endsWith('/audio/speech')) response.end(Buffer.from('new audio fixture bytes'));
-    else if (path.endsWith('/video')) response.end(JSON.stringify({ data: Buffer.from('new video fixture bytes').toString('base64') }));
+    else if (path.endsWith('/video')) response.end(JSON.stringify({ data: fixtureNativeVideo().toString('base64') }));
     else { response.statusCode = 404; response.end(); }
   })().catch(error => response.destroy(error instanceof Error ? error : undefined)); }); servers.push(server); await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve)); const address = server.address(); if (!address || typeof address === 'string') throw new Error('测试服务地址无效');
   const models = {} as Record<ShotCandidateKind, ModelProfile>;
-  for (const [kind, capability] of [['script', 'text'], ['image', 'image'], ['audio', 'tts'], ['video', 'video']] as const) models[kind] = await runtime.dispatch('model.save', { model: { name: `${kind}模型`, provider: kind === 'video' ? 'custom-http' : 'openai-compatible', baseUrl: `http://127.0.0.1:${address.port}/v1`, model: `fixture-${kind}`, capabilities: [capability], parameters: kind === 'video' ? { requestPath: '/video', requestTemplate: { prompt: '{{prompt}}' }, resultBase64Path: 'data' } : {} } }) as ModelProfile;
-  const template = await save(runtime, '固定系列'), created = projectSchema.parse(await runtime.dispatch('project.create', { title: '生成项目', seriesTemplateId: template.id, seriesTemplateRevision: template.revision }));
+  for (const [kind, capability] of [['script', 'text'], ['image', 'image'], ['video', 'video']] as const) models[kind] = await runtime.dispatch('model.save', { model: { name: `${kind}模型`, provider: kind === 'video' ? 'custom-http' : 'openai-compatible', baseUrl: `http://127.0.0.1:${address.port}/v1`, model: `fixture-${kind}`, connectionType: (([capability]) as readonly string[]).includes('text') ? 'text' : (([capability]) as readonly string[]).includes('video') ? 'video' : 'image', capabilities: [capability], parameters: kind === 'video' ? { requestPath: '/video', requestTemplate: { prompt: '{{prompt}}' }, resultBase64Path: 'data' } : {} } }) as ModelProfile;
+  const template = await save(runtime, '固定系列'), created = projectSchema.parse(await runtime.dispatch('project.create', { templateId: 'history-handdrawn', title: '生成项目', seriesTemplateId: template.id, seriesTemplateRevision: template.revision }));
   const diagram = { ...createSceneTemplate('comparison'), heading: '已有真实题目的人工图解' }, shotStyle: CaptionStyle = { ...DEFAULT_CAPTION_STYLE, fontId: 'serif', fontWeight: 700 };
   const project = projectSchema.parse(await runtime.dispatch('project.update', { projectId: created.id, revision: created.revision, patch: { shots: [{ id: 'shot-1', title: '人工镜头1', narration: '人工旁白1', visualPrompt: '人工画面1', durationUs: 1_000_000, sceneTemplate: diagram, captionStyle: shotStyle }, { id: 'shot-2', title: '人工镜头2', narration: '人工旁白2', visualPrompt: '人工画面2', durationUs: 1_000_000, captionStyle: null }] } }));
   return { runtime, directory, project, models, template, state, requests, diagram, shotStyle };
@@ -103,19 +103,9 @@ it.each(['script', 'image', 'video'] as const)('rejects a %s candidate after its
   await expect(runtime.dispatch('shot.candidate.apply', { projectId: project.id, revision: edited.revision, candidateId: generated.id })).rejects.toThrow('项目风格已修改'); expect(await current(runtime, project.id)).toEqual(edited);
 });
 
-it('keeps a voice candidate usable after visual generation style changes', async () => {
-  const { runtime, project, models } = await generationFixture(), generated = await candidate(runtime, project, 'audio', models.audio);
-  const edited = projectSchema.parse(await runtime.dispatch('project.update', { projectId: project.id, revision: project.revision, patch: { style: '只改视觉风格' } }));
-  const applied = projectSchema.parse(await runtime.dispatch('shot.candidate.apply', { projectId: project.id, revision: edited.revision, candidateId: generated.id })); expect(applied.style).toBe(edited.style); expect(applied.shots[0].audioAssetId).toBe(generated.shot.audioAssetId); expect(applied.shots[0].captionStyle).toEqual(project.shots[0].captionStyle);
-});
 
-it('guards a custom voice request that really maps the visual prompt into its payload', async () => {
-  const { runtime, project, models, requests } = await generationFixture();
-  const model = await runtime.dispatch('model.save', { model: { ...models.audio, provider: 'custom-http', parameters: { requestPath: '/video', requestTemplate: { prompt: '{{prompt}}', narration: '{{narration}}' }, resultBase64Path: 'data' } } }) as ModelProfile;
-  const generated = await candidate(runtime, project, 'audio', model); expect(JSON.stringify(requests[0].body)).toContain(project.style);
-  const edited = projectSchema.parse(await runtime.dispatch('project.update', { projectId: project.id, revision: project.revision, patch: { style: '自定义请求实际使用的风格发生更改' } }));
-  await expect(runtime.dispatch('shot.candidate.apply', { projectId: project.id, revision: edited.revision, candidateId: generated.id })).rejects.toThrow('项目风格已修改');
-});
+
+
 
 it('does not invalidate a custom image request that never consumed the project style', async () => {
   const { runtime, project, models, requests } = await generationFixture();

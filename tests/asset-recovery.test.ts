@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { afterEach, describe, expect, it } from 'vitest';
-import { createHistoryWorkflow, DEFAULT_VIDEO_PROFILE, projectSchema, type AssetRecord } from '@video-quickly/contracts';
+import { createNativeVideoWorkflow, DEFAULT_VIDEO_PROFILE, projectSchema, type AssetRecord } from '@video-quickly/contracts';
 import { assetRecoveryJobSchema, assetRecoveryPageSchema, type AssetRecoveryItem } from '../packages/contracts/src/asset-recovery';
 import { createAssetRecovery, type AssetRecoveryOptions } from '../packages/runtime/src/asset-recovery';
 import { DocumentStore, openDatabase } from '../packages/runtime/src/database';
@@ -47,7 +47,7 @@ describe('managed asset recovery', () => {
 
   it('pages the complete inventory, explains a current dangling reference and rejects a page from an older scan generation', async () => {
     const f = await fixture(); for (let index = 0; index < 101; index++) await f.asset(`page-${index}`);
-    const project = projectSchema.parse({ id: 'current', title: '当前项目', brief: '', revision: 1, createdAt: '', updatedAt: '', profile: DEFAULT_VIDEO_PROFILE, workflow: createHistoryWorkflow(), shots: [{ id: 'shot', title: '镜头', narration: '', visualPrompt: '', durationUs: 1_000_000, assetId: 'missing-record' }] });
+    const project = projectSchema.parse({ id: 'current', title: '当前项目', brief: '', revision: 1, createdAt: '', updatedAt: '', profile: DEFAULT_VIDEO_PROFILE, workflow: createNativeVideoWorkflow(), shots: [{ id: 'shot', title: '镜头', narration: '', visualPrompt: '', durationUs: 1_000_000, assetId: 'missing-record' }] });
     f.store.put('project', project.id, project);
     const first = await f.check(); expect(first.items).toHaveLength(100); expect(first.nextOffset).toBe(100); expect(first.job.progress.total).toBe(102);
     const last = assetRecoveryPageSchema.parse(await f.manager().dispatch('asset.recovery.get', { jobId: first.job.id, generation: first.job.generation, offset: first.nextOffset }));

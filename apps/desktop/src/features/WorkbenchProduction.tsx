@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Check, RefreshCw } from 'lucide-react';
 import { runInspectionSchema, type ResolvedWorkflowStage, type RunStepSummary, type RunSummary, type WorkflowDefinition, type WorkflowNode, type WorkflowStage } from '@video-quickly/contracts';
 import { Button, Notice, statusLabels } from '../components/Primitives';
@@ -6,19 +6,15 @@ import { useRuntimeRead } from '../lib/use-runtime-read';
 import type { Action, StepOutputSelection } from '../lib/types';
 import { stepGuidance } from '../lib/workflow-guidance';
 import { resolveWorkbenchStages } from '../lib/workbench-stages';
-import RunActions from './RunActions';
+import { isConfigurationFailure } from '../lib/run-recovery';
 import WorkbenchStepCard from './WorkbenchStepCard';
 import './workbench-guide.css';
 import './workbench-production.css';
-
-const RunInspector = lazy(() => import('./RunInspector'));
-const RunScopeDialog = lazy(() => import('../components/RunScopeDialog'));
 
 interface ProgressTask { id: string; label: string; description: string; node?: WorkflowNode; step?: RunStepSummary; }
 interface StageProgress { key: string; label: string; description: string; tasks: ProgressTask[]; }
 const taskCompleted = (task: ProgressTask) => task.step?.status === 'succeeded' || task.step?.status === 'skipped';
 function progressLabel(status: RunStepSummary['status'] | RunSummary['status']) {
-  if (status === 'waiting_review') return '等待审阅';
   return statusLabels[status] ?? (status === 'skipped' ? '已跳过' : status === 'not_recorded' ? '未记录' : '待执行');
 }
 function groupProgress(stages: WorkflowStage[] | undefined, steps: ProgressTask[]): StageProgress[] | undefined {
@@ -36,14 +32,12 @@ function groupProgress(stages: WorkflowStage[] | undefined, steps: ProgressTask[
   return groups;
 }
 
-export default function WorkbenchProduction({ workflow, run, version, action, onOpenOutput, onPausePreview, onConfigure, onConfigureStage }: {
+export default function WorkbenchProduction({ workflow, run, version, action, onOpenOutput, onPausePreview, onConfigureStage }: {
   workflow: WorkflowDefinition; run: RunSummary; version: number; action: Action;
   onOpenOutput: (selection: StepOutputSelection) => void; onPausePreview: () => void;
-  onConfigure: (node: WorkflowNode) => void; onConfigureStage: (stage: ResolvedWorkflowStage) => void;
+  onConfigureStage: (stage: ResolvedWorkflowStage, options?: { tab?: 'settings' | 'run'; nodeId?: string }) => void;
 }) {
   const inspection = useRuntimeRead('run.inspect', { runId: run.id }, version, runInspectionSchema);
-  const [inspectedStep, setInspectedStep] = useState<string | null>(null);
-  const [restart, setRestart] = useState<RunSummary>();
   const [pending, setPending] = useState('');
   const [error, setError] = useState('');
   const inFlight = useRef(false);
@@ -57,10 +51,11 @@ export default function WorkbenchProduction({ workflow, run, version, action, on
   const configured = new Set(tasks.map(task => task.id));
   for (const step of steps) if (!configured.has(step.id)) tasks.push({ ...step, step });
   const current = steps.find(step => step.id === run.currentNodeId);
+  const configurationFailure = isConfigurationFailure(run.error ?? current?.error);
   const isCurrent = (step: { id: string }) => step.id === run.currentNodeId && !['succeeded', 'canceled'].includes(run.status);
   const stages = groupProgress(data?.stages ?? resolveWorkbenchStages(workflow), tasks);
   const groups = stages ?? tasks.map(task => ({ key: `task:${task.id}`, label: task.step?.label ?? task.label, description: task.description, tasks: [task] }));
-  const usefulOutput = steps.findLast(step => step.outputAvailable && ['script', 'style', 'assets', 'voice', 'animation', 'research', 'export'].includes(step.kind));
+  const usefulOutput = steps.findLast(step => step.outputAvailable && ['script', 'style', 'assets', 'animation', 'research', 'export'].includes(step.kind));
   const output = current?.outputAvailable && !['review', 'brief', 'condition', 'join'].includes(current.kind) ? current : usefulOutput ?? steps.findLast(step => step.outputAvailable);
   // Completion clears the execution pointer, but the last stage stays selected.
   const latestStep = steps.reduce<RunStepSummary | undefined>((latest, step) => {
@@ -77,23 +72,20 @@ export default function WorkbenchProduction({ workflow, run, version, action, on
     if (target.left < bounds.left) list.scrollLeft -= bounds.left - target.left;
     else if (target.right > bounds.right) list.scrollLeft += target.right - bounds.right;
   }, [visibleGroup]);
-  const reviewHint = current?.kind === 'voice' ? '核对音频、文字内容和时间对齐。' : current ? stepGuidance({ kind: current.kind, config: {} }).review : '核对本步产物是否符合创作要求。';
   // A completed matching inspection stays actionable during a background read.
   const blocked = !synchronized;
-  function inspect(nodeId = run.currentNodeId ?? '') { onPausePreview(); setInspectedStep(nodeId); }
-  function configure(task: ProgressTask) {
-    if (!task.node) return;
+  function openStage(group: StageProgress, nodeId?: string) {
     onPausePreview();
-    const stage = resolveWorkbenchStages(workflow)?.find(stage => stage.nodeIds.includes(task.id));
-    if (stage) onConfigureStage(stage); else onConfigure(task.node);
+    const stage = resolveWorkbenchStages(workflow)?.find(stage => `stage:${stage.id}` === group.key)
+      ?? { id: group.key.startsWith('stage:') ? group.key.slice(6) : group.key, label: group.label, description: group.description, nodeIds: group.tasks.map(task => task.id), nodes: group.tasks.flatMap(task => task.node ? [task.node] : []) };
+    onConfigureStage(stage, { nodeId });
   }
+  const repairGroup = groups.find(group => group.tasks.some(task => task.id === run.currentNodeId)) ?? groups[0];
   async function perform(method: string, params: Record<string, unknown> = {}) {
     if (inFlight.current || blocked) return;
     inFlight.current = true; setPending(method); setError('');
     try {
-      const result = await action(method, { runId: run.id, ...params }, method === 'run.review'
-        ? params.approved ? '审阅已通过，继续制作' : '已保留当前结果，可在工作台继续修改'
-        : method === 'run.cancel' ? '已请求停止制作' : '已请求继续制作');
+      const result = await action(method, { runId: run.id, ...params }, method === 'run.cancel' ? '已请求停止制作' : '已请求继续制作');
       if (result === null) setError('操作未完成，请核对提示后重试。');
       inspection.refresh();
     } finally { inFlight.current = false; setPending(''); }
@@ -107,20 +99,17 @@ export default function WorkbenchProduction({ workflow, run, version, action, on
       if (!task) return null;
       const status = !synchronized ? 'pending' : active ? run.status : finished ? stage.tasks.every(task => task.step?.status === 'skipped') ? 'skipped' : 'succeeded' : task.step?.status ?? 'pending';
       const state = synchronized ? progressLabel(status) : inspection.error ? '进度读取失败' : '正在同步进度';
-      return <WorkbenchStepCard key={stage.key} index={status === 'succeeded' ? <Check size={12} aria-hidden="true" /> : index + 1} label={stage.label} description={stage.description} actionLabel={task.step ? undefined : `配置${stages ? '阶段' : '步骤'}：${stage.label}`} current={highlighted} status={status} onClick={() => task.step ? inspect(task.id) : configure(task)}>{stages ? active ? `${task.step?.label ?? task.label} · ${state}` : `${stage.tasks.filter(taskCompleted).length} / ${stage.tasks.length} 任务 · ${state}` : state}</WorkbenchStepCard>;
+      return <WorkbenchStepCard key={stage.key} index={status === 'succeeded' ? <Check size={12} aria-hidden="true" /> : index + 1} label={stage.label} description={stage.description} actionLabel={`打开${stages ? '阶段' : '步骤'}：${stage.label}`} current={highlighted} status={status} onClick={() => openStage(stage)}>{stages ? active ? `${task.step?.label ?? task.label} · ${state}` : `${stage.tasks.filter(taskCompleted).length} / ${stage.tasks.length} 任务 · ${state}` : state}</WorkbenchStepCard>;
     })}</ol>
-    {(run.error || data?.recovery.reason) && <p className="workbench-production__reason">{run.error || data?.recovery.reason}</p>}
+    {(run.error || data?.recovery.reason) && <Notice kind="error"><span>{run.error || data?.recovery.reason}</span>{configurationFailure && repairGroup && <Button onClick={() => openStage(repairGroup, run.currentNodeId)}>修复配置</Button>}</Notice>}
     {inspection.error && <Notice kind="error">{inspection.error}<Button static onClick={inspection.refresh}><RefreshCw size={14} />重试读取制作进度</Button></Notice>}
     {error && <Notice kind="error">{error}</Notice>}
     <div className="workbench-production__actions">
-      {run.status === 'waiting_review' && <span className="workbench-production__hint">审阅重点：{reviewHint}</span>}
       <div className="workbench-production__buttons">
         {output && <Button static disabled={blocked || Boolean(pending)} onClick={() => { onPausePreview(); onOpenOutput({ projectId: run.projectId, runId: run.id, nodeId: output.id, kind: output.kind }); }}>查看产物</Button>}
-        {data && <RunActions inspection={data} pending={pending} disabled={blocked} onPerform={(method, params) => void perform(method, params)} onRestart={value => { onPausePreview(); setRestart(value); }} />}
+        {data?.recovery.resume && !configurationFailure && <Button static variant="primary" busy={pending === 'run.resume'} disabled={blocked || Boolean(pending)} onClick={() => void perform('run.resume')}>继续原制作</Button>}
+        {data?.recovery.restart && repairGroup && <Button static disabled={blocked || Boolean(pending)} onClick={() => openStage(repairGroup, run.currentNodeId)}>调整设置并重新制作</Button>}
       </div>
     </div>
-    {run.status === 'waiting_review' && <p className="workbench-production__hint workbench-production__apply-hint">通过审阅会继续流程；产物中的“应用”才会更新当前项目。</p>}
-    {inspectedStep !== null && <Suspense fallback={<p role="status">正在打开制作详情…</p>}><RunInspector runId={run.id} initialNodeId={inspectedStep || undefined} version={version} onClose={() => setInspectedStep(null)} onChanged={inspection.refresh} onOpenOutput={selection => { setInspectedStep(null); onOpenOutput(selection); }} onRestart={value => { setInspectedStep(null); setRestart(value); }} /></Suspense>}
-    {restart?.selection && <Suspense fallback={<p role="status">正在打开执行范围…</p>}><RunScopeDialog projectId={restart.projectId} nodeId={restart.selection.nodeId} initialMode={restart.selection.mode} parentRunId={restart.id} version={version} onClose={() => setRestart(undefined)} onStarted={() => setRestart(undefined)} /></Suspense>}
   </section>;
 }

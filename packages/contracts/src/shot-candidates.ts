@@ -36,14 +36,14 @@ export function applyShotCandidate(current: Shot, candidate: ShotCandidate, fiel
     return next;
   }
   unchanged(['sourceInUs', 'durationUs']);
-  if (candidate.kind === 'audio') {
-    unchanged(['audioAssetId', 'audioInUs', 'narration']);
-    if (!output.audioAssetId || !candidate.assetIds.includes(output.audioAssetId)) throw new Error('候选缺少生成的旁白音频。');
-    return { ...current, audioAssetId: output.audioAssetId, audioInUs: 0 };
-  }
+
   if (candidate.kind === 'video') {
     unchanged(['assetId', 'videoAssetId', 'videoInUs', 'visualPrompt', 'sceneTemplate']);
     if (!output.videoAssetId || !candidate.assetIds.includes(output.videoAssetId)) throw new Error('候选缺少生成的视频。');
+    if (output.audioProcessing?.version === 2 && output.audioProcessing.videoAudio.enabled && !output.audioAssetId) {
+      unchanged(['audioAssetId', 'audioInUs', 'audioProcessing', 'captionTrack']);
+      return { ...current, videoAssetId: output.videoAssetId, videoInUs: 0, sceneTemplate: undefined, audioAssetId: undefined, audioInUs: undefined, captionTrack: undefined, audioProcessing: output.audioProcessing };
+    }
     return { ...current, videoAssetId: output.videoAssetId, videoInUs: 0, sceneTemplate: undefined };
   }
   unchanged(['assetId', 'videoAssetId', 'videoInUs', 'visualPrompt', 'sceneTemplate']);

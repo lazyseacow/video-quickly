@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { createCanvas } from '@napi-rs/canvas';
 import { afterEach, expect, it } from 'vitest';
-import { createHistoryWorkflow, createSceneTemplate, DEFAULT_CAPTION_STYLE, DEFAULT_VIDEO_PROFILE, effectiveCaptionStyle, projectSchema, shotSchema, timeAtFrame, type AssetRecord, type CaptionStyle } from '@video-quickly/contracts';
+import { createNativeVideoWorkflow, createSceneTemplate, DEFAULT_CAPTION_STYLE, DEFAULT_VIDEO_PROFILE, effectiveCaptionStyle, projectSchema, shotSchema, timeAtFrame, type AssetRecord, type CaptionStyle } from '@video-quickly/contracts';
 import { captionAtTime, captionBox, captionPages, createTimedSrt, drawSceneFrame, resolveCaptionLayout } from '../src/index.js';
 import { splitShot } from '../src/editing.js';
 import { probeMedia, renderProject, runMedia } from '../src/node.js';
@@ -41,7 +41,7 @@ it.skipIf(!mediaAvailable)('burns inherited and per-shot font/color/opacity/posi
   }
   for (const [width, height] of [[640, 360], [360, 640], [480, 480]]) {
     const profile = { ...DEFAULT_VIDEO_PROFILE, width, height, frameRate: rate, previewScale: 1 }, outputDirectory = join(directory, `${width}x${height}`);
-    const project = projectSchema.parse({ id: 'styles', title: 'Styled captions', revision: 1, brief: '', profile, workflow: createHistoryWorkflow(), createdAt: '', updatedAt: '', captionStyle: inherited, referenceDisplay: 'numbers', claims: [{ id: 'claim', text: '引用示例', source: '旧资料', status: 'pending' }], shots: [left, right] });
+    const project = projectSchema.parse({ id: 'styles', title: 'Styled captions', revision: 1, brief: '', profile, workflow: { ...createNativeVideoWorkflow(), production: { ...createNativeVideoWorkflow().production, subtitleMode: 'script' } }, createdAt: '', updatedAt: '', captionStyle: inherited, referenceDisplay: 'numbers', claims: [{ id: 'claim', text: '引用示例', source: '旧资料', status: 'pending' }], shots: [left, right] });
     const before = structuredClone(project), result = await renderProject({ project, assets, outputDirectory, ffmpegPath: ffmpeg, ffprobePath: ffprobe });
     const probe = await probeMedia(result.videoPath, ffprobe); expect(probe).toMatchObject({ width, height, frameRate: '30000/1001' }); expect(probe.videoDuration).toBeCloseTo(duration / 1e6, 3);
     expect(project).toEqual(before); expect(project.shots.every(shot => shot.captionTrack?.alignment === 'speech' && shot.captionTrack.cues[0].id === 'speech-original')).toBe(true);

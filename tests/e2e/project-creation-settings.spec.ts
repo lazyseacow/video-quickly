@@ -81,14 +81,16 @@ test('preserves existing 30fps data and keeps complete frame-rate and dimension 
   const source = await rpc<ProjectDocument>(request, 'project.create', { title: '已有4比5三十帧项目', profile: { width: 800, height: 1000, frameRate: { numerator: 30, denominator: 1 }, fitMode: 'contain', previewScale: 1 } });
   const project = await rpc<ProjectDocument>(request, 'project.update', { projectId: source.id, revision: source.revision, patch: { shots: [{ id: 'existing-profile-shot', title: '保持现有素材与时长', narration: '', visualPrompt: '', durationUs: 1_000_000, sceneTemplate: createSceneTemplate('process') }] } });
   const observed = observe(page); await page.emulateMedia({ reducedMotion: 'reduce' }); await page.goto('/'); await openProjectFromList(page, project.title);
-  expect(await saved(request, project.id)).toEqual(project); await page.getByRole('button', { name: '项目设置', exact: true }).click();
-  const panel = page.locator('.project-settings-panel'); await panel.getByRole('tab', { name: '画面', exact: true }).click();
+  expect(await saved(request, project.id)).toEqual(project); await page.locator('.project-heading-actions').getByRole('button', { name: '制作设置', exact: true }).click();
+  const panel = page.getByRole('dialog', { name: '制作设置', exact: true }); await panel.getByRole('tab', { name: '审阅与导出', exact: true }).click();
   await expect(panel.getByLabel('视频宽度', { exact: true })).toHaveValue('800'); await expect(panel.getByLabel('视频高度', { exact: true })).toHaveValue('1000');
-  const rate = panel.getByLabel('视频帧率', { exact: true }); await expect(rate).toHaveValue('30');
-  for (const value of ['custom', '4:5', '21:9']) await expect(panel.getByLabel('画面比例', { exact: true }).locator(`option[value="${value}"]`)).toHaveCount(1);
+  const rate = await settingField(panel, '视频帧率'); await expect(rate).toHaveValue('30');
+  for (const value of ['4:5', '21:9']) await expect(panel.getByLabel('画面比例', { exact: true }).locator(`option[value="${value}"]`)).toHaveCount(1);
   for (const value of ['60', '30']) {
-    await rate.selectOption(value); const save = panel.getByRole('button', { name: '保存项目设置', exact: true }); await expect(save).toBeEnabled(); await save.click();
-    await expect.poll(async () => (await saved(request, project.id)).profile.frameRate).toEqual({ numerator: Number(value), denominator: 1 }); await expect(save).toBeDisabled();
+    if (!await panel.count()) await page.locator('.project-heading-actions').getByRole('button', { name: '制作设置', exact: true }).click();
+    await settingField(panel, '视频帧率');
+    await rate.selectOption(value); const save = panel.getByRole('button', { name: '保存设置', exact: true }); await expect(save).toBeEnabled(); await save.click();
+    await expect.poll(async () => (await saved(request, project.id)).profile.frameRate).toEqual({ numerator: Number(value), denominator: 1 }); await expect(panel).toHaveCount(0);
   }
   const edited = await saved(request, project.id); expect(edited.profile).toEqual(project.profile); expect(edited.shots).toEqual(project.shots);
   await closeProjectSettings(page); await page.getByRole('button', { name: '导出', exact: true }).click(); const exporter = page.getByRole('dialog', { name: '导出视频', exact: true });

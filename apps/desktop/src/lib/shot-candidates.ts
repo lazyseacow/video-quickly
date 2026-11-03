@@ -2,7 +2,7 @@ import { z } from 'zod';
 import { projectDetailSchema, runSummarySchema, shotCandidateSchema, type RunSummary, type ShotCandidateKind } from '@video-quickly/contracts';
 import { rpc } from './client';
 
-export const candidateKindLabels: Record<ShotCandidateKind, string> = { script: '文案与分镜', image: '画面图片', audio: '旁白音频', video: '镜头视频' };
+export const candidateKindLabels: Record<ShotCandidateKind, string> = { script: '文案与分镜', image: '画面图片', video: '镜头视频' };
 export const candidatePageSchema = z.object({ items: z.array(shotCandidateSchema), total: z.number().int().nonnegative(), activeRun: runSummarySchema.nullish() });
 export const candidateRunActive = (run: Pick<RunSummary, 'status'> | undefined) => !!run && ['queued', 'running', 'waiting_external', 'retry_scheduled'].includes(run.status);
 

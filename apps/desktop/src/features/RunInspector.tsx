@@ -63,12 +63,12 @@ export default function RunInspector({ runId, initialNodeId, version, onClose, o
   </Dialog>;
 }
 
-function StepStatus({ step }: { step: RunStepSummary }) {
+export function StepStatus({ step }: { step: RunStepSummary }) {
   return stepStates[step.status] ? <span className="run-inspector__state">{stepStates[step.status]}</span> : <Status value={step.status} />;
 }
 
-function StepDetail({ inspection, step, version, onOpenOutput }: { inspection: RunInspection; step: RunStepSummary; version: number; onOpenOutput: (selection: StepOutputSelection) => void }) {
-  const [tab, setTab] = useState<'output' | 'status'>(step.outputAvailable ? 'output' : 'status');
+export function StepDetail({ inspection, step, version, onOpenOutput, defaultTab, currentRun = false }: { inspection: RunInspection; step: RunStepSummary; version: number; onOpenOutput: (selection: StepOutputSelection) => void; defaultTab?: 'output' | 'status'; currentRun?: boolean }) {
+  const [tab, setTab] = useState<'output' | 'status'>(defaultTab ?? (step.outputAvailable ? 'output' : 'status'));
   const [logOpen, setLogOpen] = useState(false);
   const id = useId();
   const selected = useRuntimeRead('run.inspect', { runId: inspection.run.id, nodeId: step.id }, version, runInspectionSchema);
@@ -86,10 +86,26 @@ function StepDetail({ inspection, step, version, onOpenOutput }: { inspection: R
     <div id={`${id}-panel`} role="tabpanel" aria-labelledby={`${id}-${tab}`} className="run-inspector__panel">
       {tab === 'output' && <StepOutputs inspection={inspection} step={step} version={version} onOpenOutput={onOpenOutput} />}
       {tab === 'status' && <><p className="run-inspector__reason" role={step.error ? 'alert' : 'status'}>{step.reason}</p>{selected.error && <Notice kind="error">{selected.error}<Button aria-label="重试读取配置" onClick={selected.refresh}>重试</Button></Notice>}
-        <dl className="run-inspector__facts"><div><dt>本步产出</dt><dd>{help.result}</dd></div>{detail && <><div><dt>制作模型</dt><dd>{detail.model ? `${detail.model.name} · ${detail.model.model}` : help.local}</dd></div><div><dt>前置步骤</dt><dd>{detail.dependencies.map(id => inspection.steps.find(step => step.id === id)?.label ?? id).join('、') || '从项目内容开始'}</dd></div><div><dt>人工审阅</dt><dd>{detail.node.requiresReview ? '需要确认后继续' : '自动继续'}</dd></div>{detail.skills.length > 0 && <div><dt>采用的规范</dt><dd>{detail.skills.map(skill => skill.name).join('、')}</dd></div>}</>}{step.startedAt && <div><dt>开始时间</dt><dd>{date(step.startedAt)}</dd></div>}{step.completedAt && <div><dt>完成时间</dt><dd>{date(step.completedAt)}</dd></div>}</dl>
+        <dl className="run-inspector__facts"><div><dt>本步产出</dt><dd>{help.result}</dd></div>{detail && <><div><dt>{currentRun ? step.activityCount > 0 ? '本次使用的模型' : '本次配置的模型' : '制作模型'}</dt><dd>{detail.model ? `${detail.model.name} · ${detail.model.model}` : detail.node.modelId ? `所选模型不可用 · ${detail.node.modelId}` : help.local}</dd></div><div><dt>前置步骤</dt><dd>{detail.dependencies.map(id => inspection.steps.find(step => step.id === id)?.label ?? id).join('、') || '从项目内容开始'}</dd></div>{detail.skills.length > 0 && <div><dt>采用的规范</dt><dd>{detail.skills.map(skill => skill.name).join('、')}</dd></div>}</>}{step.startedAt && <div><dt>开始时间</dt><dd>{date(step.startedAt)}</dd></div>}{step.completedAt && <div><dt>完成时间</dt><dd>{date(step.completedAt)}</dd></div>}</dl>
+        {currentRun && <StepExecutionPrompt runId={inspection.run.id} step={step} version={version} configuredPrompt={detail?.node.prompt} />}
         <details className="run-inspector__logs-toggle" onToggle={event => setLogOpen(event.currentTarget.open)}><summary>活动与日志</summary>{logOpen && <RunLog runId={inspection.run.id} nodeId={step.id} version={version} />}</details>
       </>}
     </div>
+  </section>;
+}
+
+function StepExecutionPrompt({ runId, step, version, configuredPrompt }: { runId: string; step: RunStepSummary; version: number; configuredPrompt?: string }) {
+  const input = useRuntimeRead('run.step.payload', { runId, nodeId: step.id, kind: 'input' }, version, runStepPayloadSchema);
+  const value = input.data?.value;
+  const resolvedPrompt = value && typeof value === 'object' && !Array.isArray(value) && typeof value.resolvedPrompt === 'string' ? value.resolvedPrompt : undefined;
+  return <section className="run-inspector__execution-prompt" aria-label="本次提示词记录">
+    <h4>{resolvedPrompt !== undefined ? '本次使用的提示词' : '本次冻结的提示词与补充要求'}</h4>
+    {input.error && <Notice kind="error">{input.error}<Button aria-label="重试读取本次提示词" onClick={input.refresh}>重试</Button></Notice>}
+    {!input.data && !input.error && <p role="status">正在读取本次提示词…</p>}
+    {input.data && <>
+      {resolvedPrompt !== undefined ? <pre className="run-inspector__json">{resolvedPrompt || '本步骤没有记录提示词内容。'}</pre> : configuredPrompt ? <pre className="run-inspector__json">{configuredPrompt}</pre> : <p>本步骤没有补充提示词。</p>}
+      <p className="run-inspector__muted">{!step.inputAvailable ? '尚未执行，未记录实际使用的提示词。' : resolvedPrompt !== undefined ? '执行时记录的提示词，只读。配置修改会用于新的制作。' : '这里显示本次保存的步骤配置，未记录完整执行提示词。'}</p>
+    </>}
   </section>;
 }
 
@@ -97,7 +113,7 @@ function StepOutputs({ inspection, step, version, onOpenOutput }: { inspection: 
   const [historyOpen, setHistoryOpen] = useState(false);
   const [comparisonId, setComparisonId] = useState('');
   const output = useRuntimeRead('run.step.payload', { runId: inspection.run.id, nodeId: step.id, kind: 'output' }, version, runStepPayloadSchema);
-  const applicable = ['script', 'style', 'assets', 'voice', 'animation', 'research'].includes(step.kind);
+  const applicable = ['script', 'style', 'assets', 'animation', 'research'].includes(step.kind);
   const open = (runId: string) => onOpenOutput({ projectId: inspection.run.projectId, runId, nodeId: step.id, kind: step.kind });
   return <>{output.error && <Notice kind="error">{output.error}<Button aria-label="重试读取产物" onClick={output.refresh}>重试</Button></Notice>}
     <div className="run-inspector__output-actions"><Button aria-expanded={historyOpen} onClick={() => setHistoryOpen(value => !value)}><History size={16} />历史产物</Button>{applicable && output.data?.available && <Button aria-label="在项目中查看与应用" variant="primary" onClick={() => open(inspection.run.id)}>在工作台使用</Button>}</div>

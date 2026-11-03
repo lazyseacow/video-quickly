@@ -1,10 +1,10 @@
 import { expect, it } from 'vitest';
-import { createHistoryWorkflow, DEFAULT_AUDIO_MIX_SETTINGS, DEFAULT_VIDEO_PROFILE, projectSchema, shotSchema, type AssetRecord } from '@video-quickly/contracts';
+import { createNativeVideoWorkflow, DEFAULT_AUDIO_MIX_SETTINGS, DEFAULT_VIDEO_PROFILE, projectSchema, shotSchema, type AssetRecord } from '@video-quickly/contracts';
 import { audioMixProjectionKey, readAudioLevelWindow } from '../src/audio-mix.js';
 import { audioMixProjection } from '../src/audio-projection.js';
 
 const voice: AssetRecord = { id: 'voice', projectId: 'project', name: 'voice.wav', kind: 'audio', path: '/not-read-by-projection.wav', sha256: 'a'.repeat(64), mimeType: 'audio/wav', size: 1000, version: 1, active: true, retained: false, provenance: '', createdAt: '' };
-const project = () => projectSchema.parse({ id: 'project', title: 'Audio identity', brief: '', revision: 1, profile: DEFAULT_VIDEO_PROFILE, workflow: createHistoryWorkflow(), createdAt: '', updatedAt: '', shots: [shotSchema.parse({ id: 'shot', title: 'Shot', narration: '', visualPrompt: '', durationUs: 2_000_000, sourceInUs: 0, audioAssetId: voice.id })] });
+const project = () => projectSchema.parse({ id: 'project', title: 'Audio identity', brief: '', revision: 1, profile: DEFAULT_VIDEO_PROFILE, workflow: createNativeVideoWorkflow(), createdAt: '', updatedAt: '', shots: [shotSchema.parse({ id: 'shot', title: 'Shot', narration: '', visualPrompt: '', durationUs: 2_000_000, sourceInUs: 0, audioAssetId: voice.id })] });
 
 it('keys the actual sound projection independently of visual edits and target export frame rate', () => {
   const original = project(), before = structuredClone(original), assets = [voice];

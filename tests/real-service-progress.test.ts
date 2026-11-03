@@ -12,8 +12,8 @@ async function fixture(options: Partial<RuntimeOptions> = {}, external = false) 
   const directory = await mkdtemp(join(tmpdir(), 'vq-service-progress-'));
   const runtime = createRuntime({ dataDirectory: directory, seed: false, ffmpegPath: join(directory, 'not-used'), ...options }); const resource = { directory, runtime }; resources.push(resource);
   const project = projectSchema.parse(await runtime.dispatch('project.create', { title: '隔离的真实服务恢复逻辑回归' }));
-  const model = external ? await runtime.dispatch('model.save', { model: { id: 'configured', name: '隔离网络边界', provider: 'openai-compatible', baseUrl: 'https://example.invalid/v1', model: 'configured', capabilities: ['text'] } }) as { id: string } : undefined;
-  const saved = projectSchema.parse(await runtime.dispatch('project.update', { projectId: project.id, revision: project.revision, patch: { workflow: { id: 'progress', name: '恢复检查', version: 1, nodes: [{ id: 'brief', kind: external ? 'style' : 'brief', label: '已经保存的实际活动', modelId: model?.id }], edges: [] } } }));
+  const model = external ? await runtime.dispatch('model.save', { model: { id: 'configured', name: '隔离网络边界', provider: 'openai-compatible', baseUrl: 'https://example.invalid/v1', model: 'configured', connectionType: 'text', capabilities: ['text'] } }) as { id: string } : undefined;
+  const saved = projectSchema.parse(await runtime.dispatch('project.update', { projectId: project.id, revision: project.revision, patch: { workflow: { id: 'progress', name: '恢复检查', version: 1, production: { mode: 'native-video', referenceMode: 'none', soundPrompt: '', subtitleMode: 'off' }, nodes: [{ id: 'brief', kind: external ? 'style' : 'brief', label: '已经保存的实际活动', modelId: model?.id }], edges: [] } } }));
   return { runtime, project: saved, resource };
 }
 

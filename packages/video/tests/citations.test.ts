@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { createCanvas } from '@napi-rs/canvas';
 import { expect, it } from 'vitest';
-import { createHistoryWorkflow, createSceneTemplate, DEFAULT_VIDEO_PROFILE, projectSchema, shotSchema, type ProjectDocument } from '@video-quickly/contracts';
+import { createNativeVideoWorkflow, createSceneTemplate, DEFAULT_VIDEO_PROFILE, projectSchema, shotSchema, type ProjectDocument } from '@video-quickly/contracts';
 import { citationOverlayForShot, createCitationManifest, drawCitationOverlay, drawSceneFrame } from '../src/index.js';
 import { reorderShots, splitShot, trimShot } from '../src/editing.js';
 
@@ -9,7 +9,7 @@ function project(): ProjectDocument {
   const content = '私有正文开头，不应整个进入成片目录。😀观察结果是四十二。私有正文结尾。', quote = '😀观察结果是四十二。';
   const sha256 = createHash('sha256').update(content).digest('hex'), startOffset = content.indexOf(quote);
   const evidence = [{ sourceId: 'source', sourceSha256: sha256, startOffset, endOffset: startOffset + quote.length, quote, locator: '第二段' }];
-  return projectSchema.parse({ id: 'citations', title: '引用', revision: 1, brief: '', workflow: createHistoryWorkflow(), profile: DEFAULT_VIDEO_PROFILE, createdAt: '', updatedAt: '', referenceDisplay: 'numbers',
+  return projectSchema.parse({ id: 'citations', title: '引用', revision: 1, brief: '', workflow: createNativeVideoWorkflow(), profile: DEFAULT_VIDEO_PROFILE, createdAt: '', updatedAt: '', referenceDisplay: 'numbers',
     researchSources: [{ id: 'source', title: '实际保存资料', kind: 'text', content, sha256, capturedAt: '2026-10-30T00:00:00.000Z' }],
     claims: [{ id: 'unused', text: '未绑定主张', source: '未绑定资料' }, { id: 'verified', text: '四十二', source: '保存资料', status: 'verified', evidence, reviewedAt: '2026-10-30T01:00:00.000Z', reviewNote: '人工核对原文' }, { id: 'pending', text: '待核对的解释', source: '保存资料', evidence }, { id: 'legacy', text: '旧项目主张', source: '旧书名', locator: '第 12 页', status: 'verified' }, { id: 'disputed', text: '有争议的解释', source: '保存资料', evidence, status: 'disputed' }],
     shots: [shotSchema.parse({ id: 'shot', title: '引用镜头', narration: '', visualPrompt: '', sourceInUs: 0, durationUs: 4_000_000, claimIds: ['verified', 'pending', 'legacy', 'disputed'] })],

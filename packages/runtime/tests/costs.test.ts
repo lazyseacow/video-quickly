@@ -2,7 +2,7 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, expect, it } from 'vitest';
-import { DEFAULT_VIDEO_PROFILE, createHistoryWorkflow, projectSchema, workflowNodeSchema, type ModelProfile, type UsageRecord } from '@video-quickly/contracts';
+import { DEFAULT_VIDEO_PROFILE, createNativeVideoWorkflow, projectSchema, workflowNodeSchema, type ModelProfile, type UsageRecord } from '@video-quickly/contracts';
 import { createCostLedger, requestCostMetrics } from '../src/costs';
 import { DocumentStore, openDatabase } from '../src/database';
 
@@ -11,19 +11,16 @@ afterEach(async () => { await Promise.all(directories.splice(0).map(directory =>
 const request = { source: 'request' as const, requestCount: 1 };
 
 function model(provider: ModelProfile['provider'], parameters: ModelProfile['parameters'] = {}): ModelProfile {
-  return { id: 'model', name: '模型', provider, baseUrl: 'http://localhost:1234/v1', model: 'fixture', capabilities: ['video', 'tts', 'image'], parameters, pricing: { currency: 'USD', perImage: .1 }, enabled: true, hasSecret: false, createdAt: 'now', updatedAt: 'now' };
+  return { id: 'model', name: '模型', provider, baseUrl: 'http://localhost:1234/v1', model: 'fixture', connectionType: 'video', capabilities: ['video', 'image'], parameters, pricing: { currency: 'USD', perImage: .1 }, enabled: true, hasSecret: false, createdAt: 'now', updatedAt: 'now' };
 }
 
 it('derives media request units from actual adapter parameters, leaving custom protocols and locked reuse unknown', () => {
-  const project = projectSchema.parse({ id: 'project', title: '计量', brief: '', profile: DEFAULT_VIDEO_PROFILE, workflow: createHistoryWorkflow(), revision: 1, shots: [{ id: 'shot', title: '镜头', narration: '字🙂', visualPrompt: '', durationUs: 2_000_000 }], createdAt: 'now', updatedAt: 'now' });
+  const project = projectSchema.parse({ id: 'project', title: '计量', brief: '', profile: DEFAULT_VIDEO_PROFILE, workflow: createNativeVideoWorkflow(), revision: 1, shots: [{ id: 'shot', title: '镜头', narration: '字🙂', visualPrompt: '', durationUs: 2_000_000 }], createdAt: 'now', updatedAt: 'now' });
   const video = workflowNodeSchema.parse({ id: 'video', kind: 'animation', label: '视频' });
   expect(requestCostMetrics(project, video, model('openai-compatible', { seconds: 6 })).videoSeconds).toBe(6);
   expect(requestCostMetrics(project, video, model('seedance', { duration: 8 })).videoSeconds).toBe(8);
   expect(requestCostMetrics(project, video, model('custom-http', { requestTemplate: { duration: '{{duration}}' } })).videoSeconds).toBeUndefined();
-  const voice = workflowNodeSchema.parse({ id: 'voice', kind: 'voice', label: '配音' });
-  expect(requestCostMetrics(project, voice, model('openai-compatible')).characters).toBe(2);
   expect(requestCostMetrics({ ...project, shots: project.shots.map(shot => ({ ...shot, locked: true })) }, video, model('openai-compatible'))).toEqual({ source: 'request' });
-  expect(requestCostMetrics(project, { ...voice, config: { operation: 'transcribe' } }, model('openai-compatible')).audioSeconds).toBeUndefined();
 });
 
 it('keeps stable usage IDs, supports legacy payment metadata, paginates and recovers orphan submissions', async () => {

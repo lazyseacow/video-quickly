@@ -1,10 +1,10 @@
 import { expect, it } from 'vitest';
-import { createHistoryWorkflow, DEFAULT_AUDIO_MIX_SETTINGS, DEFAULT_AUDIO_PROCESSING, DEFAULT_VIDEO_PROFILE, projectSchema } from '@video-quickly/contracts';
+import { createNativeVideoWorkflow, DEFAULT_AUDIO_MIX_SETTINGS, DEFAULT_AUDIO_PROCESSING, DEFAULT_VIDEO_PROFILE, projectSchema } from '@video-quickly/contracts';
 import { deleteShotRanges } from '../packages/video/src/clip-edits';
 import { applyAudioProcessingEdit, type AudioProcessingValue } from '../apps/desktop/src/lib/audio-edits';
 import { editContent } from '../apps/desktop/src/lib/project-edits';
 
-const project = () => projectSchema.parse({ id: 'audio-edits', title: '原项目', brief: '', revision: 1, profile: DEFAULT_VIDEO_PROFILE, workflow: createHistoryWorkflow(), createdAt: '', updatedAt: '', shots: [1, 2].map(index => ({ id: `shot-${index}`, title: `镜头${index}`, narration: '', visualPrompt: '', sourceInUs: 0, audioAssetId: `voice-${index}`, durationUs: 3_000_000 })) });
+const project = () => projectSchema.parse({ id: 'audio-edits', title: '原项目', brief: '', revision: 1, profile: DEFAULT_VIDEO_PROFILE, workflow: createNativeVideoWorkflow(), createdAt: '', updatedAt: '', shots: [1, 2].map(index => ({ id: `shot-${index}`, title: `镜头${index}`, narration: '', visualPrompt: '', sourceInUs: 0, audioAssetId: `voice-${index}`, durationUs: 3_000_000 })) });
 const processing = { ...DEFAULT_AUDIO_PROCESSING, gainDb: -6, denoise: true };
 const shotEdit = (): AudioProcessingValue => ({ scope: 'shot', shot: { id: 'shot-1', processing } });
 const mixEdit = (): AudioProcessingValue => ({ scope: 'project', mix: { ...DEFAULT_AUDIO_MIX_SETTINGS, ducking: { ...DEFAULT_AUDIO_MIX_SETTINGS.ducking, enabled: true } } });

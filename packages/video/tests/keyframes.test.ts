@@ -40,7 +40,7 @@ describe('authored motion keyframes', () => {
     expect(sampleMotion(right.animation, motionSceneTimeUs(right, {}, 500_000), right.sceneDurationUs!)).toEqual(sampleMotion(animation, 2_500_000, 4_000_000));
     const trimmed = trimShot(right, { inUs: 2_500_000, outUs: 4_000_000 }, rate);
     expect(motionSceneTimeUs(trimmed, {}, 0)).toBe(2_500_000);
-    const project = projectSchema.parse({ id: 'p', title: 'project', brief: '', revision: 1, profile: DEFAULT_VIDEO_PROFILE, workflow: { id: 'w', name: 'w', version: 1, nodes: [{ id: 'n', kind: 'review', label: 'n' }], edges: [] }, shots: [original], createdAt: '', updatedAt: '' });
+    const project = projectSchema.parse({ id: 'p', title: 'project', brief: '', revision: 1, profile: DEFAULT_VIDEO_PROFILE, workflow: { id: 'w', name: 'w', version: 1, production: { mode: 'native-video', referenceMode: 'none', soundPrompt: '', subtitleMode: 'off' }, nodes: [{ id: 'n', kind: 'review', label: 'n' }], edges: [] }, shots: [original], createdAt: '', updatedAt: '' });
     let id = 0; const cut = deleteShotRanges(project, original.id, [{ startUs: 1_000_000, endUs: 2_000_000 }], rate, [], () => `id-${++id}`);
     expect(motionSceneTimeUs(cut.shots[0], cut, 1_500_000)).toBe(2_500_000);
     expect(motionLocalTimeUs(cut.shots[0], cut, 2_500_000)).toBe(1_500_000);

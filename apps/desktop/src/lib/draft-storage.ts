@@ -1,4 +1,5 @@
 import { savedEditsSchema, type SavedEdits } from './project-edits';
+import { stageConfigurationDraftSchema, type StageConfigurationDraft } from './stage-configuration-draft';
 
 let connection: Promise<IDBDatabase> | undefined;
 function database() {
@@ -33,5 +34,30 @@ export async function saveDraft(key: string, state: SavedEdits) {
     transaction.oncomplete = () => resolve();
     transaction.onabort = () => reject(transaction.error ?? new Error('草稿未能写入本机存储。'));
     transaction.onerror = () => reject(transaction.error ?? new Error('草稿未能写入本机存储。'));
+  });
+}
+
+export async function loadStageConfigurationDraft(key: string): Promise<StageConfigurationDraft | undefined> {
+  const db = await database();
+  return new Promise((resolve, reject) => {
+    const request = db.transaction('projects').objectStore('projects').get(key);
+    request.onsuccess = () => {
+      if (request.result === undefined) { resolve(undefined); return; }
+      const parsed = stageConfigurationDraftSchema.safeParse(request.result);
+      if (parsed.success) resolve(parsed.data);
+      else reject(new Error('本机阶段配置格式无效，未自动恢复。'));
+    };
+    request.onerror = () => reject(request.error);
+  });
+}
+
+export async function saveStageConfigurationDraft(key: string, state: StageConfigurationDraft): Promise<void> {
+  const snapshot = stageConfigurationDraftSchema.parse(state), db = await database();
+  return new Promise((resolve, reject) => {
+    const transaction = db.transaction('projects', 'readwrite');
+    transaction.objectStore('projects').put(snapshot, key);
+    transaction.oncomplete = () => resolve();
+    transaction.onabort = () => reject(transaction.error ?? new Error('阶段配置未能写入本机存储。'));
+    transaction.onerror = () => reject(transaction.error ?? new Error('阶段配置未能写入本机存储。'));
   });
 }

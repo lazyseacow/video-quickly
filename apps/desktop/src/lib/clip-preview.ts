@@ -18,8 +18,8 @@ export function candidatePreviewProject(project: ProjectDocument, candidate: Sho
   if (candidate.projectId !== project.id) throw new Error('候选与当前项目不匹配。');
   let document = { ...project, shots: project.shots.map(shot => shot.id === candidate.shotId ? candidate.baseline : shot) };
   if (!document.shots.some(shot => shot.id === candidate.shotId)) throw new Error('候选对应的镜头已移除。');
-  if (candidate.kind === 'audio' || candidate.kind === 'video') {
-    const kind = candidate.kind, id = kind === 'audio' ? candidate.shot.audioAssetId : candidate.shot.videoAssetId;
+  if (candidate.kind === 'video') {
+    const kind = candidate.kind, id = candidate.shot.videoAssetId;
     const asset = assets.find(asset => asset.id === id);
     if (!asset?.active || asset.kind !== kind || !candidate.assetIds.includes(asset.id)) throw new Error('候选素材尚未读取或已移除。');
     document = replaceShotMedia(document, candidate.shotId, kind, asset, previewClipIds(document, `candidate-preview-${candidate.id}`));

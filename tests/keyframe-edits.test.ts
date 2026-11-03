@@ -1,11 +1,11 @@
 import { expect, it } from 'vitest';
-import { createHistoryWorkflow, DEFAULT_VIDEO_PROFILE, projectSchema } from '@video-quickly/contracts';
+import { createNativeVideoWorkflow, DEFAULT_VIDEO_PROFILE, projectSchema } from '@video-quickly/contracts';
 import { applyKeyframeEdit, assertKeyframeAssets, assertKeyframePreviewWindow, keyframeAssetIds, keyframePreviewWindow } from '../apps/desktop/src/lib/keyframe-edits';
 import type { AssetRecord } from '@video-quickly/contracts';
 import { editContent, ProjectEditSession, savedEditsSchema } from '../apps/desktop/src/lib/project-edits';
 import { applyBulkShotEdit } from '../apps/desktop/src/lib/bulk-shot-edits';
 
-const fixture = () => projectSchema.parse({ id: 'p', title: 'p', brief: '', revision: 1, profile: DEFAULT_VIDEO_PROFILE, workflow: createHistoryWorkflow(), shots: [{ id: 's', title: 's', narration: '', visualPrompt: '', durationUs: 3_000_000 }], createdAt: '', updatedAt: '' });
+const fixture = () => projectSchema.parse({ id: 'p', title: 'p', brief: '', revision: 1, profile: DEFAULT_VIDEO_PROFILE, workflow: createNativeVideoWorkflow(), shots: [{ id: 's', title: 's', narration: '', visualPrompt: '', durationUs: 3_000_000 }], createdAt: '', updatedAt: '' });
 const animated = (project = fixture()) => ({ ...project.shots[0].animation, keyframes: [{ id: 'kf', timeUs: 0, panX: .1, panY: 0, zoom: 2, easing: 'linear' as const }] });
 
 it('freezes actual consumed visual asset identity while allowing an unrelated retain flag change', () => {

@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { createCanvas } from '@napi-rs/canvas';
 import { afterEach, expect, it } from 'vitest';
-import { createHistoryWorkflow, createSceneTemplate, DEFAULT_VIDEO_PROFILE, shotSchema, type AssetRecord, type ProjectDocument, type SceneTemplateKind } from '@video-quickly/contracts';
+import { createNativeVideoWorkflow, createSceneTemplate, DEFAULT_VIDEO_PROFILE, shotSchema, type AssetRecord, type ProjectDocument, type SceneTemplateKind } from '@video-quickly/contracts';
 import { captionPages, createTimedSrt, drawSceneFrame } from '../src/index.js';
 import { splitShot } from '../src/editing.js';
 import { probeMedia, renderProject, runMedia } from '../src/node.js';
@@ -43,7 +43,7 @@ it.skipIf(!mediaAvailable)('encodes animated editable templates across three asp
     const rate = { numerator: 30, denominator: 1 }, profile = { ...DEFAULT_VIDEO_PROFILE, width, height, frameRate: rate, previewScale: 1 };
     const original = shotSchema.parse({ id: 'whole', title: 'Template', narration: '', visualPrompt: '', durationUs: 4_000_000, sourceInUs: 0, audioAssetId: 'voice', videoAssetId: 'idle-video', assetId: 'idle-image', sceneTemplate: template, captionTrack: { timeBase: 'source', alignment: 'manual', cues: [{ id: 'caption', startUs: 2_000_000, endUs: 3_900_000, text: captionText }] }, animation: { transition: 'cut' } });
     const [, right] = splitShot(original, 2_000_000, rate, 'right');
-    const project: ProjectDocument = { id: 'templates', title: 'Template render', brief: '', templateId: 'generic', revision: 1, profile, shots: [right], claims: [], style: '', archived: false, createdAt: '', updatedAt: '', workflow: createHistoryWorkflow() };
+    const project: ProjectDocument = { id: 'templates', title: 'Template render', brief: '', templateId: 'generic', revision: 1, profile, shots: [right], claims: [], style: '', archived: false, createdAt: '', updatedAt: '', workflow: { ...createNativeVideoWorkflow(), production: { ...createNativeVideoWorkflow().production, subtitleMode: 'script' } } };
     const outputDirectory = join(directory, kind);
     const output = await renderProject({ project, assets, outputDirectory, ffmpegPath: ffmpeg, ffprobePath: ffprobe });
     const probe = await probeMedia(output.videoPath, ffprobe);

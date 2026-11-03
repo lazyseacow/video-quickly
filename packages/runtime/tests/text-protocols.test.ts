@@ -25,7 +25,7 @@ async function service(handler: (path: string, body: Record<string, unknown>, he
   return `http://127.0.0.1:${address.port}/gateway/v1`;
 }
 function model(baseUrl: string, textProtocol?: TextProtocol): ModelProfile {
-  return modelSchema.parse({ id: 'model', name: '协议夹具', provider: 'openai-compatible', textProtocol, baseUrl, model: 'fixture', capabilities: ['text', 'image'], parameters: { temperature: .3, max_tokens: 128, size: '1024x1024' }, createdAt: '', updatedAt: '' });
+  return modelSchema.parse({ id: 'model', name: '协议夹具', provider: 'openai-compatible', textProtocol, baseUrl, model: 'fixture', connectionType: 'text', capabilities: ['text', 'image'], parameters: { temperature: .3, max_tokens: 128, size: '1024x1024' }, createdAt: '', updatedAt: '' });
 }
 const openaiUsage = { input_tokens: 100, output_tokens: 20, total_tokens: 120, input_tokens_details: { cached_tokens: 10 } };
 const anthropicUsage = { input_tokens: 80, output_tokens: 20, cache_read_input_tokens: 10, cache_creation_input_tokens: 10 };
@@ -93,7 +93,7 @@ for (const { protocol, reportUsage } of [{ protocol: 'responses', reportUsage: t
     const runtime = createRuntime({ dataDirectory: directory }); runtimes.push(runtime);
     const initial = await runtime.dispatch('workspace.snapshot') as WorkspaceSnapshot;
     const selected = await runtime.dispatch('model.save', { model: { name: `Agent ${protocol}`, connectionType: 'text', provider: 'openai-compatible', textProtocol: protocol, baseUrl, model: 'fixture', capabilities: ['text'] } }) as ModelProfile;
-    await runtime.dispatch('workflow.save', { projectId: initial.projects[0].id, workflow: { id: 'native-api', version: 1, name: 'native API', nodes: [workflowNodeSchema.parse({ id: 'agent', kind: 'agent', label: 'Agent', modelId: selected.id })], edges: [] } });
+    await runtime.dispatch('workflow.save', { projectId: initial.projects[0].id, workflow: { id: 'native-api', version: 1, name: 'native API', production: { mode: 'native-video', referenceMode: 'none', soundPrompt: '', subtitleMode: 'off' }, nodes: [workflowNodeSchema.parse({ id: 'agent', kind: 'agent', label: 'Agent', modelId: selected.id })], edges: [] } });
     const run = await runtime.dispatch('run.start', { projectId: initial.projects[0].id }) as RunRecord; await runtime.waitForIdle();
     const after = await runtime.dispatch('workspace.snapshot') as WorkspaceSnapshot;
     expect(after.runs[0].error).toBeUndefined(); expect(after.runs[0].status).toBe('succeeded'); expect(calls).toHaveLength(2);

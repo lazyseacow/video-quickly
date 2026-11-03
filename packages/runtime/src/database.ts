@@ -5,7 +5,7 @@ import { migrateDatabase, type DatabaseMigration } from './migrations.js';
 import type { ProjectDocument, Shot } from '@video-quickly/contracts';
 import { clipEditSource, resolveShotTime } from '@video-quickly/video/clip-edits';
 import { projectCaptionCues } from '@video-quickly/video';
-import { upgradeBuiltinProject } from './builtin-workflows.js';
+import { captionsEnabled } from '@video-quickly/contracts';
 
 export const INITIAL_SCHEMA = `
     CREATE TABLE IF NOT EXISTS documents (
@@ -154,11 +154,30 @@ export function thumbnailShot(value: ProjectDocument): Shot | null {
   const shot = value.shots?.[0];
   if (!shot) return null;
   const mapped = resolveShotTime(shot, value, 0), original = clipEditSource(shot, value)?.original;
-  const cue = projectCaptionCues(shot, 0, undefined, value).find(cue => cue.startUs <= 0 && cue.endUs > 0);
+  const cue = captionsEnabled(value) ? projectCaptionCues(shot, 0, undefined, value).find(cue => cue.startUs <= 0 && cue.endUs > 0) : undefined;
   return { ...shot, clipEdit: undefined, audioProcessing: undefined, sourceInUs: mapped.sourceUs, audioInUs: mapped.audioUs, videoInUs: mapped.videoUs, sceneInUs: mapped.sceneUs,
     sceneIndex: shot.sceneIndex ?? original?.sceneIndex, sceneDurationUs: shot.sceneDurationUs ?? original?.sceneDurationUs ?? original?.durationUs ?? shot.durationUs,
     captionTrack: { timeBase: 'scene', alignment: 'manual', cues: cue ? [{ ...cue, startUs: mapped.sceneUs, endUs: mapped.sceneUs + cue.endUs }] : [] } };
 }
+
+const PRODUCTION_AUDIO_REFERENCE_SCHEMA = `
+  DROP TRIGGER project_summary_insert;
+  DROP TRIGGER project_summary_update;
+  CREATE TRIGGER project_summary_insert AFTER INSERT ON documents WHEN new.kind = 'project' BEGIN
+    INSERT INTO documents(kind, id, body) VALUES ('project-summary', new.id, ${clipSummaryBody('new.body')}) ON CONFLICT(kind, id) DO UPDATE SET body = excluded.body;
+    INSERT OR IGNORE INTO project_asset_references(project_id, asset_id)
+      SELECT new.id, refs.value FROM (${allReferences('new.body')} UNION ${clipReferences('new.body')}
+        UNION SELECT value FROM json_each(new.body, '$.workflow.production.referenceAudioAssetIds') WHERE type = 'text') AS refs;
+  END;
+  CREATE TRIGGER project_summary_update AFTER UPDATE OF body ON documents WHEN new.kind = 'project' BEGIN
+    INSERT INTO documents(kind, id, body) VALUES ('project-summary', new.id, ${clipSummaryBody('new.body')}) ON CONFLICT(kind, id) DO UPDATE SET body = excluded.body;
+    DELETE FROM project_asset_references WHERE project_id = new.id;
+    INSERT OR IGNORE INTO project_asset_references(project_id, asset_id)
+      SELECT new.id, refs.value FROM (${allReferences('new.body')} UNION ${clipReferences('new.body')}
+        UNION SELECT value FROM json_each(new.body, '$.workflow.production.referenceAudioAssetIds') WHERE type = 'text') AS refs;
+  END;
+  UPDATE documents SET body = body WHERE kind = 'project';
+`;
 
 export const WORKSPACE_MIGRATIONS: readonly DatabaseMigration[] = [
   { version: 1, name: 'workspace-baseline', sql: INITIAL_SCHEMA },
@@ -171,7 +190,9 @@ export const WORKSPACE_MIGRATIONS: readonly DatabaseMigration[] = [
   // before storing these capabilities so opening it with such a client fails.
   { version: 7, name: 'workflow-composition-and-keyframe-capabilities', sql: `INSERT INTO runtime_metadata(key, value) VALUES ('document-capabilities', '["keyframes-v1","workflow-composition-v1","media-concurrency-v1"]') ON CONFLICT(key) DO UPDATE SET value = excluded.value;` },
   { version: 8, name: 'active-project-runs-index', sql: `CREATE INDEX documents_active_project_runs ON documents(json_extract(body, '$.projectId')) WHERE kind = 'run' AND json_extract(body, '$.status') IN ('queued','running','waiting_review','waiting_external','retry_scheduled');` },
-  { version: 9, name: 'compact-built-in-production-workflows', sql: `UPDATE documents SET body = vq_upgrade_builtin_project(body) WHERE kind = 'project' AND json_extract(body, '$.workflow.id') IN ('history-handdrawn', 'general-video') AND body != vq_upgrade_builtin_project(body);` },
+  { version: 9, name: 'workflow-layout', sql: 'SELECT 1;' },
+  { version: 10, name: 'native-video-production', sql: `INSERT INTO runtime_metadata(key, value) VALUES ('native-video-production', '1') ON CONFLICT(key) DO UPDATE SET value = excluded.value;` },
+  { version: 11, name: 'production-reference-audio', sql: PRODUCTION_AUDIO_REFERENCE_SCHEMA },
 ];
 
 export function openDatabase(directory: string) {
@@ -184,12 +205,6 @@ export function openDatabase(directory: string) {
     database.function('vq_thumbnail', { deterministic: true }, (body: unknown) => {
       if (typeof body !== 'string') throw new TypeError('项目投影需要JSON正文。');
       return JSON.stringify(thumbnailShot(JSON.parse(body) as ProjectDocument));
-    });
-    database.function('vq_upgrade_builtin_project', { deterministic: true }, (body: unknown) => {
-      if (typeof body !== 'string') throw new TypeError('流程升级需要项目JSON正文。');
-      const project = JSON.parse(body) as ProjectDocument;
-      const upgraded = upgradeBuiltinProject(project);
-      return upgraded === project ? body : JSON.stringify(upgraded);
     });
     migrateDatabase(database, directory, WORKSPACE_MIGRATIONS);
     database.pragma('journal_mode = WAL');

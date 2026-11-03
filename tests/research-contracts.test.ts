@@ -1,13 +1,13 @@
 import { createHash } from 'node:crypto';
 import { expect, it } from 'vitest';
-import { applyResearchClaims, createHistoryWorkflow, DEFAULT_VIDEO_PROFILE, projectSchema, researchResultSchema, validateResearchContent, type Claim, type ResearchSource } from '@video-quickly/contracts';
+import { applyResearchClaims, createNativeVideoWorkflow, DEFAULT_VIDEO_PROFILE, projectSchema, researchResultSchema, validateResearchContent, type Claim, type ResearchSource } from '@video-quickly/contracts';
 import { ProjectEditSession, savedEditsSchema } from '../apps/desktop/src/lib/project-edits';
 
 const content = '第一行：文献记载。\n第二行：这一结论仍有争议。';
 const source: ResearchSource = { id: 'source', title: '实际摘录', kind: 'text', content, sha256: createHash('sha256').update(content).digest('hex'), capturedAt: '2026-10-30T00:00:00.000Z' };
 const quote = '这一结论仍有争议。', startOffset = content.indexOf(quote);
 const claim: Claim = { id: 'candidate', text: '历史结论', source: source.title, locator: '第二行', status: 'verified', evidence: [{ sourceId: source.id, sourceSha256: source.sha256, startOffset, endOffset: startOffset + quote.length, quote }] };
-function project() { return projectSchema.parse({ id: 'project', title: '资料核验', brief: '', revision: 1, profile: DEFAULT_VIDEO_PROFILE, workflow: createHistoryWorkflow(), claims: [], researchSources: [source], shots: [{ id: 'shot', title: '镜头', narration: '', visualPrompt: '', durationUs: 1_000_000 }], createdAt: '', updatedAt: '' }); }
+function project() { return projectSchema.parse({ id: 'project', title: '资料核验', brief: '', revision: 1, profile: DEFAULT_VIDEO_PROFILE, workflow: createNativeVideoWorkflow(), claims: [], researchSources: [source], shots: [{ id: 'shot', title: '镜头', narration: '', visualPrompt: '', durationUs: 1_000_000 }], createdAt: '', updatedAt: '' }); }
 function result() { return researchResultSchema.parse({ version: 1, kind: 'research', projectId: 'project', runId: 'run', nodeId: 'research', sourceHashes: [{ sourceId: source.id, sha256: source.sha256 }], usedRanges: [{ sourceId: source.id, startOffset: 0, endOffset: content.length }], warnings: [], claims: [claim], shotSuggestions: [{ shotId: 'shot', claimIds: [claim.id] }] }); }
 
 it('applies only explicitly selected claims and bindings as pending without trusting model verification', () => {

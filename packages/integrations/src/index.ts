@@ -1,15 +1,15 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { createReadStream, existsSync } from 'node:fs';
 import { mkdir, readFile, writeFile, rename, stat } from 'node:fs/promises';
-import { extname, join, resolve } from 'node:path';
+import { dirname, extname, join, resolve } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { z } from 'zod';
-import { renderProject } from '@video-quickly/video/node';
+import { probeMedia, renderProject } from '@video-quickly/video/node';
+import { VideoGenerationError, isVideoGenerationNode } from '@video-quickly/contracts';
 import { providerReportedUsage, sumProviderUsage, requestModelParameters, validateModelParameters, type ProviderUsage, type AssetRecord, type CharacterProfile, type JsonValue, type ModelProfile, type PreparedAudioMix, type ProjectDocument, type Shot, type WorkflowNode } from '@video-quickly/contracts';
-import { synthesizeVolcengineSpeech, volcengineSpeechHeaders } from './volcengine-speech.js';
-import { transcribeAudio } from './transcription.js';
 import { MediaRequestQueue, mapMediaShots } from './media-concurrency.js';
 import { resolveCharacterReferences, type ResolvedCharacterReferences } from './character-references.js';
+import { resolveReferenceAudio } from './audio-references.js';
 
 export { createWaveformReader } from './waveform.js';
 export { readResearchSource, searchWikipedia, selectResearchPassages, parseResearchResult } from './research.js';
@@ -29,6 +29,7 @@ export interface MediaActivityContext {
   preparedAudioMix?: PreparedAudioMix;
   model?: ModelProfile;
   apiKey?: string;
+  ffprobePath?: string;
   remoteTaskId?: string;
   persistRemoteTask(id: string): void;
 }
@@ -84,11 +85,21 @@ function fillTemplate(value: JsonValue, values: Record<string, JsonValue>): Json
   return value;
 }
 
+function visualPrompt(context: MediaActivityContext, shot: Shot, references: ResolvedCharacterReferences): string {
+  return [context.project.style, shot.visualPrompt, context.node.prompt, references.prompt,
+    ...(isVideoGenerationNode(context.node) ? [
+      shot.narration.trim() ? `实际台词（只朗读以下正文）：${JSON.stringify(shot.narration)}` : '本镜头不需要人声。',
+      `声音要求：${[context.node.config.soundPrompt, shot.soundPrompt].filter(Boolean).join('\n')}`,
+      '画面不生成字幕或文字；台词、人声和环境音直接包含在视频音轨中。',
+    ] : []),
+  ].filter(Boolean).join('\n');
+}
+
 function comfyPrompt(context: MediaActivityContext, shot: Shot, references: ResolvedCharacterReferences): Record<string, unknown> {
   const model = context.model!;
   const workflow = structuredClone(objectSchema.parse(model.parameters.workflow));
   const values: Record<string, JsonValue> = {
-    prompt: [context.project.style, shot.visualPrompt, references.prompt].filter(Boolean).join('\n'), narration: shot.narration,
+    prompt: visualPrompt(context, shot, references), narration: shot.narration,
     character_images: references.images.map(image => image.dataUrl),
     width: context.project.profile.width, height: context.project.profile.height,
     seed: parseInt(createHash('sha256').update(`${context.operationId}:${shot.id}`).digest('hex').slice(0, 10), 16),
@@ -113,6 +124,7 @@ const mediaActivityDirectory = (dataDirectory: string, projectId: string, operat
 const mediaShotFileId = (shotId: string) => createHash('sha256').update(shotId).digest('hex').slice(0, 24);
 const imageMimeTypes = ['image/png', 'image/jpeg', 'image/webp'];
 function currentVideoImage(context: MediaPreflightContext, shot: Shot): AssetRecord | undefined {
+  if (isVideoGenerationNode(context.node) && context.project.workflow.production?.referenceMode === 'none') return;
   return context.assets.find(asset => asset.id === shot.assetId && asset.kind === 'image' && asset.active)
     ?? (context.node.config.operation === 'regenerate' ? undefined : context.assets.find(asset => asset.projectId === context.project.id && asset.shotId === shot.id && asset.kind === 'image' && asset.active));
 }
@@ -153,8 +165,9 @@ function validateReferenceProtocol(context: MediaPreflightContext, shot: Shot, r
   const total = count + (image ? 1 : 0);
   if (model.provider === 'openai-compatible' && total !== 1) throw new Error('当前 OpenAI 视频接口仅支持一张输入参考图；请仅保留一张角色图并移除镜头首帧，或改用支持多图的模型。');
   if (model.provider === 'seedance') {
-    if (model.parameters.characterReferenceMode === 'reference_image') {
-      if (/seedance[-_.]?1/i.test(model.model)) throw new Error('Seedance 1.x 不支持多模态 reference_image，请选择支持该模式的 2.x 模型。');
+    const referenceImages = model.parameters.characterReferenceMode === 'reference_image';
+    if (referenceImages || context.project.workflow.production.referenceAudioAssetIds?.length) {
+      if (referenceImages && /seedance[-_.]?1/i.test(model.model)) throw new Error('Seedance 1.x 不支持多模态 reference_image，请选择支持该模式的 2.x 模型。');
       const maximum = /seedance[-_.]?2[._-]?5/i.test(model.model) ? 30 : 9;
       if (total > maximum) throw new Error(`当前 Seedance 参考模式最多支持 ${maximum} 张图片（含当前画面），请减少参考图。`);
     } else if (total !== 1) throw new Error('Seedance 首帧模式仅支持一张图；多图角色参考须选择支持多模态参考的模型并将“角色参考方式”设为 reference_image。');
@@ -166,12 +179,10 @@ export async function validateMediaActivity(context: MediaPreflightContext): Pro
   const model = context.model;
   if (!model) return;
   validateModelParameters(model);
-  if (context.node.config.operation === 'transcribe') return;
-  const capability = context.node.kind === 'assets' ? 'image' : context.node.kind === 'voice' ? 'tts' : context.node.kind === 'animation' ? 'video' : undefined;
-  if (capability && !model.capabilities.includes(capability)) throw new Error(`所选模型不具备${capability === 'image' ? '图片' : capability === 'tts' ? '配音' : '视频'}生成能力`);
-  const protocols: Record<string, string[]> = { assets: ['openai-compatible', 'seedream', 'comfyui', 'custom-http'], voice: ['openai-compatible', 'qwen-tts', 'volcengine-tts', 'custom-http'], animation: ['openai-compatible', 'seedance', 'comfyui', 'custom-http'] };
+  const capability = context.node.kind === 'assets' ? 'image' : context.node.kind === 'animation' ? 'video' : undefined;
+  if (capability && !model.capabilities.includes(capability)) throw new Error(`所选模型不具备${capability === 'image' ? '图片' : '视频'}生成能力`);
+  const protocols: Record<string, string[]> = { assets: ['openai-compatible', 'seedream', 'comfyui', 'custom-http'], animation: ['openai-compatible', 'seedance', 'comfyui', 'custom-http'] };
   if (protocols[context.node.kind] && !protocols[context.node.kind].includes(model.provider)) throw new Error('所选模型的服务协议不适用于此制作步骤');
-  if (context.node.kind === 'voice' && ['qwen-tts', 'volcengine-tts'].includes(model.provider) && context.node.config.operation === 'regenerate' && typeof context.node.config.instruction === 'string' && context.node.config.instruction.trim()) throw new Error('当前配音接口不支持单镜头调整要求，请留空或改用支持语音指令的模型。');
   if (capability && context.operationId && context.dataDirectory) {
     // Check the frozen batch before native tasks are replayed. A queued sibling
     // can run before the failed task; its own missing receipt is not permission
@@ -184,6 +195,7 @@ export async function validateMediaActivity(context: MediaPreflightContext): Pro
     }
   }
   if (!['assets', 'animation'].includes(context.node.kind)) return;
+  if (model.provider === 'seedance' && isVideoGenerationNode(context.node)) await resolveReferenceAudio({ assetIds: context.project.workflow.production.referenceAudioAssetIds ?? [], assets: context.assets, projectId: context.project.id, signal: context.signal });
   for (const shot of context.project.shots) {
     context.signal?.throwIfAborted();
     const kind = context.node.kind === 'assets' ? 'image' : 'video';
@@ -242,8 +254,13 @@ async function assetFor(path: string, context: MediaActivityContext, kind: Asset
   return {
     id: `asset-${createHash('sha256').update(context.operationId + (shot?.id ?? '') + path).digest('hex').slice(0, 24)}`,
     projectId: context.project.id, shotId: shot?.id, name: path.split(/[\\/]/).at(-1) ?? '媒体', kind, path,
-    mimeType: kind === 'image' ? 'image/png' : kind === 'video' ? 'video/mp4' : kind === 'audio' ? 'audio/mpeg' : kind === 'subtitle' ? 'application/x-subrip' : 'application/json',
+    mimeType: kind === 'image' ? 'image/png' : kind === 'video' ? 'video/mp4' : kind === 'subtitle' ? 'application/x-subrip' : 'application/json',
     size, sha256: hash.digest('hex'), version: 1,
+    ...(kind === 'video' && isVideoGenerationNode(context.node) ? await (async () => {
+      const metadata = await probeMedia(path, context.ffprobePath, context.signal);
+      if (!metadata.width || !metadata.height || !metadata.audio) throw new VideoGenerationError();
+      return { width: metadata.width, height: metadata.height, durationUs: Math.round((metadata.videoDuration ?? metadata.duration) * 1_000_000) };
+    })() : {}),
     createdAt: new Date().toISOString(), provenance: context.model ? `${context.model.provider}/${context.model.model}` : '本地渲染', retained: false, active: true,
   };
 }
@@ -288,16 +305,33 @@ async function downloadReceipt(path: string, receiptPath: string, receipt: Recei
   return asset;
 }
 
-async function generateMedia(context: MediaActivityContext, directory: string, shot: Shot, kind: 'image' | 'video' | 'audio', onUsage: (usage?: ProviderUsage) => void): Promise<AssetRecord> {
+async function seedanceVideoBody(context: MediaActivityContext & { model: ModelProfile }, shot: Shot, references: ResolvedCharacterReferences, parameters: Record<string, JsonValue>): Promise<string> {
+  const audio = await resolveReferenceAudio({ assetIds: context.project.workflow.production.referenceAudioAssetIds ?? [], assets: context.assets, projectId: context.project.id, signal: context.signal });
+  const image = currentVideoImage(context, shot);
+  const imageUrl = image ? `data:${image.mimeType};base64,${(await readFile(image.path)).toString('base64')}` : undefined;
+  const multimodal = audio.length > 0 || references.images.length > 0 && context.model.parameters.characterReferenceMode === 'reference_image';
+  const images = [...references.images.map(reference => reference.dataUrl), ...(imageUrl ? [imageUrl] : [])];
+  const prompt = visualPrompt(context, shot, references) + (multimodal && imageUrl ? `\n图片 ${images.length} 为当前场景构图参考。` : '');
+  const body = JSON.stringify({ ...parameters, model: context.model.model, content: [
+    { type: 'text', text: prompt },
+    ...images.map(url => ({ type: 'image_url', image_url: { url }, role: multimodal ? 'reference_image' : 'first_frame' })),
+    ...audio.map(reference => ({ type: 'audio_url', audio_url: { url: reference.dataUrl }, role: 'reference_audio' })),
+  ], duration: parameters.duration ?? Math.max(1, Math.ceil(shot.durationUs / 1_000_000)), ratio: parameters.ratio ?? aspectRatio(context.project.profile.width, context.project.profile.height) });
+  if (Buffer.byteLength(body) > 64_000_000) throw new Error('参考素材与提示词编码后超过 64 MB 请求限制，请压缩或减少素材。');
+  return body;
+}
+
+async function generateMedia(context: MediaActivityContext, directory: string, shot: Shot, kind: 'image' | 'video', onUsage: (usage?: ProviderUsage) => void): Promise<AssetRecord> {
   const model = context.model;
   if (!model) throw new Error('请为此步骤选择相应的生成模型，或先导入素材');
-  const parameters = requestModelParameters(model, kind === 'audio' ? 'tts' : kind);
-  const references = kind === 'audio' ? { characters: [], prompt: '', images: [] } : await resolveCharacterReferences({ shot, characters: context.characters, assets: context.assets });
+  const parameters = requestModelParameters(model, kind);
+  if (kind === 'video') parameters.generate_audio = true;
+  const references = await resolveCharacterReferences({ shot, characters: context.characters, assets: context.assets });
   validateReferenceProtocol(context, shot, references);
-  const prompt = [context.project.style, shot.visualPrompt, references.prompt].filter(Boolean).join('\n');
-  const instruction = context.node.config.operation === 'regenerate' && typeof context.node.config.instruction === 'string' ? context.node.config.instruction : '';
-  if (kind === 'audio' && ['qwen-tts', 'volcengine-tts'].includes(model.provider) && instruction.trim()) throw new Error('当前配音接口不支持单镜头调整要求，请留空或改用支持语音指令的模型。');
-  const extension = kind === 'image' ? '.png' : kind === 'video' ? '.mp4' : '.mp3';
+  const prompt = visualPrompt(context, shot, references);
+  const adjustment = context.node.config.operation === 'regenerate' && typeof context.node.config.instruction === 'string' ? context.node.config.instruction : '';
+  const instruction = context.node.prompt.trim().endsWith(adjustment.trim()) ? context.node.prompt : [context.node.prompt, adjustment].filter(Boolean).join('\n');
+  const extension = kind === 'image' ? '.png' : '.mp4';
   const fileId = mediaShotFileId(shot.id);
   const destination = join(directory, `${fileId}${extension}`);
   const receiptPath = join(directory, `${fileId}.receipt.json`);
@@ -309,8 +343,9 @@ async function generateMedia(context: MediaActivityContext, directory: string, s
   if (receipt?.state === 'download') { const asset = await downloadReceipt(destination, receiptPath, receipt, context, kind, shot); onUsage(receipt.providerUsage); return asset; }
   if (receipt?.state === 'unknown' || receipt?.state === 'prepared') throw new Error('该镜头上次提交结果不明确，请核对服务端任务后再重新生成');
 
+  // Local file and request-size failures remain retryable before recording a submission.
+  const seedanceBody = !receipt && kind === 'video' && model.provider === 'seedance' ? await seedanceVideoBody({ ...context, model }, shot, references, parameters) : '';
   if (!receipt) {
-    if (kind === 'audio' && model.provider === 'volcengine-tts') volcengineSpeechHeaders(model, context.apiKey);
     receipt = { state: 'prepared' };
     await atomicJson(receiptPath, receipt);
     try {
@@ -338,22 +373,6 @@ async function generateMedia(context: MediaActivityContext, directory: string, s
         });
         const first = Array.isArray(result.data) ? objectSchema.parse(result.data[0]) : undefined;
         receipt = { state: 'download', downloadUrl: stringOrUndefined(first?.url), base64: stringOrUndefined(first?.b64_json), providerUsage: providerReportedUsage(result) };
-      } else if (kind === 'audio' && model.provider === 'volcengine-tts') {
-        const result = await synthesizeVolcengineSpeech(model, context.apiKey, shot.narration, context.signal);
-        receipt = { state: 'download', ...result };
-      } else if (kind === 'audio' && model.provider === 'qwen-tts') {
-        const result = await requestJson(endpoint(model.baseUrl, 'services/aigc/multimodal-generation/generation'), context, {
-          method: 'POST', body: JSON.stringify({ model: model.model, input: { ...parameters, text: shot.narration, voice: parameters.voice ?? 'Cherry', language_type: parameters.language_type ?? 'Chinese' } }),
-        });
-        receipt = { state: 'download', downloadUrl: stringOrUndefined(nested(result, 'output', 'audio', 'url')), providerUsage: providerReportedUsage(result) };
-      } else if (kind === 'audio') {
-        const response = await fetch(endpoint(model.baseUrl, 'audio/speech'), {
-          method: 'POST', headers: { 'Content-Type': 'application/json', ...(context.apiKey ? { Authorization: `Bearer ${context.apiKey}` } : {}), 'Idempotency-Key': `${context.operationId}:${shot.id}` },
-          body: JSON.stringify({ ...parameters, model: model.model, input: shot.narration, voice: parameters.voice ?? 'alloy', response_format: 'mp3', ...(instruction ? { instructions: [typeof parameters.instructions === 'string' ? parameters.instructions : '', instruction].filter(Boolean).join('\n') } : {}) }),
-          signal: AbortSignal.any([context.signal, AbortSignal.timeout(120000)]),
-        });
-        if (!response.ok) throw new Error(`配音请求未完成（HTTP ${response.status}）`);
-        receipt = { state: 'download', base64: Buffer.from(await boundedResponseBytes(response)).toString('base64') };
       } else if (model.provider === 'comfyui') {
         const workflow = comfyPrompt(context, shot, references);
         const result = await requestJson(endpoint(model.baseUrl, 'prompt'), context, { method: 'POST', body: JSON.stringify({ prompt: workflow, client_id: `${context.operationId}:${shot.id}` }) });
@@ -361,17 +380,13 @@ async function generateMedia(context: MediaActivityContext, directory: string, s
         receipt = { state: 'submitted', taskId, providerUsage: providerReportedUsage(result) };
         context.persistRemoteTask(taskId);
       } else if (kind === 'video') {
-        const image = currentVideoImage(context, shot);
-        const imageUrl = image ? `data:${image.mimeType};base64,${(await readFile(image.path)).toString('base64')}` : undefined;
         const seedance = model.provider === 'seedance';
         let body: string | FormData;
         if (seedance) {
-          const multimodal = references.images.length > 0 && model.parameters.characterReferenceMode === 'reference_image';
-          const images = [...references.images.map(reference => reference.dataUrl), ...(imageUrl ? [imageUrl] : [])];
-          const videoPrompt = prompt + (multimodal && imageUrl ? `\n图片 ${images.length} 为当前场景构图参考。` : '');
-          body = JSON.stringify({ ...parameters, model: model.model, content: [{ type: 'text', text: videoPrompt }, ...images.map(url => ({ type: 'image_url', image_url: { url }, role: multimodal ? 'reference_image' : 'first_frame' }))], duration: parameters.duration ?? Math.max(1, Math.ceil(shot.durationUs / 1_000_000)), ratio: parameters.ratio ?? aspectRatio(context.project.profile.width, context.project.profile.height) });
+          body = seedanceBody;
         }
         else {
+          const image = currentVideoImage(context, shot);
           const form = formParameters(parameters);
           form.set('model', model.model); form.set('prompt', prompt);
           form.set('seconds', String(parameters.seconds ?? Math.ceil(shot.durationUs / 1_000_000)));
@@ -454,12 +469,26 @@ async function generateMedia(context: MediaActivityContext, directory: string, s
 export function createActivityExecutor(options: { ffmpegPath?: string } = {}) {
   const requests = new MediaRequestQueue();
   return async (context: MediaActivityContext): Promise<JsonValue> => {
+    const ffmpeg = options.ffmpegPath ?? process.env.VIDEO_QUICKLY_FFMPEG;
+    context = { ...context, ffprobePath: process.env.VIDEO_QUICKLY_FFPROBE ?? (ffmpeg ? join(dirname(ffmpeg), process.platform === 'win32' ? 'ffprobe.exe' : 'ffprobe') : undefined) };
+    if (context.node.config.operation === 'prepare-edit') {
+      if (context.model) throw new Error('剪辑准备使用本地时间轴，请移除此步骤的模型。');
+      return { source: 'local', shots: context.project.shots.length, message: '动画与运镜参数已就绪，导出步骤将按当前时间轴渲染' };
+    }
+    if (isVideoGenerationNode(context.node) && !context.model) throw new Error('请选择视频模型。');
     await validateMediaActivity(context);
-    if (context.node.config.operation === 'transcribe') return transcribeAudio(context);
+    if (context.node.config.operation === 'prepare-references' && context.node.config.referenceMode !== 'generate') {
+      const assets = context.node.config.referenceMode === 'none' ? [] : context.project.shots.flatMap(shot => {
+        const asset = context.assets.find(asset => asset.id === shot.assetId && asset.active && asset.kind === 'image');
+        return asset ? [asset] : [];
+      });
+      for (const asset of assets) if (!await validAsset(asset)) throw new Error('参考素材缺失或损坏，请重新导入。');
+      return { source: 'local', references: assets.length, referenceAssetIds: assets.map(asset => asset.id) };
+    }
     if (context.model) {
-      const capability = context.node.kind === 'assets' ? 'image' : context.node.kind === 'voice' ? 'tts' : context.node.kind === 'animation' ? 'video' : undefined;
-      if (capability && !context.model.capabilities.includes(capability)) throw new Error(`所选模型不具备${capability === 'image' ? '图片' : capability === 'tts' ? '配音' : '视频'}生成能力`);
-      const protocols: Record<string, string[]> = { assets: ['openai-compatible', 'seedream', 'comfyui', 'custom-http'], voice: ['openai-compatible', 'qwen-tts', 'volcengine-tts', 'custom-http'], animation: ['openai-compatible', 'seedance', 'comfyui', 'custom-http'] };
+      const capability = context.node.kind === 'assets' ? 'image' : context.node.kind === 'animation' ? 'video' : undefined;
+      if (capability && !context.model.capabilities.includes(capability)) throw new Error(`所选模型不具备${capability === 'image' ? '图片' : '视频'}生成能力`);
+      const protocols: Record<string, string[]> = { assets: ['openai-compatible', 'seedream', 'comfyui', 'custom-http'], animation: ['openai-compatible', 'seedance', 'comfyui', 'custom-http'] };
       if (protocols[context.node.kind] && !protocols[context.node.kind].includes(context.model.provider)) throw new Error('所选模型的服务协议不适用于此制作步骤');
     }
     // Per-shot receipts own ambiguous submit recovery; allow the parent graph
@@ -490,13 +519,10 @@ export function createActivityExecutor(options: { ffmpegPath?: string } = {}) {
       }
       return { assets: assets as unknown as JsonValue, videoPath, coverPath: output.coverPath, subtitlePath: output.subtitlePath, timelinePath: output.timelinePath, warnings: output.warnings };
     }
-    if (context.node.kind === 'animation' && !context.model) {
-      return { source: 'local', shots: context.project.shots.length, message: '动画与运镜参数已就绪，导出步骤将按当前时间轴渲染' };
-    }
-    const kind = context.node.kind === 'assets' ? 'image' : context.node.kind === 'voice' ? 'audio' : 'video';
+    const kind = context.node.kind === 'assets' ? 'image' : 'video';
     if (!context.model) {
       const assets = context.project.shots.map(shot => context.assets.find(asset => asset.projectId === context.project.id && asset.shotId === shot.id && asset.kind === kind && asset.active));
-      if (assets.some(asset => !asset)) throw new Error(`请为每个镜头导入${kind === 'audio' ? '配音' : '画面'}素材，或为此步骤选择模型`);
+      if (assets.some(asset => !asset)) throw new Error(`请为每个镜头导入${'画面'}素材，或为此步骤选择模型`);
       for (const asset of assets) if (asset && !(await validAsset(asset))) throw new Error('已引用素材缺失或损坏，请重新导入');
       return { assets: assets as unknown as JsonValue, source: 'imported' };
     }
@@ -510,7 +536,7 @@ export function createActivityExecutor(options: { ffmpegPath?: string } = {}) {
       const existing = context.assets.find(asset => asset.projectId === context.project.id && asset.shotId === shot.id && asset.kind === kind && asset.active);
       if (!regenerating && shot.locked && existing && await validAsset(existing)) return existing;
       const instruction = regenerating && typeof context.node.config.instruction === 'string' ? context.node.config.instruction : '';
-      const generationShot = kind !== 'audio' && instruction ? { ...shot, visualPrompt: `${shot.visualPrompt}\n\n本次调整要求：${instruction}` } : shot;
+      const generationShot = instruction && !context.node.prompt.trim().endsWith(instruction.trim()) ? { ...shot, visualPrompt: `${shot.visualPrompt}\n\n本次调整要求：${instruction}` } : shot;
       return requests.run(context.model!.id, modelLimit, context.queueSignal ? AbortSignal.any([queueSignal, context.queueSignal]) : queueSignal, async () => {
         try { return await generateMedia(context, directory, generationShot, kind, usage => usages.push(usage)); }
         catch (error) { context.onFailure?.(error); fail(error); throw error; }

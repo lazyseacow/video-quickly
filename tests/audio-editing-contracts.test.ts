@@ -1,10 +1,10 @@
 import { expect, it } from 'vitest';
-import { audioMixSettingsSchema, audioProcessingSchema, captionTrackSchema, clipEditPlanSchema, clipEditSourceSchema, createHistoryWorkflow, DEFAULT_AUDIO_MIX_SETTINGS, DEFAULT_AUDIO_PROCESSING, DEFAULT_VIDEO_PROFILE, firstFrameAtUs, projectSchema, silenceDetectionSchema, timeAtFrame, validateClipEditContent, validateClipEditHistory } from '@video-quickly/contracts';
+import { audioMixSettingsSchema, audioProcessingSchema, captionTrackSchema, clipEditPlanSchema, clipEditSourceSchema, createNativeVideoWorkflow, DEFAULT_AUDIO_MIX_SETTINGS, DEFAULT_AUDIO_PROCESSING, DEFAULT_VIDEO_PROFILE, firstFrameAtUs, projectSchema, silenceDetectionSchema, timeAtFrame, validateClipEditContent, validateClipEditHistory } from '@video-quickly/contracts';
 
 function fixture() {
   const source = clipEditSourceSchema.parse({ id: 'original', original: { durationUs: 4_000_000 }, assetHashes: [] });
   const plan = clipEditPlanSchema.parse({ id: 'plan', sourceId: source.id, spans: [{ id: 'first', durationUs: 1_000_000, originInUs: 0, sourceInUs: 0, audioInUs: 0, videoInUs: 0, sceneInUs: 0 }, { id: 'second', durationUs: 2_000_000, originInUs: 2_000_000, sourceInUs: 2_000_000, audioInUs: 2_000_000, videoInUs: 2_000_000, sceneInUs: 2_000_000 }] });
-  return projectSchema.parse({ id: 'audio-project', title: '声音精修', brief: '', revision: 1, profile: DEFAULT_VIDEO_PROFILE, workflow: createHistoryWorkflow(), createdAt: '', updatedAt: '', clipEditSources: [source], clipEditPlans: [plan], shots: [{ id: 'shot', title: '原录音', narration: '', visualPrompt: '', durationUs: 3_000_000, clipEdit: { planId: plan.id, inUs: 0, restoreInUs: 0, restoreDurationUs: 4_000_000 } }] });
+  return projectSchema.parse({ id: 'audio-project', title: '声音精修', brief: '', revision: 1, profile: DEFAULT_VIDEO_PROFILE, workflow: createNativeVideoWorkflow(), createdAt: '', updatedAt: '', clipEditSources: [source], clipEditPlans: [plan], shots: [{ id: 'shot', title: '原录音', narration: '', visualPrompt: '', durationUs: 3_000_000, clipEdit: { planId: plan.id, inUs: 0, restoreInUs: 0, restoreDurationUs: 4_000_000 } }] });
 }
 
 it('requires an explicit processing version for video audio and validates its independent gain', () => {
