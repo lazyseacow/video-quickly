@@ -25,7 +25,7 @@ for (const viewport of [{ width: 1536, height: 960, theme: 'dark' }, { width: 39
   await expect(quality).toHaveValue('0.25'); await expect(canvas).toHaveJSProperty('width', 160);
   await page.locator('.project-heading-actions').getByRole('button', { name: '制作设置', exact: true }).click();
   const dialog = page.getByRole('dialog', { name: '制作设置', exact: true });
-  await expect(dialog.getByRole('tablist', { name: '制作配置分区', exact: true }).getByRole('tab')).toHaveText(['策划与分镜', '素材与配音', '审阅与导出']);
+  await expect(dialog.getByRole('navigation', { name: '制作设置步骤', exact: true }).getByRole('button')).toHaveText(['1创作要求', '2模型与素材', '3声音与成片', '4确认保存']);
   await expect(dialog.getByLabel('预览质量', { exact: true })).toHaveCount(0);
   await expect(dialog.getByRole('button', { name: '备份项目与素材', exact: true })).toHaveCount(0);
   await page.screenshot({ path: info.outputPath('production-sections-' + viewport.width + '.png') });

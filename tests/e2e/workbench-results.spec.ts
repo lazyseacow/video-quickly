@@ -1,3 +1,4 @@
+import { productionStep, saveAndStartProduction } from './production-settings';
 import { expect, test } from '@playwright/test';
 import { fixture, open, pick, latest, rpc } from './native-video-fixture';
 
@@ -9,18 +10,18 @@ for (const { width, theme } of [{ width: 1536, theme: 'dark' }, { width: 600, th
     await page.setViewportSize({ width, height: 960 }); await page.addInitScript(theme => localStorage.setItem('vq-theme', theme), theme);
     const settings = await open(page, source.project);
     await pick(settings, '文本模型', source.models[0]); await pick(settings, '视频模型', source.video);
-    await settings.getByRole('tab', { name: '素材与配音', exact: true }).click();
+    await productionStep(settings, '模型与素材');
     await expect(settings.getByRole('button', { name: '项目混音设置', exact: true })).toHaveCount(0);
     await expect(settings.getByText('参考音频', { exact: true })).toBeVisible();
-    await expect(settings.getByRole('button', { name: '背景音乐', exact: true })).toBeVisible();
-    await settings.getByRole('button', { name: '保存并开始制作', exact: true }).click();
+    await productionStep(settings, '声音与成片'); await expect(settings.getByRole('button', { name: '背景音乐', exact: true })).toBeVisible();
+    await saveAndStartProduction(settings);
     await expect.poll(async () => (await latest(request, source.project.id))?.status, { timeout: 30000 }).toBe('succeeded');
     await expect(page.getByLabel('旁白音频', { exact: true })).toHaveCount(0);
     await expect(page.getByRole('button', { name: '镜头声音处理', exact: true })).toHaveCount(0);
     await expect(page.getByLabel('轨道信息', { exact: true })).not.toContainText('旁白');
     await expect(page.getByRole('checkbox', { name: '启用视频原声', exact: true })).toBeChecked();
     await page.locator('.workbench-guide__step').filter({ hasText: '策划与分镜' }).click();
-    const dialog = page.getByRole('dialog', { name: '制作设置', exact: true }); await dialog.getByRole('button', { name: '本次制作', exact: true }).click();
+    const dialog = page.getByRole('dialog', { name: '本次制作', exact: true });
     const stages = dialog.getByRole('tablist', { name: '制作阶段记录', exact: true }), steps = dialog.getByRole('navigation', { name: '本阶段制作步骤', exact: true });
     await steps.getByRole('button', { name: /旁白与分镜/ }).click();
     const output = dialog.getByRole('region', { name: '本次产物', exact: true });
@@ -59,7 +60,7 @@ test('expands a long storyboard without losing the remaining shots', async ({ pa
     const script = source.project.workflow.nodes.find(node => node.kind === 'script')!;
     await rpc(request, 'run.start', { projectId: source.project.id, nodeId: script.id });
     await expect.poll(async () => (await latest(request, source.project.id))?.status).toBe('succeeded');
-    const settings = await open(page, source.project); await settings.getByRole('button', { name: '本次制作', exact: true }).click();
+    await open(page, source.project).then(dialog => dialog.getByRole('button', { name: '取消', exact: true }).click()); await page.getByRole('button', { name: '打开阶段：策划与分镜', exact: true }).click(); const settings = page.getByRole('dialog', { name: '本次制作', exact: true });
     const storyboard = settings.getByRole('region', { name: '分镜预览', exact: true });
     await expect(storyboard.locator('ol > li')).toHaveCount(20);
     await expect(storyboard).toContainText('21 个镜头');

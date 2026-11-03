@@ -6,7 +6,7 @@
 
 | 范围 | 当前能力 | 契约与验证入口 |
 | --- | --- | --- |
-| 制作指引与进度 | 四阶段卡片固定打开“制作设置 / 本次制作”；运行中可独立保存待用配置，失败可定位修复并按新配置重做；局部运行保留完整卡片与真实进度，历史分组、模型与提示词按冻结记录展示 | [四阶段进度](workspace-editing.md#制作指引与四阶段进度)、`stage-configuration-draft.test.ts`、`workbench-stage-panel.spec.ts`、`workbench-guide-progress.spec.ts`、`workflow-stages.spec.ts` |
+| 制作设置与进度 | 顶部唯一制作配置入口，逐步填写并最终保存；四阶段卡片仅打开本次记录。运行中独立保存待用配置，失败后从统一入口调整再重做；局部运行保留完整卡片与真实进度，历史分组、模型与提示词按冻结记录展示 | [四阶段进度](workspace-editing.md#制作指引与四阶段进度)、`stage-configuration-draft.test.ts`、`workbench-stage-panel.spec.ts`、`workbench-guide-progress.spec.ts`、`workflow-stages.spec.ts` |
 | 导航与设置 | 52px 单列图标栏统一项目、制作记录、资源与工具入口并提供悬停名称；项目列表进入工作台；左下角设置浮层集中提供胶囊外观切换、Token 消耗与使用指南；首次指南按实际操作推进 | [桌面工作区](electron-desktop.md#工作区与持久化)、`workspace-settings.spec.ts`、`getting-started.spec.ts` |
 | 桌面与交付 | Windows x64、macOS arm64／x64；沙箱预加载、独立 Node 执行器、系统凭据、原生路径选择、媒体协议、进程退出与重连；独立媒体组件和安装数据保留 | [Electron 架构](electron-desktop.md)、[Windows](windows-verification.md)、[macOS](macos-verification.md) |
 | 大项目读取 | 轻量工作区摘要、条件项目详情、服务端分页、后台刷新合并、迟到结果隔离；镜头与轨道按行复用，保持最新操作及全片引用上下文；只为可见缩略图读取真实帧，限制并发与缓存 | [读取与编辑契约](workspace-editing.md#读取契约)、`benchmark:workspace`、`editor-row-rendering.spec.ts`、`media-performance.spec.ts` |

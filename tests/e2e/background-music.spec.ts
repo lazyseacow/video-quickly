@@ -24,7 +24,7 @@ async function openProject(page: Page, title: string) {
   await expect(page.getByLabel('镜头标题')).toHaveValue('音乐验收镜头 1');
 }
 async function musicEditor(page: Page) {
-  await (await projectSettingAction(page, '背景音乐', {exact: true})).click();
+  await (await projectSettingAction(page, '背景音乐', {exact: true})).click(); await page.getByRole('dialog', { name: '制作设置', exact: true }).getByRole('button', { name: '保存并打开', exact: true }).click();
   const dialog = page.getByRole('dialog', { name: '背景音乐', exact: true });
   await expect(dialog).toBeVisible();
   await expect(dialog.locator('.dialog__surface')).toHaveCSS('opacity', '1');

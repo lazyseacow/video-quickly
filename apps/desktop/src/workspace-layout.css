@@ -135,3 +135,5 @@
 @media (max-width: 650px) {
   .workspace-shell .workbench { min-height: 100dvh; }
 }
+
+.production-settings-trigger__pending { width: var(--space-1); height: var(--space-1); border-radius: var(--radius-pill); background: currentColor; }

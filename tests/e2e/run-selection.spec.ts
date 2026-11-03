@@ -23,7 +23,11 @@ async function open(page: Page, project: ProjectDocument) {
   await page.getByLabel('搜索项目', { exact: true }).fill(project.title);
   await page.locator('.project-card').filter({ hasText: project.title }).getByRole('button', { name: '继续创作', exact: true }).click();
   await expect(page.getByLabel('项目名称', { exact: true })).toHaveValue(project.title);
-  await page.getByRole('button', { name: '打开步骤：条件起点', exact: true }).click();
+  await page.getByRole('button', { name: '流程', exact: true }).click();
+  await expect(page.locator('.react-flow')).toBeVisible();
+  const start = page.locator('.react-flow__node[data-id="start"]'); await start.focus(); await start.press('Enter');
+  await expect(page.getByRole('button', { name: '配置所属阶段', exact: true })).toHaveCount(0);
+  await page.getByRole('button', { name: '配置与执行步骤', exact: true }).click();
   return page.getByRole('dialog', { name: '条件起点', exact: true });
 }
 const runs = (request: APIRequestContext, projectId: string) => rpc<{ items: RunRecord[] }>(request, 'run.list', { projectId });

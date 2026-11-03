@@ -78,9 +78,8 @@ export default function WorkbenchProduction({ workflow, run, version, action, on
     onPausePreview();
     const stage = resolveWorkbenchStages(workflow)?.find(stage => `stage:${stage.id}` === group.key)
       ?? { id: group.key.startsWith('stage:') ? group.key.slice(6) : group.key, label: group.label, description: group.description, nodeIds: group.tasks.map(task => task.id), nodes: group.tasks.flatMap(task => task.node ? [task.node] : []) };
-    onConfigureStage(stage, { nodeId });
+    onConfigureStage(stage, { tab: 'run', nodeId });
   }
-  const repairGroup = groups.find(group => group.tasks.some(task => task.id === run.currentNodeId)) ?? groups[0];
   async function perform(method: string, params: Record<string, unknown> = {}) {
     if (inFlight.current || blocked) return;
     inFlight.current = true; setPending(method); setError('');
@@ -101,14 +100,13 @@ export default function WorkbenchProduction({ workflow, run, version, action, on
       const state = synchronized ? progressLabel(status) : inspection.error ? '进度读取失败' : '正在同步进度';
       return <WorkbenchStepCard key={stage.key} index={status === 'succeeded' ? <Check size={12} aria-hidden="true" /> : index + 1} label={stage.label} description={stage.description} actionLabel={`打开${stages ? '阶段' : '步骤'}：${stage.label}`} current={highlighted} status={status} onClick={() => openStage(stage)}>{stages ? active ? `${task.step?.label ?? task.label} · ${state}` : `${stage.tasks.filter(taskCompleted).length} / ${stage.tasks.length} 任务 · ${state}` : state}</WorkbenchStepCard>;
     })}</ol>
-    {(run.error || data?.recovery.reason) && <Notice kind="error"><span>{run.error || data?.recovery.reason}</span>{configurationFailure && repairGroup && <Button onClick={() => openStage(repairGroup, run.currentNodeId)}>修复配置</Button>}</Notice>}
+    {(run.error || data?.recovery.reason) && <Notice kind="error"><span>{run.error || data?.recovery.reason}</span>{configurationFailure && <span>请从顶部“制作设置”调整配置后重新制作。</span>}</Notice>}
     {inspection.error && <Notice kind="error">{inspection.error}<Button static onClick={inspection.refresh}><RefreshCw size={14} />重试读取制作进度</Button></Notice>}
     {error && <Notice kind="error">{error}</Notice>}
     <div className="workbench-production__actions">
       <div className="workbench-production__buttons">
         {output && <Button static disabled={blocked || Boolean(pending)} onClick={() => { onPausePreview(); onOpenOutput({ projectId: run.projectId, runId: run.id, nodeId: output.id, kind: output.kind }); }}>查看产物</Button>}
         {data?.recovery.resume && !configurationFailure && <Button static variant="primary" busy={pending === 'run.resume'} disabled={blocked || Boolean(pending)} onClick={() => void perform('run.resume')}>继续原制作</Button>}
-        {data?.recovery.restart && repairGroup && <Button static disabled={blocked || Boolean(pending)} onClick={() => openStage(repairGroup, run.currentNodeId)}>调整设置并重新制作</Button>}
       </div>
     </div>
   </section>;

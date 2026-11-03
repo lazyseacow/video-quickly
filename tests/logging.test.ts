@@ -59,6 +59,40 @@ it('omits provider-defined error codes even when they resemble system codes', as
   expect(lines[1].error.code).toBe('EACCES');
 });
 
+it('preserves bounded network cause chains and aggregate errors without recording their content', async () => {
+  const directory = await fixture(), logger = createLogger({ dataDirectory: directory, component: 'runtime' });
+  const secret = 'private-nested-provider-credential';
+  const network = Object.assign(new Error(secret), { code: 'ENOTFOUND', hostname: secret });
+  const aggregate = new AggregateError([network, new DOMException(secret, 'TimeoutError')], secret);
+  const error = new TypeError(secret, { cause: aggregate });
+  Object.assign(network, { cause: error });
+  logger.error('provider.request_failed', { error: logError(error) });
+  const [record] = await records(directory);
+  expect(record.error).toMatchObject({ name: 'TypeError', cause: { name: 'AggregateError', errors: [{ name: 'Error', code: 'ENOTFOUND' }, { name: 'TimeoutError' }] } });
+  expect(record.error.cause.errors[0].cause).toBeUndefined();
+  expect(await readFile(join(directory, 'logs/runtime.log'), 'utf8')).not.toContain(secret);
+
+  let chain: Error = new Error(secret);
+  for (let index = 0; index < 20; index++) chain = new Error(secret, { cause: chain });
+  const safe = logError(chain);
+  let depth = 0, current = safe;
+  while (current.cause) { depth++; current = current.cause as Record<string, unknown>; }
+  expect(depth).toBe(3);
+  expect(logError(new AggregateError(Array.from({ length: 20 }, () => new Error(secret)), secret)).errors).toHaveLength(3);
+});
+
+it('keeps shot and model correlation and technical metrics while rejecting arbitrary phase and provider text', async () => {
+  const directory = await fixture(), logger = createLogger({ dataDirectory: directory, component: 'runtime' });
+  const secret = 'private-custom-identifier';
+  logger.child({ modelId: secret, shotId: secret, nodeKind: 'animation', provider: 'seedance' }).info('media.completed', { phase: 'download', queueMs: 12.5, byteSize: 1024, shotCount: 2, pollCount: 3 });
+  logger.info('media.failed', { provider: secret, nodeKind: secret, phase: secret, requestPhase: secret });
+  const [record, rejected] = await records(directory);
+  expect(record).toMatchObject({ modelId: expect.stringMatching(/^sha256:/), shotId: expect.stringMatching(/^sha256:/), nodeKind: 'animation', provider: 'seedance', phase: 'download', queueMs: 12.5, byteSize: 1024, shotCount: 2, pollCount: 3 });
+  expect(rejected).not.toHaveProperty('provider'); expect(rejected).not.toHaveProperty('nodeKind'); expect(rejected).not.toHaveProperty('phase');
+  expect(rejected).not.toHaveProperty('requestPhase');
+  expect(await readFile(join(directory, 'logs/runtime.log'), 'utf8')).not.toContain(secret);
+});
+
 it('hashes stack basenames from POSIX, Windows and preformatted errors while retaining coordinates', async () => {
   const directory = await fixture(), logger = createLogger({ dataDirectory: directory, component: 'runtime' });
   const privateName = 'private-provider-token.ts', error = new Error('private-provider-body');

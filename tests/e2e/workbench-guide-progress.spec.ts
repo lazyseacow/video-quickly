@@ -113,15 +113,15 @@ for (const viewport of [{ width: 1536, height: 960, theme: 'dark' }, { width: 60
       try {
         await page.emulateMedia({ reducedMotion: 'reduce' }); await page.goto('/'); await expect(page).toHaveTitle(/Video Quickly/); await selectProject(page, source.project.title);
         await shotOutlineOnly(page);
-        const configuration = page.getByRole('region', { name: '制作指引', exact: true }); await expect(configuration.locator('button[aria-label^="打开阶段："]')).toHaveCount(4); await expect(configuration.locator('[aria-current="step"]')).toHaveCount(1); await expect(configuration.locator('.workbench-guide__step').first()).toHaveAttribute('aria-current', 'step');
+        const configuration = page.getByRole('region', { name: '制作指引', exact: true }); await expect(configuration.locator('button[aria-label^="打开阶段："]')).toHaveCount(4); await expect(configuration.locator('[aria-current="step"]')).toHaveCount(0);
         await page.screenshot({ path: info.outputPath(`stage-titles-${viewport.theme}-${viewport.width}.png`) });
-        await descriptionHelp(page, configuration.getByRole('list', { name: '流程步骤设置', exact: true }), stageLabels[2], '已有本地内容的阶段状态', { touch: viewport.width === 600 });
-        await configuration.getByRole('button', { name: `打开阶段：${stageLabels[2]}`, exact: true }).click(); const settings = page.getByRole('dialog', { name: '制作设置', exact: true }); await expect(settings).toBeVisible(); await settings.getByRole('button', { name: '取消', exact: true }).click();
-        await expect(configuration.locator('[aria-current="step"]')).toHaveCount(1); await expect(configuration.locator('.workbench-guide__step').first()).toHaveAttribute('aria-current', 'step'); expect(observed.writes).toEqual([]); expect(source.calls()).toBe(0);
+        await descriptionHelp(page, configuration.getByRole('list', { name: '制作阶段进度', exact: true }), stageLabels[2], '已有本地内容的阶段状态', { touch: viewport.width === 600 });
+        await configuration.getByRole('button', { name: `打开阶段：${stageLabels[2]}`, exact: true }).click(); const settings = page.getByRole('dialog', { name: '本次制作', exact: true }); await expect(settings).toBeVisible(); await settings.getByRole('button', { name: '关闭', exact: true }).click();
+        await expect(configuration.locator('[aria-current="step"]')).toHaveCount(0); expect(observed.writes).toEqual([]); expect(source.calls()).toBe(0);
         await page.getByRole('button', { name: '开始制作', exact: true }).click(); await expect.poll(source.calls).toBe(1);
         const run = (await rpc<{ items: RunSummary[] }>(request, 'run.list', { projectId: source.project.id })).items[0]; expect(run).toBeDefined();
         await expect(cards(page)).toHaveCount(4); await expect(configuration).toHaveCount(0); await expect(progress(page)).toHaveClass(/workbench-guide__steps/); await currentStage(page, stageLabels[0], 'running');
-        await card(page, stageLabels[2]).click(); const details = page.getByRole('dialog', { name: '制作设置', exact: true }); await expect(details).toBeVisible(); await details.getByRole('button', { name: '本次制作', exact: true }).click(); await expect(details.getByRole('navigation', { name: '本阶段制作步骤', exact: true })).toContainText('本地任务 3'); await details.getByRole('button', { name: '关闭对话框', exact: true }).click(); await currentStage(page, stageLabels[0], 'running');
+        await card(page, stageLabels[2]).click(); const details = page.getByRole('dialog', { name: '本次制作', exact: true }); await expect(details).toBeVisible(); await expect(details.getByRole('navigation', { name: '本阶段制作步骤', exact: true })).toContainText('本地任务 3'); await details.getByRole('button', { name: '关闭对话框', exact: true }).click(); await currentStage(page, stageLabels[0], 'running');
         source.reply(0); await expect.poll(source.calls).toBe(2); await currentStage(page, stageLabels[1], 'running');
         await page.reload(); await selectProject(page, source.project.title); await currentStage(page, stageLabels[1], 'running'); await shotOutlineOnly(page); await expect(page.locator('html')).toHaveAttribute('data-theme', viewport.theme);
         for (let index = 1; index < stageLabels.length; index++) {
@@ -148,7 +148,7 @@ test('keeps the newer run highlighted after an old inspection arrives and expose
     await page.setViewportSize({ width: 600, height: 900 }); await page.emulateMedia({ reducedMotion: 'reduce' }); await page.addInitScript(() => localStorage.setItem('vq-theme', 'light')); await page.goto('/'); await selectProject(page, source.project.title);
     const old = await rpc<RunSummary>(request, 'run.start', { projectId: source.project.id, nodeId: taskIds[0] }); await expect.poll(source.calls).toBe(1); await currentStage(page, stageLabels[0], 'running'); source.reply(0);
     await expect.poll(() => status(request, old.id)).toBe('succeeded'); await completed(page, [stageLabels[0]]);
-    await card(page, stageLabels[2]).click(); const configuration = page.getByRole('dialog', { name: '制作设置', exact: true }); await expect(configuration).toBeVisible(); await configuration.getByRole('button', { name: '取消', exact: true }).click();
+    await card(page, stageLabels[2]).click(); const configuration = page.getByRole('dialog', { name: '本次制作', exact: true }); await expect(configuration).toBeVisible(); await configuration.getByRole('button', { name: '关闭', exact: true }).click();
     await completed(page, [stageLabels[0]]); await expect(card(page, stageLabels[0])).toContainText('1 / 1 任务');
     await page.route('**/__desktop_rpc', async route => {
       const input = route.request().postDataJSON();
@@ -184,12 +184,12 @@ for (const viewport of [{ width: 1536, height: 960, theme: 'light' }, { width: 6
     await expect(steps).toHaveCount(4); await expect(steps.locator('strong')).toHaveText(stageLabels); await expect(list).not.toContainText('史实'); await expect(planning).toHaveAttribute('data-state', 'pending');
     await expect(planning).toHaveAttribute('aria-current', 'step'); await expect(planning.locator('..')).toHaveAttribute('data-current', 'true');
     await expect(planning).toBeInViewport({ ratio: 1 }); await page.screenshot({ path: info.outputPath(`native-four-stages-active-${viewport.theme}-${viewport.width}.png`) });
-    await planning.click(); const details = page.getByRole('dialog', { name: '制作设置', exact: true }); await expect(details.getByRole('tablist', { name: '制作配置分区', exact: true }).getByRole('tab')).toHaveText([stageLabels[0], stageLabels[1], stageLabels[3]]); await details.getByRole('button', { name: '取消', exact: true }).click();
+    await planning.click(); const details = page.getByRole('dialog', { name: '本次制作', exact: true }); await expect(details.getByRole('tablist', { name: '制作阶段记录', exact: true }).getByRole('tab')).toHaveText(stageLabels); await details.getByRole('button', { name: '关闭', exact: true }).click();
     await expect(page.getByRole('button', { name: '通过审阅并继续', exact: true })).toHaveCount(0);
     await expect(steps).toHaveCount(4); await expect(list.locator('[aria-current="step"]')).toHaveCount(1); await expect(planning).toHaveAttribute('aria-current', 'step'); await expect(production(page)).not.toContainText('下一步'); await expect(planning).toHaveAttribute('data-state', 'pending'); await expect(planning).toContainText('1 / 3 任务');
     await expect(card(page, stageLabels[0])).toContainText('1 / 3 任务');
-    await list.getByRole('button', { name: '打开阶段：素材与配音', exact: true }).click(); const configuration = page.getByRole('dialog', { name: '制作设置', exact: true });
-    await expect(configuration).toBeVisible(); await configuration.getByRole('button', { name: '取消', exact: true }).click();
+    await list.getByRole('button', { name: '打开阶段：素材与配音', exact: true }).click(); const configuration = page.getByRole('dialog', { name: '本次制作', exact: true });
+    await expect(configuration).toBeVisible(); await configuration.getByRole('button', { name: '关闭', exact: true }).click();
     await page.reload(); await selectProject(page, project.title); await expect(steps).toHaveCount(4); await expect(steps.locator('strong')).toHaveText(stageLabels); await expect(list).not.toContainText('史实'); await expect(planning).toContainText('1 / 3 任务');
     await expect(card(page, stageLabels[1])).toHaveAttribute('data-state', 'pending'); await expect(card(page, stageLabels[0])).toContainText('1 / 3 任务');
     expect(await saved(request, project.id)).toEqual(project); expect(await rpc(request, 'run.replay', { runId: run.id })).toMatchObject({ externalCalls: 0, matchesSnapshot: true });

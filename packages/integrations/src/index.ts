@@ -14,6 +14,26 @@ import { resolveReferenceAudio } from './audio-references.js';
 export { createWaveformReader } from './waveform.js';
 export { readResearchSource, searchWikipedia, selectResearchPassages, parseResearchResult } from './research.js';
 
+export interface MediaDiagnosticEvent {
+  event: `media.${'queued' | 'started' | 'completed' | 'failed' | 'canceled' | 'reused' | 'receipt_loaded' | 'request_started' | 'request_completed' | 'request_failed' | 'poll_started' | 'poll_completed' | 'poll_retry_scheduled' | 'poll_recovered' | 'download_started' | 'download_completed' | 'validation_started' | 'validation_completed' | 'render_started' | 'render_completed'}`;
+  level: 'debug' | 'info' | 'warn' | 'error';
+  phase?: 'queue' | 'generate' | 'submit' | 'poll' | 'download' | 'validate' | 'render';
+  shotId?: string;
+  assetId?: string;
+  state?: 'prepared' | 'submitted' | 'download' | 'completed' | 'unknown';
+  durationMs?: number;
+  queueMs?: number;
+  byteSize?: number;
+  statusCode?: number;
+  pollCount?: number;
+  retryCount?: number;
+  retryDelayMs?: number;
+  cached?: boolean;
+  resumed?: boolean;
+  hasRemoteId?: boolean;
+  error?: unknown;
+}
+
 export interface MediaActivityContext {
   project: ProjectDocument;
   node: WorkflowNode;
@@ -26,6 +46,7 @@ export interface MediaActivityContext {
   assets: AssetRecord[];
   characters?: CharacterProfile[];
   onProgress?: (value: number) => void;
+  onDiagnostic?: (event: MediaDiagnosticEvent) => void;
   preparedAudioMix?: PreparedAudioMix;
   model?: ModelProfile;
   apiKey?: string;
@@ -270,17 +291,48 @@ async function validAsset(asset: AssetRecord): Promise<boolean> {
   return createHash('sha256').update(await readFile(asset.path)).digest('hex') === asset.sha256;
 }
 
+const retryablePollCodes = new Set(['ECONNRESET', 'ECONNREFUSED', 'ETIMEDOUT', 'EAI_AGAIN', 'ENOTFOUND', 'ENETDOWN', 'ENETUNREACH', 'EHOSTDOWN', 'EHOSTUNREACH', 'EPIPE', 'UND_ERR_SOCKET', 'UND_ERR_CONNECT_TIMEOUT', 'UND_ERR_HEADERS_TIMEOUT', 'UND_ERR_BODY_TIMEOUT', 'UND_ERR_RES_CONTENT_LENGTH_MISMATCH']);
+function retryablePollError(error: unknown, depth = 0): boolean {
+  if (!(error instanceof Error) || depth > 3) return false;
+  if ('status' in error && typeof error.status === 'number') return [408, 429, 500, 502, 503, 504].includes(error.status);
+  if (error.name === 'TimeoutError' || 'code' in error && typeof error.code === 'string' && retryablePollCodes.has(error.code)) return true;
+  if (error instanceof AggregateError && error.errors.length) return error.errors.every(cause => retryablePollError(cause, depth + 1));
+  return retryablePollError(error.cause, depth + 1);
+}
+function retryAfterMilliseconds(value: string | null): number | undefined {
+  if (!value) return;
+  const seconds = Number(value);
+  if (Number.isFinite(seconds) && seconds >= 0) return seconds * 1000;
+  const date = Date.parse(value);
+  return Number.isFinite(date) ? Math.max(0, date - Date.now()) : undefined;
+}
+
 async function requestJson(url: string, context: MediaActivityContext, init: RequestInit = {}): Promise<Record<string, unknown>> {
-  const response = await fetch(url, {
-    ...init,
-    headers: { ...(context.apiKey ? { Authorization: `Bearer ${context.apiKey}` } : {}), ...(init.body && !(init.body instanceof FormData) ? { 'Content-Type': 'application/json' } : {}), ...init.headers },
-    signal: AbortSignal.any([context.signal, AbortSignal.timeout(120000)]),
-  });
-  if (!response.ok) throw new Error(`模型请求未完成（HTTP ${response.status}），请检查服务配置`);
-  return objectSchema.parse(JSON.parse(new TextDecoder().decode(await boundedResponseBytes(response, 64 * 1024 * 1024))));
+  const started = performance.now(), phase = init.method === 'POST' ? 'submit' : 'poll';
+  const level = phase === 'poll' ? 'debug' : 'info';
+  let statusCode: number | undefined;
+  context.onDiagnostic?.({ event: 'media.request_started', level, phase });
+  try {
+    const response = await fetch(url, {
+      ...init,
+      headers: { ...(context.apiKey ? { Authorization: `Bearer ${context.apiKey}` } : {}), ...(init.body && !(init.body instanceof FormData) ? { 'Content-Type': 'application/json' } : {}), ...init.headers },
+      signal: AbortSignal.any([context.signal, AbortSignal.timeout(120000)]),
+    });
+    statusCode = response.status;
+    if (!response.ok) { await response.body?.cancel(); throw Object.assign(new Error(`模型请求未完成（HTTP ${response.status}），请检查服务配置`), { status: response.status, retryAfterMs: retryAfterMilliseconds(response.headers.get('retry-after')) }); }
+    const bytes = await boundedResponseBytes(response, 64 * 1024 * 1024);
+    const result = objectSchema.parse(JSON.parse(new TextDecoder().decode(bytes)));
+    context.onDiagnostic?.({ event: 'media.request_completed', level, phase, statusCode, byteSize: bytes.byteLength, durationMs: performance.now() - started });
+    return result;
+  } catch (error) {
+    context.onDiagnostic?.({ event: 'media.request_failed', level: context.signal.aborted ? 'warn' : 'error', phase, statusCode, durationMs: performance.now() - started, error });
+    throw error;
+  }
 }
 
 async function downloadReceipt(path: string, receiptPath: string, receipt: Receipt, context: MediaActivityContext, kind: AssetRecord['kind'], shot: Shot): Promise<AssetRecord> {
+  const started = performance.now();
+  context.onDiagnostic?.({ event: 'media.download_started', level: 'info', phase: 'download' });
   let bytes: Uint8Array;
   if (receipt.base64) {
     if (receipt.base64.length > Math.ceil(MAX_MEDIA_BYTES / 3) * 4) throw new Error('素材结果超出单文件限制');
@@ -293,15 +345,19 @@ async function downloadReceipt(path: string, receiptPath: string, receipt: Recei
     // Download hosts do not receive the model API credential.
     const apiOrigin = context.model ? new URL(context.model.baseUrl).origin : undefined;
     const response = await fetch(url, { headers: receipt.authenticatedContent && apiOrigin === url.origin && context.apiKey ? { Authorization: `Bearer ${context.apiKey}` } : undefined, signal: AbortSignal.any([context.signal, AbortSignal.timeout(120000)]) });
-    if (!response.ok) throw new Error(`素材下载失败（HTTP ${response.status}），继续执行会恢复原下载`);
+    if (!response.ok) { await response.body?.cancel(); throw Object.assign(new Error(`素材下载失败（HTTP ${response.status}），继续执行会恢复原下载`), { status: response.status }); }
     bytes = await boundedResponseBytes(response);
   }
   if (bytes.byteLength === 0 || bytes.byteLength > MAX_MEDIA_BYTES) throw new Error('素材结果为空或超出单文件限制');
   const temporary = `${path}.tmp`;
   await writeFile(temporary, bytes);
   await rename(temporary, path);
+  context.onDiagnostic?.({ event: 'media.download_completed', level: 'info', phase: 'download', byteSize: bytes.byteLength, durationMs: performance.now() - started });
+  const validationStarted = performance.now();
+  context.onDiagnostic?.({ event: 'media.validation_started', level: 'info', phase: 'validate' });
   const asset = await assetFor(path, context, kind, shot);
   await atomicJson(receiptPath, { state: 'completed', taskId: receipt.taskId, asset, providerUsage: receipt.providerUsage });
+  context.onDiagnostic?.({ event: 'media.validation_completed', level: 'info', phase: 'validate', assetId: asset.id, byteSize: asset.size, durationMs: performance.now() - validationStarted });
   return asset;
 }
 
@@ -336,8 +392,9 @@ async function generateMedia(context: MediaActivityContext, directory: string, s
   const destination = join(directory, `${fileId}${extension}`);
   const receiptPath = join(directory, `${fileId}.receipt.json`);
   let receipt = await readReceipt(receiptPath);
+  if (receipt) context.onDiagnostic?.({ event: 'media.receipt_loaded', level: 'info', state: receipt.state, resumed: true, hasRemoteId: Boolean(receipt.taskId) });
   if (receipt?.state === 'completed' && receipt.asset) {
-    if (await validAsset(receipt.asset)) { onUsage(receipt.providerUsage); return receipt.asset; }
+    if (await validAsset(receipt.asset)) { context.onDiagnostic?.({ event: 'media.reused', level: 'info', cached: true, assetId: receipt.asset.id }); onUsage(receipt.providerUsage); return receipt.asset; }
     throw new Error('已完成素材缺失或损坏，请显式重新生成此镜头');
   }
   if (receipt?.state === 'download') { const asset = await downloadReceipt(destination, receiptPath, receipt, context, kind, shot); onUsage(receipt.providerUsage); return asset; }
@@ -413,53 +470,74 @@ async function generateMedia(context: MediaActivityContext, directory: string, s
 
   if (receipt.state === 'submitted') {
     context.signal.throwIfAborted();
-    // The deadline bounds this query attempt, not the remote task's lifetime.
-    // Explicit recovery can query the same task again without another POST.
-    receipt.pollDeadlineAt = Date.now() + Math.max(30, Math.min(86400, Number(model.parameters.pollTimeoutSeconds) || 1800)) * 1000;
+    const pollStarted = performance.now(); let pollCount = 0, retryCount = 0;
+    context.onDiagnostic?.({ event: 'media.poll_started', level: 'info', phase: 'poll', hasRemoteId: Boolean(receipt.taskId) });
+    // Transient GET failures stay inside this query window and never replay POST.
+    const pollDeadlineAt = Date.now() + Math.max(30, Math.min(86400, Number(model.parameters.pollTimeoutSeconds) || 1800)) * 1000;
+    receipt.pollDeadlineAt = pollDeadlineAt;
     await atomicJson(receiptPath, receipt);
+    const pollContext = { ...context, signal: AbortSignal.any([context.signal, AbortSignal.timeout(Math.max(0, Math.ceil(pollDeadlineAt - Date.now())))]) };
     while (!context.signal.aborted) {
-      if (receipt.pollDeadlineAt && Date.now() >= receipt.pollDeadlineAt) throw new Error('等待生成结果已超过本次查询时限，请在服务端核对原任务');
+      if (Date.now() >= pollDeadlineAt) throw new Error('等待生成结果已超过本次查询时限，原任务已保留');
+      pollCount++;
       let completed: string | undefined;
-      if (model.provider === 'custom-http') {
-        const pollPath = z.string().min(1).parse(model.parameters.pollPath).replaceAll('{{taskId}}', encodeURIComponent(receipt.taskId!));
-        const result = await requestJson(endpoint(model.baseUrl, pollPath), context);
-        receipt.providerUsage = providerReportedUsage(result) ?? receipt.providerUsage;
-        const status = atPath(result, model.parameters.statusPath);
-        if (['failed', 'canceled', 'cancelled', 'expired', 'error'].includes(String(status))) throw new Error('模型任务失败，请核对服务端任务记录');
-        completed = stringOrUndefined(atPath(result, model.parameters.resultUrlPath));
-      } else if (model.provider === 'comfyui') {
-        const history = await requestJson(endpoint(model.baseUrl, `history/${encodeURIComponent(receipt.taskId!)}`), context);
-        const item = nested(history, receipt.taskId!) as Record<string, unknown> | undefined;
-        if (nested(item, 'status', 'status_str') === 'error') throw new Error('ComfyUI 工作流失败，请检查任务记录');
-        const outputs = nested(item, 'outputs');
-        if (outputs && typeof outputs === 'object') {
-          for (const output of Object.values(outputs)) {
-            const files = nested(output, kind === 'image' ? 'images' : 'gifs');
-            if (Array.isArray(files) && files[0]) {
-              const file = objectSchema.parse(files[0]);
-              const query = new URLSearchParams({ filename: z.string().parse(file.filename), subfolder: stringOrUndefined(file.subfolder) ?? '', type: stringOrUndefined(file.type) ?? 'output' });
-              completed = endpoint(model.baseUrl, `view?${query}`);
-              break;
+      try {
+        if (model.provider === 'custom-http') {
+          const pollPath = z.string().min(1).parse(model.parameters.pollPath).replaceAll('{{taskId}}', encodeURIComponent(receipt.taskId!));
+          const result = await requestJson(endpoint(model.baseUrl, pollPath), pollContext);
+          receipt.providerUsage = providerReportedUsage(result) ?? receipt.providerUsage;
+          const status = atPath(result, model.parameters.statusPath);
+          if (['failed', 'canceled', 'cancelled', 'expired', 'error'].includes(String(status))) throw new Error('模型任务失败，请核对服务端任务记录');
+          completed = stringOrUndefined(atPath(result, model.parameters.resultUrlPath));
+        } else if (model.provider === 'comfyui') {
+          const history = await requestJson(endpoint(model.baseUrl, `history/${encodeURIComponent(receipt.taskId!)}`), pollContext);
+          const item = nested(history, receipt.taskId!) as Record<string, unknown> | undefined;
+          if (nested(item, 'status', 'status_str') === 'error') throw new Error('ComfyUI 工作流失败，请检查任务记录');
+          const outputs = nested(item, 'outputs');
+          if (outputs && typeof outputs === 'object') {
+            for (const output of Object.values(outputs)) {
+              const files = nested(output, kind === 'image' ? 'images' : 'gifs');
+              if (Array.isArray(files) && files[0]) {
+                const file = objectSchema.parse(files[0]);
+                const query = new URLSearchParams({ filename: z.string().parse(file.filename), subfolder: stringOrUndefined(file.subfolder) ?? '', type: stringOrUndefined(file.type) ?? 'output' });
+                completed = endpoint(model.baseUrl, `view?${query}`);
+                break;
+              }
             }
           }
+        } else {
+          const result = await requestJson(endpoint(model.baseUrl, `${model.provider === 'seedance' ? 'contents/generations/tasks' : 'videos'}/${encodeURIComponent(receipt.taskId!)}`), pollContext);
+          receipt.providerUsage = providerReportedUsage(result) ?? receipt.providerUsage;
+          const status = result.status;
+          if (['failed', 'canceled', 'cancelled', 'expired'].includes(String(status))) throw new Error('视频任务未完成，请检查服务端任务状态');
+          completed = stringOrUndefined(nested(result, 'content', 'video_url')) ?? stringOrUndefined(result.url) ?? stringOrUndefined(nested(result, 'output', 'url'));
+          if (!completed && status === 'completed' && model.provider === 'openai-compatible') {
+            completed = endpoint(model.baseUrl, `videos/${encodeURIComponent(receipt.taskId!)}/content`);
+            receipt.authenticatedContent = true;
+          } else if (!completed && ['succeeded', 'completed'].includes(String(status))) {
+            throw new Error('生成任务已完成，但该服务未返回支持的结果地址，请配置自定义响应映射');
+          }
         }
-      } else {
-        const result = await requestJson(endpoint(model.baseUrl, `${model.provider === 'seedance' ? 'contents/generations/tasks' : 'videos'}/${encodeURIComponent(receipt.taskId!)}`), context);
-        receipt.providerUsage = providerReportedUsage(result) ?? receipt.providerUsage;
-        const status = result.status;
-        if (['failed', 'canceled', 'cancelled', 'expired'].includes(String(status))) throw new Error('视频任务未完成，请检查服务端任务状态');
-        completed = stringOrUndefined(nested(result, 'content', 'video_url')) ?? stringOrUndefined(result.url) ?? stringOrUndefined(nested(result, 'output', 'url'));
-        if (!completed && status === 'completed' && model.provider === 'openai-compatible') {
-          completed = endpoint(model.baseUrl, `videos/${encodeURIComponent(receipt.taskId!)}/content`);
-          receipt.authenticatedContent = true;
-        } else if (!completed && ['succeeded', 'completed'].includes(String(status))) {
-          throw new Error('生成任务已完成，但该服务未返回支持的结果地址，请配置自定义响应映射');
-        }
+        if (retryCount) context.onDiagnostic?.({ event: 'media.poll_recovered', level: 'info', phase: 'poll', retryCount });
+        retryCount = 0;
+      } catch (error) {
+        context.signal.throwIfAborted();
+        const remaining = pollDeadlineAt - Date.now();
+        if (remaining <= 0 || pollContext.signal.aborted) throw new Error('等待生成结果已超过本次查询时限，原任务已保留', { cause: error });
+        if (!retryablePollError(error)) throw error;
+        retryCount++;
+        const retryAfterMs = error instanceof Error && 'retryAfterMs' in error && typeof error.retryAfterMs === 'number' ? error.retryAfterMs : 0;
+        const retryDelayMs = Math.min(remaining, Math.max(Math.min(30_000, 1000 * 2 ** Math.min(retryCount - 1, 5)), retryAfterMs));
+        const statusCode = error instanceof Error && 'status' in error && typeof error.status === 'number' ? error.status : undefined;
+        context.onDiagnostic?.({ event: 'media.poll_retry_scheduled', level: 'warn', phase: 'poll', retryCount, retryDelayMs, statusCode, error });
+        await delay(retryDelayMs, undefined, { signal: context.signal });
+        continue;
       }
       if (completed) { receipt = { ...receipt, state: 'download', downloadUrl: completed }; await atomicJson(receiptPath, receipt); break; }
-      await delay(2000, undefined, { signal: context.signal });
+      await delay(Math.min(2000, Math.max(0, pollDeadlineAt - Date.now())), undefined, { signal: context.signal });
     }
     context.signal.throwIfAborted();
+    context.onDiagnostic?.({ event: 'media.poll_completed', level: 'info', phase: 'poll', pollCount, durationMs: performance.now() - pollStarted });
   }
   const asset = await downloadReceipt(destination, receiptPath, receipt, context, kind, shot);
   onUsage(receipt.providerUsage);
@@ -497,7 +575,10 @@ export function createActivityExecutor(options: { ffmpegPath?: string } = {}) {
     const directory = mediaActivityDirectory(context.dataDirectory, context.project.id, context.operationId);
     await mkdir(directory, { recursive: true });
     if (context.node.kind === 'export') {
+      const started = performance.now();
+      context.onDiagnostic?.({ event: 'media.render_started', level: 'info', phase: 'render' });
       const output = await renderProject({ project: context.project, assets: context.assets, outputDirectory: directory, ffmpegPath: options.ffmpegPath, signal: context.signal, onProgress: context.onProgress, preparedAudioMix: context.preparedAudioMix });
+      context.onDiagnostic?.({ event: 'media.render_completed', level: 'info', phase: 'render', durationMs: performance.now() - started });
       const assets = await Promise.all([
         assetFor(output.videoPath, context, 'video'), assetFor(output.coverPath, context, 'image'),
         assetFor(output.subtitlePath, context, 'subtitle'), assetFor(output.timelinePath, context, 'document'),
@@ -534,13 +615,28 @@ export function createActivityExecutor(options: { ffmpegPath?: string } = {}) {
     const modelLimit = execution?.modelLimits[context.model.id] ?? concurrency;
     const assets = await mapMediaShots(context.project.shots, concurrency, context.signal, async (shot, _index, queueSignal, fail) => {
       const existing = context.assets.find(asset => asset.projectId === context.project.id && asset.shotId === shot.id && asset.kind === kind && asset.active);
-      if (!regenerating && shot.locked && existing && await validAsset(existing)) return existing;
+      let phase: MediaDiagnosticEvent['phase'] = 'queue';
+      const diagnostic = (event: MediaDiagnosticEvent) => { phase = event.phase ?? phase; context.onDiagnostic?.({ ...event, shotId: shot.id }); };
+      if (!regenerating && shot.locked && existing && await validAsset(existing)) { diagnostic({ event: 'media.reused', level: 'info', cached: true, assetId: existing.id }); return existing; }
       const instruction = regenerating && typeof context.node.config.instruction === 'string' ? context.node.config.instruction : '';
       const generationShot = instruction && !context.node.prompt.trim().endsWith(instruction.trim()) ? { ...shot, visualPrompt: `${shot.visualPrompt}\n\n本次调整要求：${instruction}` } : shot;
-      return requests.run(context.model!.id, modelLimit, context.queueSignal ? AbortSignal.any([queueSignal, context.queueSignal]) : queueSignal, async () => {
-        try { return await generateMedia(context, directory, generationShot, kind, usage => usages.push(usage)); }
-        catch (error) { context.onFailure?.(error); fail(error); throw error; }
-      });
+      const queued = performance.now(); let started: number | undefined;
+      diagnostic({ event: 'media.queued', level: 'info', phase: 'queue' });
+      try {
+        return await requests.run(context.model!.id, modelLimit, context.queueSignal ? AbortSignal.any([queueSignal, context.queueSignal]) : queueSignal, async () => {
+          started = performance.now();
+          diagnostic({ event: 'media.started', level: 'info', phase: 'generate', queueMs: started - queued });
+          try {
+            const asset = await generateMedia({ ...context, onDiagnostic: diagnostic }, directory, generationShot, kind, usage => usages.push(usage));
+            diagnostic({ event: 'media.completed', level: 'info', phase: 'generate', assetId: asset.id, byteSize: asset.size, durationMs: performance.now() - started });
+            return asset;
+          } catch (error) { context.onFailure?.(error); fail(error); throw error; }
+        });
+      } catch (error) {
+        const canceled = context.signal.aborted || started === undefined && (queueSignal.aborted || context.queueSignal?.aborted);
+        diagnostic({ event: canceled ? 'media.canceled' : 'media.failed', level: canceled ? 'warn' : 'error', phase, durationMs: performance.now() - (started ?? queued), error });
+        throw error;
+      }
     });
     const usage = sumProviderUsage(usages);
     return { assets: assets as unknown as JsonValue, source: 'model', modelId: context.model.id, ...(usage ? { providerUsage: usage as unknown as JsonValue } : {}) };

@@ -13,23 +13,30 @@ export interface DiagnosticLogger {
 }
 
 const levels: LogLevel[] = ['debug', 'info', 'warn', 'error'];
-const identifierFields = new Set(['requestId', 'projectId', 'runId', 'nodeId', 'activityId']);
-const numberFields = new Set(['generation', 'durationMs', 'sequence', 'pendingCount', 'exitCode', 'statusCode', 'childPid']);
+const identifierFields = new Set(['requestId', 'projectId', 'runId', 'nodeId', 'activityId', 'shotId', 'modelId', 'assetId']);
+const numberFields = new Set(['generation', 'durationMs', 'sequence', 'pendingCount', 'exitCode', 'statusCode', 'childPid', 'queueMs', 'byteSize', 'shotCount', 'pollCount', 'retryCount', 'retryDelayMs']);
 const booleanFields = new Set(['packaged', 'cached', 'resumed', 'hasRemoteId']);
 const tokenFields = new Set(['eventType', 'state', 'status', 'previousStatus', 'safety', 'reason', 'signal', 'platform', 'arch', 'component']);
 const versionFields = new Set(['appVersion', 'nodeVersion', 'electronVersion']);
+const enumFields: Record<string, ReadonlySet<string>> = {
+  nodeKind: new Set(['brief', 'research', 'style', 'script', 'assets', 'animation', 'review', 'export', 'agent', 'condition', 'join', 'subflow']),
+  provider: new Set(['openai-compatible', 'ollama', 'custom-http', 'comfyui', 'seedance', 'seedream']),
+  phase: new Set(['queue', 'generate', 'submit', 'poll', 'download', 'validate', 'render']),
+  requestPhase: new Set(['prepare', 'send', 'headers', 'read', 'parse', 'validate']),
+};
 const methodWords = new Set(('workspace snapshot summary project create get update archive restore backup importBackup saveShot shot candidate apply candidates regenerate ' +
   'run list start cancel resume review replay plan events activities diagnostics inspect step payload versions node result model save delete test discover ' +
   'skill import toggle tool register cost task tasks character references workflow workflowTemplate seriesTemplate render batch export research search analyze source read ' +
   'asset select retain waveform caption system status runtime reconnect host secret set audio preview levels silence mix prepare edit history undo redo readiness recovery scan confirm').split(' '));
 const builtinNodeIds = new Set(['brief', 'research', 'style', 'script', 'assets', 'video', 'animation', 'export', 'review', 'join', 'condition', 'subflow', 'agent']);
-const errorNames = new Set(['Error', 'TypeError', 'SyntaxError', 'RangeError', 'ReferenceError', 'AggregateError', 'URIError', 'EvalError', 'AbortError', 'ZodError', 'AmbiguousActivityError', 'ActivityInputChangedError', 'LockedShotChangeError', 'VideoGenerationError']);
+const errorNames = new Set(['Error', 'TypeError', 'SyntaxError', 'RangeError', 'ReferenceError', 'AggregateError', 'URIError', 'EvalError', 'AbortError', 'TimeoutError', 'ZodError', 'AmbiguousActivityError', 'ActivityInputChangedError', 'LockedShotChangeError', 'VideoGenerationError']);
 const errorCodes = new Set([
-  'EACCES', 'EADDRINUSE', 'EADDRNOTAVAIL', 'EAGAIN', 'EBADF', 'EBUSY', 'ECANCELED', 'ECONNABORTED', 'ECONNREFUSED', 'ECONNRESET',
-  'EEXIST', 'EHOSTUNREACH', 'EINTR', 'EINVAL', 'EIO', 'EISDIR', 'ELOOP', 'EMFILE', 'ENAMETOOLONG', 'ENETDOWN', 'ENETUNREACH',
-  'ENFILE', 'ENOENT', 'ENOMEM', 'ENOSPC', 'ENOSYS', 'ENOTDIR', 'ENOTEMPTY', 'ENOTSUP', 'EPERM', 'EPIPE', 'EPROTO', 'EROFS',
+  'EACCES', 'EADDRINUSE', 'EADDRNOTAVAIL', 'EAGAIN', 'EAI_AGAIN', 'EBADF', 'EBUSY', 'ECANCELED', 'ECONNABORTED', 'ECONNREFUSED', 'ECONNRESET',
+  'EEXIST', 'EHOSTDOWN', 'EHOSTUNREACH', 'EINTR', 'EINVAL', 'EIO', 'EISDIR', 'ELOOP', 'EMFILE', 'ENAMETOOLONG', 'ENETDOWN', 'ENETUNREACH',
+  'ENFILE', 'ENOENT', 'ENOMEM', 'ENOSPC', 'ENOSYS', 'ENOTDIR', 'ENOTEMPTY', 'ENOTFOUND', 'ENOTSUP', 'EPERM', 'EPIPE', 'EPROTO', 'EROFS',
   'ESPIPE', 'ESRCH', 'ETIMEDOUT', 'EXDEV', 'ABORT_ERR', 'UND_ERR_SOCKET', 'UND_ERR_CONNECT_TIMEOUT', 'UND_ERR_HEADERS_TIMEOUT',
   'UND_ERR_BODY_TIMEOUT', 'UND_ERR_ABORTED', 'UND_ERR_RES_CONTENT_LENGTH_MISMATCH',
+  'ERR_TLS_CERT_ALTNAME_INVALID', 'CERT_HAS_EXPIRED', 'DEPTH_ZERO_SELF_SIGNED_CERT', 'SELF_SIGNED_CERT_IN_CHAIN', 'UNABLE_TO_VERIFY_LEAF_SIGNATURE',
 ]);
 
 function frameLocation(file: string, line: string, column: string): string {
@@ -53,10 +60,15 @@ function identifier(value: unknown): string | number | undefined {
   return `sha256:${createHash('sha256').update(value).digest('hex').slice(0, 16)}`;
 }
 
-/** Arbitrary exception messages, response bodies, paths and causes never enter automatic logs. */
+/** Only allowlisted classifications and hashed locations survive, including nested causes. */
 export function logError(error: unknown): Record<string, unknown> {
+  return safeError(error, 0, new WeakSet());
+}
+
+function safeError(error: unknown, depth: number, seen: WeakSet<object>): Record<string, unknown> {
   try {
     if (!error || typeof error !== 'object') return { name: 'Error' };
+    seen.add(error);
     const record = error as Record<string, unknown>;
     const result: Record<string, unknown> = { name: typeof record.name === 'string' && errorNames.has(record.name) ? record.name : 'Error' };
     if (typeof record.code === 'string' && errorCodes.has(record.code)) result.code = record.code;
@@ -78,6 +90,13 @@ export function logError(error: unknown): Record<string, unknown> {
         return match ? [frameLocation(match[1], match[2], match[3])] : [];
       });
     }
+    if (depth < 3) {
+      if (record.cause && typeof record.cause === 'object' && !seen.has(record.cause)) result.cause = safeError(record.cause, depth + 1, seen);
+      if (Array.isArray(record.errors)) {
+        const errors = record.errors.slice(0, 3).flatMap(item => item && typeof item === 'object' && !seen.has(item) ? [safeError(item, depth + 1, seen)] : []);
+        if (errors.length) result.errors = errors;
+      }
+    }
     return result;
   } catch { return { name: 'Error' }; }
 }
@@ -91,6 +110,7 @@ function safeFields(fields: Record<string, unknown>): Record<string, unknown> {
     else if (booleanFields.has(key) && typeof value === 'boolean') result[key] = value;
     else if (tokenFields.has(key) && typeof value === 'string' && /^[a-zA-Z][a-zA-Z0-9_.-]{0,79}$/.test(value)) result[key] = value;
     else if (versionFields.has(key) && typeof value === 'string' && /^v?\d+(?:\.\d+){0,3}(?:-[a-zA-Z0-9.]+)?$/.test(value)) result[key] = value;
+    else if (Object.hasOwn(enumFields, key) && typeof value === 'string' && enumFields[key].has(value)) result[key] = value;
     else if (key === 'method') result[key] = safeLogMethod(value);
     else if (key === 'error') result[key] = logError(value);
   }

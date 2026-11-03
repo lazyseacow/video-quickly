@@ -1,3 +1,4 @@
+import { productionStep, saveProduction } from './production-settings';
 import { closeProjectSettings } from './settings';
 import { openProjectFromList } from './workspace-navigation';
 import { randomUUID } from 'node:crypto';
@@ -82,14 +83,14 @@ test('preserves existing 30fps data and keeps complete frame-rate and dimension 
   const project = await rpc<ProjectDocument>(request, 'project.update', { projectId: source.id, revision: source.revision, patch: { shots: [{ id: 'existing-profile-shot', title: '保持现有素材与时长', narration: '', visualPrompt: '', durationUs: 1_000_000, sceneTemplate: createSceneTemplate('process') }] } });
   const observed = observe(page); await page.emulateMedia({ reducedMotion: 'reduce' }); await page.goto('/'); await openProjectFromList(page, project.title);
   expect(await saved(request, project.id)).toEqual(project); await page.locator('.project-heading-actions').getByRole('button', { name: '制作设置', exact: true }).click();
-  const panel = page.getByRole('dialog', { name: '制作设置', exact: true }); await panel.getByRole('tab', { name: '审阅与导出', exact: true }).click();
+  const panel = page.getByRole('dialog', { name: '制作设置', exact: true }); await productionStep(panel, '声音与成片');
   await expect(panel.getByLabel('视频宽度', { exact: true })).toHaveValue('800'); await expect(panel.getByLabel('视频高度', { exact: true })).toHaveValue('1000');
   const rate = await settingField(panel, '视频帧率'); await expect(rate).toHaveValue('30');
   for (const value of ['4:5', '21:9']) await expect(panel.getByLabel('画面比例', { exact: true }).locator(`option[value="${value}"]`)).toHaveCount(1);
   for (const value of ['60', '30']) {
     if (!await panel.count()) await page.locator('.project-heading-actions').getByRole('button', { name: '制作设置', exact: true }).click();
     await settingField(panel, '视频帧率');
-    await rate.selectOption(value); const save = panel.getByRole('button', { name: '保存设置', exact: true }); await expect(save).toBeEnabled(); await save.click();
+    await rate.selectOption(value); await saveProduction(panel);
     await expect.poll(async () => (await saved(request, project.id)).profile.frameRate).toEqual({ numerator: Number(value), denominator: 1 }); await expect(panel).toHaveCount(0);
   }
   const edited = await saved(request, project.id); expect(edited.profile).toEqual(project.profile); expect(edited.shots).toEqual(project.shots);

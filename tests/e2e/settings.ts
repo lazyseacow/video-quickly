@@ -1,3 +1,4 @@
+import { productionStep } from './production-settings';
 import { expect, type Locator, type Page } from '@playwright/test';
 
 export async function addModelConnection(page: Page, type = '文本模型') {
@@ -10,6 +11,9 @@ export async function addModelConnection(page: Page, type = '文本模型') {
 
 async function revealSetting(dialog: Locator, field: Locator) {
   if (await field.count() !== 1) return field;
+  const step = await field.evaluate(element => element.closest<HTMLElement>('[data-production-step]')?.dataset.productionStep);
+  const wizardStep = ([{ id: 'planning', label: '创作要求' }, { id: 'materials', label: '模型与素材' }, { id: 'delivery', label: '声音与成片' }] as const).find(item => item.id === step);
+  if (wizardStep) await productionStep(dialog, wizardStep.label);
   const tab = await field.evaluate(element => element.closest('[role="tabpanel"]')?.getAttribute('aria-labelledby'));
   if (tab) await dialog.locator(`[role="tab"][id="${tab}"]`).click();
   const disclosures = field.locator('xpath=ancestor::details');

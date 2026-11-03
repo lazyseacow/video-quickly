@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { basename, join, relative } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createNativeVideoWorkflow, DEFAULT_VIDEO_PROFILE, type ModelProfile, type ProjectDocument } from '@video-quickly/contracts';
-import { createActivityExecutor, type MediaActivityContext } from './index';
+import { createActivityExecutor, type MediaActivityContext, type MediaDiagnosticEvent } from './index';
 
 const temporaryDirectories: string[] = [];
 const servers: Server[] = [];
@@ -34,6 +34,12 @@ async function listen(handler: RequestListener): Promise<string> {
   const address = server.address();
   if (!address || typeof address === 'string') throw new Error('测试服务地址无效');
   return `http://127.0.0.1:${address.port}`;
+}
+
+async function pollingContextFor(baseUrl: string) {
+  const context = await contextFor(baseUrl);
+  context.model = { ...context.model!, provider: 'custom-http', parameters: { requestPath: 'generate', requestTemplate: { prompt: '{{prompt}}' }, taskIdPath: 'id', pollPath: 'tasks/{{taskId}}', statusPath: 'status', resultUrlPath: 'url', pollTimeoutSeconds: 30 } };
+  return context;
 }
 
 describe('media generation request receipts', () => {
@@ -101,6 +107,141 @@ describe('media generation request receipts', () => {
     expect(submits).toBe(1);
   });
 
+  it('automatically recovers a video progress socket failure using the original task and downloads its result', async () => {
+    let submits = 0, queries = 0, downloads = 0;
+    const video = fixtureNativeVideo(), events: MediaDiagnosticEvent[] = [];
+    const baseUrl = await listen((request, response) => {
+      request.resume();
+      if (request.method === 'POST') { submits++; response.setHeader('Content-Type', 'application/json'); response.end(JSON.stringify({ id: 'original-video' })); }
+      else if (request.url === '/videos/original-video') {
+        if (++queries === 1) { response.destroy(); return; }
+        response.setHeader('Content-Type', 'application/json'); response.end(JSON.stringify({ status: 'completed' }));
+      } else if (request.url === '/videos/original-video/content') { downloads++; response.end(video); }
+      else response.writeHead(404).end();
+    });
+    const context = await contextFor(baseUrl);
+    context.node = context.project.workflow.nodes.find(node => node.id === 'video')!;
+    context.model = { ...context.model!, model: 'fixture-video', capabilities: ['video'], connectionType: 'video' };
+    context.onDiagnostic = event => events.push(event);
+    await expect(createActivityExecutor()(context)).resolves.toMatchObject({ assets: [{ kind: 'video', shotId: 'shot-1' }] });
+    expect({ submits, queries, downloads }).toEqual({ submits: 1, queries: 2, downloads: 1 });
+    expect(events).toContainEqual(expect.objectContaining({ event: 'media.poll_retry_scheduled', phase: 'poll', retryCount: 1 }));
+    expect(events).toContainEqual(expect.objectContaining({ event: 'media.poll_recovered', phase: 'poll', retryCount: 1 }));
+    expect(events.some(event => event.event === 'media.failed')).toBe(false);
+  });
+
+  it.each([429, 503])('automatically retries HTTP %i queries after Retry-After without submitting a replacement', async status => {
+    let submits = 0, queries = 0, baseUrl = '';
+    const queryTimes: number[] = [], events: MediaDiagnosticEvent[] = [];
+    baseUrl = await listen((request, response) => {
+      request.resume(); response.setHeader('Content-Type', 'application/json');
+      if (request.method === 'POST') { submits++; response.end(JSON.stringify({ id: 'original-task' })); }
+      else if (request.url === '/tasks/original-task') {
+        queryTimes.push(performance.now());
+        if (++queries === 1) response.writeHead(status, { 'Retry-After': status === 429 ? '2' : new Date(Date.now() + 3000).toUTCString() }).end();
+        else response.end(JSON.stringify({ status: 'completed', url: `${baseUrl}/image.png` }));
+      } else response.end('recovered-image');
+    });
+    const context = await pollingContextFor(baseUrl); context.onDiagnostic = event => events.push(event);
+    await expect(createActivityExecutor()(context)).resolves.toMatchObject({ assets: [{ kind: 'image' }] });
+    expect({ submits, queries }).toEqual({ submits: 1, queries: 2 });
+    expect(queryTimes[1] - queryTimes[0]).toBeGreaterThanOrEqual(1900);
+    const retry = events.find(event => event.event === 'media.poll_retry_scheduled');
+    expect(retry).toMatchObject({ phase: 'poll', retryCount: 1, statusCode: status });
+    expect(retry?.retryDelayMs).toBeGreaterThanOrEqual(1900); expect(retry?.retryDelayMs).toBeLessThanOrEqual(3000);
+  });
+
+  it('backs off consecutive query failures and resets the delay after a healthy running response', async () => {
+    let submits = 0, queries = 0, baseUrl = '';
+    const events: MediaDiagnosticEvent[] = [];
+    baseUrl = await listen((request, response) => {
+      request.resume(); response.setHeader('Content-Type', 'application/json');
+      if (request.method === 'POST') { submits++; response.end(JSON.stringify({ id: 'original-task' })); }
+      else if (request.url === '/tasks/original-task') {
+        queries++;
+        if ([1, 2, 4].includes(queries)) response.writeHead(503).end();
+        else response.end(JSON.stringify(queries === 3 ? { status: 'running' } : { status: 'completed', url: `${baseUrl}/image.png` }));
+      } else response.end('recovered-image');
+    });
+    const context = await pollingContextFor(baseUrl); context.onDiagnostic = event => events.push(event);
+    await expect(createActivityExecutor()(context)).resolves.toMatchObject({ assets: [{ kind: 'image' }] });
+    expect({ submits, queries }).toEqual({ submits: 1, queries: 5 });
+    expect(events.filter(event => event.event === 'media.poll_retry_scheduled').map(event => event.retryDelayMs)).toEqual([1000, 2000, 1000]);
+    expect(events.filter(event => event.event === 'media.poll_recovered').map(event => event.retryCount)).toEqual([2, 1]);
+  });
+
+  it.each(['401', '403', '404', 'invalid-json', 'task-failed'])('does not retry a permanent %s query failure', async failure => {
+    let submits = 0, queries = 0;
+    const events: MediaDiagnosticEvent[] = [];
+    const baseUrl = await listen((request, response) => {
+      request.resume(); response.setHeader('Content-Type', 'application/json');
+      if (request.method === 'POST') { submits++; response.end(JSON.stringify({ id: 'original-task' })); }
+      else {
+        queries++;
+        if (failure === 'invalid-json') response.end('{');
+        else if (failure === 'task-failed') response.end(JSON.stringify({ status: 'failed' }));
+        else response.writeHead(Number(failure)).end();
+      }
+    });
+    const context = await pollingContextFor(baseUrl); context.onDiagnostic = event => events.push(event);
+    await expect(createActivityExecutor()(context)).rejects.toThrow();
+    expect({ submits, queries }).toEqual({ submits: 1, queries: 1 });
+    expect(events.map(event => event.event)).not.toContain('media.poll_retry_scheduled');
+  });
+
+  it('cancels retry backoff immediately and preserves the original submitted task', async () => {
+    let submits = 0, queries = 0;
+    const controller = new AbortController();
+    const baseUrl = await listen((request, response) => {
+      request.resume(); response.setHeader('Content-Type', 'application/json');
+      if (request.method === 'POST') { submits++; response.end(JSON.stringify({ id: 'original-task' })); }
+      else { queries++; response.writeHead(503, { 'Retry-After': '30' }).end(); }
+    });
+    const context = await pollingContextFor(baseUrl); context.signal = controller.signal;
+    context.onDiagnostic = event => { if (event.event === 'media.poll_retry_scheduled') controller.abort(); };
+    await expect(createActivityExecutor()(context)).rejects.toMatchObject({ name: 'AbortError' });
+    expect({ submits, queries }).toEqual({ submits: 1, queries: 1 });
+    const directory = join(context.dataDirectory, 'projects', context.project.id, 'activities');
+    const [activity] = await readdir(directory), activityPath = join(directory, activity);
+    const receipt = (await readdir(activityPath)).find(name => name.endsWith('.receipt.json'))!;
+    expect(JSON.parse(await readFile(join(activityPath, receipt), 'utf8'))).toMatchObject({ state: 'submitted', taskId: 'original-task' });
+  });
+
+  it('stops retrying at the original query deadline without submitting another task', async () => {
+    let submits = 0, queries = 0, now = Date.now();
+    const baseUrl = await listen((request, response) => {
+      request.resume(); response.setHeader('Content-Type', 'application/json');
+      if (request.method === 'POST') { submits++; response.end(JSON.stringify({ id: 'original-task' })); }
+      else { queries++; now += 31_000; response.writeHead(503).end(); }
+    });
+    const context = await pollingContextFor(baseUrl), clock = vi.spyOn(Date, 'now').mockImplementation(() => now);
+    try {
+      await expect(createActivityExecutor()(context)).rejects.toThrow('已超过本次查询时限');
+      expect({ submits, queries }).toEqual({ submits: 1, queries: 1 });
+    } finally { clock.mockRestore(); }
+  });
+
+  it('bounds an in-flight query by the shared window and keeps a timeout distinct from user cancellation', async () => {
+    let submits = 0, queries = 0;
+    const timeout = new AbortController(), originalTimeout = AbortSignal.timeout.bind(AbortSignal), windowTimeouts: number[] = [];
+    const baseUrl = await listen((request, response) => {
+      request.resume(); response.setHeader('Content-Type', 'application/json');
+      if (request.method === 'POST') { submits++; response.end(JSON.stringify({ id: 'original-task' })); }
+      else { queries++; timeout.abort(new DOMException('Fixture query deadline', 'TimeoutError')); }
+    });
+    const context = await pollingContextFor(baseUrl);
+    const timer = vi.spyOn(AbortSignal, 'timeout').mockImplementation(milliseconds => {
+      if (milliseconds <= 30_000) { windowTimeouts.push(milliseconds); return timeout.signal; }
+      return originalTimeout(milliseconds);
+    });
+    try {
+      await expect(createActivityExecutor()(context)).rejects.toThrow('已超过本次查询时限');
+      expect(context.signal.aborted).toBe(false);
+      expect({ submits, queries }).toEqual({ submits: 1, queries: 1 });
+      expect(windowTimeouts).toHaveLength(1); expect(windowTimeouts[0]).toBeGreaterThan(29_000); expect(windowTimeouts[0]).toBeLessThanOrEqual(30_000);
+    } finally { timer.mockRestore(); }
+  });
+
   it('renews an expired submitted query window without replacing the task or submitting again', async () => {
     let submits = 0, queries = 0, downloads = 0, baseUrl = '';
     baseUrl = await listen((request, response) => {
@@ -108,13 +249,13 @@ describe('media generation request receipts', () => {
       if (request.method === 'POST') { submits++; request.resume(); response.end(JSON.stringify({ id: 'original-task' })); }
       else if (request.url === '/tasks/original-task') {
         queries++;
-        if (queries === 1) response.writeHead(503).end();
+        if (queries === 1) response.writeHead(401).end();
         else response.end(JSON.stringify({ status: 'completed', url: `${baseUrl}/image.png` }));
       } else { downloads++; response.end('recovered-image'); }
     });
     const context = await contextFor(baseUrl);
     context.model = { ...context.model!, provider: 'custom-http', parameters: { requestPath: 'generate', requestTemplate: { prompt: '{{prompt}}' }, taskIdPath: 'id', pollPath: 'tasks/{{taskId}}', statusPath: 'status', resultUrlPath: 'url', pollTimeoutSeconds: 30 } };
-    await expect(createActivityExecutor()(context)).rejects.toThrow('HTTP 503');
+    await expect(createActivityExecutor()(context)).rejects.toThrow('HTTP 401');
     const activities = join(context.dataDirectory, 'projects', context.project.id, 'activities');
     const [activity] = await readdir(activities), activityPath = join(activities, activity);
     const receiptPath = join(activityPath, (await readdir(activityPath)).find(name => name.endsWith('.receipt.json'))!);

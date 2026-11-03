@@ -2,7 +2,7 @@ import { primaryModifier } from '../lib/desktop';
 import { memo, useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { Background, ControlButton, Controls, Handle, Panel, Position, ReactFlow, SelectionMode, addEdge, applyEdgeChanges, applyNodeChanges, type AriaLabelConfig, type Connection, type Edge, type IsValidConnection, type Node, type NodeProps, type NodeTypes, type OnEdgesChange, type OnInit, type OnNodesChange, type OnSelectionChangeFunc, type ReactFlowInstance } from '@xyflow/react';
 import { BookOpen, Check, GitBranch, Image, Layers, Maximize, Mic, Plus, Sparkles, Trash2, Save } from 'lucide-react';
-import { nodeKindSchema, resolveWorkflowStages, type ModelProfile, type ResolvedWorkflowStage, type WorkflowDefinition, type WorkflowNode } from '@video-quickly/contracts';
+import { nodeKindSchema, type ModelProfile, type WorkflowDefinition, type WorkflowNode } from '@video-quickly/contracts';
 import { Button, Field, IconButton, Notice, Select } from '../components/Primitives';
 import ToolBindings from '../components/ToolBindings';
 import WorkflowComposition, { SubflowInputBindings } from '../components/WorkflowComposition';
@@ -40,9 +40,8 @@ interface Props {
   onChange: (workflow: WorkflowDefinition, label: string, group?: string) => void;
   onEndGroup: () => void; onSave: () => Promise<boolean>; onHistory: (direction: 'undo' | 'redo') => void;
   onConfigure?: (node: WorkflowNode) => void;
-  onConfigureStage?: (stage: ResolvedWorkflowStage) => void;
 }
-export default function WorkflowCanvas({ workflow, models, dirty, saving, conflicted, onChange, onEndGroup, onSave, onHistory, onConfigure, onConfigureStage }: Props) {
+export default function WorkflowCanvas({ workflow, models, dirty, saving, conflicted, onChange, onEndGroup, onSave, onHistory, onConfigure }: Props) {
   const [nodes, setNodes] = useState<FlowNode[]>(() => flowNodes(workflow));
   const [edges, setEdges] = useState<Edge[]>(() => flowEdges(workflow));
   const [selectedId, setSelectedId] = useState<string>();
@@ -101,7 +100,6 @@ export default function WorkflowCanvas({ workflow, models, dirty, saving, confli
     workflowRef.current = next; onChange(next, label, group);
   }, [onChange]);
   const selected = nodes.find(node => node.id === selectedId)?.data.node;
-  const selectedStage = selected && workflow.stages?.length ? resolveWorkflowStages(workflow).find(stage => stage.nodeIds.includes(selected.id)) : undefined;
   const stepModels = selected ? matchingStepModels(selected, models) : [];
   const updateSelected = useCallback((patch: Partial<WorkflowNode>) => {
     const next = nodesRef.current.map(node => node.id === selectedId ? { ...node, ariaLabel: `${patch.label ?? node.data.node.label}，${typeLabels[patch.kind ?? node.data.node.kind]}`, data: { node: { ...node.data.node, ...patch } } } : node);
@@ -187,7 +185,6 @@ export default function WorkflowCanvas({ workflow, models, dirty, saving, confli
       <WorkflowComposition workflow={workflow} models={models} onChange={onChange} />
       {selected ? <>
         {onConfigure && <Button className="button-full" onClick={() => onConfigure(selected)}>配置与执行步骤</Button>}
-        {selectedStage && onConfigureStage && <Button className="button-full" onClick={() => onConfigureStage(selectedStage)}>配置所属阶段</Button>}
         <Field label="步骤名称"><input value={selected.label} onChange={event => updateSelected({ label: event.target.value })} /></Field>
         <Field label="步骤类型"><Select value={selected.kind} onChange={event => updateSelected({ kind: nodeKindSchema.parse(event.target.value) })}>{Object.entries(typeLabels).filter(([value]) => value !== 'research' && (workflow.id !== 'native-video' || value !== 'review')).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</Select></Field>
         <Field label="步骤说明"><textarea value={selected.description} onChange={event => updateSelected({ description: event.target.value })} /></Field>

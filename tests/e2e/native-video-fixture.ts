@@ -1,3 +1,4 @@
+import { pickProductionModel } from './production-settings';
 import { randomUUID } from 'node:crypto';
 import { execFile } from 'node:child_process';
 import { createServer } from 'node:http';
@@ -13,7 +14,7 @@ async function rpc<T>(request: APIRequestContext, method: string, params: unknow
 }
 async function saved(request: APIRequestContext, projectId: string) { return (await rpc<{ project: ProjectDocument }>(request, 'project.get', { projectId })).project; }
 async function latest(request: APIRequestContext, projectId: string) { return (await rpc<{ items: RunSummary[] }>(request, 'run.list', { projectId })).items[0]; }
-async function pick(dialog: Locator, label: string, model: ModelProfile) { const control = dialog.getByRole('combobox', { name: label, exact: true }); await control.fill(model.name); await dialog.getByRole('option', { name: model.name, exact: true }).click(); }
+async function pick(dialog: Locator, label: string, model: ModelProfile) { await pickProductionModel(dialog, label, model); }
 async function open(page: Page, project: ProjectDocument) { await page.goto('/'); await openProjectFromList(page, project.title); await page.locator('.project-heading-actions').getByRole('button', { name: '制作设置', exact: true }).click(); const dialog = page.getByRole('dialog', { name: '制作设置', exact: true }); await expect(dialog).toBeVisible(); return dialog; }
 
 async function fixture(request: APIRequestContext, info: TestInfo, hold = false, shotCount = 1) {

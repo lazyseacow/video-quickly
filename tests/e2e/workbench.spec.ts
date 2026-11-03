@@ -1,3 +1,4 @@
+import { saveProduction } from './production-settings';
 import { selectModel, closeProjectSettings } from './settings';
 import { createSceneTemplate, type ProjectDocument } from '@video-quickly/contracts';
 import { openProjectFromList } from './workspace-navigation';
@@ -173,7 +174,7 @@ for (const reducedMotion of ['no-preference', 'reduce'] as const) {
     for (const [ratio, expected] of [['9:16', 9 / 16], ['16:9', 16 / 9]] as const) {
       await (await projectSettingField(page, '画面比例', { exact: true })).selectOption(ratio);
       const settings = page.getByRole('dialog', { name: '制作设置', exact: true });
-      await settings.getByRole('button', { name: '保存设置', exact: true }).click(); await expect(settings).toHaveCount(0);
+      await saveProduction(settings); await expect(settings).toHaveCount(0);
       const frame = await page.locator('.preview-frame').boundingBox();
       expect(frame).not.toBeNull();
       if (!frame) throw new Error('预览框不可见');
@@ -308,7 +309,7 @@ test('edits real project state, output profiles, graph and theme', async ({ page
   await expect((await projectSettingField(page, '视频宽度'))).toHaveValue('1080');
   await expect((await projectSettingField(page, '视频高度'))).toHaveValue('1920');
   const profileSaved = page.waitForResponse(response => response.url().endsWith('/__desktop_rpc') && response.status() === 200 && response.request().postDataJSON()?.method === 'project.update' && response.request().postDataJSON()?.params.projectId === 'example-history');
-  await page.getByRole('button', { name: '保存设置', exact: true }).click();
+  await saveProduction(page.getByRole('dialog', { name: '制作设置', exact: true }));
   expect((await (await profileSaved).json()).error).toBeUndefined();
   await page.reload();
   await expect((await projectSettingField(page, '视频帧率'))).toHaveValue('60');

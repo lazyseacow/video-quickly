@@ -6,9 +6,9 @@
 .workbench-guide__heading p { margin: 0; }
 .workbench-guide__actions { flex-shrink: 0; flex-wrap: wrap; }
 .workbench-guide .button { min-height: var(--control-hit-size); }
-.workbench-guide__steps { display: flex; gap: var(--space-2); list-style: none; padding: 0; margin: var(--space-3) 0; max-width: 100%; overflow-x: auto; }
+.workbench-guide__steps { display: flex; gap: var(--space-2); list-style: none; padding: 0; margin: 0; max-width: 100%; overflow-x: auto; }
 .workbench-guide__steps li { flex: 0 0 180px; }
-.workbench-guide__steps--stages { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 180px), 1fr)); overflow: visible; }
+.workbench-guide__steps--stages { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); overflow: visible; }
 .workbench-guide__steps--stages li { min-width: 0; }
 .workbench-guide__card { display: grid; grid-template-columns: minmax(0, 1fr) auto; border: 1px solid var(--border); border-radius: var(--radius-small); background: var(--surface); color: var(--text); }
 .workbench-guide__step { display: flex; align-items: flex-start; gap: var(--space-2); width: 100%; height: 100%; min-width: 0; min-height: var(--control-hit-size); padding: var(--space-3); border: 0; border-radius: inherit; background: transparent; color: inherit; text-align: left; }
@@ -32,4 +32,5 @@
   .workbench-guide__heading { align-items: flex-start; flex-direction: column; }
   .workbench-guide .button { min-height: 44px; }
   .workbench-guide__steps li { flex-basis: 168px; }
+  .workbench-guide__steps--stages { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }

@@ -1,11 +1,14 @@
 import { getModelConnectionType, requestModelParameters, textProtocols, validateModelParameters, type JsonValue, type ModelDiscovery, type ModelProfile, type ProviderUsage } from '@video-quickly/contracts';
 
+export type ModelRequestPhase = 'prepare' | 'send' | 'headers' | 'read' | 'parse' | 'validate';
+
 export interface TextGenerationRequest {
   model: ModelProfile;
   secret?: string;
   prompt: string;
   operationId: string;
   signal?: AbortSignal;
+  onRequestPhase?: (phase: ModelRequestPhase) => void;
 }
 
 export interface TextGenerationResult { text: string; usage?: ProviderUsage }
@@ -63,7 +66,8 @@ function textBlocks(value: unknown, type: 'text' | 'output_text'): string {
   return value.flatMap(block => block && typeof block === 'object' && block.type === type && typeof block.text === 'string' ? [block.text] : []).join('\n');
 }
 
-export async function readModelResponse(response: Response): Promise<unknown> {
+export async function readModelResponse(response: Response, onRequestPhase?: TextGenerationRequest['onRequestPhase']): Promise<unknown> {
+  onRequestPhase?.('read');
   const maximum = 4 * 1024 * 1024;
   if (Number(response.headers.get('content-length')) > maximum) { await response.body?.cancel(); throw new Error('模型文本结果超过 4 MB，请缩小请求范围。'); }
   if (!response.body) throw new Error('模型未返回响应内容。');
@@ -71,14 +75,17 @@ export async function readModelResponse(response: Response): Promise<unknown> {
   try {
     for (;;) { const item = await reader.read(); if (item.done) break; size += item.value.byteLength; if (size > maximum) { await reader.cancel(); throw new Error('模型文本结果超过 4 MB，请缩小请求范围。'); } chunks.push(item.value); }
   } finally { reader.releaseLock(); }
-  return JSON.parse(Buffer.concat(chunks, size).toString('utf8'));
+  const text = Buffer.concat(chunks, size).toString('utf8');
+  onRequestPhase?.('parse');
+  return JSON.parse(text);
 }
 
-export const generateText: TextProvider = async ({ model, secret, prompt, operationId, signal }) => {
+export const generateText: TextProvider = async ({ model, secret, prompt, operationId, signal, onRequestPhase }) => {
+  onRequestPhase?.('prepare');
   const ollama = model.provider === 'ollama';
   const protocol = model.textProtocol ?? 'chat-completions';
   const requestUrl = modelEndpoint(model.baseUrl, ollama ? 'api/chat' : textProtocols.find(item => item.id === protocol)!.path);
-  const response = await fetch(requestUrl, {
+  const request = {
     method: 'POST',
     headers: { ...modelHeaders(model, secret), 'X-Client-Request-Id': operationId },
     body: JSON.stringify({
@@ -89,9 +96,13 @@ export const generateText: TextProvider = async ({ model, secret, prompt, operat
       stream: false,
     }),
     signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(120_000)]) : AbortSignal.timeout(120_000),
-  });
-  if (!response.ok) throw new Error(`模型服务返回 HTTP ${response.status}，请检查服务地址、模型及访问权限。`);
-  const data = await readModelResponse(response);
+  };
+  onRequestPhase?.('send');
+  const response = await fetch(requestUrl, request);
+  onRequestPhase?.('headers');
+  if (!response.ok) { await response.body?.cancel(); throw Object.assign(new Error(`模型服务返回 HTTP ${response.status}，请检查服务地址、模型及访问权限。`), { status: response.status }); }
+  const data = await readModelResponse(response, onRequestPhase);
+  onRequestPhase?.('validate');
   if (!data || typeof data !== 'object') throw new Error('模型服务返回了无效结果。');
   const value = data as Record<string, unknown>;
   if (!ollama && protocol === 'responses') {
@@ -118,7 +129,7 @@ export async function testModelConnection(model: ModelProfile, secret?: string) 
 
   const route = model.provider === 'ollama' ? 'api/tags' : model.provider === 'comfyui' ? 'system_stats' : 'models';
   const response = await fetch(modelEndpoint(model.baseUrl, route), { headers: { ...modelHeaders(model, secret), ...(model.platform === 'anthropic' ? { 'anthropic-version': '2023-06-01', ...(secret ? { 'x-api-key': secret } : {}) } : {}) }, signal: AbortSignal.timeout(15_000) });
-  if (!response.ok) throw new Error(`连接检查返回 HTTP ${response.status}。`);
+  if (!response.ok) { await response.body?.cancel(); throw Object.assign(new Error(`连接检查返回 HTTP ${response.status}。`), { status: response.status }); }
   const data: unknown = await response.json();
   const entries = data && typeof data === 'object' ? data as Record<string, unknown> : {};
   const rows = model.provider === 'ollama' ? entries.models : entries.data;
@@ -165,7 +176,7 @@ export async function discoverModels(model: ModelProfile, secret?: string): Prom
     const url = new URL(modelEndpoint(model.baseUrl, model.provider === 'ollama' ? 'api/tags' : 'models'));
     if (model.textProtocol === 'messages') { url.searchParams.set('limit', '1000'); if (after) url.searchParams.set('after_id', after); }
     const response = await fetch(url, { headers: { ...modelHeaders(model, secret), ...(model.platform === 'anthropic' ? { 'anthropic-version': '2023-06-01', ...(secret ? { 'x-api-key': secret } : {}) } : {}) }, signal });
-    if (!response.ok) { await response.body?.cancel(); throw new Error('读取模型列表返回 HTTP ' + response.status); }
+    if (!response.ok) { await response.body?.cancel(); throw Object.assign(new Error('读取模型列表返回 HTTP ' + response.status), { status: response.status }); }
     const data = await readModelResponse(response);
     if (!data || typeof data !== 'object') throw new Error('模型列表格式无效。');
     const value = data as Record<string, unknown>, rows = Array.isArray(value.data) ? value.data : value.models;

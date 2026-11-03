@@ -6,6 +6,7 @@ import { spawnSync } from 'node:child_process';
 import { isDeepStrictEqual } from 'node:util';
 import { z } from 'zod';
 import { readResearchSource, searchWikipedia, selectResearchPassages, parseResearchResult } from '@video-quickly/integrations/research';
+import type { MediaDiagnosticEvent } from '@video-quickly/integrations';
 import { SqliteSaver } from '@langchain/langgraph-checkpoint-sqlite';
 import {
   MAX_REFERENCE_AUDIO_BYTES, applyShotCandidate, assetSchema, audioWaveformSchema, characterProfileSchema, claimSchema, clipSourceAssetIds, DEFAULT_VIDEO_PROFILE, LockedShotChangeError, modelSchema, pageInputSchema, projectSchema, providerUsageSchema, sumProviderUsage, runSelectionSchema, runStatusSchema, shotCandidateFieldSchema, shotCandidateKindSchema, shotCandidateSchema, shotSchema, validateClipEditContent, validateClipEditHistory, validateModelConnection, getModelCapabilities, validateModelParameters, videoProfileSchema, workflowSchema,
@@ -20,7 +21,7 @@ import { validateWorkflowComposition, workflowNodesWithSubflows, workflowEdgesWi
 import { createWorkflowTemplateLibrary } from './workflow-templates.js';
 import { buildWorkflowPrompt, parseWorkflowShots, type WorkflowUpstreamResult } from './workflow-prompts.js';
 import { executeMediaGraph } from './media-graph.js';
-import { discoverModels, generateText, testModelConnection, type TextProvider } from './providers.js';
+import { discoverModels, generateText, testModelConnection, type ModelRequestPhase, type TextProvider } from './providers.js';
 import { seedExampleProject } from './seed.js';
 import { createNativeVideoWorkflow, resolveProductionWorkflow, isVideoGenerationNode, DEFAULT_AUDIO_PROCESSING } from '@video-quickly/contracts';
 import { importSkill } from './skills.js';
@@ -65,6 +66,7 @@ export interface ActivityExecutionContext {
   apiKey?: string;
   characters?: CharacterProfile[];
   onProgress?: (value: number) => void;
+  onDiagnostic?: (event: MediaDiagnosticEvent) => void;
   preparedAudioMix?: PreparedAudioMix;
   persistRemoteTask(id: string): void;
 }
@@ -110,6 +112,12 @@ const runIdInput = z.object({ runId: z.string().min(1) });
 const regenerationInput = z.object({ shotId: z.string().min(1), kind: shotCandidateKindSchema, modelId: z.string().min(1).optional(), instruction: z.string().max(10_000).optional() });
 const researchInput = z.object({ modelId: z.string().min(1), sourceIds: z.array(z.string().min(1)).min(1).max(20).optional(), instruction: z.string().max(10_000).optional() });
 const now = () => new Date().toISOString();
+
+function rpcIdentifiers(value: unknown): Record<string, string> {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
+  return Object.fromEntries(Object.entries(value).filter((entry): entry is [string, string] =>
+    ['projectId', 'runId', 'nodeId', 'shotId', 'modelId', 'assetId'].includes(entry[0]) && typeof entry[1] === 'string'));
+}
 
 const regenerationKinds = {
   script: { nodeKind: 'script', capability: 'text', label: '脚本', protocols: ['openai-compatible', 'ollama', 'custom-http'] },
@@ -525,8 +533,26 @@ export function createRuntime(options: RuntimeOptions) {
   }
 
   async function executeNode(runId: string, inputNode: WorkflowNode, saved: RunSnapshot, controller: AbortController): Promise<JsonValue> {
-    if (controller.signal.aborted || run(runId).status === 'canceled') throw new Error('任务已停止。');
+    const started = performance.now();
     const node = store.get<WorkflowNode>('node-definition', `${runId}:${inputNode.id}`) ?? inputNode;
+    const model = saved.models.find(model => model.id === node.modelId);
+    const nodeLogger = logger.child({ runId, projectId: saved.project.id, nodeId: node.id, nodeKind: node.kind, modelId: model?.id, provider: model?.provider });
+    nodeLogger.info('node.execution_started');
+    try {
+      const result = await executeNodeWork(runId, node, saved, controller, nodeLogger);
+      nodeLogger.info('node.execution_completed', { durationMs: performance.now() - started });
+      return result;
+    } catch (error) {
+      if (!(error instanceof SimulatedProcessExit)) {
+        const canceled = controller.signal.aborted || run(runId).status === 'canceled';
+        nodeLogger[canceled ? 'warn' : 'error'](canceled ? 'node.execution_canceled' : 'node.execution_failed', { durationMs: performance.now() - started, error: logError(error) });
+      }
+      throw error;
+    }
+  }
+
+  async function executeNodeWork(runId: string, node: WorkflowNode, saved: RunSnapshot, controller: AbortController, nodeLogger: DiagnosticLogger): Promise<JsonValue> {
+    if (controller.signal.aborted || run(runId).status === 'canceled') throw new Error('任务已停止。');
     store.put('node-definition', `${runId}:${node.id}`, node);
     if (node.kind === 'subflow') return executeSubflow(runId, node, saved, controller);
     updateRun(runId, { status: 'running', currentNodeId: node.id, error: undefined });
@@ -586,8 +612,21 @@ export function createRuntime(options: RuntimeOptions) {
     try {
     const result = await journal.execute(runId, node.id, input, safety, async context => {
       if (usesProvider) {
+        const generate = async () => {
+          const started = performance.now();
+          let requestPhase: ModelRequestPhase | undefined;
+          nodeLogger.info('provider.request_started', { phase: 'submit' });
+          try {
+            const result = await (options.provider ?? generateText)({ model: selectedModel, secret, prompt, operationId: context.operationId, signal: controller.signal, onRequestPhase: phase => { requestPhase = phase; } });
+            nodeLogger.info('provider.request_completed', { durationMs: performance.now() - started });
+            return result;
+          } catch (error) {
+            nodeLogger[controller.signal.aborted ? 'warn' : 'error']('provider.request_failed', { requestPhase, durationMs: performance.now() - started, error: logError(error) });
+            throw error;
+          }
+        };
         const generated = researchContext
-          ? await researchModelResponse({ dataDirectory: directory, projectId: executionProject.id, operationId: context.operationId, inputHash: fingerprint({ prompt, model: selectedModel }), recordReceipt: context.recordRemoteId, generate: () => (options.provider ?? generateText)({ model: selectedModel, secret, prompt, operationId: context.operationId, signal: controller.signal }) })
+          ? await researchModelResponse({ dataDirectory: directory, projectId: executionProject.id, operationId: context.operationId, inputHash: fingerprint({ prompt, model: selectedModel }), recordReceipt: context.recordRemoteId, generate })
           : deepAgent
           ? await (async () => {
               context.recordRemoteId(`langgraph:${runId}:${node.id}:agent`);
@@ -596,7 +635,7 @@ export function createRuntime(options: RuntimeOptions) {
               const mcpServers = await Promise.all((saved.mcpServers ?? []).filter(server => server.enabled && selectedServers.includes(server.id)).map(async server => ({ ...server, secret: server.credentialRef ? rememberSecret(await options.secretStore?.get(server.credentialRef)) : undefined })));
               return executeDeepAgent({ database, model: selectedModel, secret, prompt, signal: controller.signal, runId, nodeId: node.id, project: executionProject, skills: saved.skills.filter(skill => skill.enabled && node.skillIds.includes(skill.id)), mcpServers, dataDirectory: directory, failpoint: options.failpoint, costs });
             })()
-          : await (options.provider ?? generateText)({ model: selectedModel, secret, prompt, operationId: context.operationId, signal: controller.signal });
+          : await generate();
         const text = typeof generated === 'string' ? generated : generated.text;
         if (!text.trim()) throw new Error('模型没有返回可用内容，请检查模型配置后重试。');
         const usage = typeof generated === 'string' ? undefined : generated.usage;
@@ -608,6 +647,7 @@ export function createRuntime(options: RuntimeOptions) {
         const batch = saved.exportBatch;
         const executeActivity = options.executeActivity;
         const activityContext: ActivityExecutionContext = { project: executionProject, node, runId, operationId: context.operationId, signal: controller.signal, remoteTaskId: context.remoteId, persistRemoteTask: context.recordRemoteId, dataDirectory: directory, assets: activityAssets, model: selectedModel, apiKey: secret, characters: executionCharacters,
+          onDiagnostic: ({ event, level, ...fields }) => nodeLogger[level](event, { ...fields, shotCount: executionProject.shots.length }),
           ...(node.kind === 'export' ? { preparedAudioMix: audioPreview.ready(executionProject, activityAssets) } : {}),
           ...(batch ? { onProgress: value => batches.progress(batch.batchId, batch.targetId, value) } : {}) };
         let output: JsonValue;
@@ -824,17 +864,19 @@ export function createRuntime(options: RuntimeOptions) {
   });
 
   function dispatch(method: string, rawParams: unknown = {}, context?: { requestId?: string | number }): Promise<unknown> {
-    const requestLogger = logger.child({ requestId: context?.requestId ?? randomUUID(), method });
+    const requestLogger = logger.child({ ...rpcIdentifiers(rawParams), requestId: context?.requestId ?? randomUUID(), method });
     const started = performance.now();
-    requestLogger.debug('rpc.started');
+    const read = /\.(?:get|list|summary|snapshot|inspect|payload|versions|plan|replay|status|read|references|tasks|events|activities|candidates|voices|waveform|result)$/.test(method);
+    requestLogger[read ? 'debug' : 'info']('rpc.started');
     return trackWork(async () => {
       try {
         const result = await dispatchRequest(method, rawParams);
-        const runId = ['run.start', 'run.resume', 'run.cancel', 'run.get'].includes(method) && result && typeof result === 'object' && 'id' in result && typeof result.id === 'string' ? result.id : undefined;
-        const fields = { durationMs: Math.round(performance.now() - started), runId };
+        const idField = { 'project.create': 'projectId', 'project.importBackup': 'projectId', 'run.start': 'runId', 'run.resume': 'runId', 'run.cancel': 'runId', 'model.save': 'modelId' }[method];
+        const created = idField && result && typeof result === 'object' && 'id' in result && typeof result.id === 'string' ? { [idField]: result.id } : {};
+        const fields = { ...rpcIdentifiers(result), ...created, durationMs: Math.round(performance.now() - started) };
         // Polling and read models belong to debug; successful user changes
         // remain visible at the default info level without their payloads.
-        if (/\.(?:get|list|summary|snapshot|inspect|payload|versions|plan|replay|status|read|references|tasks|events|activities|candidates|voices|waveform|result)$/.test(method)) requestLogger.debug('rpc.completed', fields);
+        if (read) requestLogger.debug('rpc.completed', fields);
         else requestLogger.info('rpc.completed', fields);
         return result;
       } catch (error) {

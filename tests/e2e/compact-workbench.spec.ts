@@ -1,3 +1,4 @@
+
 import { expect, type APIRequestContext } from '@playwright/test';
 import { createSceneTemplate, type ProjectDocument } from '@video-quickly/contracts';
 import { test } from './isolated-workspace';
@@ -27,15 +28,15 @@ for (const viewport of [{ width: 1536, height: 960, theme: 'light' }, { width: 1
     await page.screenshot({ path: info.outputPath(`compact-projects-${viewport.theme}-${viewport.width}.png`) });
     await card.getByRole('button', { name: '继续创作', exact: true }).click();
     const guide = page.getByRole('region', { name: '制作指引', exact: true }); await expect(guide.locator('.workbench-guide__step')).toHaveCount(4); await expect(guide).not.toContainText('人工审阅'); await expect(guide).not.toContainText('审阅点');
-    await guide.getByRole('button', { name: '打开阶段：策划与分镜', exact: true }).click();
+    await page.getByRole('button', { name: '制作设置', exact: true }).click();
     const dialog = page.getByRole('dialog', { name: '制作设置', exact: true }); await expect(dialog).toBeVisible();
-    await expect(dialog.getByRole('group', { name: '制作视图', exact: true }).getByRole('button')).toHaveText(['制作设置', '本次制作']);
-    await expect(dialog.getByRole('tablist', { name: '制作阶段设置', exact: true }).getByRole('tab')).toHaveText(['策划与分镜', '素材与配音', '剪辑与动画', '审阅与导出']); await expect(dialog.getByRole('region', { name: '步骤指引', exact: true })).toHaveCount(0);
+    await expect(dialog.getByRole('group', { name: '制作视图', exact: true })).toHaveCount(0);
+    await expect(dialog.getByRole('navigation', { name: '制作设置步骤', exact: true }).getByRole('button')).toHaveText(['1创作要求', '2模型与素材', '3声音与成片', '4确认保存']); await expect(dialog.getByRole('region', { name: '步骤指引', exact: true })).toHaveCount(0);
     await expect(dialog.getByText(/本步产出|前置步骤|后续步骤|一次确定创作方向|完成后等待人工审阅|资料与史实/)).toHaveCount(0);
     await expect(dialog.getByRole('checkbox', { name: /人工审核|人工审阅/ })).toHaveCount(0); expect((await dialog.locator('.dialog__surface').boundingBox())!.height).toBeLessThanOrEqual(viewport.height);
     await dialog.locator('summary:visible').click();
     const prompt = dialog.getByLabel('创意简报补充要求', { exact: true }); await prompt.fill('精简弹窗也保留可编辑的配置');
-    const save = dialog.getByRole('button', { name: '保存设置', exact: true }); await expect(save).toBeInViewport({ ratio: 1 });
+    await dialog.getByRole('button', { name: '确认保存', exact: true }).click(); const save = dialog.getByRole('button', { name: '保存设置', exact: true }); await expect(save).toBeInViewport({ ratio: 1 });
     await page.screenshot({ path: info.outputPath(`compact-planning-${viewport.theme}-${viewport.width}.png`) }); await save.click(); await expect(dialog).toHaveCount(0);
     const saved = (await rpc<{ project: ProjectDocument }>(request, 'project.get', { projectId: project.id })).project;
     expect(saved.workflow.nodes.find(node => node.id === 'brief')?.prompt).toBe('精简弹窗也保留可编辑的配置');

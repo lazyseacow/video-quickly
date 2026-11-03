@@ -63,8 +63,7 @@ for (const viewport of [{ width: 1536, height: 960, theme: 'dark' }, { width: 39
       await expect(panel.getByRole('button', { name: /通过审阅|停止并修改/ })).toHaveCount(0);
       await expect(panel).not.toContainText('等待审阅'); await expect(page.locator('vite-error-overlay')).toHaveCount(0); await expect(page).toHaveTitle(/Video Quickly/);
       await panel.getByRole('list', { name: '制作步骤进度', exact: true }).getByRole('button', { name: '打开步骤：风格确认', exact: true }).click();
-      const detail = page.getByRole('dialog', { name: '制作设置', exact: true });
-      await detail.getByRole('button', { name: '本次制作', exact: true }).click();
+      const detail = page.getByRole('dialog', { name: '本次制作', exact: true });
       await expect(detail.getByRole('region', { name: '步骤详情：风格确认', exact: true })).toBeVisible();
       await detail.getByRole('tab', { name: '制作信息', exact: true }).click(); await expect(detail).not.toContainText('人工审阅');
       await detail.getByRole('button', { name: '关闭对话框', exact: true }).click();
@@ -100,7 +99,7 @@ for (const viewport of [{ width: 1536, height: 960, theme: 'dark' }, { width: 39
     await expect(page.getByRole('button', { name: '停止制作', exact: true })).toHaveCount(1); await expect(panel.getByRole('button', { name: '停止制作', exact: true })).toHaveCount(0);
     expect(await control.evaluate((button, original) => button === original, originalControl)).toBe(true); const stopBounds = await control.boundingBox(); expect(stopBounds).not.toBeNull(); expect(Math.abs(stopBounds!.width - startBounds!.width)).toBeLessThan(1);
     await panel.locator('.workbench-guide__step[aria-current="step"]').click();
-    const detail = page.getByRole('dialog', { name: '制作设置', exact: true }); await expect(detail).toContainText('风格确认'); await detail.getByRole('button', { name: '本次制作', exact: true }).click(); await expect(detail.getByRole('navigation', { name: '本阶段制作步骤', exact: true })).toContainText('风格确认'); await detail.getByRole('button', { name: '关闭对话框', exact: true }).click(); await expect(detail).toHaveCount(0);
+    const detail = page.getByRole('dialog', { name: '本次制作', exact: true }); await expect(detail).toContainText('风格确认'); await expect(detail.getByRole('navigation', { name: '本阶段制作步骤', exact: true })).toContainText('风格确认'); await detail.getByRole('button', { name: '关闭对话框', exact: true }).click(); await expect(detail).toHaveCount(0);
     await page.getByLabel('镜头标题', { exact: true }).fill('停止时保留的镜头草稿');
     await expect(page.getByLabel('镜头标题', { exact: true })).toHaveValue('停止时保留的镜头草稿'); await expect(page.locator('.unsaved-dot')).toBeVisible();
     await control.scrollIntoViewIfNeeded(); await page.screenshot({ path: info.outputPath(`top-production-stop-${viewport.width}.png`) });
