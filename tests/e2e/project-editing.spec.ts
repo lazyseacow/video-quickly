@@ -1,3 +1,4 @@
+import { confirmAction } from './confirmation-actions';
 import { openProjectFromList } from './workspace-navigation';
 import { setWorkspaceTheme } from './workspace-settings';
 import { createServer } from 'node:http';
@@ -48,7 +49,7 @@ test('undoes and redoes grouped input, ordering, duplication and deletion with m
   await page.getByRole('button', { name: '复制镜头', exact: true }).click();
   await expect(page.locator('.outline-shot')).toHaveCount(3);
   await expect(page.getByRole('button', { name: '保存镜头', exact: true })).toBeDisabled();
-  await page.getByRole('button', { name: '移除所选镜头', exact: true }).click();
+  await page.getByRole('button', { name: '移除所选镜头', exact: true }).click(); await confirmAction(page, '确认移除');
   await expect(page.locator('.outline-shot')).toHaveCount(2);
   for (const count of [3, 2, 2]) {
     await expect(page.getByRole('button', { name: '保存镜头', exact: true })).toBeDisabled();

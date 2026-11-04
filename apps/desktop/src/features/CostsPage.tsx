@@ -71,7 +71,7 @@ function TokenTotals({ summary }: { summary: CostSummary }) {
   return <><div className="cost-totals">{tokenMetrics.map(metric => <div className="cost-metric" key={metric} data-metric={metric}><h3>{labels[metric]}</h3><TokenAmount summary={summary} metric={metric} /></div>)}</div><p className="token-legend">— 未返回；* 部分返回。缓存用量单独统计。</p></>;
 }
 
-function TaskUsage({ runId, version, onBack, onTaskUpdated }: { runId: string; version: number; onBack: () => void; onTaskUpdated: (task: CostTaskDetail) => void }) {
+export function TaskUsage({ runId, version, onBack, onTaskUpdated, backLabel = '返回任务归档' }: { runId: string; version: number; onBack: () => void; onTaskUpdated: (task: CostTaskDetail) => void; backLabel?: string }) {
   const records = useRecordPage('cost.list', { runId, limit: 30 }, version, recordsSchema);
   const [task, setTask] = useState<CostTaskDetail>();
   const [error, setError] = useState('');
@@ -85,7 +85,7 @@ function TaskUsage({ runId, version, onBack, onTaskUpdated }: { runId: string; v
   }, [runId, version, reload, onTaskUpdated]);
   function refresh() { records.refresh(); setReload(value => value + 1); }
   return <div className="cost-task-detail">
-    <button aria-label="返回任务归档" ref={back} type="button" className="button button--ghost cost-back" onClick={onBack}><ArrowLeft size={16} />返回</button>
+    <button aria-label={backLabel} ref={back} type="button" className="button button--ghost cost-back" onClick={onBack}><ArrowLeft size={16} />{backLabel}</button>
     <div className="page-heading"><div><h1>任务用量详情</h1><p>{task ? task.title : '正在读取任务用量…'}</p></div><Button aria-label="刷新详情" variant="ghost" busy={records.busy} onClick={refresh}><RefreshCw size={15} />刷新</Button></div>
     {(records.error || error) && <Notice kind="error">{records.error || error}</Notice>}
     {task && <section className="cost-task-overview" aria-label="任务 Token 汇总"><div className="cost-record__heading"><h2>{task.projectTitle}</h2>{task.status && <Status value={task.status} />}</div><dl className="cost-task-meta"><div><dt>任务编号</dt><dd>{task.id}</dd></div><div><dt>开始时间</dt><dd>{date(task.createdAt)}</dd></div>{task.projectRevision !== undefined && <div><dt>项目修订</dt><dd>{task.projectRevision} · 流程 v{task.workflowVersion}</dd></div>}{task.parentRunId && <div><dt>来源任务</dt><dd>{task.parentRunId}</dd></div>}</dl><TokenTotals summary={task.summary} />{!task.runAvailable && <Notice>原任务记录已不可用，已归档用量仍可查看。</Notice>}</section>}

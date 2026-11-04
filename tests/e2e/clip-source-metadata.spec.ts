@@ -115,7 +115,7 @@ test('blocks trimming throughout source replacement loading and decode failure w
     await route.continue();
   });
   try {
-    await page.getByLabel('旁白音频', { exact: true }).selectOption(bad.id);
+    await rpc(request, 'asset.select', { projectId: project.id, revision: project.revision, shotId: project.shots[0].id, assetId: bad.id });
     await expect(page.locator('.clip-timing [role=status]')).toContainText('正在读取素材时长');
     const outPoint = page.getByLabel('素材出点（秒）', { exact: true });
     const apply = page.getByRole('button', { name: '应用入出点', exact: true });

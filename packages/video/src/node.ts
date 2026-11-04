@@ -9,6 +9,7 @@ import { buildTimeline, captionGeometry, captionPages, createSubtitleCues, creat
 import { clipEditSource, resolveShotSpans } from './clip-edits.js';
 import { audioMixProjectionKey, prepareAudioMix, resolveAudioProject } from './audio-mix.js';
 import { createRenderSchedule, type RenderClipSchedule } from './render-schedule.js';
+import { createTransitionTimeline, FFMPEG_TRANSITIONS, TRANSITION_DURATION_US } from './transitions.js';
 import { resolveCaptionLayout, selectCaptionFont } from './caption-layout.js';
 import { createCaptionAss } from './caption-ass.js';
 import { hashMediaFile, probeMedia, runMedia } from './media-process.js';
@@ -116,6 +117,7 @@ export async function renderProject(options: RenderOptions): Promise<RenderResul
   mix ??= await prepareAudioMix({ project: options.project, assets: options.assets ?? [], outputDirectory: join(options.outputDirectory, 'audio'), ffmpegPath: ffmpeg, ffprobePath: ffprobe, signal: options.signal });
   const warnings: string[] = [...mix.warnings];
   const schedule = createRenderSchedule(shots, profile.frameRate);
+  const visualClips = createTransitionTimeline(shots, profile.frameRate).clips;
   const captionLayoutFor=(shot:Shot)=>resolveCaptionLayout(profile.width,profile.height,shot.captionStyle,{template:Boolean(shot.sceneTemplate)});
   const captionFontFor=(shot:Shot)=>selectCaptionFont(shot.captionStyle?.fontId??'sans',name=>GlobalFonts.has(name));
   const segments:string[]=[];
@@ -124,6 +126,7 @@ export async function renderProject(options: RenderOptions): Promise<RenderResul
     const imageAsset=!shot.sceneTemplate&&shot.assetId?assets.get(shot.assetId):undefined;
     const videoAsset=!shot.sceneTemplate&&shot.videoAssetId?assets.get(shot.videoAssetId):undefined;
     const timing = schedule[index];
+    if (!timing.frameCount) { options.onProgress?.((index + 1) / shots.length); continue; }
     for (const asset of [imageAsset, videoAsset]) if (asset) {
       if (!asset.active || (asset.projectId !== undefined && asset.projectId !== project.id)) throw new Error('画面必须引用当前项目或共享素材库中的有效素材。');
       if (await hashMediaFile(asset.path, options.signal) !== asset.sha256) throw new Error(`素材“${asset.name}”校验失败，请重新导入文件`);
@@ -196,19 +199,21 @@ export async function renderProject(options: RenderOptions): Promise<RenderResul
   segments.forEach(segment=>finalArgs.push('-i',segment));
   finalArgs.push('-i',mix.path);
   const filters:string[]=[];
-  shots.forEach((shot,index)=>{
-    const next=shots[index+1];const extend=next&&next.animation.transition!=='cut'?.2:0;
-    filters.push(`[${index}:v]setsar=1,settb=AVTB,setpts=N*1000000*${profile.frameRate.denominator}/${profile.frameRate.numerator},trim=end_frame=${schedule[index].frameCount}${extend?`,tpad=stop_mode=clone:stop_duration=${extend}`:''}[v${index}]`);
+  visualClips.forEach((clip,index)=>{
+    const extend=clip.padFrames?TRANSITION_DURATION_US/1_000_000:0;
+    filters.push(`[${index}:v]setsar=1,settb=AVTB,setpts=N*1000000*${profile.frameRate.denominator}/${profile.frameRate.numerator},trim=end_frame=${clip.frameCount}${extend?`,tpad=stop_mode=clone:stop_duration=${extend}`:''}[v${index}]`);
   });
   let current='v0';
-  for(let index=1;index<shots.length;index++){
-    const output=`joined${index}`, offset=schedule[index].firstFrame*profile.frameRate.denominator/profile.frameRate.numerator;
-    if(shots[index].animation.transition==='cut')filters.push(`[${current}][v${index}]concat=n=2:v=1:a=0[${output}]`);
-    else filters.push(`[${current}][v${index}]xfade=transition=${shots[index].animation.transition==='wipe'?'wipeleft':'fade'}:duration=0.2:offset=${offset}[${output}]`);
+  for(let index=1;index<visualClips.length;index++){
+    const clip=visualClips[index], output=`joined${index}`, offset=clip.firstFrame*profile.frameRate.denominator/profile.frameRate.numerator;
+    // A sub-frame tpad has no clone to crossfade. Normalize joins so integer AVTB rounding cannot miss a later offset by one tick.
+    const clock=`settb=AVTB,setpts=N*1000000*${profile.frameRate.denominator}/${profile.frameRate.numerator}`;
+    if(clip.transition==='cut'||!visualClips[index-1].padFrames)filters.push(`[${current}][v${index}]concat=n=2:v=1:a=0,${clock}[${output}]`);
+    else filters.push(`[${current}][v${index}]xfade=transition=${FFMPEG_TRANSITIONS[clip.transition]}:duration=${TRANSITION_DURATION_US/1_000_000}:offset=${offset},${clock}[${output}]`);
     current=output;
   }
   const totalFrames=schedule.at(-1)!.endFrame, presentationDuration=totalFrames*profile.frameRate.denominator/profile.frameRate.numerator;
-  filters.push(`[${shots.length}:a]apad=whole_len=${Math.round(presentationDuration*48000)},atrim=end_sample=${Math.round(presentationDuration*48000)}[mixed]`);
+  filters.push(`[${segments.length}:a]apad=whole_len=${Math.round(presentationDuration*48000)},atrim=end_sample=${Math.round(presentationDuration*48000)}[mixed]`);
   if(subtitles.trim()){
     const painter=styledCaptions?`subtitles=subtitles.ass:original_size=${profile.width}x${profile.height}`:`subtitles=subtitles.srt:original_size=${profile.width}x${profile.height}:force_style='${subtitleStyle(profile.width,profile.height)}'`;
     filters.push(`[${current}]${painter}[captioned]`);current='captioned';

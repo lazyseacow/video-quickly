@@ -64,8 +64,9 @@ let bundle: string, styles: string[];
 test.beforeAll(async () => {
   const result = await build({ absWorkingDir: resolve('apps/desktop'), stdin: { contents: fixtureSource, resolveDir: resolve('apps/desktop'), sourcefile: 'editor-row-fixture.ts' }, bundle: true, write: false, platform: 'browser', format: 'esm', target: 'es2022', loader: { '.css': 'empty' }, define: { 'process.env.NODE_ENV': '"production"', 'import.meta.env': '{"MODE":"browser-test","DEV":false}' } });
   bundle = result.outputFiles[0].text;
-  const manifest = JSON.parse(await readFile(resolve('apps/desktop/.generated/browser-preview/.vite/manifest.json'), 'utf8'));
-  styles = manifest['index.html'].css;
+  const html = await readFile(resolve('apps/desktop/.generated/browser-preview/index.html'), 'utf8');
+  styles = [...html.matchAll(/<link\b[^>]*\bhref="([^"]+\.css)"[^>]*>/g)].map(match => match[1].replace(/^\//, ''));
+  expect(styles.length, 'The built browser entry must declare its production styles.').toBeGreaterThan(0);
 });
 
 async function openFixture(page: Page) {

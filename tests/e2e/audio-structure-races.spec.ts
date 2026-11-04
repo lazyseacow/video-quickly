@@ -99,7 +99,7 @@ test('locates an added shot after the complete legacy voice without changing the
 test('locates a duplicated selected group using the real prefix while retaining legacy authored durations', async ({ page, request }, info) => {
   const errors = observe(page), { project } = await fixture(request, info, '长旁白后的多选复制定位验收', true); await open(page, project); await selectB(page);
   await page.getByRole('button', { name: '定位镜头 3：后续镜头 C', exact: true }).click({ modifiers: [process.platform === 'darwin' ? 'Meta' : 'Control'] });
-  await expect(page.locator('#project-outline .outline-selection')).toContainText('已选 2 个镜头');
+  await expect(page.locator('#project-outline .outline-selection > span')).toHaveText('已选 2');
   await page.getByRole('region', { name: '项目时间轴', exact: true }).getByRole('button', { name: '复制镜头', exact: true }).click();
   await expect.poll(async () => (await saved(request, project.id)).shots.length).toBe(5); const result = await saved(request, project.id);
   expect(result.shots.map(shot => shot.title)).toEqual(['前置完整旁白 A', '目标镜头 B', '目标镜头 B · 副本', '后续镜头 C', '后续镜头 C · 副本']);
@@ -121,17 +121,17 @@ test('rejects a split after a new duration is entered during the preceding save 
   } finally { gate.release(); }
 });
 
-test('rejects a split after replacement audio is selected during the preceding save and keeps its new source mapping', async ({ page, request }, info) => {
+test('rejects a split when another view replaces audio during the preceding save and preserves its source mapping', async ({ page, request }, info) => {
   const errors = observe(page), { project, asset } = await fixture(request, info, '分割等待保存期间新配音保护验收'); await open(page, project); await selectB(page); await seek(page, 105);
   await page.getByLabel('镜头标题', { exact: true }).fill('分割前媒体基线'); const gate = await gateFirstSave(page);
   try {
     await page.getByRole('button', { name: '在播放头处分割镜头', exact: true }).click(); await gate.started;
-    await page.getByLabel('旁白音频', { exact: true }).selectOption(asset.id); gate.release();
+    // A second view uses the public media-binding operation while this page's save is still pending.
+    const replacement = await rpc<ProjectDocument>(request, 'asset.select', { projectId: project.id, revision: project.revision, shotId: 'target-b', assetId: asset.id }); gate.release();
     await expect(page.getByRole('alert').filter({ hasText: /时间|素材|配音|变化|修改/ })).toBeVisible();
-    await expect(page.locator('#project-outline .outline-shot')).toHaveCount(2); await expect(page.getByLabel('旁白音频', { exact: true })).toHaveValue(asset.id); await expect(page.locator('.project-heading-copy')).toContainText('未保存');
-    expect((await saved(request, project.id)).shots[1].audioAssetId).toBeUndefined(); expect(gate.writes()).toBe(1);
-    const save = page.getByRole('button', { name: '保存修改', exact: true }); await expect(save).toBeEnabled(); await save.click();
-    await expect.poll(async () => (await saved(request, project.id)).shots[1].audioAssetId).toBe(asset.id); const result = await saved(request, project.id);
-    expect(result.shots).toHaveLength(2); expect(result.shots[1].audioInUs).toBe(0); expect(gate.writes()).toBe(2); await healthy(page, errors);
+    await expect(page.locator('#project-outline .outline-shot')).toHaveCount(2); await expect(page.getByLabel('镜头标题', { exact: true })).toHaveValue('分割前媒体基线'); await expect(page.locator('.project-heading-copy')).toContainText('未保存');
+    const result = await saved(request, project.id);
+    expect(result).toEqual(replacement); expect(result.shots).toHaveLength(2); expect(result.shots[1]).toMatchObject({ audioAssetId: asset.id, audioInUs: 0 });
+    expect(gate.writes()).toBe(1); await healthy(page, errors);
   } finally { gate.release(); }
 });

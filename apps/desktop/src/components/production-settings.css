@@ -1,5 +1,5 @@
 .production-settings-dialog > .dialog__surface { height: min(720px, calc(100dvh - 2 * var(--space-6))); }
-.production-settings-dialog .dialog__body { display: flex; flex-direction: column; }
+.production-settings-dialog > .dialog__surface > .dialog__body { display: flex; flex-direction: column; }
 .dialog.production-settings-dialog { width: min(880px, calc(100vw - var(--space-8))); }
 .production-settings__steps { padding: var(--space-3) var(--space-6); border-bottom: 1px solid var(--border); }
 .production-settings__steps ol { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: var(--space-2); padding: 0; margin: 0; list-style: none; }

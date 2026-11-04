@@ -1,3 +1,4 @@
+import { confirmAction } from './confirmation-actions';
 import { productionStep, saveProduction } from './production-settings';
 import { openProjectFromList } from './workspace-navigation';
 import { expect, test, type APIRequestContext, type Locator, type Page } from '@playwright/test';
@@ -164,7 +165,7 @@ test('connects nodes, blocks a cycle and undoes node deletion with its edges as 
   await page.getByRole('button', { name: '适应全部步骤', exact: true }).click();
   await connect(page, 'b', added); await expect(page.locator('.react-flow__edge')).toHaveCount(2);
   await connect(page, added, 'a'); await expect(page.locator('.react-flow__edge')).toHaveCount(2);
-  await node(page, 'b').click(); await page.getByRole('button', { name: '移除步骤', exact: true }).click();
+  await node(page, 'b').click(); await page.getByRole('button', { name: '移除步骤', exact: true }).click(); await confirmAction(page, '确认移除');
   await expect(page.locator('.react-flow__node')).toHaveCount(2); await expect(page.locator('.react-flow__edge')).toHaveCount(0);
   await history(page, '撤销'); await expect(page.locator('.react-flow__node')).toHaveCount(3); await expect(page.locator('.react-flow__edge')).toHaveCount(2);
   await save(page); expect((await current(request, project.id)).workflow.edges.map(edge => edge.source)).toEqual(['a', 'b']);
@@ -212,14 +213,14 @@ test('shares wizard task-setting history with the graph and preserves input when
   const project = await fixture(request, '步骤设置统一历史'); await open(page, project.title, false);
   await page.getByRole('button', { name: '制作设置', exact: true }).click();
   const dialog = page.getByRole('dialog', { name: '制作设置', exact: true });
-  await dialog.locator('summary:visible').click();
+  await dialog.locator('summary:visible').filter({ hasText: '高级设置' }).click();
   const prompt = dialog.getByLabel('简报 A补充要求', { exact: true });
   await prompt.fill('人工设置的提示词'); await saveProduction(dialog);
   await expect(dialog).toHaveCount(0); await history(page, '撤销');
   await expect.poll(async () => (await current(request, project.id)).workflow.nodes[0].prompt).toBe('');
   await history(page, '重做');
   await expect.poll(async () => (await current(request, project.id)).workflow.nodes[0].prompt).toBe('人工设置的提示词');
-  await page.getByRole('button', { name: '制作设置', exact: true }).click(); await productionStep(dialog, '创作要求'); await dialog.locator('summary:visible').click(); await prompt.fill('尚未应用的输入');
+  await page.getByRole('button', { name: '制作设置', exact: true }).click(); await productionStep(dialog, '创作要求'); await dialog.locator('summary:visible').filter({ hasText: '高级设置' }).click(); await prompt.fill('尚未应用的输入');
   const saved = await current(request, project.id);
   const remote = await rpc<ProjectDocument>(request, 'project.update', { projectId: project.id, revision: saved.revision, patch: { workflow: { ...saved.workflow, nodes: saved.workflow.nodes.map(node => node.id === 'a' ? { ...node, prompt: '另一视图的提示词' } : node) } } });
   await expect(page.locator('.project-heading-copy')).toHaveAttribute('data-revision', String(remote.revision));
@@ -233,7 +234,7 @@ test('shares wizard task-setting history with the graph and preserves input when
 test('freezes task input during final saving and never executes a run as part of saving', async ({ page, request }) => {
   const project = await fixture(request, '最终保存期间冻结输入'); await open(page, project.title, false);
   await page.getByRole('button', { name: '制作设置', exact: true }).click();
-  const dialog = page.getByRole('dialog', { name: '制作设置', exact: true }); await dialog.locator('summary:visible').click();
+  const dialog = page.getByRole('dialog', { name: '制作设置', exact: true }); await dialog.locator('summary:visible').filter({ hasText: '高级设置' }).click();
   const prompt = dialog.getByLabel('简报 A补充要求', { exact: true });
   await prompt.fill('先提交的步骤要求');
   let release!: () => void, entered!: () => void, held = false;
@@ -332,7 +333,7 @@ test('persists branch and model settings and supports keyboard edge history whil
     if (!matrix) throw new Error('连接没有画面坐标');
     return { x: point.x * matrix.a + point.y * matrix.c + matrix.e, y: point.x * matrix.b + point.y * matrix.d + matrix.f };
   });
-  await page.mouse.click(position.x, position.y); await page.keyboard.press('Delete');
+  await page.mouse.click(position.x, position.y); await page.keyboard.press('Delete'); await confirmAction(page, '确认移除');
   await expect(page.locator('.react-flow__edge')).toHaveCount(0); await expect(page.locator('.react-flow__node')).toHaveCount(2);
   await node(page, 'a').focus(); await page.keyboard.press('Control+z'); await expect(page.locator('.react-flow__edge')).toHaveCount(1);
   expect((await rpc<{ items: unknown[] }>(request, 'run.list', { projectId: project.id })).items).toEqual([]);
@@ -392,16 +393,16 @@ test('freezes settings during start submission and saves subsequent task input f
       await route.continue();
     });
     await open(page, project.title, false); await page.getByRole('button', { name: '制作设置', exact: true }).click();
-    const dialog = page.getByRole('dialog', { name: '制作设置', exact: true }); await dialog.locator('summary:visible').click(); const prompt = dialog.getByLabel('简报 A补充要求', { exact: true });
+    const dialog = page.getByRole('dialog', { name: '制作设置', exact: true }); await dialog.locator('summary:visible').filter({ hasText: '高级设置' }).click(); const prompt = dialog.getByLabel('简报 A补充要求', { exact: true });
     await prompt.fill('这次执行使用已保存的输入'); await saveProduction(dialog); await expect(dialog).toHaveCount(0); await page.getByRole('button', { name: '开始制作', exact: true }).click(); await accepted;
     await expect.poll(() => pending.length).toBe(1); await expect(page.locator('.project-heading-actions [data-guide="produce"]')).toBeDisabled(); release(); await expect(dialog).toHaveCount(0);
-    await page.getByRole('button', { name: '制作设置', exact: true }).click(); await productionStep(dialog, '创作要求'); await dialog.locator('summary:visible').click(); await prompt.fill('请求在途期间补充的下一次输入');
+    await page.getByRole('button', { name: '制作设置', exact: true }).click(); await productionStep(dialog, '创作要求'); await dialog.locator('summary:visible').filter({ hasText: '高级设置' }).click(); await prompt.fill('请求在途期间补充的下一次输入');
     const inspection = await rpc<RunInspection>(request, 'run.inspect', { runId, nodeId: 'a' });
     expect(inspection.selected?.node.prompt).toBe('这次执行使用已保存的输入'); expect(inspection.run.status).toBe('running');
     const before = await current(request, project.id); expect(before.workflow.nodes[0].prompt).toBe('这次执行使用已保存的输入');
     await saveProduction(dialog); await expect(dialog).toHaveCount(0);
     expect(await current(request, project.id)).toEqual(before); expect((await rpc<{ items: RunSummary[] }>(request, 'run.list', { projectId: project.id })).items).toHaveLength(1);
-    await page.getByRole('button', { name: '制作设置', exact: true }).click(); await productionStep(dialog, '创作要求'); await dialog.locator('summary:visible').click(); await expect(prompt).toHaveValue('请求在途期间补充的下一次输入');
+    await page.getByRole('button', { name: '制作设置', exact: true }).click(); await productionStep(dialog, '创作要求'); await dialog.locator('summary:visible').filter({ hasText: '高级设置' }).click(); await expect(prompt).toHaveValue('请求在途期间补充的下一次输入');
     await dialog.getByRole('button', { name: '关闭对话框', exact: true }).click(); expect(errors).toEqual([]);
   } finally {
     release(); if (runId) await rpc(request, 'run.cancel', { runId });

@@ -7,6 +7,8 @@ import { drawCitationOverlay, type CitationOverlay } from './citations.js';
 import { captionBox, resolveCaptionLayout, safeCaptionStyle } from './caption-layout.js';
 import { sampleMotion } from './keyframes.js';
 export { sampleMotion, motionSceneTimeUs, motionLocalTimeUs, type MotionPose } from './keyframes.js';
+export { TRANSITION_DURATION_US, FFMPEG_TRANSITIONS, createTransitionTimeline, sampleTransition, transitionPaddingFrames, wipeLeftIncomingStartX, type TransitionKind, type TransitionClip, type TransitionTimeline, type TransitionSample } from './transitions.js';
+export { createRenderSchedule, type RenderClipSchedule } from './render-schedule.js';
 export { captionAtTime, createEstimatedCaptionTrack, projectCaptionCues, replaceVisibleCaptionCues, splitCaptionText, type CaptionClip, type CaptionPages } from './captions.js';
 export { commonSourceOutUs, mediaSourceInUs, musicPlaybackAtTime, type MediaSourceOffsets, type MusicPlayback, type SourceDurations } from './audio.js';
 export { captureClipEditSource, clipEditPlan, clipEditSource, clipEditTotalUs, clipSourceOutUs, deleteShotRanges, replaceShotMedia, resolveShotAtTime, resolveShotSpans, resolveShotTime, restoreShotRanges, sliceClipPlan, sourceCaptionTrack, type ClipEditContext, type ClipEditDocument, type ClipEditIdFactory, type ClipRange, type ClipTimingShot, type ResolvedClipSpan, type ResolvedShotTime } from './clip-edits.js';
@@ -150,8 +152,15 @@ function drawCaptions(ctx: CanvasRenderingContext2D, scene: SceneFrame, width: n
   ctx.restore();
 }
 
+/** Captions are painted after the picture transition, as in the FFmpeg export. */
+export function drawSceneCaptions(canvas: HTMLCanvasElement, scene: SceneFrame, timeUs = 0): void {
+  const ctx = canvas.getContext('2d');
+  if (!ctx) throw new Error('当前环境无法创建视频画布');
+  drawCaptions(ctx, scene, canvas.width, canvas.height, timeUs);
+}
+
 /** Deterministic authored art and diagrams shared by interactive preview and exported frames. */
-export function drawSceneFrame(canvas: HTMLCanvasElement, scene: SceneFrame, timeUs = 0): void {
+export function drawSceneFrame(canvas: HTMLCanvasElement, scene: SceneFrame, timeUs = 0, options: { captions?: boolean; mediaOnly?: boolean } = {}): void {
   const ctx = canvas.getContext('2d');
   if (!ctx) throw new Error('当前环境无法创建视频画布');
   const width = canvas.width, height = canvas.height;
@@ -162,8 +171,9 @@ export function drawSceneFrame(canvas: HTMLCanvasElement, scene: SceneFrame, tim
   if(scene.sceneTemplate){
     const layout=resolveCaptionLayout(width,height,scene.captionStyle,{referenceFooter:scene.referenceFooter??Boolean(scene.citation),template:true});
     drawSceneTemplate(canvas,scene.sceneTemplate,progress,{fontSize:layout.fontSize,lines:layout.maxLines,bottom:layout.bottom,diagramTop:layout.diagramTop,diagramBottom:layout.diagramBottom},scene.animation?.keyframes?.length ? pose : undefined);
-    drawCaptions(ctx,scene,width,height,timeUs);drawCitationOverlay(canvas,scene.citation);return;
+    if(options.captions !== false)drawCaptions(ctx,scene,width,height,timeUs);drawCitationOverlay(canvas,scene.citation);return;
   }
+  if (!options.mediaOnly) {
   const shotIndex = scene.sceneIndex ?? source?.original.sceneIndex ?? scene.shotIndex;
   const vertical = height > width;
   ctx.save(); ctx.clearRect(0, 0, width, height);
@@ -201,15 +211,16 @@ export function drawSceneFrame(canvas: HTMLCanvasElement, scene: SceneFrame, tim
   scholar(ctx,442+Math.sin(shotIndex)*32,451,vertical?.7:.82);
   scholar(ctx,570,426,.58);
   ctx.restore();
+  } else ctx.clearRect(0, 0, width, height);
   ctx.save();
   if(scene.image){
     const image=scene.image;
     const sourceWidth='naturalWidth' in image?image.naturalWidth:'videoWidth' in image?image.videoWidth:'displayWidth' in image?image.displayWidth:'width' in image&&typeof image.width==='number'?image.width:width;
     const sourceHeight='naturalHeight' in image?image.naturalHeight:'videoHeight' in image?image.videoHeight:'displayHeight' in image?image.displayHeight:'height' in image&&typeof image.height==='number'?image.height:height;
     const fit=scene.profile.fitMode==='cover'?Math.max(width/sourceWidth,height/sourceHeight):Math.min(width/sourceWidth,height/sourceHeight);
-    const mediaPose=sampleMotion(scene.animation,sceneUs,scene.sceneDurationUs??source?.original.sceneDurationUs??source?.original.durationUs??scene.durationUs??8_000_000,1);
+    const mediaPose=options.mediaOnly?{zoom:1,panX:0,panY:0}:sampleMotion(scene.animation,sceneUs,scene.sceneDurationUs??source?.original.sceneDurationUs??source?.original.durationUs??scene.durationUs??8_000_000,1);
     const zoom=mediaPose.zoom;
-    const keyframed=Boolean(scene.animation?.keyframes?.length);
+    const keyframed=!options.mediaOnly&&Boolean(scene.animation?.keyframes?.length);
     const w=sourceWidth*fit*(keyframed?1:zoom),h=sourceHeight*fit*(keyframed?1:zoom);
     ctx.fillStyle='#1d2724';ctx.fillRect(0,0,width,height);
     if(keyframed){ctx.save();ctx.translate(width/2+mediaPose.panX*width,height/2+mediaPose.panY*height);ctx.scale(zoom,zoom);ctx.translate(-width/2,-height/2);ctx.beginPath();ctx.rect(0,0,width,height);ctx.clip();}
@@ -217,13 +228,15 @@ export function drawSceneFrame(canvas: HTMLCanvasElement, scene: SceneFrame, tim
     ctx.drawImage(image,(width-w)/2+(keyframed?0:mediaPose.panX*width),(height-h)/2+(keyframed?0:mediaPose.panY*height),w,h);
     if(keyframed)ctx.restore();
   }
+  if (!options.mediaOnly) {
   const titleSize=Math.max(15,Math.min(width*.035,height*.064));
   ctx.textAlign='center';ctx.fillStyle='#374c43';ctx.font=`600 ${titleSize}px "Microsoft YaHei", sans-serif`;
   const title=scene.title;
   ctx.fillText(title,width/2,height*.12,width*.82);
   ctx.font=`${Math.max(10,titleSize*.42)}px "Microsoft YaHei", sans-serif`;ctx.fillStyle='#66745b';
   if(scene.label)ctx.fillText(scene.label,width/2,height*.17,width*.85);
-  drawCaptions(ctx,scene,width,height,timeUs);
+  }
+  if(options.captions !== false)drawCaptions(ctx,scene,width,height,timeUs);
   ctx.restore();
   drawCitationOverlay(canvas,scene.citation);
 }

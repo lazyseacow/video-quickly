@@ -1,15 +1,19 @@
 import { primaryModifier } from '../lib/desktop';
-import { memo, useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { lazy, memo, Suspense, useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { Background, ControlButton, Controls, Handle, Panel, Position, ReactFlow, SelectionMode, addEdge, applyEdgeChanges, applyNodeChanges, type AriaLabelConfig, type Connection, type Edge, type IsValidConnection, type Node, type NodeProps, type NodeTypes, type OnEdgesChange, type OnInit, type OnNodesChange, type OnSelectionChangeFunc, type ReactFlowInstance } from '@xyflow/react';
 import { BookOpen, Check, GitBranch, Image, Layers, Maximize, Mic, Plus, Sparkles, Trash2, Save } from 'lucide-react';
-import { nodeKindSchema, type ModelProfile, type WorkflowDefinition, type WorkflowNode } from '@video-quickly/contracts';
+import { applyWorkflowProposal, nodeKindSchema, type ModelProfile, type WorkflowDefinition, type WorkflowNode } from '@video-quickly/contracts';
 import { Button, Field, IconButton, Notice, Select } from '../components/Primitives';
 import ToolBindings from '../components/ToolBindings';
 import WorkflowComposition, { SubflowInputBindings } from '../components/WorkflowComposition';
 import { sameWorkflow } from '../lib/project-edits';
 import { beginGuideAction } from '../lib/guide-actions';
+import { useConfirmation } from '../components/ConfirmationDialog';
 import { matchingStepModels, stepGuidance, stepModelLabel, stepModelPlaceholder } from '../lib/workflow-guidance';
 import './workflow-canvas.css';
+
+const WorkflowAssistant = lazy(() => import('../components/WorkflowAssistant'));
+const ModelAlternatives = lazy(() => import('../components/ModelAlternatives'));
 
 type FlowNode = Node<{ node: WorkflowNode }, 'activity'>;
 const typeLabels: Record<string, string> = { brief: '创意简报', research: '资料与史实', style: '风格与角色', script: '旁白与分镜', assets: '画面素材', animation: '动画与运镜', review: '自动检查', export: '导出成片', agent: 'Agent 步骤', condition: '条件分支', join: '汇合', subflow: '子流程' };
@@ -40,12 +44,15 @@ interface Props {
   onChange: (workflow: WorkflowDefinition, label: string, group?: string) => void;
   onEndGroup: () => void; onSave: () => Promise<boolean>; onHistory: (direction: 'undo' | 'redo') => void;
   onConfigure?: (node: WorkflowNode) => void;
+  assistantProject?: { id: string; revision: number };
 }
-export default function WorkflowCanvas({ workflow, models, dirty, saving, conflicted, onChange, onEndGroup, onSave, onHistory, onConfigure }: Props) {
+export default function WorkflowCanvas({ workflow, models, dirty, saving, conflicted, onChange, onEndGroup, onSave, onHistory, onConfigure, assistantProject }: Props) {
+  const confirm = useConfirmation();
   const [nodes, setNodes] = useState<FlowNode[]>(() => flowNodes(workflow));
   const [edges, setEdges] = useState<Edge[]>(() => flowEdges(workflow));
   const [selectedId, setSelectedId] = useState<string>();
   const [error, setError] = useState('');
+  const [assistantId, setAssistantId] = useState<string>(), [alternativesId, setAlternativesId] = useState<string>();
   const nodesRef = useRef(nodes), edgesRef = useRef(edges), workflowRef = useRef(workflow);
   const canvas = useRef<ReactFlowInstance<FlowNode> | null>(null);
   const container = useRef<HTMLDivElement>(null);
@@ -100,6 +107,7 @@ export default function WorkflowCanvas({ workflow, models, dirty, saving, confli
     workflowRef.current = next; onChange(next, label, group);
   }, [onChange]);
   const selected = nodes.find(node => node.id === selectedId)?.data.node;
+  const assistantNode = nodes.find(node => node.id === assistantId)?.data.node;
   const stepModels = selected ? matchingStepModels(selected, models) : [];
   const updateSelected = useCallback((patch: Partial<WorkflowNode>) => {
     const next = nodesRef.current.map(node => node.id === selectedId ? { ...node, ariaLabel: `${patch.label ?? node.data.node.label}，${typeLabels[patch.kind ?? node.data.node.kind]}`, data: { node: { ...node.data.node, ...patch } } } : node);
@@ -139,18 +147,25 @@ export default function WorkflowCanvas({ workflow, models, dirty, saving, confli
     if (!validConnection(connection)) return;
     commit(nodesRef.current, addEdge({ ...connection, id: `${connection.source}-${connection.target}`, type: 'smoothstep' }, edgesRef.current), '连接编排步骤');
   }, [validConnection, commit]);
-  const beforeDelete = useCallback(async ({ nodes: deleting }: { nodes: FlowNode[] }) => {
+  const beforeDelete = useCallback(async ({ nodes: deleting, edges: connections }: { nodes: FlowNode[]; edges: Edge[] }) => {
     if (deleting.length >= nodesRef.current.length) { setError('流程至少保留一个步骤。'); return false; }
+    if (!deleting.length && !connections.length) return false;
+    const before = workflowRef.current;
+    const accepted = await confirm({ title: '移除流程内容？', description: `将移除 ${deleting.length} 个步骤和 ${connections.length} 条连接，可能影响后续执行顺序。移除后可通过撤销恢复。`, confirmLabel: '确认移除' });
+    if (!accepted) return false;
+    if (!sameWorkflow(before, workflowRef.current)) { setError('流程已有新的修改，请核对后重新移除。'); return false; }
     return true;
-  }, []);
+  }, [confirm]);
   function addNode() {
     const id = `agent-${crypto.randomUUID().slice(0, 8)}`;
     const node: WorkflowNode = { id, kind: 'agent', label: '新步骤', description: '', prompt: '', skillIds: [], config: {}, position: { x: 60 + nodesRef.current.length * 45, y: 310 }, requiresReview: false };
     commit([...nodesRef.current.map(item => item.selected ? { ...item, selected: false } : item), { id, type: 'activity', position: node.position, data: { node }, ariaLabel: '新步骤，Agent 步骤', selected: true }], edgesRef.current, '添加编排步骤');
     setSelectedId(id);
   }
-  function removeNode(id: string) {
+  async function removeNode(id: string) {
     if (nodesRef.current.length <= 1) return;
+    const node = nodesRef.current.find(node => node.id === id);
+    if (!node || !await beforeDelete({ nodes: [node], edges: edgesRef.current.filter(edge => edge.source === id || edge.target === id) })) return;
     commit(nodesRef.current.filter(node => node.id !== id), edgesRef.current.filter(edge => edge.source !== id && edge.target !== id), '移除编排步骤'); setSelectedId(undefined);
   }
   async function save() {
@@ -189,7 +204,9 @@ export default function WorkflowCanvas({ workflow, models, dirty, saving, confli
         <Field label="步骤类型"><Select value={selected.kind} onChange={event => updateSelected({ kind: nodeKindSchema.parse(event.target.value) })}>{Object.entries(typeLabels).filter(([value]) => value !== 'research' && (workflow.id !== 'native-video' || value !== 'review')).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</Select></Field>
         <Field label="步骤说明"><textarea value={selected.description} onChange={event => updateSelected({ description: event.target.value })} /></Field>
         <Field label="提示词"><textarea value={selected.prompt} onChange={event => updateSelected({ prompt: event.target.value })} placeholder="补充这个步骤的具体要求" /></Field>
+        {assistantProject && <Button disabled={saving || conflicted} onClick={() => setAssistantId(selected.id)}>对话修改任务</Button>}
         {(stepGuidance(selected).capability || selected.modelId) && <Field label="使用模型" hint={stepGuidance(selected).requiresModel ? '此步骤需要选择匹配的模型才能执行。' : '未选择模型时使用已有内容或本地处理，不会自动调用 AI。'}><Select value={selected.modelId ?? ''} disabled={!stepModels.length && !selected.modelId} onChange={event => updateSelected({ modelId: event.target.value || undefined })}><option value="">{stepModelPlaceholder(selected, stepModels)}</option>{selected.modelId && !stepModels.some(model => model.id === selected.modelId) && <option value={selected.modelId} disabled>{stepModels.length ? `当前：${stepModelLabel(selected, models)}` : '无可用模型'}</option>}{stepModels.map(model => <option key={model.id} value={model.id}>{model.name}</option>)}</Select></Field>}
+        {stepGuidance(selected).capability && <><Button aria-expanded={alternativesId === selected.id} onClick={() => setAlternativesId(current => current === selected.id ? undefined : selected.id)}>查看替代模型</Button>{alternativesId === selected.id && <Suspense fallback={<p role="status">正在读取模型建议…</p>}><ModelAlternatives node={selected} models={models} onSelect={modelId => updateSelected({ modelId, ...(selected.config.modelBinding === 'default' ? { config: { ...selected.config, modelOverride: true } } : {}) })} /></Suspense>}</>}
         {selected.kind === 'subflow' && <SubflowInputBindings node={selected} onChange={value => updateSelected(value)} />}
         {selected.kind === 'agent' && <ToolBindings node={selected} onChange={value => updateSelected(value)} />}
         {selected.kind === 'condition' && <Field label="条件结果"><Select aria-label="条件分支结果" value={selected.config.value === true ? 'true' : 'false'} onChange={event => updateSelected({ config: { ...selected.config, value: event.target.value === 'true' } })}><option value="true">成立</option><option value="false">不成立</option></Select></Field>}
@@ -197,9 +214,17 @@ export default function WorkflowCanvas({ workflow, models, dirty, saving, confli
           const condition = event.target.value;
           commit(nodesRef.current, edgesRef.current.map(item => item.id === edge.id ? { ...item, data: { ...item.data, condition }, label: conditionLabel(condition) } : item), '修改分支条件');
         }}><option value="">始终执行</option><option value="true">条件成立时</option><option value="false">条件不成立时</option></Select></Field>)}</div>}
-        <Button aria-label="移除步骤" variant="danger" className="button-full" disabled={nodes.length <= 1} onClick={() => removeNode(selected.id)}><Trash2 size={15} />移除</Button>
+        <Button aria-label="移除步骤" variant="danger" className="button-full" disabled={nodes.length <= 1} onClick={() => void removeNode(selected.id)}><Trash2 size={15} />移除</Button>
       </> : <p className="list-help">选择步骤编辑设置，拖动连接点设置依赖。</p>}
       <div className="flow-save"><span className="flow-save-state" role="status">{saving ? '正在保存…' : conflicted ? '请先处理修订冲突' : dirty ? '有未保存修改' : '修改已保存'}</span><Button aria-label="保存流程" variant="primary" className="button-full" disabled={!dirty || conflicted} busy={saving} onClick={() => void save()}><Save size={15} />保存</Button><p className="tiny-meta">保存前检查依赖关系。已启动的制作使用其固定版本。</p></div>
     </aside>
+    {assistantNode && assistantProject && <Suspense fallback={<p role="status">正在打开修改预览…</p>}><WorkflowAssistant projectId={assistantProject.id} projectRevision={assistantProject.revision} node={assistantNode} models={models} onClose={() => setAssistantId(undefined)} onApply={(_next, proposal) => {
+      const current = nodesRef.current.find(node => node.id === proposal.baseline.id)?.data.node;
+      if (!current) throw new Error('任务已移除，请重新选择任务。');
+      const proposed = applyWorkflowProposal(assistantProject, current, proposal);
+      const next = Object.hasOwn(proposal.patch, 'modelId') && proposed.config.modelBinding === 'default' ? { ...proposed, config: { ...proposed.config, modelOverride: Boolean(proposed.modelId) } } : proposed;
+      commit(nodesRef.current.map(node => node.id === next.id ? { ...node, ariaLabel: `${next.label}，${typeLabels[next.kind]}`, data: { node: next } } : node), edgesRef.current, '应用对话修改');
+      setAssistantId(undefined);
+    }} /></Suspense>}
   </div>;
 }

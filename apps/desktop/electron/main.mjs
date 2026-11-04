@@ -7,7 +7,7 @@ import { RuntimeController } from './runtime-controller.mjs';
 import { createCredentialHost } from './credentials.mjs';
 import { createLogger, logError } from './logging.mjs';
 import { windowsJobContainer } from './windows-job.mjs';
-import { applicationId, applicationOrigin, externalWebUrl, fileInside, pathDialogOptions, rendererIsTrusted, runtimeMediaEnvironment, serveFile, validPath, validRuntimeRequest, workspaceDirectory } from './platform.mjs';
+import { applicationId, applicationOrigin, externalWebUrl, fileInside, pathDialogOptions, rendererIsTrusted, rendererPermissionAllowed, runtimeMediaEnvironment, serveFile, validPath, validRuntimeRequest, workspaceDirectory } from './platform.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const repository = resolve(here, '../../..');
@@ -128,8 +128,8 @@ async function launch() {
   if (!app.isPackaged) app.dock?.setIcon(join(here, '../build/icons/dock.png'));
   await mkdir(dataDirectory, { recursive: true });
   await mkdir(app.getPath('userData'), { recursive: true });
-  session.defaultSession.setPermissionRequestHandler((_contents, _permission, callback) => callback(false));
-  session.defaultSession.setPermissionCheckHandler(() => false);
+  session.defaultSession.setPermissionRequestHandler((contents, permission, callback, details) => callback(rendererPermissionAllowed(contents, permission, details, window?.webContents, developmentUrl)));
+  session.defaultSession.setPermissionCheckHandler((contents, permission, _origin, details) => rendererPermissionAllowed(contents, permission, details, window?.webContents, developmentUrl));
   protocol.handle('video-quickly', request => {
     const url = new URL(request.url);
     if (url.hostname !== 'app') return new Response(null, { status: 404 });

@@ -1,9 +1,15 @@
 import { z } from 'zod';
+import { imageDerivationSchema } from './image-tools.js';
+export { imageRectangleSchema, imageDerivationSchema, imageEditInputSchema, imageGridRectangles, type ImageRectangle, type ImageEditInput } from './image-tools.js';
+export * from './workflow-patches.js';
+export * from './model-alternatives.js';
 import { sceneTemplateSchema } from './scene-templates.js';
 import { claimSchema, researchSourceSchema } from './research.js';
 import { captionStyleSchema, scenePresetSchema } from './caption-style.js';
 import { audioMixSettingsSchema, audioProcessingSchema } from './audio-processing.js';
 import { motionKeyframesSchema } from './keyframes.js';
+import { creativeContextSchema, creativeEntityKeysSchema } from './creative-context.js';
+export { creativeContextSchema, creativeEntitySchema, creativeEntityKeysSchema, creativeCharacterBindings, projectCharacterIds, validateCreativeReferences, shotCreativePrompt, creativeEntityLabels, creativeReferenceAssetIds, type CreativeContext, type CreativeEntity } from './creative-context.js';
 import { productionSettingsSchema, resolveProductionWorkflow } from './production.js';
 export { productionSettingsSchema, resolveProductionWorkflow, isVideoGenerationNode, captionsEnabled, MAX_REFERENCE_AUDIO_BYTES, MAX_REFERENCE_AUDIOS, type ProductionSettings } from './production.js';
 export * from './asset-recovery.js';
@@ -163,6 +169,7 @@ export const shotSchema = z.object({
   captionStyle: captionStyleSchema.nullable().optional(),
   clipEdit: clipEditReferenceSchema.optional(), audioProcessing: audioProcessingSchema.optional(),
   characterIds: z.array(z.string().min(1)).max(8).refine(value => new Set(value).size === value.length, '镜头角色不能重复').optional(),
+  creativeEntityKeys: creativeEntityKeysSchema.optional(),
   sceneTemplate: sceneTemplateSchema.optional(),
   assetId: z.string().optional(), audioAssetId: z.string().optional(), videoAssetId: z.string().optional(),
   claimIds: z.array(z.string()).default([]), locked: z.boolean().default(false),
@@ -203,12 +210,22 @@ export const workflowValueBindingSchema = z.union([
   z.object({ nodeId: z.string().min(1), path: z.array(z.string().min(1)).max(20).default([]) }),
 ]);
 export const subflowReferenceSchema = z.object({ id: z.string().min(1), version: z.number().int().positive(), inputs: z.record(z.string(), workflowValueBindingSchema).default({}) });
+const promptPathSchema = z.array(z.string().min(1).max(120).refine(value => !['__proto__', 'prototype', 'constructor'].includes(value), '不支持此字段路径。')).max(20);
+export const promptBindingsSchema = z.record(z.string().regex(/^[A-Za-z][A-Za-z0-9_]{0,63}$/), z.union([
+  z.object({ literal: jsonValueSchema }).strict(),
+  z.object({ projectPath: promptPathSchema.min(1) }).strict(),
+  z.object({ shotPath: promptPathSchema.min(1) }).strict(),
+  z.object({ nodeId: z.string().min(1), path: promptPathSchema.optional().default([]) }).strict(),
+])).refine(value => Object.keys(value).length <= 40, '提示词变量不能超过 40 个。');
+export type PromptBindings = z.infer<typeof promptBindingsSchema>;
+export const promptTemplateReferenceSchema = z.object({ id: z.string().min(1), version: z.number().int().positive() });
 export const workflowNodeSchema = z.object({
   id: z.string().min(1), kind: nodeKindSchema, label: z.string().min(1), description: z.string().default(''),
   prompt: z.string().default(''), modelId: z.string().optional(), skillIds: z.array(z.string()).default([]),
   config: z.record(z.string(), jsonValueSchema).default({}).refine(config => config.operation === undefined || ['prepare-references', 'generate-native-video', 'prepare-edit', 'regenerate', 'research'].includes(String(config.operation)), '不支持的制作任务类型。'),
   position: z.object({ x: z.number(), y: z.number() }).default({ x: 0, y: 0 }), requiresReview: z.boolean().default(false),
   subflow: subflowReferenceSchema.optional(),
+  promptBindings: promptBindingsSchema.optional(), promptTemplate: promptTemplateReferenceSchema.optional(),
 });
 const workflowEdgesSchema = z.array(z.object({ id: z.string(), source: z.string(), target: z.string(), condition: z.string().optional() }));
 export const subflowInputSchema = z.object({ name: z.string().regex(/^[A-Za-z][A-Za-z0-9_]{0,63}$/), type: z.enum(['string', 'number', 'boolean', 'json']), required: z.boolean().default(true), default: jsonValueSchema.optional() }).superRefine((value, context) => { if (value.default !== undefined && value.type !== 'json' && typeof value.default !== value.type) context.addIssue({ code: 'custom', message: '输入默认值与声明类型不一致。', path: ['default'] }); });
@@ -233,6 +250,13 @@ export const workflowSchema = z.object({
   stages: z.array(workflowStageSchema).max(100).refine(stages => new Set(stages.map(stage => stage.id)).size === stages.length, '阶段编号不能重复').optional(),
 });
 export type WorkflowNode = z.infer<typeof workflowNodeSchema>;
+export const promptLibraryItemSchema = z.object({
+  id: z.string().min(1), revision: z.number().int().positive(), version: z.number().int().positive(),
+  kind: z.enum(['template', 'snippet']), name: z.string().trim().min(1).max(120), prompt: z.string().min(1).max(100000),
+  nodeKinds: z.array(nodeKindSchema).min(1).max(13), bindings: promptBindingsSchema.optional(),
+  favorite: z.boolean().default(false), archived: z.boolean().default(false), createdAt: z.string(), updatedAt: z.string(),
+});
+export type PromptLibraryItem = z.infer<typeof promptLibraryItemSchema>;
 export type WorkflowDefinition = z.infer<typeof workflowSchema>;
 export type SubflowDefinition = z.infer<typeof subflowDefinitionSchema>;
 export type SubflowReference = z.infer<typeof subflowReferenceSchema>;
@@ -244,9 +268,13 @@ export const workflowTemplateSchema = z.object({
 export type WorkflowTemplate = z.infer<typeof workflowTemplateSchema>;
 export { validateWorkflowComposition, workflowNodesWithSubflows, workflowEdgesWithSubflows, resolveSubflowInputs, substituteSubflowInputs, subflowNodeId, subflowThreadId, subflowValueAt } from './workflow-composition.js';
 export { resolveWorkflowStages, type ResolvedWorkflowStage } from './workflow-stages.js';
+export const episodeSchema = z.object({ workId: z.string().min(1), number: z.number().int().min(1).max(100000), originalText: z.string().max(30000), defaultsRevision: z.number().int().positive().optional() });
+export const episodeSourceSchema = episodeSchema.extend({ workTitle: z.string().max(160) });
 export const projectSchema = z.object({
   id: z.string(), title: z.string().min(1).max(160), brief: z.string().max(30000), templateId: z.string().default('history-handdrawn'),
   revision: z.number().int().positive(), profile: videoProfileSchema, shots: z.array(shotSchema), workflow: workflowSchema,
+  creativeContext: creativeContextSchema.nullable().optional(),
+  episode: episodeSchema.optional(), episodeSource: episodeSourceSchema.optional(),
   musicClips: z.array(musicClipSchema).optional(),
   researchSources: z.array(researchSourceSchema).max(20).optional(), referenceDisplay: z.enum(['hidden', 'numbers']).optional(),
   captionStyle: captionStyleSchema.nullable().optional(), scenePreset: scenePresetSchema.nullable().optional(),
@@ -256,6 +284,30 @@ export const projectSchema = z.object({
 });
 export type ProjectDocument = z.infer<typeof projectSchema>;
 export type Project = ProjectDocument;
+export const workDefaultsSchema = z.object({
+  style: z.string().max(30000).default(''), creativeContext: creativeContextSchema.nullable().optional(),
+  profile: videoProfileSchema.default(() => structuredClone(DEFAULT_VIDEO_PROFILE)),
+  production: productionSettingsSchema.omit({ referenceAudioAssetIds: true }).strict().default(() => productionSettingsSchema.parse({ mode: 'native-video' })),
+});
+export const workSchema = z.object({
+  id: z.string(), revision: z.number().int().positive(), title: z.string().trim().min(1).max(160), description: z.string().max(10000).default(''),
+  defaults: workDefaultsSchema, archived: z.boolean().default(false), createdAt: z.string(), updatedAt: z.string(),
+});
+export type StoryWork = z.infer<typeof workSchema>;
+export const productionQueueSchema = z.object({
+  id: z.string(), workId: z.string(), revision: z.number().int().positive(), status: z.enum(['paused', 'running', 'needs_attention', 'succeeded', 'canceled']),
+  createdAt: z.string(), updatedAt: z.string(), error: z.string().optional(),
+});
+export type ProductionQueue = z.infer<typeof productionQueueSchema>;
+export const productionQueueItemSchema = z.object({
+  id: z.string(), queueId: z.string(), projectId: z.string(), projectRevision: z.number().int().positive(), revision: z.number().int().positive(),
+  position: z.number().int().nonnegative(), episodeNumber: z.number().int().positive(), title: z.string(),
+  status: z.enum(['queued', 'running', 'succeeded', 'needs_attention', 'failed', 'canceled', 'skipped']),
+  runId: z.string().optional(), error: z.string().optional(), createdAt: z.string(), updatedAt: z.string(),
+});
+export type ProductionQueueItem = z.infer<typeof productionQueueItemSchema>;
+export const productionQueueDetailSchema = z.object({ queue: productionQueueSchema, items: z.array(productionQueueItemSchema) });
+export const productionQueueEnqueueResultSchema = z.object({ queue: productionQueueSchema.nullable(), items: z.array(productionQueueItemSchema), reused: z.array(productionQueueItemSchema) });
 
 export const modelCapabilitySchema = z.enum(['text', 'image', 'video', 'vision', 'tools', 'structured-output']);
 export type ModelCapability = z.infer<typeof modelCapabilitySchema>;
@@ -391,6 +443,8 @@ export const runSchema = z.object({
   workflowVersion: z.number().int(), snapshotDigest: z.string(), currentNodeId: z.string().optional(),
   parentRunId: z.string().optional(), selection: runSelectionSchema.optional(), stepCount: z.number().int().positive().optional(), createdAt: z.string(), updatedAt: z.string(), error: z.string().optional(),
   events: z.array(runEventSchema).default([]), activities: z.array(activitySchema).default([]),
+  purpose: z.enum(['production', 'prompt-trial', 'workflow-assistant']).optional(), promptSessionId: z.string().optional(), promptSessionRevision: z.number().int().positive().optional(),
+  productionQueueId: z.string().optional(), productionQueueItemId: z.string().optional(),
 });
 export type StepRun = z.infer<typeof runSchema>;
 export type RunRecord = StepRun;
@@ -412,6 +466,7 @@ export const assetSchema = z.object({
   size: z.number().nonnegative(), sha256: z.string(), version: z.number().int().positive(),
   durationUs: z.number().int().positive().optional(), width: z.number().int().positive().optional(), height: z.number().int().positive().optional(),
   createdAt: z.string(), provenance: z.string(), retained: z.boolean().default(false), active: z.boolean().default(true),
+  derivation: imageDerivationSchema.optional(),
 });
 export type AssetRecord = z.infer<typeof assetSchema>;
 export const systemSchema = z.object({
@@ -426,13 +481,33 @@ export const workspaceSnapshotSchema = z.object({
 });
 export type WorkspaceSnapshot = z.infer<typeof workspaceSnapshotSchema>;
 // Summaries deliberately exclude shot collections, activity results and event history.
-export const projectSummarySchema = projectSchema.pick({ id: true, title: true, brief: true, templateId: true, revision: true, profile: true, captionStyle: true, createdAt: true, updatedAt: true, archived: true }).extend({
+export const projectSummarySchema = projectSchema.pick({ id: true, title: true, brief: true, templateId: true, revision: true, profile: true, captionStyle: true, episode: true, episodeSource: true, createdAt: true, updatedAt: true, archived: true }).extend({
   shotCount: z.number().int().nonnegative(), durationUs: z.number().nonnegative(), workflowNodeCount: z.number().int().nonnegative(),
   thumbnailShot: shotSchema.nullable(), thumbnailAsset: assetSchema.optional(),
 });
 export type ProjectSummary = z.infer<typeof projectSummarySchema>;
 export const runSummarySchema = runSchema.omit({ events: true, activities: true }).extend({ completedNodeIds: z.array(z.string()) });
 export type RunSummary = z.infer<typeof runSummarySchema>;
+export const promptDraftSchema = z.object({
+  projectId: z.string().min(1), projectRevision: z.number().int().positive(), node: workflowNodeSchema,
+  context: projectSchema.pick({ brief: true, style: true, creativeContext: true, profile: true }).partial().extend({ production: productionSettingsSchema.optional() }).optional(),
+  shotId: z.string().min(1).optional(), upstreamRunId: z.string().min(1).optional(),
+});
+export type PromptDraft = z.infer<typeof promptDraftSchema>;
+export const promptPreviewSchema = z.object({
+  digest: z.string(), prompt: z.string(), node: workflowNodeSchema, projectRevision: z.number().int(),
+  model: modelSchema.optional(), skills: z.array(skillSchema), references: z.array(z.object({ id: z.string(), name: z.string(), kind: z.string() })),
+  variables: z.array(z.object({ name: z.string(), source: z.string(), value: jsonValueSchema })),
+  upstream: z.array(z.object({ nodeId: z.string(), label: z.string(), kind: nodeKindSchema })),
+});
+export type PromptPreview = z.infer<typeof promptPreviewSchema>;
+export const promptSessionSchema = z.object({
+  id: z.string(), revision: z.number().int().positive(), draft: promptDraftSchema, preview: promptPreviewSchema,
+  createdAt: z.string(), updatedAt: z.string(),
+});
+export type PromptSession = z.infer<typeof promptSessionSchema>;
+export { resolvePromptBindings, applyPromptLibraryItem, supportsPromptExperiment } from './prompt-bindings.js';
+export { buildMediaPrompt, characterReferencePrompt } from './media-prompts.js';
 export const runStepStatusSchema = z.enum(['pending', 'running', 'waiting_review', 'waiting_external', 'retry_scheduled', 'needs_attention', 'succeeded', 'failed', 'canceled', 'skipped', 'not_recorded']);
 export const runStepSummarySchema = z.object({
   id: z.string().min(1), label: z.string(), kind: nodeKindSchema, description: z.string(), requiresReview: z.boolean(),

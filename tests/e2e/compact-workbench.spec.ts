@@ -34,7 +34,7 @@ for (const viewport of [{ width: 1536, height: 960, theme: 'light' }, { width: 1
     await expect(dialog.getByRole('navigation', { name: '制作设置步骤', exact: true }).getByRole('button')).toHaveText(['1创作要求', '2模型与素材', '3声音与成片', '4确认保存']); await expect(dialog.getByRole('region', { name: '步骤指引', exact: true })).toHaveCount(0);
     await expect(dialog.getByText(/本步产出|前置步骤|后续步骤|一次确定创作方向|完成后等待人工审阅|资料与史实/)).toHaveCount(0);
     await expect(dialog.getByRole('checkbox', { name: /人工审核|人工审阅/ })).toHaveCount(0); expect((await dialog.locator('.dialog__surface').boundingBox())!.height).toBeLessThanOrEqual(viewport.height);
-    await dialog.locator('summary:visible').click();
+    await dialog.locator('summary:visible').filter({ hasText: '高级设置' }).click();
     const prompt = dialog.getByLabel('创意简报补充要求', { exact: true }); await prompt.fill('精简弹窗也保留可编辑的配置');
     await dialog.getByRole('button', { name: '确认保存', exact: true }).click(); const save = dialog.getByRole('button', { name: '保存设置', exact: true }); await expect(save).toBeInViewport({ ratio: 1 });
     await page.screenshot({ path: info.outputPath(`compact-planning-${viewport.theme}-${viewport.width}.png`) }); await save.click(); await expect(dialog).toHaveCount(0);

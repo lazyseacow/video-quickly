@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { stat } from 'node:fs/promises';
-import { projectReadinessSchema, usesVideoAudio, type AssetRecord, type CharacterProfile, type ModelProfile, type ProjectDocument, type ReadinessIssue, type RunSelection, type RuntimeSystem, type SkillPackage, type WorkflowNode } from '@video-quickly/contracts';
+import { creativeReferenceAssetIds, projectCharacterIds, projectReadinessSchema, usesVideoAudio, type AssetRecord, type CharacterProfile, type ModelProfile, type ProjectDocument, type ReadinessIssue, type RunSelection, type RuntimeSystem, type SkillPackage, type WorkflowNode } from '@video-quickly/contracts';
 import { fingerprint } from './activities.js';
 import { audioFileHash } from './audio-preview.js';
 import { ExecutionModelError, validateExecutionModel } from './execution-model.js';
@@ -53,7 +53,7 @@ export function createProjectReadiness(options: {
     }
     if (saved.blockedIssue) add({ ...saved.blockedIssue, severity: 'error' }, 'blocked');
     if (nodes.some(node => node.kind === 'export') && (!options.hasMediaExecutor || !options.system.ffmpegAvailable)) add({ severity: 'error', category: 'environment', message: '媒体导出引擎尚未就绪。', hint: '请检查随应用安装的媒体组件，修复后重新连接执行器并再次检查。', fix: 'runtime' }, 'media-engine');
-    const characterIds = new Set(project.shots.flatMap(shot => shot.characterIds ?? []));
+    const characterIds = new Set(projectCharacterIds(project));
     for (const id of characterIds) {
       const character = characters.get(id);
       if (!character || character.archived) {
@@ -64,6 +64,11 @@ export function createProjectReadiness(options: {
         if (!asset?.active || asset.kind !== 'image' || asset.projectId !== undefined) add({ severity: 'error', category: 'media', assetId, message: `角色「${character.name}」的参考图不再是有效公共图片。`, fix: 'characters' }, `character-asset:${assetId}`);
         else requireAsset(assetId, nodes[0]);
       }
+    }
+    for (const assetId of creativeReferenceAssetIds(project)) {
+      const asset = assets.get(assetId);
+      if (!asset?.active || asset.kind !== 'image' || asset.projectId !== undefined) add({ severity: 'error', category: 'media', assetId, message: '场景或道具的参考图不再是有效公共图片。', hint: '请在制作设置中重新选择参考图片。', fix: 'assets' }, `creative-asset:${assetId}`);
+      else requireAsset(assetId, nodes[0]);
     }
     let futureShots = false, futureImages = false, futureVoice = false;
     for (const node of nodes) {

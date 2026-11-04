@@ -5,11 +5,12 @@ import { dirname, extname, join, resolve } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { z } from 'zod';
 import { probeMedia, renderProject } from '@video-quickly/video/node';
-import { VideoGenerationError, isVideoGenerationNode } from '@video-quickly/contracts';
+import { buildMediaPrompt, VideoGenerationError, isVideoGenerationNode, validateCreativeReferences } from '@video-quickly/contracts';
 import { providerReportedUsage, sumProviderUsage, requestModelParameters, validateModelParameters, type ProviderUsage, type AssetRecord, type CharacterProfile, type JsonValue, type ModelProfile, type PreparedAudioMix, type ProjectDocument, type Shot, type WorkflowNode } from '@video-quickly/contracts';
 import { MediaRequestQueue, mapMediaShots } from './media-concurrency.js';
 import { resolveCharacterReferences, type ResolvedCharacterReferences } from './character-references.js';
 import { resolveReferenceAudio } from './audio-references.js';
+import { resolveImageEdit } from './image-edit.js';
 
 export { createWaveformReader } from './waveform.js';
 export { readResearchSource, searchWikipedia, selectResearchPassages, parseResearchResult } from './research.js';
@@ -45,6 +46,7 @@ export interface MediaActivityContext {
   dataDirectory: string;
   assets: AssetRecord[];
   characters?: CharacterProfile[];
+  promptUpstream?: Record<string, JsonValue>;
   onProgress?: (value: number) => void;
   onDiagnostic?: (event: MediaDiagnosticEvent) => void;
   preparedAudioMix?: PreparedAudioMix;
@@ -107,13 +109,7 @@ function fillTemplate(value: JsonValue, values: Record<string, JsonValue>): Json
 }
 
 function visualPrompt(context: MediaActivityContext, shot: Shot, references: ResolvedCharacterReferences): string {
-  return [context.project.style, shot.visualPrompt, context.node.prompt, references.prompt,
-    ...(isVideoGenerationNode(context.node) ? [
-      shot.narration.trim() ? `实际台词（只朗读以下正文）：${JSON.stringify(shot.narration)}` : '本镜头不需要人声。',
-      `声音要求：${[context.node.config.soundPrompt, shot.soundPrompt].filter(Boolean).join('\n')}`,
-      '画面不生成字幕或文字；台词、人声和环境音直接包含在视频音轨中。',
-    ] : []),
-  ].filter(Boolean).join('\n');
+  return buildMediaPrompt(context.project, context.node, shot, references.characters, context.model, Boolean(currentVideoImage(context, shot)), context.promptUpstream);
 }
 
 function comfyPrompt(context: MediaActivityContext, shot: Shot, references: ResolvedCharacterReferences): Record<string, unknown> {
@@ -156,8 +152,9 @@ function hasExactTemplateValue(value: JsonValue | undefined, placeholder: string
 }
 function validateReferenceProtocol(context: MediaPreflightContext, shot: Shot, references: ResolvedCharacterReferences): void {
   const model = context.model;
-  if (!model || !references.images.length) return;
-  const count = references.images.length;
+  if (!model || !references.images.length && !context.node.config.imageEdit) return;
+  const editSourceId = context.node.config.imageEdit && typeof context.node.config.imageEdit === 'object' && !Array.isArray(context.node.config.imageEdit) ? context.node.config.imageEdit.sourceAssetId : undefined;
+  const count = references.images.length + (typeof editSourceId === 'string' && !references.images.some(image => image.assetId === editSourceId) ? 1 : 0);
   if (model.provider === 'custom-http') {
     if (!hasExactTemplateValue(model.parameters.requestTemplate, '{{character_images}}')) throw new Error('自定义 HTTP 角色参考须在 requestTemplate 中显式配置完整的 {{character_images}} 数组占位符。');
     return;
@@ -174,11 +171,11 @@ function validateReferenceProtocol(context: MediaPreflightContext, shot: Shot, r
   if (context.node.kind === 'assets') {
     if (model.provider === 'openai-compatible') {
       if (/dall-e/i.test(model.model)) throw new Error('当前角色参考使用 GPT Image 图像编辑协议，请选择支持该协议的模型。');
-      if (count > 16) throw new Error('所选图像编辑模型最多支持 16 张角色参考图，请减少参考图。');
+      if (count > 16) throw new Error('所选图像编辑模型最多支持 16 张参考图，请减少参考图。');
       if (references.images.some(image => image.dataUrl.length > 20_971_520)) throw new Error('图像编辑接口的单张参考图 Data URL 超过 20 MiB，请压缩图片。');
     } else if (model.provider === 'seedream') {
       if (/seedream[-_.]?3/i.test(model.model)) throw new Error('Seedream 3.0 文生图模型不支持参考图，请选择支持图像输入的模型。');
-      if (count > 14) throw new Error('Seedream 本次最多支持 14 张角色参考图，请减少参考图。');
+      if (count > 14) throw new Error('Seedream 本次最多支持 14 张参考图，请减少参考图。');
     } else throw new Error('所选图片协议尚未支持角色参考图。');
     return;
   }
@@ -197,6 +194,7 @@ function validateReferenceProtocol(context: MediaPreflightContext, shot: Shot, r
 
 /** Local preflight runs before the external-operation journal or estimated-cost reservation. */
 export async function validateMediaActivity(context: MediaPreflightContext): Promise<void> {
+  validateCreativeReferences(context.project);
   const model = context.model;
   if (!model) return;
   validateModelParameters(model);
@@ -216,13 +214,14 @@ export async function validateMediaActivity(context: MediaPreflightContext): Pro
     }
   }
   if (!['assets', 'animation'].includes(context.node.kind)) return;
+  await resolveImageEdit(context);
   if (model.provider === 'seedance' && isVideoGenerationNode(context.node)) await resolveReferenceAudio({ assetIds: context.project.workflow.production.referenceAudioAssetIds ?? [], assets: context.assets, projectId: context.project.id, signal: context.signal });
   for (const shot of context.project.shots) {
     context.signal?.throwIfAborted();
     const kind = context.node.kind === 'assets' ? 'image' : 'video';
     const existing = context.assets.find(asset => asset.projectId === context.project.id && asset.shotId === shot.id && asset.kind === kind && asset.active);
     if (context.node.config.operation !== 'regenerate' && shot.locked && existing && await validAsset(existing)) continue;
-    const references = await resolveCharacterReferences({ shot, characters: context.characters, assets: context.assets });
+    const references = await resolveCharacterReferences({ project: context.project, shot, characters: context.characters, assets: context.assets });
     context.signal?.throwIfAborted();
     validateReferenceProtocol(context, shot, references);
   }
@@ -367,7 +366,7 @@ async function seedanceVideoBody(context: MediaActivityContext & { model: ModelP
   const imageUrl = image ? `data:${image.mimeType};base64,${(await readFile(image.path)).toString('base64')}` : undefined;
   const multimodal = audio.length > 0 || references.images.length > 0 && context.model.parameters.characterReferenceMode === 'reference_image';
   const images = [...references.images.map(reference => reference.dataUrl), ...(imageUrl ? [imageUrl] : [])];
-  const prompt = visualPrompt(context, shot, references) + (multimodal && imageUrl ? `\n图片 ${images.length} 为当前场景构图参考。` : '');
+  const prompt = visualPrompt(context, shot, references);
   const body = JSON.stringify({ ...parameters, model: context.model.model, content: [
     { type: 'text', text: prompt },
     ...images.map(url => ({ type: 'image_url', image_url: { url }, role: multimodal ? 'reference_image' : 'first_frame' })),
@@ -382,7 +381,8 @@ async function generateMedia(context: MediaActivityContext, directory: string, s
   if (!model) throw new Error('请为此步骤选择相应的生成模型，或先导入素材');
   const parameters = requestModelParameters(model, kind);
   if (kind === 'video') parameters.generate_audio = true;
-  const references = await resolveCharacterReferences({ shot, characters: context.characters, assets: context.assets });
+  const references = await resolveCharacterReferences({ project: context.project, shot, characters: context.characters, assets: context.assets });
+  const imageEdit = await resolveImageEdit(context);
   validateReferenceProtocol(context, shot, references);
   const prompt = visualPrompt(context, shot, references);
   const adjustment = context.node.config.operation === 'regenerate' && typeof context.node.config.instruction === 'string' ? context.node.config.instruction : '';
@@ -424,8 +424,16 @@ async function generateMedia(context: MediaActivityContext, directory: string, s
         const imageParameters = { ...parameters, model: model.model, prompt, n: 1, size: parameters.size ?? defaultSize };
         const editing = references.images.length > 0 && model.provider === 'openai-compatible';
         const imageBody = JSON.stringify({ ...imageParameters, ...(editing ? { images: references.images.map(image => ({ image_url: image.dataUrl })) } : references.images.length && model.provider === 'seedream' ? { image: references.images.map(image => image.dataUrl) } : {}) });
-        const result = await requestJson(endpoint(model.baseUrl, editing ? 'images/edits' : 'images/generations'), context, {
-          method: 'POST', body: imageBody,
+        let requestBody: string | FormData = imageBody;
+        if (imageEdit) {
+          const form = formParameters(imageParameters);
+          form.set('image[]', new Blob([imageEdit.source.bytes], { type: imageEdit.source.asset.mimeType }), 'source' + extname(imageEdit.source.asset.path));
+          for (const image of references.images.filter(image => image.assetId !== imageEdit.source.asset.id)) form.append('image[]', referenceBlob(image.dataUrl, image.mimeType), `reference-${form.getAll('image[]').length}.png`);
+          if (imageEdit.mask) form.set('mask', new Blob([imageEdit.mask.bytes], { type: 'image/png' }), 'mask.png');
+          requestBody = form;
+        }
+        const result = await requestJson(endpoint(model.baseUrl, editing || imageEdit ? 'images/edits' : 'images/generations'), context, {
+          method: 'POST', body: requestBody,
           headers: { 'Idempotency-Key': `${context.operationId}:${shot.id}` },
         });
         const first = Array.isArray(result.data) ? objectSchema.parse(result.data[0]) : undefined;

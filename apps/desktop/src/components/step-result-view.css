@@ -12,6 +12,7 @@
 .step-result__copy > span { color: var(--text-secondary); font-size: var(--text-size-caption); }
 .step-result__animation { margin: var(--space-2) 0 0 calc(var(--space-6) + var(--space-2)); }
 .step-result__document { line-height: var(--line-height-prose); }
+.step-result__document pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 360px; overflow: auto; font: var(--text-size-caption)/var(--line-height-body) var(--font-family-code); }
 .step-result__document > h3 { margin: 0 0 var(--space-4); font-size: var(--text-size-body); font-weight: var(--font-weight-semibold); text-wrap: balance; }
 .step-result__document > p + p { margin-top: var(--space-4); }
 .step-result__media { margin: 0; min-width: 0; }

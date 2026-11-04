@@ -10,6 +10,15 @@ function task(id: string, changes: Partial<WorkflowNode> = {}) {
 }
 
 describe('pending stage configuration', () => {
+  it('retains frozen prompt bindings and template versions in pending configuration', () => {
+    const workflow = createNativeVideoWorkflow();
+    const configured = task('style', { prompt: '{{tone}}', promptBindings: { tone: { literal: '水彩' } }, promptTemplate: { id: 'fixed-style', version: 2 } });
+    const draft = stageConfigurationDraftSchema.parse(updateStageConfigurationDraft(projectId, undefined, workflow.nodes, [configured]));
+    const applied = applyStageConfigurationDraft(workflow, draft);
+    expect(applied.conflicts).toEqual([]);
+    expect(applied.workflow.nodes.find(node => node.id === configured.id)).toEqual(configured);
+    expect(workflow.nodes.find(node => node.id === configured.id)?.promptBindings).toBeUndefined();
+  });
   it('changes only the requested tasks while preserving workflow structure, versions and other nodes', () => {
     const workflow = createNativeVideoWorkflow(), before = structuredClone(workflow);
     const configured = task('style', { modelId: 'next-text-model', prompt: '下一次采用的风格要求。' });

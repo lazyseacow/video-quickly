@@ -1,3 +1,4 @@
+import { confirmAction } from './confirmation-actions';
 import { openProjectFromList } from './workspace-navigation';
 import { createServer, type Server } from 'node:http';
 import { randomUUID } from 'node:crypto';
@@ -88,7 +89,7 @@ test('shows visual results without execution inputs, compares versions, exports 
     await page.screenshot({ path: info.outputPath('run-history-comparison-dark.png') });
     await dialog.getByRole('button', { name: '在项目中查看与应用此版本', exact: true }).click();
     const output = page.getByRole('dialog', { name: '步骤产物', exact: true });
-    await expect(output).toContainText('第 1 版生成风格'); await output.getByRole('button', { name: '应用到项目', exact: true }).click(); await expect(output).toHaveCount(0);
+    await expect(output).toContainText('第 1 版生成风格'); await output.getByRole('button', { name: '应用到项目', exact: true }).click(); await confirmAction(page, '确认应用'); await expect(output).toHaveCount(0);
     await expect.poll(async () => (await saved(request, source.project.id)).style).toBe('第 1 版生成风格');
     await page.getByRole('button', { name: '撤销', exact: true }).click(); await expect.poll(async () => (await saved(request, source.project.id)).style).toBe(source.project.style);
     await page.getByRole('button', { name: '重做', exact: true }).click(); await expect.poll(async () => (await saved(request, source.project.id)).style).toBe('第 1 版生成风格');
@@ -113,7 +114,7 @@ test('keeps late historical reads scoped and retains manual edits when an older 
     const manual = await rpc<ProjectDocument>(request, 'project.update', { projectId: source.project.id, revision: source.project.revision, patch: { style: '人工精修后保留的风格' } });
     await dialog.getByRole('button', { name: '在项目中查看与应用此版本', exact: true }).click();
     const output = page.getByRole('dialog', { name: '步骤产物', exact: true }); await expect(output).toContainText('第 2 版生成风格');
-    expectedErrors = ['Failed to load resource: the server responded with a status of 400 (Bad Request)']; await output.getByRole('button', { name: '应用到项目', exact: true }).click();
+    expectedErrors = ['Failed to load resource: the server responded with a status of 400 (Bad Request)']; await output.getByRole('button', { name: '应用到项目', exact: true }).click(); await confirmAction(page, '确认应用');
     await expect(page.getByRole('alert')).toContainText('项目已在生成后修改'); await expect(output).toBeVisible();
     expect(await saved(request, source.project.id)).toEqual(manual); expect(source.calls()).toBe(3);
   } finally { release(); await page.unrouteAll({ behavior: 'wait' }); await close(source.server); }

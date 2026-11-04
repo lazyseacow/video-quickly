@@ -179,6 +179,16 @@ const PRODUCTION_AUDIO_REFERENCE_SCHEMA = `
   UPDATE documents SET body = body WHERE kind = 'project';
 `;
 
+const episodeSummaryBody = (body: string) => `json_patch(${clipSummaryBody(body)}, json_object('episode', json_extract(${body}, '$.episode'), 'episodeSource', json_extract(${body}, '$.episodeSource')))`;
+const WORK_PRODUCTION_SCHEMA = PRODUCTION_AUDIO_REFERENCE_SCHEMA.replaceAll(clipSummaryBody('new.body'), episodeSummaryBody('new.body')) + `
+  CREATE UNIQUE INDEX projects_work_episode ON documents(json_extract(body, '$.episode.workId'), json_extract(body, '$.episode.number')) WHERE kind = 'project' AND json_type(body, '$.episode') = 'object';
+  CREATE UNIQUE INDEX queue_active_project ON documents(json_extract(body, '$.projectId')) WHERE kind = 'production-queue-item' AND json_extract(body, '$.status') IN ('queued','running','needs_attention','failed');
+  CREATE UNIQUE INDEX queue_running_item ON documents((1)) WHERE kind = 'production-queue-item' AND json_extract(body, '$.status') = 'running';
+  CREATE INDEX queue_order ON documents(json_extract(body, '$.queueId'), json_extract(body, '$.position')) WHERE kind = 'production-queue-item';
+  CREATE UNIQUE INDEX queue_item_run ON documents(json_extract(body, '$.productionQueueItemId')) WHERE kind = 'run' AND json_type(body, '$.productionQueueItemId') = 'text';
+  INSERT INTO runtime_metadata(key, value) VALUES ('work-production', '1');
+`;
+
 export const WORKSPACE_MIGRATIONS: readonly DatabaseMigration[] = [
   { version: 1, name: 'workspace-baseline', sql: INITIAL_SCHEMA },
   { version: 2, name: 'execution-event-index', sql: 'CREATE INDEX execution_events_run_sequence ON execution_events(run_id, sequence);' },
@@ -193,6 +203,13 @@ export const WORKSPACE_MIGRATIONS: readonly DatabaseMigration[] = [
   { version: 9, name: 'workflow-layout', sql: 'SELECT 1;' },
   { version: 10, name: 'native-video-production', sql: `INSERT INTO runtime_metadata(key, value) VALUES ('native-video-production', '1') ON CONFLICT(key) DO UPDATE SET value = excluded.value;` },
   { version: 11, name: 'production-reference-audio', sql: PRODUCTION_AUDIO_REFERENCE_SCHEMA },
+  { version: 12, name: 'project-creative-context', sql: "INSERT INTO runtime_metadata(key, value) VALUES ('creative-context', '1') ON CONFLICT(key) DO UPDATE SET value = excluded.value;" },
+  { version: 13, name: 'prompt-workbench', sql: "INSERT INTO runtime_metadata(key, value) VALUES ('prompt-workbench', '1') ON CONFLICT(key) DO UPDATE SET value = excluded.value;" },
+  { version: 14, name: 'work-episodes-production-queue', sql: WORK_PRODUCTION_SCHEMA },
+  { version: 15, name: 'creative-reference-images-and-media-derivations', sql: PRODUCTION_AUDIO_REFERENCE_SCHEMA
+    .replaceAll(clipSummaryBody('new.body'), episodeSummaryBody('new.body'))
+    .replaceAll("UNION SELECT value FROM json_each(new.body, '$.workflow.production.referenceAudioAssetIds') WHERE type = 'text'", "UNION SELECT value FROM json_each(new.body, '$.workflow.production.referenceAudioAssetIds') WHERE type = 'text' UNION SELECT image.value FROM json_each(new.body, '$.creativeContext.entities') entity JOIN json_each(entity.value, '$.referenceAssetIds') image WHERE image.type = 'text'")
+    + "INSERT INTO runtime_metadata(key, value) VALUES ('media-extensions', '1');" },
 ];
 
 export function openDatabase(directory: string) {

@@ -2,7 +2,7 @@ import { mkdtemp, mkdir, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { applicationId, externalWebUrl, fileInside, pathDialogOptions, rendererIsTrusted, runtimeMediaEnvironment, serveFile, validRuntimeRequest, workspaceDirectory, workspaceName } from '../apps/desktop/electron/platform.mjs';
+import { applicationId, externalWebUrl, fileInside, pathDialogOptions, rendererIsTrusted, rendererPermissionAllowed, runtimeMediaEnvironment, serveFile, validRuntimeRequest, workspaceDirectory, workspaceName } from '../apps/desktop/electron/platform.mjs';
 import { createCredentialHost, credentialEntry } from '../apps/desktop/electron/credentials.mjs';
 
 const directories: string[] = [];
@@ -15,6 +15,20 @@ async function fixture() {
 }
 
 describe('Electron workspace and media boundary', () => {
+  it('permits fullscreen only for the trusted main application document', () => {
+    const contents = { mainFrame: { url: 'video-quickly://app/index.html' } };
+    const details = { isMainFrame: true, requestingUrl: contents.mainFrame.url };
+    expect(rendererPermissionAllowed(contents, 'fullscreen', details, contents)).toBe(true);
+    for (const permission of ['media', 'geolocation', 'notifications', 'automatic-fullscreen']) expect(rendererPermissionAllowed(contents, permission, details, contents)).toBe(false);
+    expect(rendererPermissionAllowed(contents, 'fullscreen', { ...details, isMainFrame: false }, contents)).toBe(false);
+    expect(rendererPermissionAllowed(contents, 'fullscreen', { ...details, requestingUrl: 'https://example.com' }, contents)).toBe(false);
+    expect(rendererPermissionAllowed({ ...contents }, 'fullscreen', details, contents)).toBe(false);
+    expect(rendererPermissionAllowed(null, 'fullscreen', details, contents)).toBe(false);
+    expect(rendererPermissionAllowed(contents, 'fullscreen', undefined, contents)).toBe(false);
+    const development = { mainFrame: { url: 'http://127.0.0.1:1420/' } }, devDetails = { isMainFrame: true, requestingUrl: development.mainFrame.url };
+    expect(rendererPermissionAllowed(development, 'fullscreen', devDetails, development, 'http://127.0.0.1:1420')).toBe(true);
+    expect(rendererPermissionAllowed(development, 'fullscreen', devDetails, development, 'http://127.0.0.1:1421')).toBe(false);
+  });
   it('never falls back to host media tools in a packaged application with missing bundled media', async () => {
     const { root } = await fixture(), media = join(root, 'missing-media');
     const host = { PATH: '/host/tools', VIDEO_QUICKLY_FFMPEG: 'host-ffmpeg', VIDEO_QUICKLY_FFPROBE: 'host-ffprobe' };

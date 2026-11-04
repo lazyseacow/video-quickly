@@ -1,7 +1,7 @@
 .dialog.settings-dialog { width: min(1040px, calc(100vw - 32px)); }
 .settings-dialog > .dialog__surface { height: min(760px, calc(100dvh - 48px)); }
 .settings-dialog .dialog__surface > form { flex: 1; min-height: 0; }
-.dialog.settings-dialog .dialog__body { flex: 1; min-height: 0; padding: 0; overflow: hidden; }
+.dialog.settings-dialog > .dialog__surface > .dialog__body { flex: 1; min-height: 0; padding: 0; overflow: hidden; }
 .settings-sections { display: grid; grid-template-columns: 156px minmax(0, 1fr); min-width: 0; height: 100%; min-height: 0; }
 .settings-sections--preview { grid-template-columns: 144px minmax(0, 1fr) minmax(250px, .85fr); }
 .settings-sections--tabs { display: flex; flex-direction: column; flex: 1; }

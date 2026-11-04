@@ -2,7 +2,7 @@ import { z } from 'zod';
 import { productionSettingsSchema, projectSchema, resolveProductionWorkflow, workflowNodeSchema, type ProductionSettings, type WorkflowDefinition, type WorkflowNode } from '@video-quickly/contracts';
 import { sameContent } from './project-edits';
 
-export const productionProjectSettingsSchema = projectSchema.pick({ brief: true, style: true, profile: true });
+export const productionProjectSettingsSchema = projectSchema.pick({ brief: true, style: true, profile: true, creativeContext: true });
 export type ProductionProjectSettings = z.infer<typeof productionProjectSettingsSchema>;
 export const stageConfigurationDraftSchema = z.object({
   version: z.literal(1),
@@ -49,7 +49,7 @@ export function applyProductionProjectDraft(current: ProductionProjectSettings, 
   if (!draft?.project) return { settings: current, conflicts: [] };
   const { baseline, value } = draft.project;
   const settings = { ...current }, conflicts: string[] = [];
-  for (const field of ['brief', 'style', 'profile'] as const) {
+  for (const field of ['brief', 'style', 'profile', 'creativeContext'] as const) {
     if (sameContent(baseline[field], value[field])) continue;
     if (!sameContent(current[field], baseline[field]) && !sameContent(current[field], value[field])) conflicts.push(field);
     else Object.assign(settings, { [field]: value[field] });

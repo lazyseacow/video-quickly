@@ -78,6 +78,11 @@ export function rendererIsTrusted(event, contents, developmentUrl) {
   } catch { return false; }
 }
 
+export function rendererPermissionAllowed(contents, permission, details, owner, developmentUrl) {
+  if (!contents || contents !== owner || permission !== 'fullscreen' || !details?.isMainFrame || details.requestingUrl !== contents.mainFrame.url) return false;
+  return rendererIsTrusted({ sender: contents, senderFrame: contents.mainFrame }, owner, developmentUrl);
+}
+
 export function pathDialogOptions(input) {
   if (!input || typeof input !== 'object' || !['file', 'directory', 'save'].includes(input.mode)) throw new Error('文件选择参数无效。');
   if (typeof input.title !== 'string' || input.title.length > 200) throw new Error('文件选择标题无效。');

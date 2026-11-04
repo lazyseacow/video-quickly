@@ -7,11 +7,13 @@ import SettingsSections from '../components/SettingsSections';
 import { rpc } from '../lib/client';
 import { useRecordPage } from '../lib/use-record-page';
 import type { Action, WorkspaceView } from '../lib/types';
+import { useConfirmation } from '../components/ConfirmationDialog';
 
 const templatesPage = recordPageSchema(seriesTemplateSchema);
 const defaultSettings: SeriesSettings = { style: '', captionStyle: null, scenePreset: null };
 
 export default function SeriesTemplatesPage({ workspace, action }: { workspace: WorkspaceView; action: Action }) {
+  const confirm = useConfirmation();
   const [archived, setArchived] = useState(false), [editing, setEditing] = useState<SeriesTemplate | 'new'>(), [readingId, setReadingId] = useState(''), [error, setError] = useState('');
   const library = useRecordPage('seriesTemplate.list', { archived, limit: 20 }, workspace.version, templatesPage);
   const readingGeneration = useRef(0); useEffect(() => { setReadingId(''); return () => { readingGeneration.current++; }; }, []);
@@ -23,6 +25,7 @@ export default function SeriesTemplatesPage({ workspace, action }: { workspace: 
     finally { if (request === readingGeneration.current) setReadingId(''); }
   }
   async function archive(template: SeriesTemplate) {
+    if (!archived && !await confirm({ title: '归档系列模板？', description: `“${template.name}”将移入已归档模板。已有项目的内容会保留，之后可恢复模板。`, confirmLabel: '确认归档' })) return;
     const request = ++readingGeneration.current;
     setReadingId(template.id); setError('');
     try { await rpc(archived ? 'seriesTemplate.restore' : 'seriesTemplate.archive', { templateId: template.id, revision: template.revision }); if (request === readingGeneration.current) library.refresh(); }

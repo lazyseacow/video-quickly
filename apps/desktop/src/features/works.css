@@ -1,0 +1,26 @@
+.works-panel .page-heading > div { min-width: 0; }
+.works-panel h1, .work-card h2, .episode-content h3, .queue-item h3 { overflow-wrap: anywhere; }
+.work-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 320px), 1fr)); gap: var(--space-4); }
+.work-card h2 { margin: 0 0 var(--space-2); font-size: var(--text-size-title); }
+.work-card p { color: var(--text-secondary); }
+.work-actions { display: flex; flex-wrap: wrap; gap: var(--space-2); align-items: center; margin: var(--space-3) 0; }
+.work-fieldset { padding: 0; margin: 0; border: 0; min-width: 0; }
+.work-form-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-3); }
+.work-checks { display: grid; gap: var(--space-3); }
+.episode-list { display: grid; gap: var(--space-3); }
+.episode-row { display: flex; align-items: center; gap: var(--space-4); }
+.episode-choice { display: flex; gap: var(--space-2); align-items: center; white-space: nowrap; }
+.episode-content { flex: 1; min-width: 0; }
+.episode-content h3, .queue-item h3 { margin: 0; }
+.episode-content p { margin: var(--space-1) 0 0; }
+.episode-row > .work-actions { margin: 0; }
+.episode-draft { padding-top: var(--space-4); border-top: 1px solid var(--border-subtle); }
+.queue-summary { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-3); padding: var(--space-4) 0; }
+.queue-summary span { color: var(--text-secondary); font-variant-numeric: tabular-nums; }
+.queue-items { display: grid; gap: var(--space-3); list-style: none; padding: 0; margin: var(--space-4) 0; }
+.queue-item__heading { display: flex; gap: var(--space-3); justify-content: space-between; align-items: center; }
+.queue-item__status { color: var(--text-secondary); white-space: nowrap; font-size: var(--text-size-caption); }
+.queue-item__status--needs_attention, .queue-item__status--failed { color: var(--danger); }
+.queue-item__status--succeeded { color: var(--success); }
+.production-queue { min-width: 0; }
+@media (max-width: 760px) { .episode-row { flex-wrap: wrap; gap: var(--space-3); } .episode-row > .work-actions { width: 100%; } .work-form-grid { grid-template-columns: minmax(0, 1fr); } }

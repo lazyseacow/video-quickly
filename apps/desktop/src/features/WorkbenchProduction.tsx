@@ -3,7 +3,7 @@ import { Check, RefreshCw } from 'lucide-react';
 import { runInspectionSchema, type ResolvedWorkflowStage, type RunStepSummary, type RunSummary, type WorkflowDefinition, type WorkflowNode, type WorkflowStage } from '@video-quickly/contracts';
 import { Button, Notice, statusLabels } from '../components/Primitives';
 import { useRuntimeRead } from '../lib/use-runtime-read';
-import type { Action, StepOutputSelection } from '../lib/types';
+import type { Action } from '../lib/types';
 import { stepGuidance } from '../lib/workflow-guidance';
 import { resolveWorkbenchStages } from '../lib/workbench-stages';
 import { isConfigurationFailure } from '../lib/run-recovery';
@@ -32,9 +32,9 @@ function groupProgress(stages: WorkflowStage[] | undefined, steps: ProgressTask[
   return groups;
 }
 
-export default function WorkbenchProduction({ workflow, run, version, action, onOpenOutput, onPausePreview, onConfigureStage }: {
+export default function WorkbenchProduction({ workflow, run, version, action, onPausePreview, onConfigureStage }: {
   workflow: WorkflowDefinition; run: RunSummary; version: number; action: Action;
-  onOpenOutput: (selection: StepOutputSelection) => void; onPausePreview: () => void;
+  onPausePreview: () => void;
   onConfigureStage: (stage: ResolvedWorkflowStage, options?: { tab?: 'settings' | 'run'; nodeId?: string }) => void;
 }) {
   const inspection = useRuntimeRead('run.inspect', { runId: run.id }, version, runInspectionSchema);
@@ -55,8 +55,6 @@ export default function WorkbenchProduction({ workflow, run, version, action, on
   const isCurrent = (step: { id: string }) => step.id === run.currentNodeId && !['succeeded', 'canceled'].includes(run.status);
   const stages = groupProgress(data?.stages ?? resolveWorkbenchStages(workflow), tasks);
   const groups = stages ?? tasks.map(task => ({ key: `task:${task.id}`, label: task.step?.label ?? task.label, description: task.description, tasks: [task] }));
-  const usefulOutput = steps.findLast(step => step.outputAvailable && ['script', 'style', 'assets', 'animation', 'research', 'export'].includes(step.kind));
-  const output = current?.outputAvailable && !['review', 'brief', 'condition', 'join'].includes(current.kind) ? current : usefulOutput ?? steps.findLast(step => step.outputAvailable);
   // Completion clears the execution pointer, but the last stage stays selected.
   const latestStep = steps.reduce<RunStepSummary | undefined>((latest, step) => {
     if (!step.startedAt && !step.outputAvailable && step.status !== 'succeeded') return latest;
@@ -103,11 +101,10 @@ export default function WorkbenchProduction({ workflow, run, version, action, on
     {(run.error || data?.recovery.reason) && <Notice kind="error"><span>{run.error || data?.recovery.reason}</span>{configurationFailure && <span>请从顶部“制作设置”调整配置后重新制作。</span>}</Notice>}
     {inspection.error && <Notice kind="error">{inspection.error}<Button static onClick={inspection.refresh}><RefreshCw size={14} />重试读取制作进度</Button></Notice>}
     {error && <Notice kind="error">{error}</Notice>}
-    <div className="workbench-production__actions">
+    {data?.recovery.resume && !configurationFailure && <div className="workbench-production__actions">
       <div className="workbench-production__buttons">
-        {output && <Button static disabled={blocked || Boolean(pending)} onClick={() => { onPausePreview(); onOpenOutput({ projectId: run.projectId, runId: run.id, nodeId: output.id, kind: output.kind }); }}>查看产物</Button>}
-        {data?.recovery.resume && !configurationFailure && <Button static variant="primary" busy={pending === 'run.resume'} disabled={blocked || Boolean(pending)} onClick={() => void perform('run.resume')}>继续原制作</Button>}
+        <Button static variant="primary" busy={pending === 'run.resume'} disabled={blocked || Boolean(pending)} onClick={() => void perform('run.resume')}>继续原制作</Button>
       </div>
-    </div>
+    </div>}
   </section>;
 }

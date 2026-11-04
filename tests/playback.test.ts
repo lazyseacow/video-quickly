@@ -115,4 +115,102 @@ describe('local preview clock', () => {
     expect(callbacks.size).toBe(0);
     unsubscribe(); listener.mockClear(); clock.seek(0); expect(listener).not.toHaveBeenCalled();
   });
+
+  it('holds play intent and discards elapsed loading time until the exact picture is acknowledged', () => {
+    const clock = new PlaybackClock(10_000_000, { numerator: 30, denominator: 1 });
+    let readyUs = -1;
+    const gate = { constrainTime: (_from: number, requested: number) => requested, isFrameReady: (timeUs: number) => timeUs === readyUs };
+    clock.attachFrameGate(gate); clock.toggle();
+    expect(clock.getSnapshot()).toEqual({ timeUs: 0, playing: true, buffering: true });
+    expect(callbacks.size).toBe(0);
+    advance(1300);
+    expect(clock.getSnapshot().timeUs).toBe(0);
+    readyUs = 0; clock.refreshFrameGate(gate); clock.refreshFrameGate(gate);
+    expect(clock.getSnapshot()).toEqual({ timeUs: 0, playing: true }); expect(callbacks.size).toBe(1);
+    advance(34); clock.refreshFrameGate(gate);
+    expect(clock.getSnapshot()).toEqual({ timeUs: 33333, playing: true, buffering: true });
+    advance(900); readyUs = 33333; clock.refreshFrameGate(gate);
+    advance(34);
+    expect(clock.getSnapshot()).toEqual({ timeUs: 66667, playing: true });
+    clock.dispose();
+  });
+
+  it('clamps a stalled tick to the first incoming sample and re-anchors its transition clock', () => {
+    const clock = new PlaybackClock(10_000_000, { numerator: 30, denominator: 1 });
+    const gate = { constrainTime: (from: number, requested: number) => from < 1_000_000 && requested >= 1_000_000 ? 1_000_000 : requested, isFrameReady: () => true };
+    clock.attachFrameGate(gate); clock.toggle(); advance(1450);
+    expect(clock.getSnapshot()).toEqual({ timeUs: 1_000_000, playing: true });
+    advance(34);
+    expect(clock.getSnapshot()).toEqual({ timeUs: 1_033_333, playing: true });
+    clock.dispose();
+  });
+
+  it('still presents an unseen boundary when a stalled RAF runs past the project end', () => {
+    const clock = new PlaybackClock(2_000_000, { numerator: 30, denominator: 1 });
+    const gate = { constrainTime: (from: number, requested: number) => from < 1_000_000 && requested >= 1_000_000 ? 1_000_000 : requested, isFrameReady: () => true };
+    clock.attachFrameGate(gate); clock.toggle(); advance(2500);
+    expect(clock.getSnapshot()).toEqual({ timeUs: 1_000_000, playing: true });
+    advance(34); expect(clock.getSnapshot()).toEqual({ timeUs: 1_033_333, playing: true });
+    clock.dispose();
+  });
+
+  it('waits for the last picture before completing a gated project', () => {
+    const clock = new PlaybackClock(2_000_000, { numerator: 30, denominator: 1 });
+    let readyUs = 0;
+    const gate = { constrainTime: (_from: number, requested: number) => requested, isFrameReady: (timeUs: number) => timeUs === readyUs };
+    clock.attachFrameGate(gate); clock.toggle(); advance(2500); clock.refreshFrameGate(gate);
+    expect(clock.getSnapshot()).toEqual({ timeUs: 1_966_667, playing: true, buffering: true });
+    advance(500); readyUs = 1_966_667; clock.refreshFrameGate(gate); advance(34);
+    expect(clock.getSnapshot()).toEqual({ timeUs: 1_966_667, playing: false }); expect(callbacks.size).toBe(0);
+    clock.dispose();
+  });
+
+  for (const command of ['pause', 'toggle', 'seek', 'deferred-seek', 'configure', 'detach', 'dispose'] as const) it(`does not resume a buffered frame after ${command}`, () => {
+    const clock = new PlaybackClock(10_000_000, { numerator: 30, denominator: 1 });
+    let ready = false;
+    const gate = { constrainTime: (_from: number, requested: number) => requested, isFrameReady: () => ready };
+    const detach = clock.attachFrameGate(gate); clock.toggle();
+    expect(clock.getSnapshot().buffering).toBe(true);
+    if (command === 'pause') clock.pause();
+    if (command === 'toggle') clock.toggle();
+    if (command === 'seek') clock.seek(500_000);
+    if (command === 'deferred-seek') clock.seekIfUnchanged(clock.transportRevision, 500_000);
+    if (command === 'configure') clock.configure(9_000_000, { numerator: 60, denominator: 1 });
+    if (command === 'detach') detach();
+    if (command === 'dispose') clock.dispose();
+    ready = true; clock.refreshFrameGate(gate); advance(1000);
+    expect(clock.getSnapshot().playing).toBe(false); expect(clock.getSnapshot().buffering).toBeUndefined(); expect(callbacks.size).toBe(0);
+    clock.dispose();
+  });
+
+  it('ignores obsolete owners and can reattach after a StrictMode cleanup', () => {
+    const clock = new PlaybackClock(10_000_000, { numerator: 30, denominator: 1 });
+    const oldGate = { constrainTime: (_from: number, requested: number) => requested, isFrameReady: () => false };
+    const detachOld = clock.attachFrameGate(oldGate); clock.toggle();
+    let ready = false;
+    const gate = { ...oldGate, isFrameReady: () => ready };
+    clock.attachFrameGate(gate); detachOld();
+    ready = true; clock.refreshFrameGate(oldGate);
+    expect(clock.getSnapshot().buffering).toBe(true); expect(callbacks.size).toBe(0);
+    clock.refreshFrameGate(gate);
+    expect(clock.getSnapshot()).toEqual({ timeUs: 0, playing: true }); expect(callbacks.size).toBe(1);
+    clock.dispose(); clock.refreshFrameGate(gate);
+    expect(callbacks.size).toBe(0);
+    clock.attachFrameGate(gate); clock.toggle();
+    expect(clock.getSnapshot()).toEqual({ timeUs: 0, playing: true }); expect(callbacks.size).toBe(1);
+    clock.dispose();
+  });
+
+  it('ignores a canceled callback and keeps one RAF after synchronous frame acknowledgements', () => {
+    const clock = new PlaybackClock(10_000_000, { numerator: 30, denominator: 1 });
+    const gate = { constrainTime: (_from: number, requested: number) => requested, isFrameReady: () => true };
+    clock.attachFrameGate(gate);
+    clock.subscribe(() => clock.refreshFrameGate(gate));
+    clock.toggle(); const canceled = [...callbacks.values()][0]; clock.pause(); clock.toggle();
+    now = 34; canceled(34);
+    expect(clock.getSnapshot().timeUs).toBe(0); expect(callbacks.size).toBe(1);
+    advance(0);
+    expect(clock.getSnapshot().timeUs).toBe(33333); expect(callbacks.size).toBe(1);
+    clock.dispose(); expect(callbacks.size).toBe(0);
+  });
 });

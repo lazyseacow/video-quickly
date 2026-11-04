@@ -68,13 +68,14 @@ for (const viewport of [{ width: 1536, height: 960, theme: 'light' }, { width: 6
     await page.screenshot({ path: info.outputPath('keyboard-settings-return.png') });
   });
 
-  test('preserves arrow navigation, combobox editing, sliders and help while switching input methods', async ({ page, request }, info) => {
+  test('preserves step navigation, combobox editing, sliders and help while switching input methods', async ({ page, request }, info) => {
     const source = await productionFixture(request), dialog = await openProduction(page, source.project);
-    const materials = dialog.getByRole('tab', { name: '素材与配音', exact: true }), delivery = dialog.getByRole('tab', { name: '审阅与导出', exact: true });
+    const navigation = dialog.getByRole('navigation', { name: '制作设置步骤', exact: true });
+    const materials = navigation.getByRole('button', { name: '模型与素材', exact: true }), delivery = navigation.getByRole('button', { name: '声音与成片', exact: true });
     await materials.click(); await expect(materials).toBeFocused(); await expect(materials).toHaveCSS('outline-style', 'none');
-    await materials.press('ArrowRight'); await expect(delivery).toBeFocused(); await expect(delivery).toHaveAttribute('aria-selected', 'true'); await expect(delivery).toHaveCSS('outline-style', 'solid');
+    await materials.press('Tab'); await expect(delivery).toBeFocused(); await delivery.press('Enter'); await expect(delivery).toHaveAttribute('aria-current', 'step'); await expect(delivery).toHaveCSS('outline-style', 'solid');
     await delivery.click(); await expect(delivery).toBeFocused(); await expect(delivery).toHaveCSS('outline-style', 'none');
-    await delivery.press('ArrowLeft'); await expect(materials).toBeFocused(); await expect(materials).toHaveCSS('outline-style', 'solid');
+    await delivery.press('Shift+Tab'); await expect(materials).toBeFocused(); await materials.press('Enter'); await expect(materials).toHaveAttribute('aria-current', 'step'); await expect(materials).toHaveCSS('outline-style', 'solid');
     const video = dialog.getByRole('combobox', { name: '视频模型', exact: true });
     await video.fill(source.video.name); await video.press('ArrowDown'); await video.press('Enter'); await expect(video).toHaveValue(source.video.name);
     await dialog.getByRole('button', { name: '展开视频模型列表', exact: true }).click();

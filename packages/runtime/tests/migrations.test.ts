@@ -15,6 +15,45 @@ afterEach(async () => { for (const directory of directories.splice(0)) await rm(
 async function directory() { const path = await mkdtemp(join(tmpdir(), 'vq-migration-')); directories.push(path); return path; }
 
 describe('workspace database upgrades', () => {
+  it('upgrades a v13 workspace, retains old snapshots and projects, and projects unique episode memberships', async () => {
+    const path = await directory(), legacy = new Database(join(path, 'workspace.sqlite'));
+    legacy.function('vq_thumbnail', { deterministic: true }, (body: unknown) => JSON.stringify(thumbnailShot(JSON.parse(String(body)))));
+    const previousMigrations = WORKSPACE_MIGRATIONS.filter(migration => migration.version <= 13);
+    migrateDatabase(legacy, path, previousMigrations);
+    const project = projectSchema.parse({ id: 'pre-work-project', revision: 1, title: '已有独立项目', brief: '', profile: DEFAULT_VIDEO_PROFILE, workflow: createNativeVideoWorkflow(), shots: [], createdAt: '', updatedAt: '' });
+    new DocumentStore(legacy).put('project', project.id, project);
+    new DocumentStore(legacy).put('run-snapshot', 'preserved-prompt-trial', { project, trial: { preview: { prompt: '固定的旧提示词' } } }); legacy.close();
+    const upgraded = openDatabase(path), store = new DocumentStore(upgraded);
+    try {
+      expect(upgraded.prepare("SELECT value FROM runtime_metadata WHERE key = 'work-production'").get()).toEqual({ value: '1' });
+      expect(store.get('project', project.id)).toEqual(project);
+      expect(store.get('run-snapshot', 'preserved-prompt-trial')).toMatchObject({ trial: { preview: { prompt: '固定的旧提示词' } } });
+      const member = { ...project, episode: { workId: 'work-fixture', number: 1, originalText: '原始文案' } };
+      store.put('project', project.id, member);
+      expect(projectSummarySchema.parse(store.get('project-summary', project.id)).episode).toEqual(member.episode);
+      expect(() => store.put('project', 'duplicate-episode', { ...member, id: 'duplicate-episode' })).toThrow('UNIQUE');
+      expect(() => migrateDatabase(upgraded, path, previousMigrations)).toThrow(DatabaseMigrationError);
+    } finally { upgraded.close(); }
+  });
+  it('upgrades production workspaces before creative fields can be stored and rejects reopening with older parsers', async () => {
+    const path = await directory(), previous = new Database(join(path, 'workspace.sqlite'));
+    previous.function('vq_thumbnail', { deterministic: true }, (body: unknown) => {
+      if (typeof body !== 'string') throw new Error('Expected a project document');
+      return JSON.stringify(thumbnailShot(JSON.parse(body)));
+    });
+    const legacy = WORKSPACE_MIGRATIONS.filter(migration => migration.version <= 11);
+    migrateDatabase(previous, path, legacy);
+    const snapshot = { project: { id: 'frozen', shots: [] }, characters: [], characterAssets: [] };
+    new DocumentStore(previous).put('run-snapshot', 'old-run', snapshot); previous.close();
+    const upgraded = openDatabase(path);
+    try {
+      expect(new DocumentStore(upgraded).get('run-snapshot', 'old-run')).toEqual(snapshot);
+      expect(upgraded.prepare("SELECT value FROM runtime_metadata WHERE key = 'creative-context'").get()).toEqual({ value: '1' });
+      expect(upgraded.prepare("SELECT value FROM runtime_metadata WHERE key = 'prompt-workbench'").get()).toEqual({ value: '1' });
+      expect(() => migrateDatabase(upgraded, path, legacy)).toThrow('高于此客户端支持的版本');
+    } finally { upgraded.close(); }
+  });
+
   it('adds the active-run index to v7 without changing documents, rowids or checkpoints', async () => {
     const path = await directory(), previous = new Database(join(path, 'workspace.sqlite'));
     previous.function('vq_thumbnail', { deterministic: true }, body => {
@@ -79,7 +118,7 @@ describe('workspace database upgrades', () => {
   it('creates a versioned database and does not back up on every reopen', async () => {
     const path = await directory(); const db = openDatabase(path);
     expect(db.pragma('user_version', { simple: true })).toBe(currentVersion);
-    expect(db.prepare('SELECT name FROM schema_migrations ORDER BY version').all()).toEqual([{ name: 'workspace-baseline' }, { name: 'execution-event-index' }, { name: 'workspace-read-models' }, { name: 'audio-asset-references' }, { name: 'project-summary-caption-style' }, { name: 'clip-edit-references-and-first-frame' }, { name: 'workflow-composition-and-keyframe-capabilities' }, { name: 'active-project-runs-index' }, { name: 'workflow-layout' }, { name: 'native-video-production' }, { name: 'production-reference-audio' }]);
+    expect(db.prepare('SELECT name FROM schema_migrations ORDER BY version').all()).toEqual([{ name: 'workspace-baseline' }, { name: 'execution-event-index' }, { name: 'workspace-read-models' }, { name: 'audio-asset-references' }, { name: 'project-summary-caption-style' }, { name: 'clip-edit-references-and-first-frame' }, { name: 'workflow-composition-and-keyframe-capabilities' }, { name: 'active-project-runs-index' }, { name: 'workflow-layout' }, { name: 'native-video-production' }, { name: 'production-reference-audio' }, { name: 'project-creative-context' }, { name: 'prompt-workbench' }, { name: 'work-episodes-production-queue' }, { name: 'creative-reference-images-and-media-derivations' }]);
     db.close(); openDatabase(path).close();
     expect(await readdir(path)).not.toContain('database-backups');
   });

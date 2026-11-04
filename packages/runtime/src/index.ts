@@ -19,7 +19,8 @@ import { createExecutionGraph } from './graph.js';
 import { AsyncLocalStorageProviderSingleton } from '@langchain/core/singletons';
 import { validateWorkflowComposition, workflowNodesWithSubflows, workflowEdgesWithSubflows, resolveSubflowInputs, substituteSubflowInputs, subflowNodeId, subflowThreadId, subflowValueAt, type SubflowDefinition } from '@video-quickly/contracts';
 import { createWorkflowTemplateLibrary } from './workflow-templates.js';
-import { buildWorkflowPrompt, parseWorkflowShots, type WorkflowUpstreamResult } from './workflow-prompts.js';
+import { buildWorkflowPrompt, parseWorkflowScript, type WorkflowUpstreamResult } from './workflow-prompts.js';
+import { creativeContextSchema, projectCharacterIds, shotCreativePrompt, validateCreativeReferences } from '@video-quickly/contracts';
 import { executeMediaGraph } from './media-graph.js';
 import { discoverModels, generateText, testModelConnection, type ModelRequestPhase, type TextProvider } from './providers.js';
 import { seedExampleProject } from './seed.js';
@@ -39,6 +40,17 @@ import { createRunInspector, redactInspectionText } from './run-inspection.js';
 import { createLogger, logError, type DiagnosticLogger } from './logging.js';
 import { createProjectReadiness } from './project-readiness.js';
 import { validateExecutionModel } from './execution-model.js';
+import { buildMediaPrompt, resolvePromptBindings, supportsPromptExperiment, type PromptDraft, type PromptPreview, type PromptSession } from '@video-quickly/contracts';
+import { createPromptLibrary } from './prompt-library.js';
+import { createPromptWorkbench } from './prompt-workbench.js';
+import { createWorkLibrary } from './works.js';
+import { createProductionQueue } from './production-queue.js';
+import { createImageTools } from './image-tools.js';
+import { resolveImageEdit } from '@video-quickly/integrations/image-edit';
+import { imageEditInputSchema, creativeReferenceAssetIds, type ImageEditInput } from '@video-quickly/contracts';
+import { prepareWorkflowAssistant, parseWorkflowAssistantResult, type WorkflowAssistantContext } from './workflow-assistant.js';
+import { workflowNodeSchema } from '@video-quickly/contracts';
+import { type ProductionQueueItem } from '@video-quickly/contracts';
 
 export { ActivityJournal, AmbiguousActivityError, SimulatedProcessExit } from './activities.js';
 export type { ActivityContext } from './activities.js';
@@ -65,6 +77,7 @@ export interface ActivityExecutionContext {
   model?: ModelProfile;
   apiKey?: string;
   characters?: CharacterProfile[];
+  promptUpstream?: Record<string, JsonValue>;
   onProgress?: (value: number) => void;
   onDiagnostic?: (event: MediaDiagnosticEvent) => void;
   preparedAudioMix?: PreparedAudioMix;
@@ -88,7 +101,7 @@ export interface RuntimeOptions {
   ffmpegPath?: string;
 }
 
-interface RunSnapshot {
+export interface RunSnapshot {
   project: ProjectDocument;
   models: ModelProfile[];
   skills: SkillPackage[];
@@ -98,18 +111,20 @@ interface RunSnapshot {
   inspectionNodes?: WorkflowNode[];
   inspectionThreads?: Record<string, string>;
   inspectionEdges?: WorkflowDefinition['edges'];
-  regeneration?: { shotId: string; kind: ShotCandidateKind; baseline: Shot; instruction?: string };
+  regeneration?: { shotId: string; kind: ShotCandidateKind; baseline: Shot; instruction?: string; imageEdit?: ImageEditInput };
+  assistant?: WorkflowAssistantContext;
   characters?: CharacterProfile[];
   characterAssets?: AssetRecord[];
   assets?: AssetRecord[];
   exportBatch?: { batchId: string; targetId: string };
   research?: { sourceIds?: string[]; instruction?: string };
   selection?: RunSelection;
+  trial?: { inputProject: ProjectDocument; upstream: WorkflowUpstreamResult[]; preview: PromptPreview };
 }
 
 const entityId = z.object({ projectId: z.string().min(1) });
 const runIdInput = z.object({ runId: z.string().min(1) });
-const regenerationInput = z.object({ shotId: z.string().min(1), kind: shotCandidateKindSchema, modelId: z.string().min(1).optional(), instruction: z.string().max(10_000).optional() });
+const regenerationInput = z.object({ shotId: z.string().min(1), kind: shotCandidateKindSchema, modelId: z.string().min(1).optional(), instruction: z.string().max(10_000).optional(), imageEdit: imageEditInputSchema.optional() });
 const researchInput = z.object({ modelId: z.string().min(1), sourceIds: z.array(z.string().min(1)).min(1).max(20).optional(), instruction: z.string().max(10_000).optional() });
 const now = () => new Date().toISOString();
 
@@ -157,7 +172,9 @@ export function createRuntime(options: RuntimeOptions) {
   function rememberSecret(value: string | undefined) { if (value) transientSecrets.add(value); return value; }
   let closing = false;
   let workspaceVersion = 0;
-  const changed = () => { workspaceVersion++; emit({ type: 'workspace.changed' }); };
+  let productionQueue: ReturnType<typeof createProductionQueue> | undefined;
+  const editorExports = new Map<string, AbortController>();
+  const changed = () => { workspaceVersion++; emit({ type: 'workspace.changed' }); productionQueue?.notify(); };
   function emit(event: RuntimeEvent) { for (const listener of listeners) listener(event); }
   const assetRecovery = createAssetRecovery({ directory, store, onRestored(assetIds) { workspaceVersion++; emit({ type: 'workspace.changed', data: { repairedAssetIds: assetIds } }); } });
   const journal = new ActivityJournal(database, { failpoint: options.failpoint, onEvent: changed, logger });
@@ -165,6 +182,11 @@ export function createRuntime(options: RuntimeOptions) {
   const characters = createCharacterLibrary({ database, store, onChanged: changed });
   const seriesTemplates = createSeriesTemplateLibrary({ database, store, onChanged: changed });
   const workflowTemplates = createWorkflowTemplateLibrary({ database, store, onChanged: changed });
+  const promptLibrary = createPromptLibrary(database, store, changed);
+  const imageTools = createImageTools({ store, directory, changed });
+  const promptWorkbench = createPromptWorkbench({ database, store, prepare: preparePromptDraft, changed, start: startPromptTrial, schedule });
+  const works = createWorkLibrary({ database, store, project, saveProject, changed,
+    reserved: id => projectBusy(id), validateDefaults: defaults => { characters.profilesFor({ creativeContext: defaults.creativeContext, shots: [] }); } });
   const audioPreview = createAudioPreview({ directory, store, callbacks: options.audioMix, project, validate: value => { validateEdits(value, project(value.id)); validateResearchProject(value, project(value.id)); characters.profilesFor(value); } });
   const runInspector = createRunInspector({ database, store, dataDirectory: directory, run,
     async secrets(models) {
@@ -215,11 +237,12 @@ export function createRuntime(options: RuntimeOptions) {
     const protocols: readonly string[] = configuration.protocols;
     if (!model?.enabled || !model.capabilities.includes(configuration.capability) || !protocols.includes(model.provider)) throw new Error(`请为镜头${configuration.label}重新生成选择可用的对应模型。`);
     const instruction = input.instruction?.trim();
+    if (input.imageEdit && (input.kind !== 'image' || !instruction || shot.sceneTemplate || shot.assetId !== input.imageEdit.sourceAssetId)) throw new Error('局部改图需要当前镜头图片及明确的修改要求。');
     return {
       id: 'regenerate', kind: configuration.nodeKind, label: `重新生成镜头${configuration.label}`,
       description: template?.description ?? '', prompt: [template?.prompt, instruction].filter(Boolean).join('\n\n'),
       modelId: model.id, skillIds: template?.skillIds ?? [], position: template?.position ?? { x: 0, y: 0 }, requiresReview: false,
-      config: { ...template?.config, operation: 'regenerate', shotId: shot.id, regenerationKind: input.kind, ...(instruction ? { instruction } : {}) },
+      config: { ...template?.config, operation: 'regenerate', shotId: shot.id, regenerationKind: input.kind, ...(instruction ? { instruction } : {}), ...(input.imageEdit ? { imageEdit: input.imageEdit } : {}) },
     };
   }
 
@@ -231,8 +254,19 @@ export function createRuntime(options: RuntimeOptions) {
     }
   }
 
-  async function validateCharacterAssets(profiles: CharacterProfile[], references: AssetRecord[]) {
-    const ids = new Set(profiles.flatMap(profile => profile.referenceAssetIds));
+  async function validatePromptAssets(assets: AssetRecord[]) {
+    requireCandidateAssets(assets);
+    for (const asset of assets) {
+      const info = await stat(asset.path).catch(() => undefined);
+      if (!info?.isFile() || info.size !== asset.size) throw new Error('实验输入素材缺失或损坏，请修复后重新预览。');
+      const hash = createHash('sha256');
+      for await (const chunk of createReadStream(asset.path)) hash.update(chunk);
+      if (hash.digest('hex') !== asset.sha256) throw new Error('实验输入素材校验失败，请修复后重新预览。');
+    }
+  }
+
+  async function validateCharacterAssets(profiles: CharacterProfile[], references: AssetRecord[], creativeIds: string[] = []) {
+    const ids = new Set([...profiles.flatMap(profile => profile.referenceAssetIds), ...creativeIds]);
     if (ids.size !== references.length || references.some(asset => !ids.has(asset.id) || !asset.active || asset.kind !== 'image' || asset.projectId !== undefined)) throw new Error('角色参考图快照无效。');
     for (const reference of references) {
       const info = await stat(reference.path).catch(() => undefined);
@@ -269,14 +303,23 @@ export function createRuntime(options: RuntimeOptions) {
     if (!stored) throw new Error('候选不存在。');
     const candidate = shotCandidateSchema.parse(stored);
     const record = store.get<RunRecord>('run', candidate.runId);
-    const row = database.prepare("SELECT json_extract(body, '$.regeneration') AS regeneration, json_extract(body, '$.characters') AS characters, json_extract(body, '$.characterAssets') AS characterAssets FROM documents WHERE kind = 'run-snapshot' AND id = ?").get(candidate.runId) as { regeneration: string | null; characters: string | null; characterAssets: string | null } | undefined;
-    const metadata = row?.regeneration ? z.object({ shotId: z.string(), kind: shotCandidateKindSchema, baseline: shotSchema }).parse(JSON.parse(row.regeneration)) : undefined;
+    const row = database.prepare("SELECT json_extract(body, '$.regeneration') AS regeneration, json_extract(body, '$.characters') AS characters, json_extract(body, '$.characterAssets') AS characterAssets, CASE WHEN json_type(body, '$.trial') = 'object' THEN json_extract(body, '$.trial.inputProject.creativeContext') ELSE json_extract(body, '$.project.creativeContext') END AS creativeContext FROM documents WHERE kind = 'run-snapshot' AND id = ?").get(candidate.runId) as { regeneration: string | null; characters: string | null; characterAssets: string | null; creativeContext: string | null } | undefined;
+    const metadata = row?.regeneration ? z.object({ shotId: z.string(), kind: shotCandidateKindSchema, baseline: shotSchema, imageEdit: imageEditInputSchema.optional() }).parse(JSON.parse(row.regeneration)) : undefined;
     const activity = journal.get(candidate.runId, candidate.nodeId);
     if (candidate.projectId !== projectId || record?.projectId !== projectId || record.status !== 'succeeded' || activity?.status !== 'completed' || metadata?.shotId !== candidate.shotId || metadata.kind !== candidate.kind || fingerprint(metadata.baseline) !== fingerprint(candidate.baseline) || candidate.shot.id !== candidate.shotId) throw new Error('候选未完成或不属于当前镜头项目。');
     const profiles = row?.characters ? z.array(characterProfileSchema).parse(JSON.parse(row.characters)) : [];
     if (fingerprint(profiles) !== fingerprint(candidate.characters ?? [])) throw new Error('候选角色与生成快照不匹配。');
     const references = row?.characterAssets ? z.array(assetSchema).parse(JSON.parse(row.characterAssets)) : [];
-    await validateCharacterAssets(profiles, references);
+    const editAssets: AssetRecord[] = [];
+    if (metadata?.imageEdit) {
+      const frozen = store.get<RunSnapshot>('run-snapshot', candidate.runId);
+      const node = frozen?.nodes.find(node => node.id === candidate.nodeId);
+      if (!frozen || !node) throw new Error('局部改图快照缺失，请重新生成。');
+      await resolveImageEdit({ project: frozen.project, node, assets: frozen.assets ?? [], model: frozen.models.find(model => model.id === node.modelId) });
+      editAssets.push(...(frozen.assets ?? []).filter(asset => asset.id === metadata.imageEdit!.sourceAssetId || asset.id === metadata.imageEdit!.maskAssetId));
+      requireCandidateAssets(editAssets);
+    }
+    await validateCharacterAssets(profiles, references, creativeReferenceAssetIds({ creativeContext: row?.creativeContext ? creativeContextSchema.parse(JSON.parse(row.creativeContext)) : undefined }));
     if (candidate.kind === 'script') {
       if (candidate.assetIds.length) throw new Error('脚本候选包含无效素材。');
       return { candidate, assets: references };
@@ -289,7 +332,7 @@ export function createRuntime(options: RuntimeOptions) {
     const hash = createHash('sha256');
     for await (const chunk of createReadStream(asset.path)) hash.update(chunk);
     if (hash.digest('hex') !== asset.sha256) throw new Error('候选素材校验失败，请重新生成。');
-    return { candidate, assets: [...references, asset] };
+    return { candidate, assets: [...references, ...editAssets, asset] };
   }
 
   function requireRevision(value: ProjectDocument, revision?: number) {
@@ -297,6 +340,7 @@ export function createRuntime(options: RuntimeOptions) {
   }
 
   function validateEdits(value: ProjectDocument, previous?: ProjectDocument) {
+    validateCreativeReferences(value);
     const ids = new Set((value.clipEditSources ?? []).flatMap(clipSourceAssetIds));
     const assets = [...ids].map(id => {
       const asset = store.get<AssetRecord>('asset', id);
@@ -338,6 +382,7 @@ export function createRuntime(options: RuntimeOptions) {
   }
 
   function upstreamResults(runId: string, node: WorkflowNode, saved: RunSnapshot): WorkflowUpstreamResult[] {
+    if (saved.trial) return saved.trial.upstream;
     const edges = saved.inspectionEdges ?? saved.project.workflow.edges;
     const ancestors = new Set(edges.filter(edge => edge.target === node.id).map(edge => edge.source));
     // A subflow entry also inherits the call site's upstream context.
@@ -356,12 +401,12 @@ export function createRuntime(options: RuntimeOptions) {
 
   function applyProductionResult(runId: string, saved: RunSnapshot) {
     // Isolated execution and regeneration retain their candidate editing contract.
-    if (saved.selection || saved.regeneration || saved.research || saved.exportBatch || (saved.inspectionNodes ?? saved.nodes).filter(node => node.kind !== 'subflow').length < 2) return;
+    if (saved.assistant || saved.trial || saved.selection || saved.regeneration || saved.research || saved.exportBatch || (saved.inspectionNodes ?? saved.nodes).filter(node => node.kind !== 'subflow').length < 2) return;
     const working = store.get<ProjectDocument>('run-project', runId);
     if (!working) return;
     const current = project(saved.project.id);
-    const output = { brief: working.brief, style: working.style, shots: working.shots, clipEditSources: working.clipEditSources, clipEditPlans: working.clipEditPlans };
-    const baseline = { brief: saved.project.brief, style: saved.project.style, shots: saved.project.shots, clipEditSources: saved.project.clipEditSources, clipEditPlans: saved.project.clipEditPlans };
+    const output = { brief: working.brief, style: working.style, creativeContext: working.creativeContext, shots: working.shots, clipEditSources: working.clipEditSources, clipEditPlans: working.clipEditPlans };
+    const baseline = { brief: saved.project.brief, style: saved.project.style, creativeContext: saved.project.creativeContext, shots: saved.project.shots, clipEditSources: saved.project.clipEditSources, clipEditPlans: saved.project.clipEditPlans };
     if (isDeepStrictEqual(output, baseline)) return;
     const receipt = store.get<{ revision: number }>('run-application', runId);
     if (receipt) return;
@@ -377,6 +422,93 @@ export function createRuntime(options: RuntimeOptions) {
     recordEvent(runId, 'project.applied', '制作结果已自动保存到项目。');
   }
 
+  async function preparePromptDraft(draft: PromptDraft): Promise<{ saved: RunSnapshot; preview: PromptPreview }> {
+    const baseline = project(draft.projectId); requireRevision(baseline, draft.projectRevision);
+    if (baseline.archived) throw new Error('请先恢复项目。');
+    const original = baseline.workflow.nodes.find(node => node.id === draft.node.id && node.kind === draft.node.kind);
+    if (draft.node.config.imageEdit !== undefined) throw new Error('局部改图请从镜头候选选择原图与区域后生成。');
+    if (!original || !supportsPromptExperiment(original)) throw new Error('提示词实验支持简报、风格、分镜、参考图和镜头视频任务。');
+    const media = ['assets', 'animation'].includes(original.kind);
+    if (media && !draft.shotId) throw new Error('图片和视频实验需要选择一个镜头。');
+    const upstream: WorkflowUpstreamResult[] = [];
+    let inputProject = projectSchema.parse({ ...baseline, ...draft.context, workflow: { ...baseline.workflow, production: draft.context?.production ?? baseline.workflow.production } });
+    const assets = store.list<AssetRecord>('asset').filter(asset => !asset.projectId || asset.projectId === baseline.id);
+    if (draft.upstreamRunId) {
+      const source = run(draft.upstreamRunId), snapshot = store.get<RunSnapshot>('run-snapshot', source.id);
+      if (source.projectId !== baseline.id || source.status !== 'succeeded' || !snapshot || source.purpose && source.purpose !== 'production') throw new Error('请选择本项目已成功的正式制作作为上游输入。');
+      const ancestors = new Set(baseline.workflow.edges.filter(edge => edge.target === original.id).map(edge => edge.source));
+      for (const id of ancestors) baseline.workflow.edges.filter(edge => edge.target === id).forEach(edge => ancestors.add(edge.source));
+      for (const node of orderedNodes(baseline.workflow).filter(node => ancestors.has(node.id))) {
+        if (!(snapshot.inspectionNodes ?? snapshot.nodes).some(saved => saved.id === node.id && saved.kind === node.kind)) continue;
+        const output = store.get<JsonValue>('node-result', `${source.id}:${node.id}`);
+        if (output === undefined) continue;
+        const references = nodeResultAssets(output); requireCandidateAssets(references);
+        for (const asset of references) {
+          if (asset.projectId !== baseline.id) throw new Error('上游素材与当前项目不匹配。');
+          const info = await stat(asset.path).catch(() => undefined);
+          if (!info?.isFile() || info.size !== asset.size) throw new Error('上游素材缺失或损坏，请修复后重新预览。');
+          const hash = createHash('sha256');
+          for await (const chunk of createReadStream(asset.path)) hash.update(chunk);
+          if (hash.digest('hex') !== asset.sha256) throw new Error('上游素材缺失或损坏，请修复后重新预览。');
+        }
+        inputProject = projectAfterNode(inputProject, node, output, references);
+        upstream.push({ nodeId: node.id, label: node.label, kind: node.kind, output });
+      }
+      if (!upstream.length) throw new Error('该制作没有保存当前任务可用的上游产物。');
+    }
+    validateCreativeReferences(inputProject);
+    const baselineShot = draft.shotId ? baseline.shots.find(shot => shot.id === draft.shotId) : undefined;
+    if (draft.shotId && (!baselineShot || baselineShot.locked)) throw new Error('请选择存在且已解锁的镜头。');
+    if (draft.shotId) {
+      const shot = inputProject.shots.find(shot => shot.id === draft.shotId);
+      if (!shot) throw new Error('上游产物没有包含所选镜头。');
+      inputProject = { ...inputProject, shots: [shot], creativeContext: inputProject.creativeContext ? { ...inputProject.creativeContext, characterIds: [] } : undefined };
+    }
+    const kind = media ? original.kind === 'assets' ? 'image' : 'video' : 'script';
+    const candidate = baselineShot && (media || original.kind === 'script');
+    const node: WorkflowNode = { ...draft.node, requiresReview: false, ...(candidate ? { id: 'regenerate', config: { ...draft.node.config, operation: 'regenerate', shotId: baselineShot.id, regenerationKind: kind, instruction: '' } } : {}) };
+    const bundle = characters.profilesFor(inputProject);
+    await validateCharacterAssets(bundle.characters, bundle.assets, creativeReferenceAssetIds(inputProject));
+    const model = availableModels().find(model => model.id === node.modelId);
+    const sceneImageIds = node.kind === 'animation' && inputProject.workflow.production.referenceMode !== 'none' ? inputProject.shots.flatMap(shot => shot.assetId ? [shot.assetId] : []) : [];
+    for (const id of sceneImageIds) if (!assets.some(asset => asset.id === id && asset.active && asset.kind === 'image')) throw new Error('镜头参考图不可用，请重新选择后预览。');
+    const audioIds = node.kind === 'animation' && (!model || model.provider === 'seedance') ? inputProject.workflow.production.referenceAudioAssetIds ?? [] : [];
+    for (const id of audioIds) if (!assets.some(asset => asset.id === id && asset.active && asset.kind === 'audio')) throw new Error('参考音频不可用，请重新选择后预览。');
+    const requiredAssetIds = new Set([...bundle.assets.map(asset => asset.id), ...sceneImageIds, ...audioIds]);
+    const frozenAssets = assets.filter(asset => requiredAssetIds.has(asset.id));
+    if (frozenAssets.length !== requiredAssetIds.size) throw new Error('实验参考素材不完整，请重新选择后预览。');
+    await validatePromptAssets(frozenAssets);
+    const skills = store.list<SkillPackage>('skill').filter(skill => skill.enabled && node.skillIds.includes(skill.id));
+    if (skills.length !== new Set(node.skillIds).size) throw new Error('选用的 Skill 不存在或已停用，请重新选择。');
+    if (media && model) await options.preflightActivity?.({ project: inputProject, node, model, assets: frozenAssets, characters: bundle.characters, dataDirectory: directory, signal: new AbortController().signal });
+    const values = Object.fromEntries(upstream.map(result => [result.nodeId, result.output]));
+    const shot = inputProject.shots.length === 1 ? inputProject.shots[0] : undefined;
+    const resolved = resolvePromptBindings(node, inputProject, shot, values);
+    const hasImage = Boolean(shot?.assetId && assets.some(asset => asset.id === shot.assetId && asset.active && asset.kind === 'image')) && inputProject.workflow.production?.referenceMode !== 'none';
+    const prompt = media ? buildMediaPrompt(inputProject, node, shot!, bundle.characters, model, hasImage, values) : buildWorkflowPrompt(inputProject, node, skills, Boolean(baselineShot), bundle.characters, upstream);
+    const references = frozenAssets.map(({ id, name, kind }) => ({ id, name, kind }));
+    const preview: PromptPreview = { digest: '', prompt, node, model, skills, projectRevision: baseline.revision, variables: resolved.variables, references, upstream: upstream.map(({ nodeId, label, kind }) => ({ nodeId, label, kind })) };
+    const saved: RunSnapshot = { project: baseline, models: model ? [model] : [], skills, mcpServers: [], nodes: [node], handlerVersion: 1, characters: bundle.characters, characterAssets: bundle.assets, assets: frozenAssets,
+      selection: { nodeId: node.id, mode: 'node' }, ...(candidate ? { regeneration: { shotId: baselineShot.id, baseline: baselineShot, kind } } : {}), trial: { inputProject, upstream, preview } };
+    preview.digest = fingerprint(saved);
+    requireRevision(project(draft.projectId), draft.projectRevision);
+    return { saved, preview };
+  }
+
+  function startPromptTrial(session: PromptSession, saved: RunSnapshot): RunRecord {
+    const current = project(session.draft.projectId); requireRevision(current, session.draft.projectRevision);
+    if (current.archived) throw new Error('请先恢复项目。');
+    if (batches.blocked(current.id) || projectBusy(current.id)) throw new Error('该项目已有未完成的运行，请先完成或停止现有任务。');
+    const node = saved.nodes[0], model = saved.models.find(model => model.id === node.modelId);
+    if (!model?.enabled) throw new Error('请选择可用模型后重新预览。');
+    validateExecutionModel(node, model);
+    const id = randomUUID(), timestamp = now();
+    const record: RunRecord = { id, projectId: current.id, projectRevision: current.revision, workflowVersion: current.workflow.version, snapshotDigest: fingerprint(saved), purpose: 'prompt-trial', promptSessionId: session.id, promptSessionRevision: session.revision, selection: saved.selection, stepCount: 1, status: 'queued', createdAt: timestamp, updatedAt: timestamp, events: [], activities: [] };
+    store.put('run-snapshot', id, saved); store.put('run', id, record);
+    recordEvent(id, 'run.created', '提示词实验快照已保存，结果等待手动应用。');
+    return record;
+  }
+
   function projectAfterNode(value: ProjectDocument, node: WorkflowNode, result: JsonValue, assets: AssetRecord[]): ProjectDocument {
     let working = value;
     if (result && typeof result === 'object' && !Array.isArray(result)) {
@@ -384,7 +516,7 @@ export function createRuntime(options: RuntimeOptions) {
       if (node.kind === 'script' && Array.isArray(result.shots)) {
         const shots = z.array(shotSchema).parse(result.shots);
         if (value.shots.some((shot, index) => shot.locked && !isDeepStrictEqual(shot, shots[index]))) throw new LockedShotChangeError();
-        working = { ...working, shots };
+        working = { ...working, shots, ...(result.creativeContext ? { creativeContext: creativeContextSchema.parse(result.creativeContext) } : {}) };
       }
       if (node.kind === 'style' && typeof result.text === 'string') working = { ...working, style: result.text };
 
@@ -407,6 +539,7 @@ export function createRuntime(options: RuntimeOptions) {
         audioProcessing: { ...DEFAULT_AUDIO_PROCESSING, version: 2, videoAudio: { enabled: true, gainDb: 0 } },
       } : item) };
     }
+    validateCreativeReferences(working);
     return working;
   }
 
@@ -519,7 +652,7 @@ export function createRuntime(options: RuntimeOptions) {
       const subflows = value.workflow.subflows?.map(definition => ({ ...definition, nodes: orderedNodes({ ...value.workflow, nodes: definition.nodes, edges: definition.edges }) }));
       const expanded = workflowNodesWithSubflows({ ...value.workflow, nodes, subflows });
       const modelIds = new Set(expanded.flatMap(node => node.modelId ? [node.modelId] : [])), skillIds = new Set(expanded.flatMap(node => node.skillIds));
-      const characterIds = new Set(value.shots.flatMap(shot => shot.characterIds ?? []));
+      const characterIds = projectCharacterIds(value);
       return { project: value, nodes: expanded, selection, blockedIssue: productionBlockIssue(value, nodes),
         models: availableModels().filter(model => modelIds.has(model.id)),
         skills: store.list<SkillPackage>('skill').filter(skill => skillIds.has(skill.id)),
@@ -557,9 +690,11 @@ export function createRuntime(options: RuntimeOptions) {
     if (node.kind === 'subflow') return executeSubflow(runId, node, saved, controller);
     updateRun(runId, { status: 'running', currentNodeId: node.id, error: undefined });
     recordEvent(runId, 'node.started', `开始：${node.label}`, node.id);
-    const scopedProject = saved.regeneration ? { ...saved.project, shots: saved.project.shots.filter(shot => shot.id === saved.regeneration!.shotId) } : saved.project;
-    const executionProject = store.get<ProjectDocument>('node-project', `${runId}:${node.id}`) ?? store.get<ProjectDocument>('run-project', runId) ?? scopedProject;
+    const scopedProject = saved.regeneration ? { ...saved.project, creativeContext: saved.project.creativeContext ? { ...saved.project.creativeContext, characterIds: [] } : undefined, shots: saved.project.shots.filter(shot => shot.id === saved.regeneration!.shotId) } : saved.project;
+    const executionProject = store.get<ProjectDocument>('node-project', `${runId}:${node.id}`) ?? store.get<ProjectDocument>('run-project', runId) ?? saved.trial?.inputProject ?? scopedProject;
     store.put('node-project', `${runId}:${node.id}`, executionProject);
+    if (saved.trial) await validatePromptAssets(saved.assets ?? []);
+    if (node.config.imageEdit !== undefined && (!saved.regeneration?.imageEdit || fingerprint(node.config.imageEdit) !== fingerprint(saved.regeneration.imageEdit))) throw new Error('局部改图输入须由镜头候选冻结，请重新选择改图区域。');
     const selectedModel = node.modelId ? saved.models.find(model => model.id === node.modelId) : undefined;
     validateExecutionModel(node, selectedModel);
     const usesProvider = !!selectedModel && ['brief', 'research', 'style', 'script', 'agent'].includes(node.kind);
@@ -569,10 +704,10 @@ export function createRuntime(options: RuntimeOptions) {
     const safety = options.activitySafety?.(node) ?? (usesProvider || (media && !!selectedModel) ? 'external' : 'local');
     const input = { project: executionProject, node, model: selectedModel ?? null, skills: saved.skills.filter(skill => node.skillIds.includes(skill.id)), handlerVersion: saved.handlerVersion, ...(saved.exportBatch ? { exportBatch: saved.exportBatch, assets: saved.assets } : {}) };
     const cached = journal.get(runId, node.id);
-    const selectedCharacterIds = new Set(node.kind === 'research' || node.kind === 'export' && !selectedModel ? [] : executionProject.shots.flatMap(shot => shot.characterIds ?? []));
+    const selectedCharacterIds = new Set(saved.assistant || node.kind === 'research' || node.kind === 'export' && !selectedModel ? [] : usesProvider ? projectCharacterIds(executionProject) : executionProject.shots.flatMap(shot => shot.characterIds ?? []));
     const executionCharacters = (saved.characters ?? []).filter(profile => selectedCharacterIds.has(profile.id));
     if (executionCharacters.length !== selectedCharacterIds.size) throw new Error('运行快照缺少镜头角色，请基于当前角色新建运行。');
-    const referenceIds = new Set(executionCharacters.flatMap(profile => profile.referenceAssetIds));
+    const referenceIds = new Set([...executionCharacters.flatMap(profile => profile.referenceAssetIds), ...executionProject.shots.flatMap(shot => creativeReferenceAssetIds(executionProject, shot))]);
     const characterAssets = (saved.characterAssets ?? []).filter(asset => referenceIds.has(asset.id));
     const assetIds = saved.regeneration ? new Set(executionProject.shots.flatMap(shot => [shot.assetId, shot.audioAssetId, shot.videoAssetId]).filter((id): id is string => Boolean(id))) : undefined;
     const generatedAssets = media ? database.prepare("SELECT asset.value AS body FROM documents result, json_each(result.body, '$.assets') asset WHERE result.kind = 'node-result' AND json_type(result.body, '$.assets') = 'array' AND result.id IN (SELECT value FROM json_each(?))").all(JSON.stringify((saved.inspectionNodes ?? saved.nodes).map(node => `${runId}:${node.id}`))).map(row => assetSchema.parse(JSON.parse((row as { body: string }).body))) : [];
@@ -599,9 +734,9 @@ export function createRuntime(options: RuntimeOptions) {
     }
     const deepAgent = node.kind === 'agent' && selectedModel?.capabilities.includes('tools') && selectedModel.provider !== 'ollama';
     const researchContext = usesProvider && node.kind === 'research' ? selectResearchPassages(executionProject, saved.research?.sourceIds ?? (Array.isArray(node.config.sourceIds) ? node.config.sourceIds.filter((id): id is string => typeof id === 'string') : undefined), saved.research?.instruction ?? node.prompt) : undefined;
-    const prompt = usesProvider ? researchContext ? researchPrompt(executionProject, node, saved.skills, researchContext) : buildWorkflowPrompt(executionProject, node, saved.skills, Boolean(saved.regeneration), executionCharacters, upstreamResults(runId, node, saved)) : '';
+    const prompt = saved.assistant ? node.prompt : usesProvider ? researchContext ? researchPrompt(executionProject, node, saved.skills, researchContext) : buildWorkflowPrompt(executionProject, node, saved.skills, Boolean(saved.regeneration), executionCharacters, upstreamResults(runId, node, saved)) : '';
     if (!cached || cached.status === 'prepared') runInspector.captureInput(runId, node.id, { inputHash: fingerprint(input), recordedAt: now(),
-      prompt: usesProvider ? redactInspectionText(prompt, text => redactError(text, saved.models, transientSecrets, Number.POSITIVE_INFINITY)) : undefined });
+      prompt: usesProvider || saved.trial ? redactInspectionText(saved.trial?.preview.prompt ?? prompt, text => redactError(text, saved.models, transientSecrets, Number.POSITIVE_INFINITY)) : undefined });
     const capability: ModelCapability | undefined = node.kind === 'assets' ? 'image' : node.kind === 'animation' ? 'video' : usesProvider ? 'text' : undefined;
     const costOperation = selectedModel && capability && !deepAgent ? `${runId}:${node.id}` : undefined;
     if (costOperation && selectedModel && capability) {
@@ -641,12 +776,12 @@ export function createRuntime(options: RuntimeOptions) {
         const usage = typeof generated === 'string' ? undefined : generated.usage;
         if (costOperation) costs.status(costOperation, 'completed', usage);
         if (researchContext) return { ...parseResearchResult(text, executionProject, researchContext, runId, node.id), ...(usage ? { providerUsage: usage } : {}) } as unknown as JsonValue;
-        return { text, source: 'model', modelId: selectedModel.id, ...(usage ? { providerUsage: usage } : {}), ...(node.kind === 'script' ? { shots: parseWorkflowShots(text, executionProject.shots, Boolean(saved.regeneration), executionProject.scenePreset) } : {}) } as JsonValue;
+        return { text, source: 'model', modelId: selectedModel.id, ...(usage ? { providerUsage: usage } : {}), ...(node.kind === 'script' ? parseWorkflowScript(text, executionProject, Boolean(saved.regeneration), executionCharacters) : {}) } as JsonValue;
       }
       if (media && options.executeActivity) {
         const batch = saved.exportBatch;
         const executeActivity = options.executeActivity;
-        const activityContext: ActivityExecutionContext = { project: executionProject, node, runId, operationId: context.operationId, signal: controller.signal, remoteTaskId: context.remoteId, persistRemoteTask: context.recordRemoteId, dataDirectory: directory, assets: activityAssets, model: selectedModel, apiKey: secret, characters: executionCharacters,
+        const activityContext: ActivityExecutionContext = { project: executionProject, node, runId, operationId: context.operationId, signal: controller.signal, remoteTaskId: context.remoteId, persistRemoteTask: context.recordRemoteId, dataDirectory: directory, assets: activityAssets, model: selectedModel, apiKey: secret, characters: executionCharacters, promptUpstream: Object.fromEntries(upstreamResults(runId, node, saved).map(result => [result.nodeId, result.output])),
           onDiagnostic: ({ event, level, ...fields }) => nodeLogger[level](event, { ...fields, shotCount: executionProject.shots.length }),
           ...(node.kind === 'export' ? { preparedAudioMix: audioPreview.ready(executionProject, activityAssets) } : {}),
           ...(batch ? { onProgress: value => batches.progress(batch.batchId, batch.targetId, value) } : {}) };
@@ -685,6 +820,14 @@ export function createRuntime(options: RuntimeOptions) {
       }
       return localNodeResult(node, executionProject, store.list<AssetRecord>('asset'));
     }, output => {
+      if (saved.assistant) {
+        if (!output || typeof output !== 'object' || Array.isArray(output) || typeof output.text !== 'string') throw new Error('任务修改建议未返回文本。');
+        let proposalResult: JsonValue;
+        try { proposalResult = { ...output, proposal: parseWorkflowAssistantResult(output.text, saved.assistant) } as unknown as JsonValue; }
+        catch (error) { proposalResult = { ...output, proposalError: error instanceof Error ? error.message : String(error) }; }
+        store.put('node-result', `${runId}:${node.id}`, proposalResult);
+        return;
+      }
       if (saved.regeneration) {
         const baseline = saved.regeneration.baseline;
         if (!output || typeof output !== 'object' || Array.isArray(output)) throw new Error('镜头重新生成没有返回有效候选。');
@@ -742,7 +885,8 @@ export function createRuntime(options: RuntimeOptions) {
     const children = definition.nodes.map(child => {
       const subflow = child.subflow ? { ...child.subflow, inputs: Object.fromEntries(Object.entries(child.subflow.inputs).map(([name, binding]) => [name, 'literal' in binding ? { literal: substituteSubflowInputs(binding.literal, inputs) } : { ...binding, nodeId: subflowNodeId(node.id, binding.nodeId) }])) } : undefined;
       const prompt = substituteSubflowInputs(child.prompt, inputs);
-      return { ...child, id: subflowNodeId(node.id, child.id), prompt: typeof prompt === 'string' ? prompt : JSON.stringify(prompt), config: substituteSubflowInputs(child.config, inputs) as WorkflowNode['config'], subflow };
+      const promptBindings = child.promptBindings ? Object.fromEntries(Object.entries(child.promptBindings).map(([name, binding]) => [name, 'nodeId' in binding ? { ...binding, nodeId: subflowNodeId(node.id, binding.nodeId) } : 'literal' in binding ? { literal: substituteSubflowInputs(binding.literal, inputs) } : binding])) : undefined;
+      return { ...child, id: subflowNodeId(node.id, child.id), prompt: typeof prompt === 'string' ? prompt : JSON.stringify(prompt), promptBindings, config: substituteSubflowInputs(child.config, inputs) as WorkflowNode['config'], subflow };
     });
     const workflow: WorkflowDefinition = { production: saved.project.workflow.production, id: definition.id, version: definition.version, name: definition.name, nodes: children, edges: definition.edges.map(edge => ({ ...edge, source: subflowNodeId(node.id, edge.source), target: subflowNodeId(node.id, edge.target) })) };
     const graph = createExecutionGraph(database, workflow, {
@@ -802,8 +946,9 @@ export function createRuntime(options: RuntimeOptions) {
     active.set(runId, { promise, controller });
   }
 
-  function projectBusy(projectId: string, exceptBatchId?: string) {
-    return Boolean(database.prepare("SELECT 1 FROM documents r LEFT JOIN documents s ON s.kind = 'run-snapshot' AND s.id = r.id WHERE r.kind = 'run' AND json_extract(r.body, '$.projectId') = ? AND json_extract(r.body, '$.status') IN ('queued','running','waiting_review','waiting_external','retry_scheduled') AND (? IS NULL OR coalesce(json_extract(s.body, '$.exportBatch.batchId'), '') <> ?) LIMIT 1").get(projectId, exceptBatchId ?? null, exceptBatchId ?? null));
+  function projectBusy(projectId: string, exceptBatchId?: string, exceptQueueItemId?: string) {
+    if (editorExports.has(projectId)) return true;
+    return Boolean(database.prepare("SELECT 1 FROM documents r LEFT JOIN documents s ON s.kind = 'run-snapshot' AND s.id = r.id WHERE r.kind = 'run' AND json_extract(r.body, '$.projectId') = ? AND json_extract(r.body, '$.status') IN ('queued','running','waiting_review','waiting_external','retry_scheduled') AND (? IS NULL OR coalesce(json_extract(s.body, '$.exportBatch.batchId'), '') <> ?) LIMIT 1").get(projectId, exceptBatchId ?? null, exceptBatchId ?? null)) || Boolean(productionQueue?.activeForProject(projectId, exceptQueueItemId));
   }
   const batches = createExportBatchManager({
     database, store, dataDirectory: directory, onChanged: changed, projectBusy,
@@ -863,6 +1008,17 @@ export function createRuntime(options: RuntimeOptions) {
     },
   });
 
+  productionQueue = createProductionQueue({ database, store, project, work: works.get, changed,
+    busy: (id, exceptItemId) => batches.blocked(id) || projectBusy(id, undefined, exceptItemId),
+    createRun: async item => {
+      const created = await dispatchRequest('run.start', { projectId: item.projectId, revision: item.projectRevision }, item);
+      return run(z.object({ id: z.string() }).parse(created).id);
+    },
+    resumeRun: id => { if (batches.blocked(run(id).projectId)) throw new Error('请先处理该项目的批量导出。'); updateRun(id, { status: 'queued', error: undefined }); schedule(id); },
+    cancelRun: id => dispatch('run.cancel', { runId: id }),
+    runConflict: id => Boolean(database.prepare("SELECT 1 FROM execution_events WHERE run_id = ? AND type = 'project.apply_conflict' LIMIT 1").get(id)),
+  });
+
   function dispatch(method: string, rawParams: unknown = {}, context?: { requestId?: string | number }): Promise<unknown> {
     const requestLogger = logger.child({ ...rpcIdentifiers(rawParams), requestId: context?.requestId ?? randomUUID(), method });
     const started = performance.now();
@@ -885,7 +1041,7 @@ export function createRuntime(options: RuntimeOptions) {
       }
     });
   }
-  async function dispatchRequest(method: string, rawParams: unknown): Promise<unknown> {
+  async function dispatchRequest(method: string, rawParams: unknown, queueItem?: ProductionQueueItem): Promise<unknown> {
     if (closing) throw new Error('运行环境正在关闭。');
     if (method.startsWith('audio.mix.') || method === 'audio.silence') return audioPreview.dispatch(method, rawParams);
     switch (method) {
@@ -902,7 +1058,7 @@ export function createRuntime(options: RuntimeOptions) {
       }
       case 'run.list': {
         const instant = z.string().datetime().regex(/T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?Z$/, '请使用 UTC 秒或最多三位毫秒精度时间。');
-        const input = pageInputSchema.extend({ projectId: z.string().optional(), status: runStatusSchema.optional(), createdAfter: instant.optional(), createdBefore: instant.optional() })
+        const input = pageInputSchema.extend({ projectId: z.string().optional(), purpose: z.enum(['production', 'prompt-trial', 'workflow-assistant']).optional(), promptSessionId: z.string().optional(), status: runStatusSchema.optional(), createdAfter: instant.optional(), createdBefore: instant.optional() })
           .refine(value => !value.createdAfter || !value.createdBefore || Date.parse(value.createdAfter) < Date.parse(value.createdBefore), { path: ['createdBefore'], message: '结束时间必须晚于开始时间。' }).parse(rawParams);
         return reads.runs(input.before, input.limit, input.projectId, input);
       }
@@ -920,9 +1076,12 @@ export function createRuntime(options: RuntimeOptions) {
         const input = pageInputSchema.extend({ kind: assetSchema.shape.kind.optional() }).parse(rawParams);
         const result = reads.assets(input.before, input.limit, input.kind);
         const characterReferences = characters.assetsInUse(result.items.filter(asset => !asset.inUse).map(asset => asset.id));
-        return { ...result, items: result.items.map(asset => ({ ...asset, inUse: asset.inUse || characterReferences.has(asset.id) })) };
+        const imageReferences = imageTools.assetsInUse(result.items.filter(asset => !asset.inUse).map(asset => asset.id));
+        return { ...result, items: result.items.map(asset => ({ ...asset, inUse: asset.inUse || characterReferences.has(asset.id) || imageReferences.has(asset.id) })) };
       }
       case 'system.status': return system;
+      case 'work.list': case 'work.get': case 'work.save': case 'work.archive': case 'work.restore': case 'work.episodes.create': case 'work.episode.attach': case 'work.episode.detach': case 'work.defaults.apply': return works.dispatch(method, rawParams);
+      case 'productionQueue.list': case 'productionQueue.get': case 'productionQueue.enqueue': case 'productionQueue.start': case 'productionQueue.pause': case 'productionQueue.cancel': case 'productionQueue.refreshItem': case 'productionQueue.skipItem': case 'productionQueue.resumeItem': case 'productionQueue.stopCurrent': return productionQueue!.dispatch(method, rawParams);
       case 'project.create': {
         const input = z.object({ title: z.string().min(1).max(160), brief: z.string().max(30000).default(''), profile: videoProfileSchema.optional(), templateId: z.string().optional(), seriesTemplateId: z.string().min(1).optional(), seriesTemplateRevision: z.number().int().positive().optional() }).refine(value => Boolean(value.seriesTemplateId) === (value.seriesTemplateRevision !== undefined), '请选择系列模板及其当前修订。').parse(rawParams);
         const settings = input.seriesTemplateId ? seriesTemplates.settingsFor(input.seriesTemplateId, input.seriesTemplateRevision) : undefined;
@@ -931,7 +1090,7 @@ export function createRuntime(options: RuntimeOptions) {
         store.put('project', value.id, value); changed(); return value;
       }
       case 'project.update': {
-        const input = entityId.extend({ revision: z.number().int().optional(), patch: z.object({ title: z.string().min(1).max(160).optional(), brief: z.string().max(30000).optional(), profile: videoProfileSchema.optional(), style: z.string().optional(), workflow: workflowSchema.optional(), captionStyle: projectSchema.shape.captionStyle, scenePreset: projectSchema.shape.scenePreset, claims: z.array(claimSchema).optional(), shots: z.array(shotSchema).optional(), researchSources: projectSchema.shape.researchSources, referenceDisplay: projectSchema.shape.referenceDisplay, musicClips: projectSchema.shape.musicClips, audioMix: projectSchema.shape.audioMix, clipEditSources: projectSchema.shape.clipEditSources, clipEditPlans: projectSchema.shape.clipEditPlans }) }).parse(rawParams);
+        const input = entityId.extend({ revision: z.number().int().optional(), patch: z.object({ title: z.string().min(1).max(160).optional(), brief: z.string().max(30000).optional(), profile: videoProfileSchema.optional(), style: z.string().optional(), creativeContext: projectSchema.shape.creativeContext, workflow: workflowSchema.optional(), captionStyle: projectSchema.shape.captionStyle, scenePreset: projectSchema.shape.scenePreset, claims: z.array(claimSchema).optional(), shots: z.array(shotSchema).optional(), researchSources: projectSchema.shape.researchSources, referenceDisplay: projectSchema.shape.referenceDisplay, musicClips: projectSchema.shape.musicClips, audioMix: projectSchema.shape.audioMix, clipEditSources: projectSchema.shape.clipEditSources, clipEditPlans: projectSchema.shape.clipEditPlans }) }).parse(rawParams);
         const value = project(input.projectId); requireRevision(value, input.revision);
         if (input.patch.workflow) validateCompositionUpdate(input.patch.workflow, value.workflow);
         const workflow = input.patch.workflow && !isDeepStrictEqual({ ...value.workflow, version: 0 }, { ...input.patch.workflow, version: 0 }) ? { ...input.patch.workflow, version: value.workflow.version + 1 } : value.workflow;
@@ -952,7 +1111,7 @@ export function createRuntime(options: RuntimeOptions) {
       case 'project.archive':
       case 'project.restore': {
         const input = entityId.parse(rawParams); const value = project(input.projectId);
-        if (store.list<RunRecord>('run').some(record => record.projectId === value.id && active.has(record.id))) throw new Error('请先停止项目任务。');
+        if (productionQueue?.activeForProject(value.id) || store.list<RunRecord>('run').some(record => record.projectId === value.id && active.has(record.id))) throw new Error('请先停止项目任务并处理生产队列中的排队项。');
         return saveProject({ ...value, archived: method === 'project.archive' });
       }
       case 'workflow.save': {
@@ -984,6 +1143,8 @@ export function createRuntime(options: RuntimeOptions) {
         let inheritedNode: WorkflowNode | undefined, inheritedExport: WorkflowNode | undefined;
         if (input.parentRunId) {
           const parent = run(input.parentRunId);
+          if (parent.productionQueueItemId) throw new Error('请通过生产队列处理原运行或将分集重新入队。');
+          if (parent.purpose && parent.purpose !== 'production') throw new Error('请在提示词实验中创建新试运行，实验不能接续正式制作。');
           if (parent.projectId !== input.projectId) throw new Error('父运行不属于当前项目。');
           // Read only the scope, without decoding the parent's full project or asset snapshot.
           const row = database.prepare("SELECT json_object('exportBatch', json_extract(body, '$.exportBatch'), 'regeneration', json_extract(body, '$.regeneration'), 'research', json_extract(body, '$.research'), 'nodes', json_extract(body, '$.nodes'), 'selection', json_extract(body, '$.selection'), 'profile', json_extract(body, '$.project.profile'), 'workflowNodeCount', json_array_length(body, '$.project.workflow.nodes')) AS body FROM documents WHERE kind = 'run-snapshot' AND id = ?").get(parent.id) as { body: string } | undefined;
@@ -998,7 +1159,7 @@ export function createRuntime(options: RuntimeOptions) {
           if (saved.regeneration) {
             const modelId = saved.nodes.find(node => node.id === 'regenerate')?.modelId;
             if (!modelId) throw new Error('原镜头生成模型缺失，请从镜头编辑器选择模型后重新生成。');
-            input.regeneration = { shotId: saved.regeneration.shotId, kind: saved.regeneration.kind, instruction: saved.regeneration.instruction, modelId };
+            input.regeneration = { shotId: saved.regeneration.shotId, kind: saved.regeneration.kind, instruction: saved.regeneration.instruction, imageEdit: saved.regeneration.imageEdit, modelId };
             inheritedScope = true;
           } else if (saved.research) {
             const modelId = saved.nodes.find(node => node.kind === 'research')?.modelId;
@@ -1025,7 +1186,7 @@ export function createRuntime(options: RuntimeOptions) {
         requireRevision(original, input.revision);
         const value = input.profile ? { ...original, profile: input.profile } : original;
         if (value.archived) throw new Error('请先恢复项目。');
-        if (batches.blocked(value.id) || projectBusy(value.id)) throw new Error('该项目已有未完成的运行或批量导出，请继续或停止现有运行。');
+        if (batches.blocked(value.id) || projectBusy(value.id, undefined, queueItem?.id)) throw new Error('该项目已有未完成的运行、批量导出或排队项，请先处理现有任务。');
         const prepared = input.selection ? prepareRunSelection(value, { nodeId: input.selection.nodeId, mode: input.selection.mode }) : undefined;
         if (prepared && input.selection) {
           if (prepared.plan.digest !== input.selection.previewDigest) throw new Error('项目或执行配置已变化，请重新预览执行范围后确认。');
@@ -1046,9 +1207,14 @@ export function createRuntime(options: RuntimeOptions) {
         const id = randomUUID();
         const baseline = input.regeneration ? value.shots.find(shot => shot.id === input.regeneration?.shotId) : undefined;
         const scope = input.research ? [] : baseline ? [baseline] : value.shots;
-        const bundle = prepared ? { characters: prepared.saved.characters, assets: prepared.saved.characterAssets } : characters.profilesFor({ shots: scope });
+        const bundle = prepared ? { characters: prepared.saved.characters, assets: prepared.saved.characterAssets } : characters.profilesFor({ shots: scope, ...(input.regeneration ? { creativeContext: value.creativeContext ? { ...value.creativeContext, characterIds: [] } : undefined } : !input.research ? { creativeContext: value.creativeContext } : {}) });
         const nodeSelection: RunSelection | undefined = input.nodeId && !input.profile && !input.destination && !input.regeneration && !input.research && nodes[0].kind !== 'export' ? { nodeId: input.nodeId, mode: 'node' } : undefined;
-        const saved: RunSnapshot = prepared?.saved ?? { project: structuredClone(value), ...(value.workflow.production.referenceAudioAssetIds?.length ? { assets: store.list<AssetRecord>('asset').filter(asset => !asset.projectId || asset.projectId === value.id) } : {}), models: availableModels(), skills: store.list<SkillPackage>('skill'), mcpServers: store.list<McpServer>('mcp-server'), nodes, handlerVersion: 1, characters: bundle.characters, characterAssets: bundle.assets, selection: nodeSelection, ...(input.research ? { research: { sourceIds: input.research.sourceIds, instruction: input.research.instruction } } : {}), ...(input.regeneration && baseline ? { regeneration: { shotId: baseline.id, baseline: structuredClone(baseline), kind: input.regeneration.kind, instruction: input.regeneration.instruction?.trim() } } : {}) };
+        const saved: RunSnapshot = prepared?.saved ?? { project: structuredClone(value), ...(value.workflow.production.referenceAudioAssetIds?.length || input.regeneration?.imageEdit ? { assets: store.list<AssetRecord>('asset').filter(asset => input.regeneration?.imageEdit ? [input.regeneration.imageEdit.sourceAssetId, input.regeneration.imageEdit.maskAssetId].includes(asset.id) : !asset.projectId || asset.projectId === value.id) } : {}), models: availableModels(), skills: store.list<SkillPackage>('skill'), mcpServers: store.list<McpServer>('mcp-server'), nodes, handlerVersion: 1, characters: bundle.characters, characterAssets: bundle.assets, selection: nodeSelection, ...(input.research ? { research: { sourceIds: input.research.sourceIds, instruction: input.research.instruction } } : {}), ...(input.regeneration && baseline ? { regeneration: { shotId: baseline.id, baseline: structuredClone(baseline), kind: input.regeneration.kind, instruction: input.regeneration.instruction?.trim(), ...(input.regeneration.imageEdit ? { imageEdit: input.regeneration.imageEdit } : {}) } } : {}) };
+        if (input.regeneration?.imageEdit) {
+          await resolveImageEdit({ project: saved.project, node: saved.nodes[0], assets: saved.assets ?? [], model: saved.models.find(model => model.id === saved.nodes[0].modelId) });
+          requireRevision(project(value.id), value.revision);
+          if (batches.blocked(value.id) || projectBusy(value.id, undefined, queueItem?.id)) throw new Error('该项目已有未完成的运行，请先处理现有任务。');
+        }
         if (saved.project.workflow.execution) saved.handlerVersion = 3;
         if (saved.nodes.some(node => node.kind === 'subflow')) {
           validateWorkflowComposition(saved.project.workflow);
@@ -1060,11 +1226,47 @@ export function createRuntime(options: RuntimeOptions) {
         }
         if (saved.project.workflow.production) for (const node of saved.inspectionNodes ?? saved.nodes) validateExecutionModel(node, saved.models.find(model => model.id === node.modelId));
         const timestamp = now();
-        const record: RunRecord = { id, projectId: value.id, projectRevision: value.revision, status: 'queued', workflowVersion: value.workflow.version, snapshotDigest: fingerprint(saved), parentRunId: input.parentRunId, selection: saved.selection, stepCount: saved.inspectionNodes?.length ?? nodes.length, createdAt: timestamp, updatedAt: timestamp, events: [], activities: [] };
-        database.transaction(() => { store.put('run-snapshot', id, saved); store.put('run', id, record); })();
+        const record: RunRecord = { id, projectId: value.id, projectRevision: value.revision, status: 'queued', workflowVersion: value.workflow.version, snapshotDigest: fingerprint(saved), parentRunId: input.parentRunId, selection: saved.selection, stepCount: saved.inspectionNodes?.length ?? nodes.length, createdAt: timestamp, updatedAt: timestamp, events: [], activities: [], ...(queueItem ? { productionQueueId: queueItem.queueId, productionQueueItemId: queueItem.id } : {}) };
+        database.transaction(() => { if (queueItem) productionQueue!.claim(queueItem, id); store.put('run-snapshot', id, saved); store.put('run', id, record); })();
         recordEvent(id, 'run.created', '运行快照已保存'); schedule(id); return hydrateRun(record);
       }
 
+      case 'render.editor.export': {
+        const { editorExportInputSchema, exportEditorProject } = await import('./editor-export.js');
+        const input = editorExportInputSchema.parse(rawParams), value = project(input.projectId); requireRevision(value, input.revision);
+        if (closing || value.archived || batches.blocked(value.id) || projectBusy(value.id)) throw new Error('请先恢复项目或处理未完成的制作与队列任务。');
+        const controller = new AbortController(); editorExports.set(value.id, controller); changed();
+        try {
+          return await exportEditorProject({ ...input, project: structuredClone(value), assets: structuredClone(store.list<AssetRecord>('asset').filter(asset => !asset.projectId || asset.projectId === value.id)), dataDirectory: directory, ffmpegPath: options.ffmpegPath, signal: controller.signal });
+        } finally { editorExports.delete(value.id); changed(); }
+      }
+      case 'workflowAssistant.latest': {
+        const input = entityId.extend({ nodeId: z.string().min(1) }).strict().parse(rawParams); project(input.projectId);
+        const row = database.prepare("SELECT s.id FROM documents s JOIN documents r ON r.kind = 'run' AND r.id = s.id WHERE s.kind = 'run-snapshot' AND json_extract(s.body, '$.assistant.projectId') = ? AND json_extract(s.body, '$.assistant.baseline.id') = ? ORDER BY r.rowid DESC LIMIT 1").get(input.projectId, input.nodeId) as { id: string } | undefined;
+        if (!row) return null;
+        const saved = store.get<RunSnapshot>('run-snapshot', row.id)!;
+        return { run: reads.runSummary(run(row.id)), nodeId: saved.nodes[0].id, context: saved.assistant, modelId: saved.nodes[0].modelId };
+      }
+      case 'workflowAssistant.start': {
+        const input = entityId.extend({ revision: z.number().int().positive(), node: workflowNodeSchema, modelId: z.string().min(1), instruction: z.string().trim().min(1).max(10000), requestId: z.string().uuid() }).strict().parse(rawParams);
+        const requestKey = fingerprint({ projectId: input.projectId, requestId: input.requestId }), inputHash = fingerprint(input);
+        const existing = store.get<{ inputHash: string; runId: string; nodeId: string }>('workflow-assistant-request', requestKey);
+        if (existing) {
+          if (existing.inputHash !== inputHash) throw new Error('建议请求标识已用于其他输入，请新建建议任务。');
+          return { run: reads.runSummary(run(existing.runId)), nodeId: existing.nodeId };
+        }
+        const value = project(input.projectId); requireRevision(value, input.revision);
+        if (value.archived || batches.blocked(value.id) || projectBusy(value.id)) throw new Error('请先恢复项目或处理当前未完成的运行。');
+        const models = availableModels(), model = models.find(model => model.id === input.modelId);
+        if (!model) throw new Error('建议生成模型不存在。');
+        const id = randomUUID(), timestamp = now();
+        const prepared = prepareWorkflowAssistant({ project: value, baseline: input.node, instruction: input.instruction, model, models, nodeId: 'workflow-assistant' });
+        const saved: RunSnapshot = { project: structuredClone(value), models: [model], skills: [], mcpServers: [], nodes: [prepared.node], handlerVersion: 1, assistant: prepared.context };
+        const record: RunRecord = { id, projectId: value.id, projectRevision: value.revision, workflowVersion: value.workflow.version, snapshotDigest: fingerprint(saved), purpose: 'workflow-assistant', stepCount: 1, status: 'queued', createdAt: timestamp, updatedAt: timestamp, events: [], activities: [] };
+        database.transaction(() => { store.put('run-snapshot', id, saved); store.put('run', id, record); store.put('workflow-assistant-request', requestKey, { inputHash, runId: id, nodeId: prepared.node.id }); })();
+        recordEvent(id, 'run.created', '任务修改建议快照已保存，结果等待手动应用。'); schedule(id);
+        return { run: reads.runSummary(record), nodeId: prepared.node.id };
+      }
       case 'research.source.read': return readResearchSource(rawParams);
       case 'research.search': return searchWikipedia(rawParams);
       case 'research.analyze': {
@@ -1073,7 +1275,7 @@ export function createRuntime(options: RuntimeOptions) {
       }
       case 'shot.regenerate': {
         const input = entityId.merge(regenerationInput).extend({ revision: z.number().int().positive() }).parse(rawParams);
-        return dispatch('run.start', { projectId: input.projectId, revision: input.revision, regeneration: { shotId: input.shotId, kind: input.kind, modelId: input.modelId, instruction: input.instruction } });
+        return dispatch('run.start', { projectId: input.projectId, revision: input.revision, regeneration: { shotId: input.shotId, kind: input.kind, modelId: input.modelId, instruction: input.instruction, imageEdit: input.imageEdit } });
       }
       case 'shot.candidates': {
         const input = entityId.extend({ shotId: z.string().min(1), offset: z.number().int().nonnegative().default(0), limit: z.number().int().min(1).max(100).default(20) }).parse(rawParams);
@@ -1102,6 +1304,8 @@ export function createRuntime(options: RuntimeOptions) {
         const currentCharacters = characters.profilesFor({ shots: [current] }).characters;
         if (fingerprint(currentCharacters) !== fingerprint(candidate.characters ?? [])) throw new Error('生成后角色设定或参考图已修改，请重新生成后应用。');
         requireCandidateResearch(value, candidate);
+        const frozenContext = store.get<RunSnapshot>('run-snapshot', candidate.runId)?.project;
+        if (frozenContext && (shotCreativePrompt(frozenContext, candidate.baseline) !== shotCreativePrompt(value, current) || fingerprint(creativeReferenceAssetIds(frozenContext, candidate.baseline)) !== fingerprint(creativeReferenceAssetIds(value, current)))) throw new Error('生成后镜头的创作设定或连续性要求已修改，请重新生成候选。');
         if (candidate.baseline.clipEdit) {
           const oldPlanRow = database.prepare("SELECT p.value AS body FROM documents s, json_each(s.body, '$.project.clipEditPlans') p WHERE s.kind = 'run-snapshot' AND s.id = ? AND json_extract(p.value, '$.id') = ?").get(candidate.runId, candidate.baseline.clipEdit.planId) as { body: string } | undefined;
           const oldPlan = oldPlanRow ? JSON.parse(oldPlanRow.body) as NonNullable<ProjectDocument['clipEditPlans']>[number] : undefined;
@@ -1137,6 +1341,8 @@ export function createRuntime(options: RuntimeOptions) {
       case 'run.get': return reads.runSummary(run(runIdInput.parse(rawParams).runId));
       case 'run.resume': {
         const { runId } = runIdInput.parse(rawParams); const value = run(runId);
+        if (value.productionQueueItemId) { await productionQueue!.resumeOwnedRun(runId); return hydrateRun(run(runId)); }
+        if (productionQueue!.activeForProject(value.projectId)) throw new Error('该项目已在生产队列中，请先从队列处理排队项。');
         const saved = store.get<RunSnapshot>('run-snapshot', runId);
         if (saved?.exportBatch) { await batches.dispatch('render.batch.resume', { batchId: saved.exportBatch.batchId }); return hydrateRun(run(runId)); }
         if (batches.blocked(value.projectId)) throw new Error('请先继续或取消当前批量导出，再恢复其他运行。');
@@ -1193,6 +1399,12 @@ export function createRuntime(options: RuntimeOptions) {
         store.put('model', id, value); changed(); return value;
       }
       case 'cost.list': case 'cost.update': case 'cost.summary': case 'cost.tasks': case 'cost.task.get': return costs.dispatch(method, rawParams);
+      case 'promptLibrary.get': case 'promptLibrary.list': case 'promptLibrary.save': case 'promptLibrary.update': return promptLibrary.dispatch(method, rawParams);
+      case 'prompt.preview': case 'promptSession.get': case 'promptSession.list': case 'promptSession.save': return promptWorkbench.dispatch(method, rawParams);
+      case 'promptTrial.start': {
+        const value = await promptWorkbench.dispatch(method, rawParams);
+        return reads.runSummary(run(z.object({ id: z.string() }).parse(value).id));
+      }
       case 'render.batch.start': case 'render.batch.get': case 'render.batch.list': case 'render.batch.cancel': case 'render.batch.resume': return batches.dispatch(method, rawParams);
       case 'character.list': case 'character.get': case 'character.references': case 'character.save': case 'character.archive': case 'character.restore': return characters.dispatch(method, rawParams);
       case 'workflowTemplate.list': case 'workflowTemplate.get': case 'workflowTemplate.save': case 'workflowTemplate.archive': case 'workflowTemplate.restore': return workflowTemplates.dispatch(method, rawParams);
@@ -1291,6 +1503,13 @@ export function createRuntime(options: RuntimeOptions) {
           }
         })(); changed(); return value;
       }
+      case 'image.dimensions': return imageTools.dimensions(rawParams);
+      case 'image.cutGrid': return trackWork(() => imageTools.cutGrid(rawParams));
+      case 'image.createMask': return trackWork(() => imageTools.mask(rawParams));
+      case 'asset.getMany': {
+        const { assetIds } = z.object({ assetIds: z.array(z.string().min(1)).max(100) }).parse(rawParams);
+        return [...new Set(assetIds)].flatMap(id => { const asset = store.get<AssetRecord>('asset', id); return asset ? [asset] : []; });
+      }
       case 'asset.waveform': {
         const { assetId } = z.object({ assetId: z.string().min(1) }).parse(rawParams);
         const asset = store.get<AssetRecord>('asset', assetId);
@@ -1324,7 +1543,7 @@ export function createRuntime(options: RuntimeOptions) {
       case 'asset.delete': {
         const { assetId } = z.object({ assetId: z.string() }).parse(rawParams);
         const asset = store.get<AssetRecord>('asset', assetId); if (!asset) throw new Error('素材不存在。');
-        if (asset.retained || reads.assetInUse(assetId) || characters.assetInUse(assetId)) throw new Error('正在使用或已保留的素材不能移除。');
+        if (asset.retained || reads.assetInUse(assetId) || characters.assetInUse(assetId) || imageTools.assetsInUse([assetId]).has(assetId)) throw new Error('正在使用或已保留的素材不能移除。');
         store.put('asset', assetId, { ...asset, active: false }); changed(); return { deleted: true };
       }
       case 'project.backup': {
@@ -1333,8 +1552,12 @@ export function createRuntime(options: RuntimeOptions) {
         validateResearchProject(value, value);
         validateEdits(value, value);
         const bundle = characters.profilesFor(value);
-        const referenced = new Set([...value.shots.flatMap(shot => [shot.assetId, shot.videoAssetId, shot.audioAssetId, shot.captionTrack?.sourceAssetId]), ...(value.clipEditSources ?? []).flatMap(clipSourceAssetIds), ...(value.musicClips ?? []).map(clip => clip.assetId), ...(value.workflow.production.referenceAudioAssetIds ?? []), ...bundle.assets.map(asset => asset.id)]);
-        const assets = store.list<AssetRecord>('asset').filter(asset => asset.projectId === projectId || !asset.projectId && referenced.has(asset.id));
+        const referenced = new Set([...value.shots.flatMap(shot => [shot.assetId, shot.videoAssetId, shot.audioAssetId, shot.captionTrack?.sourceAssetId]), ...(value.clipEditSources ?? []).flatMap(clipSourceAssetIds), ...(value.musicClips ?? []).map(clip => clip.assetId), ...(value.workflow.production.referenceAudioAssetIds ?? []), ...creativeReferenceAssetIds(value), ...bundle.assets.map(asset => asset.id)]);
+        const availableAssets = store.list<AssetRecord>('asset');
+        for (const asset of availableAssets.filter(asset => asset.projectId === projectId)) referenced.add(asset.id);
+        let added = true;
+        while (added) { added = false; for (const asset of availableAssets) if (referenced.has(asset.id) && asset.derivation && !referenced.has(asset.derivation.sourceAssetId)) { referenced.add(asset.derivation.sourceAssetId); added = true; } }
+        const assets = availableAssets.filter(asset => referenced.has(asset.id));
         const backupDirectory = resolve(destination ?? join(directory, 'backups', `${projectId}-${Date.now()}`));
         await mkdir(join(backupDirectory, 'assets'), { recursive: true });
         const portable = assets.map(asset => ({ ...asset, path: `assets/${createHash('sha256').update(asset.id).digest('hex')}${extname(asset.path).toLowerCase()}` }));
@@ -1342,8 +1565,9 @@ export function createRuntime(options: RuntimeOptions) {
           if (!existsSync(assets[index].path)) throw new Error(`素材「${assets[index].name}」缺失，无法创建完整备份。`);
           await copyFile(assets[index].path, join(backupDirectory, portable[index].path));
         }
-        const schemaVersion = 4;
-        await writeFile(join(backupDirectory, 'project.json'), JSON.stringify({ schemaVersion, project: value, assets: portable, characters: bundle.characters }, null, 2), { encoding: 'utf8', flag: 'wx' });
+        const hasPromptBindings = workflowNodesWithSubflows(value.workflow).some(node => node.promptBindings !== undefined || node.promptTemplate !== undefined);
+        const schemaVersion = creativeReferenceAssetIds(value).length || assets.some(asset => asset.derivation) ? 8 : value.episode || value.episodeSource ? 7 : hasPromptBindings ? 6 : value.creativeContext || value.shots.some(shot => shot.creativeEntityKeys?.length) ? 5 : 4;
+        await writeFile(join(backupDirectory, 'project.json'), JSON.stringify({ schemaVersion, project: value.episode ? { ...value, episodeSource: { ...value.episode, workTitle: works.get(value.episode.workId).title } } : value, assets: portable, characters: bundle.characters }, null, 2), { encoding: 'utf8', flag: 'wx' });
         return { path: backupDirectory, assets: portable.length };
       }
       case 'project.importBackup': {
@@ -1352,7 +1576,11 @@ export function createRuntime(options: RuntimeOptions) {
         const source = (await stat(entry)).isDirectory() ? join(entry, 'project.json') : entry;
         const info = await stat(source);
         if (!info.isFile() || info.size > 30_000_000) throw new Error('项目备份文件无效或超过 30 MB。');
-        const backup = z.object({ schemaVersion: z.literal(4, { error: '仅支持格式 4 的项目备份。' }), project: projectSchema, assets: z.array(assetSchema).max(2000), characters: z.array(characterProfileSchema).max(1000).default([]) }).parse(JSON.parse(await readFile(source, 'utf8')));
+        const backup = z.object({ schemaVersion: z.union([z.literal(4), z.literal(5), z.literal(6), z.literal(7), z.literal(8)], { error: '仅支持格式 4 至 8 的项目备份。' }), project: projectSchema, assets: z.array(assetSchema).max(2000), characters: z.array(characterProfileSchema).max(1000).default([]) }).parse(JSON.parse(await readFile(source, 'utf8')));
+        if (backup.schemaVersion < 7 && (backup.project.episode || backup.project.episodeSource)) throw new Error('包含分集来源的项目需要格式 7 备份。');
+        if (backup.schemaVersion < 6 && workflowNodesWithSubflows(backup.project.workflow).some(node => node.promptBindings !== undefined || node.promptTemplate !== undefined)) throw new Error('包含提示词绑定的项目需要格式 6 备份。');
+        if (backup.schemaVersion === 4 && (backup.project.creativeContext || backup.project.shots.some(shot => shot.creativeEntityKeys?.length))) throw new Error('包含创作设定的项目需要格式 5 备份。');
+        if (backup.schemaVersion < 8 && (creativeReferenceAssetIds(backup.project).length || backup.assets.some(asset => asset.derivation))) throw new Error('包含图片设定或裁切来源的项目需要格式 8 备份。');
         validateWorkflow(backup.project.workflow);
         validateResearchProject(backup.project, backup.project);
         validateClipEditContent(backup.project, backup.assets);
@@ -1373,14 +1601,27 @@ export function createRuntime(options: RuntimeOptions) {
           if (createHash('sha256').update(bytes).digest('hex') !== asset.sha256 || bytes.length !== asset.size) throw new Error(`素材“${asset.name}”缺失或校验失败，请使用完整备份。`);
           buffers.push({ asset, bytes });
         }
+        const sources = new Map(buffers.map(entry => [entry.asset.id, entry]));
+        if (buffers.some(entry => entry.asset.derivation)) {
+          const { imageDimensions } = await import('@video-quickly/video/image-tools');
+          const dimensions = new Map<string, { width: number; height: number }>();
+          for (const { asset, bytes } of buffers) if (asset.derivation) {
+            const provenance = asset.derivation, origin = sources.get(provenance.sourceAssetId);
+            if (!origin || origin.asset.kind !== 'image' || origin.asset.sha256 !== provenance.sourceSha256 || !['image/png', 'image/jpeg', 'image/webp'].includes(origin.asset.mimeType)) throw new Error('备份中的图片来源缺失或哈希不匹配。');
+            const size = dimensions.get(origin.asset.id) ?? await imageDimensions(origin.bytes); dimensions.set(origin.asset.id, size);
+            if (size.width !== provenance.sourceWidth || size.height !== provenance.sourceHeight) throw new Error('备份中的图片来源尺寸不匹配。');
+            const output = await imageDimensions(bytes), expected = provenance.kind === 'grid-crop' ? provenance.rectangle : size;
+            if (asset.kind !== 'image' || output.width !== expected.width || output.height !== expected.height || asset.width !== undefined && asset.width !== output.width || asset.height !== undefined && asset.height !== output.height) throw new Error('备份中的裁切或遮罩尺寸不匹配。');
+          }
+        }
         const projectId = randomUUID();
         const assetDirectory = join(directory, 'projects', projectId, 'assets');
         await mkdir(assetDirectory, { recursive: true });
         const identifiers = new Map(buffers.map(({ asset }) => [asset.id, randomUUID()]));
         const clipAssetId = (id: string | undefined) => { if (!id) return undefined; const mapped = identifiers.get(id); if (!mapped) throw new Error('备份缺少原始剪辑素材，请使用完整备份。'); return mapped; };
         const importedCharacters = characters.prepareImport({ characters: backup.characters, assets: backup.assets }, identifiers);
-        const characterReferences = new Set(backup.characters.flatMap(profile => profile.referenceAssetIds));
-        if (backup.project.shots.some(shot => shot.characterIds?.some(id => !importedCharacters.idMap.has(id)))) throw new Error('备份缺少镜头使用的角色，请重新创建完整备份。');
+        const characterReferences = new Set([...backup.characters.flatMap(profile => profile.referenceAssetIds), ...creativeReferenceAssetIds(backup.project)]);
+        if (projectCharacterIds(backup.project).some(id => !importedCharacters.idMap.has(id))) throw new Error('备份缺少镜头或项目角色池使用的角色，请重新创建完整备份。');
         const restoredAssets: AssetRecord[] = [];
         const timestamp = now();
         for (const { asset, bytes } of buffers) {
@@ -1388,10 +1629,11 @@ export function createRuntime(options: RuntimeOptions) {
           if (!id) throw new Error('备份素材编号无效。');
           const destination = join(assetDirectory, `${id}${extname(asset.path)}`);
           await writeFile(destination, bytes, { flag: 'wx' });
-          restoredAssets.push({ ...asset, id, projectId: characterReferences.has(asset.id) ? undefined : projectId, shotId: characterReferences.has(asset.id) ? undefined : asset.shotId, path: destination, createdAt: timestamp });
+          restoredAssets.push({ ...asset, id, projectId: characterReferences.has(asset.id) ? undefined : projectId, shotId: characterReferences.has(asset.id) ? undefined : asset.shotId, path: destination, createdAt: timestamp, ...(asset.derivation ? { derivation: { ...asset.derivation, sourceAssetId: clipAssetId(asset.derivation.sourceAssetId)! } } : {}) });
         }
-        const restored = projectSchema.parse({ ...backup.project, workflow: { ...backup.project.workflow, production: { ...backup.project.workflow.production, referenceAudioAssetIds: backup.project.workflow.production.referenceAudioAssetIds?.map(id => clipAssetId(id)!) } }, id: projectId, title: `${backup.project.title.slice(0, 150)}（恢复）`, revision: 1, archived: false, createdAt: timestamp, updatedAt: timestamp,
+        const restored = projectSchema.parse({ ...backup.project, episode: undefined, episodeSource: backup.project.episodeSource ?? (backup.project.episode ? { ...backup.project.episode, workTitle: '备份中的作品' } : undefined), workflow: { ...backup.project.workflow, production: { ...backup.project.workflow.production, referenceAudioAssetIds: backup.project.workflow.production.referenceAudioAssetIds?.map(id => clipAssetId(id)!) } }, id: projectId, title: `${backup.project.title.slice(0, 150)}（恢复）`, revision: 1, archived: false, createdAt: timestamp, updatedAt: timestamp,
           clipEditSources: backup.project.clipEditSources?.map(source => ({ ...source, original: { ...source.original, assetId: clipAssetId(source.original.assetId), audioAssetId: clipAssetId(source.original.audioAssetId), videoAssetId: clipAssetId(source.original.videoAssetId), captionTrack: source.original.captionTrack ? { ...source.original.captionTrack, sourceAssetId: clipAssetId(source.original.captionTrack.sourceAssetId) } : undefined }, assetHashes: source.assetHashes.map(hash => ({ ...hash, assetId: clipAssetId(hash.assetId)! })) })),
+          creativeContext: backup.project.creativeContext ? { ...backup.project.creativeContext, characterIds: backup.project.creativeContext.characterIds.map(id => importedCharacters.idMap.get(id)!), entities: backup.project.creativeContext.entities.map(entity => ({ ...entity, ...(entity.referenceAssetIds ? { referenceAssetIds: entity.referenceAssetIds.map(id => clipAssetId(id)!) } : {}) })) } : backup.project.creativeContext,
           musicClips: backup.project.musicClips?.map(clip => ({ ...clip, assetId: identifiers.get(clip.assetId) })), shots: backup.project.shots.map(shot => ({ ...shot, characterIds: shot.characterIds?.map(id => importedCharacters.idMap.get(id)), assetId: shot.assetId ? identifiers.get(shot.assetId) : undefined, audioAssetId: shot.audioAssetId ? identifiers.get(shot.audioAssetId) : undefined, videoAssetId: shot.videoAssetId ? identifiers.get(shot.videoAssetId) : undefined, captionTrack: shot.captionTrack ? { ...shot.captionTrack, sourceAssetId: shot.captionTrack.sourceAssetId ? identifiers.get(shot.captionTrack.sourceAssetId) : undefined } : undefined })) });
         database.transaction(() => {
           for (const asset of restoredAssets) store.put('asset', asset.id, asset);
@@ -1423,6 +1665,8 @@ export function createRuntime(options: RuntimeOptions) {
         })();
         const record = run(runId); const value = project(record.projectId); requireRevision(value, revision);
         const saved = store.get<RunSnapshot>('run-snapshot', runId);
+        if (saved?.assistant) throw new Error('任务修改建议请在预览中应用到编辑草稿。');
+        if (saved?.trial && record.status !== 'succeeded') throw new Error('请等待试运行成功后再应用产物。');
         if ((saved?.inspectionNodes ?? saved?.nodes)?.some(node => node.id === nodeId && node.kind === 'research')) throw new Error('该历史资料产物仅支持查看。');
         if (saved?.regeneration) {
           if (applicationId) throw new Error('镜头候选请使用候选应用接口。');
@@ -1432,7 +1676,7 @@ export function createRuntime(options: RuntimeOptions) {
         }
         if (!saved || value.revision !== saved.project.revision) throw new Error('项目已在生成后修改，请基于当前内容重新生成建议。');
         const frozenCharacters = saved.characters ?? [], frozenReferences = saved.characterAssets ?? [];
-        await validateCharacterAssets(frozenCharacters, frozenReferences);
+        await validateCharacterAssets(frozenCharacters, frozenReferences, creativeReferenceAssetIds(saved.project));
         const captured = appliedReceipt(); if (captured) return captured;
         const verifiedProject = () => {
           const current = project(record.projectId); requireRevision(current, revision);
@@ -1461,7 +1705,7 @@ export function createRuntime(options: RuntimeOptions) {
           const repeated = appliedReceipt(); if (repeated) return repeated;
           const latest = verifiedProject(); requireCandidateAssets(assets);
           const working = projectAfterNode(input, node, result, assets);
-          return saveApplied({ ...latest, shots: working.shots, clipEditSources: working.clipEditSources, clipEditPlans: working.clipEditPlans });
+          return saveApplied({ ...latest, creativeContext: working.creativeContext, shots: working.shots, clipEditSources: working.clipEditSources, clipEditPlans: working.clipEditPlans });
         }
         throw new Error('此步骤结果无需写入项目。');
       }
@@ -1473,11 +1717,13 @@ export function createRuntime(options: RuntimeOptions) {
   return {
     dispatch,
     subscribe(listener: (event: RuntimeEvent) => void) { listeners.add(listener); return () => { listeners.delete(listener); }; },
-    async waitForIdle() { await assetRecovery.waitForIdle(); await readiness.waitForIdle(); await audioPreview.waitForIdle(); await batches.waitForIdle(); await drainWork(); },
+    async waitForIdle() { await assetRecovery.waitForIdle(); await readiness.waitForIdle(); await audioPreview.waitForIdle(); await batches.waitForIdle(); do { await productionQueue!.waitForIdle(); await drainWork(); } while (active.size || pendingWork.size || productionQueue!.hasPending()); },
     async close() {
       logger.info('runtime.stopping', { pendingCount: active.size + pendingWork.size });
-      closing = true;
+      closing = true; productionQueue!.close();
+      for (const controller of editorExports.values()) controller.abort();
       try {
+        await productionQueue!.waitForIdle();
         await assetRecovery.close();
         await readiness.close();
         await audioPreview.close();

@@ -238,11 +238,11 @@ test('automatically recovers the selected media in both current and historical r
     await open(page, project); await page.getByRole('button', { name: '制作记录', exact: true }).click();
     await page.locator(`.run-card[data-run-id="${runs[1].id}"]`).getByRole('button', { name: '查看步骤', exact: true }).click();
     const detail = page.getByRole('dialog', { name: '制作步骤详情', exact: true }), current = detail.getByRole('region', { name: '本次产物', exact: true });
-    await current.getByLabel('选择媒体', { exact: true }).getByRole('button', { name: asset.name, exact: true }).click(); await expect(current.getByRole('alert')).toContainText('媒体暂时无法预览');
+    await current.getByRole('combobox', { name: '预览媒体', exact: true }).selectOption(asset.id); await expect(current.getByRole('alert')).toContainText('媒体暂时无法预览');
     await detail.getByRole('button', { name: '历史产物', exact: true }).click();
     await detail.getByLabel('历史产物版本', { exact: true }).locator(`[data-run-id="${runs[0].id}"]`).click();
     const history = detail.getByRole('region', { name: '历史产物', exact: true });
-    await history.getByLabel('选择媒体', { exact: true }).getByRole('button', { name: asset.name, exact: true }).click(); await expect(history.getByRole('alert')).toContainText('媒体暂时无法预览');
+    await history.getByRole('combobox', { name: '预览媒体', exact: true }).selectOption(asset.id); await expect(history.getByRole('alert')).toContainText('媒体暂时无法预览');
     const job = await rpc<{ id: string }>(request, 'asset.recovery.start', { projectId: project.id });
     await expect.poll(async () => (await rpc<{ job: { phase: string } }>(request, 'asset.recovery.get', { jobId: job.id })).job.phase).toBe('awaiting_directory');
     await rpc(request, 'asset.recovery.scan', { jobId: job.id, directory: source });
@@ -255,7 +255,7 @@ test('automatically recovers the selected media in both current and historical r
       await expect(result.getByRole('alert')).toHaveCount(0);
       const image = result.getByRole('img', { name: asset.name, exact: true }); await expect(image).toBeVisible();
       expect(await image.evaluate((element: HTMLImageElement) => ({ ready: element.complete && element.naturalWidth === 160, path: new URL(element.src).searchParams.get('path'), retried: Number(new URL(element.src).searchParams.get('availability')) > 0 }))).toEqual({ ready: true, path: asset.path, retried: true });
-      await expect(result.getByLabel('选择媒体', { exact: true }).getByRole('button', { name: asset.name, exact: true })).toHaveAttribute('aria-pressed', 'true');
+      await expect(result.getByRole('combobox', { name: '预览媒体', exact: true })).toHaveValue(asset.id);
     }
     expect(await saved(request, project.id)).toEqual(project); expect(frozen()).toEqual(baseline);
     for (const run of runs) expect(await rpc(request, 'run.get', { runId: run.id })).toEqual(run);

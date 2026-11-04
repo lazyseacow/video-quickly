@@ -68,9 +68,9 @@ for (const viewport of [{ width: 1536, height: 960, theme: 'dark' }, { width: 39
       await detail.getByRole('tab', { name: '制作信息', exact: true }).click(); await expect(detail).not.toContainText('人工审阅');
       await detail.getByRole('button', { name: '关闭对话框', exact: true }).click();
       await page.reload(); await selectProject(page, source.project);
-      await production(page).getByRole('button', { name: '查看产物', exact: true }).click();
-      const output = page.getByRole('dialog', { name: '步骤产物', exact: true });
-      await expect(output).toContainText('流程生成镜头'); await output.getByRole('button', { name: '关闭', exact: true }).click(); await expect(output).toHaveCount(0);
+      await production(page).getByRole('button', { name: '打开步骤：分镜确认', exact: true }).click();
+      const output = page.getByRole('dialog', { name: '本次制作', exact: true });
+      await expect(output.getByRole('region', { name: '本次产物', exact: true })).toContainText('流程生成镜头'); await output.getByRole('button', { name: '关闭对话框', exact: true }).click(); await expect(output).toHaveCount(0);
       await expect(page.getByLabel('镜头标题', { exact: true })).toHaveValue('流程生成镜头');
       await expect(page.getByRole('button', { name: '导出', exact: true })).toBeEnabled();
       await production(page).scrollIntoViewIfNeeded(); await page.screenshot({ path: info.outputPath(`automatic-production-${viewport.width}.png`) });
@@ -164,7 +164,7 @@ test('retries failed progress reads while automatic generation completes without
     const panel = production(page); await expect(panel).toContainText('制作进度读取暂时失败');
     await panel.getByRole('button', { name: '重试读取制作进度', exact: true }).click();
     await expect.poll(async () => (await latest(request, source.project.id)).status).toBe('succeeded');
-    await expect(panel).toContainText('已完成'); await expect(panel.getByRole('button', { name: '查看产物', exact: true })).toBeEnabled();
+    await expect(panel).toContainText('已完成'); await expect(panel.getByRole('button', { name: '打开步骤：分镜确认', exact: true })).toBeEnabled();
     expect(source.calls()).toBe(2);
   } finally { await close(source.server); }
 });

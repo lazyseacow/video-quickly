@@ -1,3 +1,4 @@
+import { confirmAction } from './confirmation-actions';
 import { openProjectFromList } from './workspace-navigation';
 import { openCosts, setWorkspaceTheme } from './workspace-settings';
 import { settingField, settingControl } from './settings';
@@ -78,7 +79,7 @@ test('creates a visual character library, binds a shot with durable undo, and pr
   await expect(page.getByRole('checkbox', { name: '稳定角色小青', exact: true })).toBeChecked();
   await page.getByRole('button', { name: '角色参考库', exact: true }).click();
   const blockedArchive = page.waitForResponse(response => response.url().endsWith('/__desktop_rpc') && response.request().postDataJSON()?.method === 'character.archive');
-  await page.getByRole('button', { name: '归档角色：稳定角色小青', exact: true }).click();
+  await page.getByRole('button', { name: '归档角色：稳定角色小青', exact: true }).click(); await confirmAction(page, '确认归档');
   await expect(page.getByRole('alert')).toContainText('仍有项目镜头使用此角色');
   expect((await blockedArchive).status()).toBe(400);
   const deletion = await request.post('/__desktop_rpc', { data: { method: 'asset.delete', params: { assetId: character!.referenceAssetIds[0] } } });

@@ -8,7 +8,7 @@ export default function SceneTemplateEditor({ value, onChange, disabled = false 
 }) {
   const validation = value ? sceneTemplateSchema.safeParse(value) : undefined;
   return <div className="scene-template-editor">
-    <Field label="科普画面模板" hint="本地绘制，无需调用模型；清除后恢复原画面素材。"><Select value={value?.kind ?? ''} disabled={disabled} onChange={event => onChange(event.target.value ? createSceneTemplate(event.target.value as SceneTemplateKind) : undefined)}><option value="">使用原画面</option><option value="process">流程讲解</option><option value="comparison">双栏对照</option><option value="bar-chart">条形数据图</option></Select></Field>
+    <Field label="科普画面模板"><Select value={value?.kind ?? ''} disabled={disabled} onChange={event => onChange(event.target.value ? createSceneTemplate(event.target.value as SceneTemplateKind) : undefined)}><option value="">使用原画面</option><option value="process">流程讲解</option><option value="comparison">双栏对照</option><option value="bar-chart">条形数据图</option></Select></Field>
     {value && <>
       <p className="scene-template-editor__example">示例内容请自行替换，并核对事实与数据。</p>
       <Field label="模板标题"><input value={value.heading} maxLength={160} disabled={disabled} onChange={event => onChange({ ...value, heading: event.target.value })} /></Field>

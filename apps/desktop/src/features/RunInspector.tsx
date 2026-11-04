@@ -113,7 +113,7 @@ function StepOutputs({ inspection, step, version, onOpenOutput }: { inspection: 
   const [historyOpen, setHistoryOpen] = useState(false);
   const [comparisonId, setComparisonId] = useState('');
   const output = useRuntimeRead('run.step.payload', { runId: inspection.run.id, nodeId: step.id, kind: 'output' }, version, runStepPayloadSchema);
-  const applicable = ['script', 'style', 'assets', 'animation', 'research'].includes(step.kind);
+  const applicable = inspection.run.purpose !== 'workflow-assistant' && ['script', 'style', 'assets', 'animation', 'research'].includes(step.kind);
   const open = (runId: string) => onOpenOutput({ projectId: inspection.run.projectId, runId, nodeId: step.id, kind: step.kind });
   return <>{output.error && <Notice kind="error">{output.error}<Button aria-label="重试读取产物" onClick={output.refresh}>重试</Button></Notice>}
     {historyOpen && <OutputVersions runId={inspection.run.id} nodeId={step.id} comparisonId={comparisonId} onCompare={setComparisonId} />}

@@ -1,0 +1,23 @@
+.prompt-workbench { width: min(1160px, calc(100vw - var(--space-6))); }
+.prompt-workbench > .dialog__surface { height: min(840px, calc(100dvh - 2 * var(--space-6))); }
+.prompt-workbench__body { display: grid; align-content: start; gap: var(--space-4); min-width: 0; overflow-y: auto; }
+.prompt-workbench__subtitle { margin: 0; color: var(--text-secondary); font-size: var(--text-size-caption); }
+.prompt-workbench__fieldset { margin: 0; padding: 0; border: 0; min-width: 0; }
+.prompt-workbench__columns { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: var(--space-6); }
+.prompt-workbench__columns > section { min-width: 0; }
+.prompt-workbench__preview { align-self: start; padding: var(--space-4); border: 1px solid var(--border); border-radius: var(--radius-small); background: var(--surface-raised); }
+.prompt-workbench pre { white-space: pre-wrap; overflow-wrap: anywhere; font: var(--text-size-caption)/var(--line-height-body) var(--font-family-code); max-height: 440px; overflow: auto; margin: var(--space-3) 0; }
+.prompt-workbench .muted { color: var(--text-secondary); font-size: var(--text-size-caption); line-height: var(--line-height-body); }
+.prompt-workbench h3 { margin: 0 0 var(--space-3); }
+.prompt-workbench__actions, .prompt-workbench__run-meta { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); margin: var(--space-4) 0; }
+.prompt-workbench__skills { display: grid; gap: var(--space-2); margin: var(--space-4) 0; }
+.prompt-workbench__skills label { display: flex; align-items: center; gap: var(--space-2); }
+.prompt-workbench small { color: var(--text-secondary); }
+.prompt-variable { padding: var(--space-3) 0; border-bottom: 1px solid var(--border-subtle); display: grid; grid-template-columns: 1fr 1fr; align-items: end; gap: var(--space-2); }
+.prompt-variable .field { margin: 0; min-width: 0; }
+.prompt-variable input { width: 100%; }
+.prompt-variable > .button { justify-self: end; }
+.prompt-workbench__kinds { display: flex; gap: var(--space-3); flex-wrap: wrap; padding: var(--space-3); border: 1px solid var(--border); border-radius: var(--radius-small); }
+.prompt-workbench__kinds legend { color: var(--text-secondary); font-size: var(--text-size-caption); }
+.prompt-workbench .dialog__footer { flex-wrap: wrap; }
+@media (max-width: 760px) { .prompt-workbench__columns { grid-template-columns: minmax(0, 1fr); gap: var(--space-4); } .prompt-workbench { width: calc(100vw - var(--space-4)); } .prompt-workbench__body { padding: var(--space-4); } }

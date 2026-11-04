@@ -22,7 +22,7 @@ export function applyShotCandidate(current: Shot, candidate: ShotCandidate, fiel
   function unchanged(keys: (keyof Shot)[]) {
     if (keys.some(key => !sameInput(current[key], baseline[key]))) throw new Error('候选涉及的内容或镜头区间已修改，请重新生成或核对后再应用。');
   }
-  unchanged(['claimIds', 'clipEdit']);
+  unchanged(['claimIds', 'clipEdit', 'creativeEntityKeys']);
   if (candidate.kind === 'script') {
     if (!fields.length) throw new Error('请至少选择一项要应用的内容。');
     unchanged(fields);

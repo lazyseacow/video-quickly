@@ -1,3 +1,4 @@
+import { confirmAction } from './confirmation-actions';
 import { saveProduction } from './production-settings';
 import { selectModel, closeProjectSettings } from './settings';
 import { createSceneTemplate, type ProjectDocument } from '@video-quickly/contracts';
@@ -375,7 +376,7 @@ test('resizes and restores editor panels, and saves before opening a recent proj
   const shots = page.locator('#project-outline');
   await expect(shots.getByRole('region', { name: '镜头列表', exact: true })).toBeVisible(); await expect(shots.locator('.outline-header')).toHaveCount(0); await expect(shots.getByRole('tab')).toHaveCount(0); await expect(shots.locator('.step-list, .step-item')).toHaveCount(0);
   await shots.getByRole('button', { name: '添加镜头', exact: true }).click(); await expect(shots.locator('.outline-shot')).toHaveCount(original.shots.length + 1);
-  await page.getByRole('button', { name: '移除所选镜头', exact: true }).click(); await expect(shots.locator('.outline-shot')).toHaveCount(original.shots.length);
+  await page.getByRole('button', { name: '移除所选镜头', exact: true }).click(); await confirmAction(page, '确认移除'); await expect(shots.locator('.outline-shot')).toHaveCount(original.shots.length);
   await shots.locator('.outline-shot').first().click();
   await page.getByLabel('镜头标题', { exact: true }).fill('专注模式保留的草稿');
   await page.getByRole('button', { name: '专注预览', exact: true }).click();

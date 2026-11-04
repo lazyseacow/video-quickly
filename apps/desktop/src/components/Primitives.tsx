@@ -1,9 +1,9 @@
-import { cloneElement, createElement, isValidElement, useId, useRef, type ButtonHTMLAttributes, type ComponentProps, type ReactNode } from 'react';
+import { cloneElement, createElement, isValidElement, useId, useRef, type ComponentProps, type ReactNode, type RefObject } from 'react';
 import { Check, CircleAlert, Info, LoaderCircle, X } from 'lucide-react';
 import { gsap, motion, useGSAP } from '../lib/motion';
 export { default as Combobox } from './Combobox';
 
-export function Button({ children, variant = 'default', className = '', busy = false, static: isStatic = false, ...props }: ButtonHTMLAttributes<HTMLButtonElement> & { variant?: 'default' | 'primary' | 'ghost' | 'danger'; busy?: boolean; static?: boolean }) {
+export function Button({ children, variant = 'default', className = '', busy = false, static: isStatic = false, ...props }: ComponentProps<'button'> & { variant?: 'default' | 'primary' | 'ghost' | 'danger'; busy?: boolean; static?: boolean }) {
   return <button type="button" {...props} disabled={props.disabled || busy} className={`button button--${variant} ${isStatic ? 'button--static' : ''} ${className}`} aria-busy={busy || undefined}>{busy && <LoaderCircle className="spin" size={16} aria-hidden="true" />}{children}</button>;
 }
 
@@ -23,7 +23,7 @@ export function Field({ label, hint, children, className = '' }: { label: string
   return <label className={`field ${className}`}><span className="field__label">{label}</span>{control}{hint && <span id={hintId} className="field__hint">{hint}</span>}</label>;
 }
 
-export function Dialog({ title, children, onClose, onDismissStart, className = '' }: { title: string; children: ReactNode; onClose: () => void; onDismissStart?: () => void; className?: string }) {
+export function Dialog({ title, children, onClose, onDismissStart, className = '', role, descriptionId, initialFocus }: { title: string; children: ReactNode; onClose: () => void; onDismissStart?: () => void; className?: string; role?: 'dialog' | 'alertdialog'; descriptionId?: string; initialFocus?: RefObject<HTMLElement | null> }) {
   const titleId = useId();
   const ref = useRef<HTMLDialogElement>(null);
   const surface = useRef<HTMLDivElement>(null);
@@ -35,7 +35,7 @@ export function Dialog({ title, children, onClose, onDismissStart, className = '
     const content = surface.current;
     if (!dialog || !content) return;
     dialog.showModal();
-    content.querySelector<HTMLElement>('input:not([disabled]):not([type="hidden"]), textarea:not([disabled]), select:not([disabled])')?.focus({ preventScroll: true });
+    (initialFocus?.current ?? content.querySelector<HTMLElement>('input:not([disabled]):not([type="hidden"]), textarea:not([disabled]), select:not([disabled])'))?.focus({ preventScroll: true });
     const preference = matchMedia('(prefers-reduced-motion: reduce)');
     let closing = false;
     let exit: gsap.core.Tween | undefined;
@@ -58,7 +58,7 @@ export function Dialog({ title, children, onClose, onDismissStart, className = '
     preference.addEventListener('change', updatePreference);
     return () => { preference.removeEventListener('change', updatePreference); enter.kill(); exit?.kill(); dismiss.current = undefined; content.inert = false; if (dialog.open) dialog.close(); };
   }, { scope: ref });
-  return <dialog ref={ref} className={`dialog ${className}`} aria-labelledby={titleId} onCancel={event => { event.preventDefault(); dismiss.current?.(); }} onClick={event => { if (event.target === event.currentTarget) dismiss.current?.(); }}><div ref={surface} className="dialog__surface"><div className="dialog__header"><h2 id={titleId}>{title}</h2><IconButton label="关闭对话框" onClick={() => dismiss.current?.()}><X size={18} /></IconButton></div>{children}</div></dialog>;
+  return <dialog ref={ref} role={role} className={`dialog ${className}`} aria-labelledby={titleId} aria-describedby={descriptionId} onCancel={event => { event.preventDefault(); event.stopPropagation(); dismiss.current?.(); }} onClick={event => { if (event.target === event.currentTarget) dismiss.current?.(); }}><div ref={surface} className="dialog__surface"><div className="dialog__header"><h2 id={titleId}>{title}</h2><IconButton label="关闭对话框" onClick={() => dismiss.current?.()}><X size={18} /></IconButton></div>{children}</div></dialog>;
 }
 
 export function Notice({ kind = 'info', children }: { kind?: 'info' | 'error' | 'success'; children: ReactNode }) {

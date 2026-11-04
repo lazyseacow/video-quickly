@@ -75,6 +75,8 @@ test('keeps the original-sound toggle, actual playback, mute and undo across rel
   await expect(page.locator('.track--audio')).toHaveCount(0);
   await setOriginal(page, true);
   const main = page.locator('.preview-panel'); await mixReady(main);
+  await expect(main.locator('.audio-level-meter, .prepared-mix-preview__warnings')).toHaveCount(0);
+  await expect(main.locator('.preview-audio')).toHaveCSS('height', '0px');
   const amplitude = await amplitudeOfPlayedMix(main, request, info, 'main'); expect(amplitude).toBeGreaterThan(.17); expect(amplitude).toBeLessThan(.24);
   await expect(page.locator('.track--original .audio-waveform')).toHaveAttribute('data-status', 'ready');
   await expect(page.locator('.track--original .audio-waveform')).toHaveAttribute('data-source-in-us', '250000');

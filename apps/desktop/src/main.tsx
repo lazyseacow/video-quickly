@@ -2,6 +2,7 @@ import React from 'react';
 import { createRoot } from 'react-dom/client';
 import { desktopBridge } from './lib/desktop';
 import App from './App';
+import { ConfirmationProvider } from './components/ConfirmationDialog';
 import './styles.css';
 import './workspace-layout.css';
 
@@ -12,6 +13,6 @@ if (!container) throw new Error('无法找到应用容器');
 
 createRoot(container).render(
   <React.StrictMode>
-    <App />
+    <ConfirmationProvider><App /></ConfirmationProvider>
   </React.StrictMode>,
 );

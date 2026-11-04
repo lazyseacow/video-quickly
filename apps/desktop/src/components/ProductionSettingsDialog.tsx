@@ -1,6 +1,6 @@
 import { lazy, Suspense, useId, useRef, useState } from 'react';
 import { ChevronLeft, ChevronRight } from 'lucide-react';
-import { productionSettingsSchema, resolveProductionWorkflow, videoProfileSchema, type AssetRecord, type ProductionSettings, type ProjectDocument, type RunSummary, type WorkflowDefinition, type WorkflowNode } from '@video-quickly/contracts';
+import { applyWorkflowProposal, productionSettingsSchema, resolveProductionWorkflow, supportsPromptExperiment, videoProfileSchema, type AssetRecord, type ProductionSettings, type ProjectDocument, type RunSummary, type WorkflowDefinition, type WorkflowNode } from '@video-quickly/contracts';
 import type { WorkspaceView, StepOutputSelection } from '../lib/types';
 import type { ProductionProjectSettings } from '../lib/stage-configuration-draft';
 import { matchingStepModels, stepGuidance } from '../lib/workflow-guidance';
@@ -9,15 +9,20 @@ import SettingsSections from './SettingsSections';
 import VideoSettings from './VideoSettings';
 import { ProjectSettingsActions, type ProjectSettingsAction } from './ProjectSettingsPanel';
 import ReferenceAudioPicker from './ReferenceAudioPicker';
+import CreativeContextEditor from './CreativeContextEditor';
 import './production-settings.css';
 
 const StageRunView = lazy(() => import('../features/StageRunView'));
+const PromptWorkbench = lazy(() => import('./PromptWorkbench'));
+const WorkflowAssistant = lazy(() => import('./WorkflowAssistant'));
+const ModelAlternatives = lazy(() => import('./ModelAlternatives'));
 const steps = [{ id: 'planning', label: '创作要求' }, { id: 'materials', label: '模型与素材' }, { id: 'delivery', label: '声音与成片' }, { id: 'review', label: '确认保存' }] as const;
 type ConfigurationStep = typeof steps[number]['id'];
 export interface ProductionConfiguration { nodes: WorkflowNode[]; production: ProductionSettings; project: ProductionProjectSettings; }
 
-export default function ProductionSettingsDialog({ project, workflow, workspace, run, version, initialStage = 'planning', initialNodeId, initialTab, pendingConfiguration, configurationError, onSave, onDiscardPending, onClose, onOpenOutput, onOpenTool, onSectionChange, onImportReferenceAudio }: {
-  project: Pick<ProjectDocument, 'brief' | 'style' | 'profile'>; workflow: WorkflowDefinition; workspace: WorkspaceView; run?: RunSummary; version: number;
+export default function ProductionSettingsDialog({ project, projectId, projectRevision, workflow, workspace, run, version, usedEntityKeys = [], initialStage = 'planning', initialNodeId, initialTab, pendingConfiguration, configurationError, onSave, onDiscardPending, onClose, onOpenOutput, onOpenCandidate, onOpenTool, onSectionChange, onImportReferenceAudio }: {
+  project: Pick<ProjectDocument, 'brief' | 'style' | 'profile' | 'creativeContext'>; workflow: WorkflowDefinition; workspace: WorkspaceView; run?: RunSummary; version: number; usedEntityKeys?: string[];
+  projectId?: string; projectRevision?: number; onOpenCandidate?(shotId: string): void;
   initialStage?: string; initialNodeId?: string; initialTab?: 'settings' | 'run'; pendingConfiguration?: boolean; configurationError?: string;
   onSave: (value: ProductionConfiguration) => Promise<boolean>;
   onDiscardPending?: () => Promise<boolean>; onClose: () => void; onOpenOutput: (value: StepOutputSelection) => void;
@@ -25,8 +30,10 @@ export default function ProductionSettingsDialog({ project, workflow, workspace,
   onImportReferenceAudio: (path: string) => Promise<AssetRecord | undefined>;
 }) {
   const [settings, setSettings] = useState(() => productionSettingsSchema.parse(workflow.production));
-  const [fields, setFields] = useState<ProductionProjectSettings>(() => ({ brief: project.brief, style: project.style, profile: project.profile }));
+  const [fields, setFields] = useState<ProductionProjectSettings>(() => ({ brief: project.brief, style: project.style, profile: project.profile, creativeContext: project.creativeContext }));
   const [nodes, setNodes] = useState(workflow.nodes);
+  const [promptNode, setPromptNode] = useState<WorkflowNode>();
+  const [assistantNodeId, setAssistantNodeId] = useState<string>(), [alternativesId, setAlternativesId] = useState<string>();
   const initialTask = workflow.nodes.find(node => node.id === initialNodeId);
   const initialStep = initialTask ? stepGuidance(initialTask).capability === 'text' ? 'planning' : 'materials' : steps.find(item => item.id === initialStage)?.id ?? 'planning';
   const [step, setStep] = useState<ConfigurationStep>(initialStep);
@@ -41,6 +48,7 @@ export default function ProductionSettingsDialog({ project, workflow, workspace,
   const records = initialTab === 'run';
   const active = Boolean(run && ['queued', 'running', 'waiting_review', 'waiting_external', 'retry_scheduled'].includes(run.status));
   const resolved = resolveProductionWorkflow({ ...workflow, nodes, production: settings });
+  const assistantNode = resolved.nodes.find(node => node.id === assistantNodeId);
   const stages = resolved.stages ?? resolved.nodes.map(node => ({ id: node.id, label: node.label, description: node.description, nodeIds: [node.id] }));
   const selectedStage = stages.find(item => item.id === runStage) ?? stages[0];
   const stepIndex = steps.findIndex(item => item.id === step);
@@ -87,6 +95,10 @@ export default function ProductionSettingsDialog({ project, workflow, workspace,
       <div key={node.id} className="production-settings__task" role="group" aria-label={node.label}>
         <Field label={`${node.label}模型`}><Combobox displayMode="label" id={`${id}-${node.id}-model`} label={`${node.label}模型`} value={node.config.modelOverride === true || node.config.modelBinding !== 'default' ? node.modelId ?? '' : ''} placeholder="跟随统一模型" items={[{ id: '', label: '跟随统一模型' }, ...matchingStepModels(node, workspace.models).map(model => ({ id: model.id, label: model.name }))]} onChange={value => updateNode(node, { modelId: value || undefined, config: { ...node.config, modelBinding: 'default', modelOverride: Boolean(value) } })} /></Field>
         <Field label={`${node.label}补充要求`}><textarea value={node.prompt} rows={3} onChange={event => updateNode(node, { prompt: event.target.value })} /></Field>
+        {projectId && projectRevision && supportsPromptExperiment(node) && <Button onClick={() => setPromptNode(node)}>预览与实验提示词</Button>}
+        {projectId && projectRevision && <Button onClick={() => setAssistantNodeId(node.id)}>对话修改任务</Button>}
+        <Button aria-expanded={alternativesId === node.id} onClick={() => setAlternativesId(current => current === node.id ? undefined : node.id)}>查看替代模型</Button>
+        {alternativesId === node.id && <Suspense fallback={<p role="status">正在读取模型建议…</p>}><ModelAlternatives node={node} models={workspace.models} runId={run?.id} version={version} failure={run ? { error: run.error, runStatus: run.status, queueOwned: Boolean(run.productionQueueId), trial: run.purpose === 'prompt-trial' } : undefined} onSelect={modelId => updateNode(node, { modelId, config: { ...node.config, modelBinding: 'default', modelOverride: true } })} /></Suspense>}
         {workspace.skills.filter(skill => skill.enabled).map(skill => <label className="field-inline" key={skill.id}><input type="checkbox" checked={node.skillIds.includes(skill.id)} onChange={event => updateNode(node, { skillIds: event.target.checked ? [...node.skillIds, skill.id] : node.skillIds.filter(id => id !== skill.id) })} />{skill.name}</label>)}
       </div>
     </details>;
@@ -129,6 +141,7 @@ export default function ProductionSettingsDialog({ project, workflow, workspace,
           <section data-production-step="planning" hidden={step !== 'planning'} aria-label="创作要求配置">
             <Field label="创作要求"><textarea value={fields.brief} onChange={event => setFields(current => ({ ...current, brief: event.target.value }))} rows={5} placeholder="主题、受众、核心信息和预期时长…" autoFocus={step === 'planning'} /></Field>
             <Field label="视觉风格"><textarea value={fields.style} onChange={event => setFields(current => ({ ...current, style: event.target.value }))} rows={3} /></Field>
+            <CreativeContextEditor value={fields.creativeContext} version={version} usedEntityKeys={usedEntityKeys} onChange={creativeContext => setFields(current => ({ ...current, creativeContext }))} />
             <ProjectSettingsActions items={['series', 'saveSeries']} onAction={requestTool} />
             {advanced({ id: 'planning', label: '创作要求', nodeIds: resolved.nodes.filter(node => stepGuidance(node).capability === 'text').map(node => node.id) })}
           </section>
@@ -153,7 +166,7 @@ export default function ProductionSettingsDialog({ project, workflow, workspace,
           {step === 'review' && <section data-production-step="review" aria-label="确认保存" className="production-settings__review">
             <p className="production-settings__note">核对以下配置，保存后返回工作台。准备好后再点击“开始制作”。</p>
             {requestedTool && <Notice>保存设置后将打开{toolNames[requestedTool]}。<Button static onClick={() => setRequestedTool(undefined)}>仅保存设置</Button></Notice>}
-            <section><header><h3>创作要求</h3><Button static variant="ghost" aria-label="修改创作要求" onClick={() => selectStep('planning')}>修改</Button></header><dl><div><dt>创作要求</dt><dd>{fields.brief.trim() || '尚未填写'}</dd></div><div><dt>视觉风格</dt><dd>{fields.style.trim() || '沿用默认风格'}</dd></div></dl></section>
+            <section><header><h3>创作要求</h3><Button static variant="ghost" aria-label="修改创作要求" onClick={() => selectStep('planning')}>修改</Button></header><dl><div><dt>创作要求</dt><dd>{fields.brief.trim() || '尚未填写'}</dd></div><div><dt>视觉风格</dt><dd>{fields.style.trim() || '沿用默认风格'}</dd></div><div><dt>项目角色池</dt><dd>{fields.creativeContext?.characterIds.length ? `已选择 ${fields.creativeContext.characterIds.length} 个角色` : '未选择'}</dd></div>{fields.creativeContext?.continuity && <div><dt>连续性要求</dt><dd>{fields.creativeContext.continuity}</dd></div>}{Boolean(fields.creativeContext?.entities.length) && <div><dt>文字设定</dt><dd>{fields.creativeContext?.entities.map(entity => entity.name).join('、')}</dd></div>}</dl></section>
             <section><header><h3>模型与素材</h3><Button static variant="ghost" aria-label="修改模型与素材" onClick={() => selectStep('materials')}>修改</Button></header><dl><div><dt>文本模型</dt><dd>{modelName(settings.textModelId)}</dd></div><div><dt>视频模型</dt><dd>{modelName(settings.videoModelId)}</dd></div><div><dt>参考素材</dt><dd>{{ none: '直接文生视频', existing: '使用已有参考图', generate: '先生成参考图' }[settings.referenceMode]}</dd></div>{settings.referenceMode === 'generate' && <div><dt>图片模型</dt><dd>{modelName(settings.imageModelId)}</dd></div>}<div><dt>参考音频</dt><dd>{settings.referenceAudioAssetIds?.length ? `已选择 ${settings.referenceAudioAssetIds.length} 段` : '未添加'}</dd></div></dl></section>
             <section><header><h3>声音与成片</h3><Button static variant="ghost" aria-label="修改声音与成片" onClick={() => selectStep('delivery')}>修改</Button></header><dl><div><dt>声音要求</dt><dd>{settings.soundPrompt.trim() || '跟随分镜内容'}</dd></div><div><dt>成片规格</dt><dd>{fields.profile.width} × {fields.profile.height} · {Number((fields.profile.frameRate.numerator / fields.profile.frameRate.denominator).toFixed(2))} fps</dd></div><div><dt>字幕</dt><dd>{settings.subtitleMode === 'off' ? '关闭' : '显示分镜文本（预估时间）'}</dd></div></dl></section>
           </section>}
@@ -161,5 +174,13 @@ export default function ProductionSettingsDialog({ project, workflow, workspace,
       </form>}
     </div>
     <div className="dialog__footer"><Button onClick={close}>{records ? '关闭' : '取消'}</Button>{!records && <>{stepIndex > 0 && <Button disabled={Boolean(pending)} onClick={() => selectStep(steps[stepIndex - 1].id)}><ChevronLeft size={14} />上一步</Button>}{step === 'review' ? <Button variant="primary" busy={pending === 'save'} disabled={Boolean(pending || configurationError)} onClick={() => void submit()}>{requestedTool ? '保存并打开' : active ? '保存待用配置' : '保存设置'}</Button> : <Button variant="primary" disabled={Boolean(pending || configurationError)} onClick={next}>下一步<ChevronRight size={14} /></Button>}</>}</div>
+    {promptNode && projectId && projectRevision && <Suspense fallback={<p role="status">正在打开提示词实验…</p>}><PromptWorkbench projectId={projectId} projectRevision={projectRevision} node={promptNode} context={{ ...fields, production: settings }} models={workspace.models} skills={workspace.skills} version={version} onClose={() => setPromptNode(undefined)} onApplyPrompt={value => { updateNode(promptNode, { prompt: value.prompt, promptBindings: value.promptBindings, promptTemplate: value.promptTemplate }); }} onOpenOutput={onOpenOutput} onOpenCandidate={onOpenCandidate} /></Suspense>}
+    {assistantNode && projectId && projectRevision && <Suspense fallback={<p role="status">正在打开修改预览…</p>}><WorkflowAssistant projectId={projectId} projectRevision={projectRevision} node={assistantNode} models={workspace.models} onClose={() => setAssistantNodeId(undefined)} onApply={(_next, proposal) => {
+      const current = resolved.nodes.find(node => node.id === proposal.baseline.id);
+      if (!current) throw new Error('任务已移除，请重新选择任务。');
+      const next = applyWorkflowProposal({ id: projectId, revision: projectRevision }, current, proposal);
+      updateNode(current, { ...next, ...(Object.hasOwn(proposal.patch, 'modelId') ? { config: { ...next.config, modelBinding: 'default', modelOverride: Boolean(next.modelId) } } : {}) });
+      setAssistantNodeId(undefined);
+    }} /></Suspense>}
   </Dialog>;
 }

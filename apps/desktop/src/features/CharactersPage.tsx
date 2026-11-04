@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { Image, RotateCcw, Trash2, Users, Plus, ChevronDown, Upload } from 'lucide-react';
 import { assetListItemSchema, assetSchema, characterProfileSchema, recordPageSchema, type AssetRecord, type CharacterProfile } from '@video-quickly/contracts';
 import { Button, Dialog, EmptyState, Field, IconButton, Notice } from '../components/Primitives';
+import { useConfirmation } from '../components/ConfirmationDialog';
 import PathPicker from '../components/PathPicker';
 import SettingsSections from '../components/SettingsSections';
 import { getAssetUrl, rpc } from '../lib/client';
@@ -13,11 +14,13 @@ const characterPage = recordPageSchema(characterProfileSchema);
 const imagePage = recordPageSchema(assetListItemSchema);
 
 export default function CharactersPage({ workspace, action }: { workspace: WorkspaceView; action: Action }) {
+  const confirm = useConfirmation();
   const [archived, setArchived] = useState(false);
   const library = useRecordPage('character.list', { archived, limit: 20 }, workspace.version, characterPage);
   const [editing, setEditing] = useState<CharacterProfile | 'new'>();
   const [error, setError] = useState('');
   async function changeArchive(character: CharacterProfile) {
+    if (!archived && !await confirm({ title: '归档角色？', description: `“${character.name}”将移入已归档角色，已有项目中的角色关联会保留，之后可恢复。`, confirmLabel: '确认归档' })) return;
     setError('');
     try { await rpc(archived ? 'character.restore' : 'character.archive', { characterId: character.id, revision: character.revision }); library.refresh(); }
     catch (error) { setError(error instanceof Error ? error.message : String(error)); }
@@ -105,7 +108,7 @@ function ReferenceImage({ asset }: { asset: AssetRecord }) {
   return source?.id === asset.id && source.url ? <img src={source.url} alt={asset.name} loading="lazy" onError={() => setSource({ id: asset.id, error: '参考图无法读取' })} /> : <span className="tiny-meta">{source?.id === asset.id && source.error ? source.error : '读取中…'}</span>;
 }
 
-export function CharacterPicker({ value = [], version, onChange, disabled = false }: { value?: string[]; version: number; onChange: (ids: string[]) => void; disabled?: boolean }) {
+export function CharacterPicker({ value = [], version, onChange, disabled = false, label = '镜头角色', maximum = 8 }: { value?: string[]; version: number; onChange: (ids: string[]) => void; disabled?: boolean; label?: string; maximum?: number }) {
   const library = useRecordPage('character.list', { archived: false, limit: 20 }, version, characterPage);
   const [selected, setSelected] = useState<CharacterProfile[]>([]);
   const [error, setError] = useState('');
@@ -116,5 +119,5 @@ export function CharacterPicker({ value = [], version, onChange, disabled = fals
     return () => { active = false; };
   }, [selectedKey, version]);
   const profiles = [...new Map([...selected, ...library.items].map(character => [character.id, character])).values()];
-  return <fieldset className="character-shot-picker capability-fieldset"><legend>镜头角色</legend>{profiles.map(character => <label key={character.id} className="field-inline"><input type="checkbox" checked={value.includes(character.id)} disabled={disabled || !value.includes(character.id) && (character.archived || value.length >= 8)} onChange={event => onChange(event.target.checked ? [...value, character.id] : value.filter(id => id !== character.id))} />{character.name}{character.archived ? '（已归档）' : ''}</label>)}{!profiles.length && !library.busy && <p className="tiny-meta">在角色参考库创建角色后，可在此选择。</p>}{(library.error || error) && <Notice kind="error">{library.error || error}</Notice>}{library.nextCursor !== null && <Button aria-label="加载更多角色" busy={library.loadingMore} disabled={!library.canLoadMore} onClick={() => void library.loadMore()}>加载更多</Button>}</fieldset>;
+  return <fieldset className="character-shot-picker capability-fieldset"><legend>{label}</legend>{profiles.map(character => <label key={character.id} className="field-inline"><input type="checkbox" checked={value.includes(character.id)} disabled={disabled || !value.includes(character.id) && (character.archived || value.length >= maximum)} onChange={event => onChange(event.target.checked ? [...value, character.id] : value.filter(id => id !== character.id))} />{character.name}{character.archived ? '（已归档）' : ''}</label>)}{!profiles.length && !library.busy && <p className="tiny-meta">在角色参考库创建角色后，可在此选择。</p>}{(library.error || error) && <Notice kind="error">{library.error || error}</Notice>}{library.nextCursor !== null && <Button aria-label="加载更多角色" busy={library.loadingMore} disabled={!library.canLoadMore} onClick={() => void library.loadMore()}>加载更多</Button>}</fieldset>;
 }

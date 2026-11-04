@@ -2,7 +2,7 @@ import { primaryModifier } from '../lib/desktop';
 import { memo, useMemo, type KeyboardEvent } from 'react';
 import { Film, ListChecks, SlidersHorizontal, X, Plus } from 'lucide-react';
 import type { AssetRecord, ProjectDocument } from '@video-quickly/contracts';
-import { Button, IconButton } from './Primitives';
+import { IconButton } from './Primitives';
 import type { SelectionModifiers } from '../lib/shot-selection';
 import OutlineShotRow from './OutlineShotRow';
 import { useScenePreviewContext } from '../lib/scene-preview-context';
@@ -33,10 +33,9 @@ export default memo(function ProjectOutline({ project, assets, selectedShotId, s
   }
 
   return <>
-    {(onSelectAll || onClearSelection || onBulkEdit) && <div className="outline-selection" role="group" aria-label="镜头多选操作" onKeyDown={selectionKey}><span aria-live="polite">已选 {selected.size} 个镜头</span>{onSelectAll && <IconButton label="全选镜头" disabled={!project.shots.length || selected.size === project.shots.length} onClick={onSelectAll}><ListChecks size={15} /></IconButton>}{onClearSelection && <IconButton label="清除镜头选择" disabled={!selected.size} onClick={onClearSelection}><X size={15} /></IconButton>}{onBulkEdit && <IconButton label="批量编辑镜头" disabled={!selected.size} onClick={onBulkEdit}><SlidersHorizontal size={15} /></IconButton>}</div>}
+    <div className="outline-selection" role="group" aria-label="镜头操作" onKeyDown={selectionKey}><span aria-live="polite">已选 {selected.size}</span><IconButton label="添加镜头" onClick={() => void onAddShot()}><Plus size={15} /></IconButton>{onSelectAll && <IconButton label="全选镜头" disabled={!project.shots.length || selected.size === project.shots.length} onClick={onSelectAll}><ListChecks size={15} /></IconButton>}{onClearSelection && <IconButton label="清除镜头选择" disabled={!selected.size} onClick={onClearSelection}><X size={15} /></IconButton>}{onBulkEdit && <IconButton label="批量编辑镜头" disabled={!selected.size} onClick={onBulkEdit}><SlidersHorizontal size={15} /></IconButton>}</div>
     <div className="shot-list outline-list" role="region" aria-label="镜头列表" tabIndex={0} onKeyDown={selectionKey}>
       {project.shots.length ? project.shots.map((shot, index) => <OutlineShotRow key={shot.id} project={previewContext} shot={shot} index={index} assets={assets} selected={selected.has(shot.id)} primary={selected.has(shot.id) && shot.id === selectedShotId} multipleSelected={selected.size > 1 && selected.has(shot.id)} modifierLabel={modifierLabel} onSelectShot={selectShot} />) : <div className="outline-empty"><Film size={20} aria-hidden="true" /><p>还没有镜头</p><span>添加镜头，开始安排画面与旁白。</span></div>}
     </div>
-    <div className="outline-footer"><Button className="outline-add-shot button-full" variant="ghost" onClick={() => void onAddShot()}><Plus size={15} />添加镜头</Button></div>
   </>;
 });

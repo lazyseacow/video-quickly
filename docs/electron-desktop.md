@@ -5,7 +5,7 @@ Video Quickly 使用 Electron 加载 React 工作台，通过沙箱预加载桥�
 ## 进程与安全边界
 
 - `BrowserWindow` 加载工作台，画面预览复用 `<video>` 与 Canvas。Electron 45.2.1、electron-builder 26.18.0 的实际锁定版本以包清单和 `pnpm-lock.yaml` 为准。
-- 主进程开启 `contextIsolation`、渲染沙箱及 `webSecurity`，关闭页面 Node 集成及 Electron 的 `webviewTag`。权限请求默认拒绝。
+- 主进程开启 `contextIsolation`、渲染沙箱及 `webSecurity`，关闭页面 Node 集成及 Electron 的 `webviewTag`。权限请求默认拒绝，仅允许当前可信主窗口文档通过用户操作进入播放器全屏；子帧、其他窗口、外部页面及自动全屏继续拒绝。
 - 预加载仅暴露 Runtime RPC、事件订阅、路径选择、素材地址和文件定位。主进程校验当前主窗口、主框架与来源地址，并拒绝页面直接调用 `host.*` 系统接口。
 - 生产页面与工作区媒体通过 `video-quickly://app` 加载。协议支持 GET、HEAD 与单段 Range；真实路径及符号链接边界检查阻止读取工作区外文件。外部 HTTP(S) 链接由系统浏览器打开。
 - LangGraph、SQLite、媒体处理和重型依赖运行在独立 Node 24 执行组件，保留 Node 自身 ABI。Electron 仅加载系统凭据及 Windows 进程容器所需的原生绑定。
@@ -54,7 +54,7 @@ Mac 正式组件使用固定摘要验证的官方独立 Node.js 和静态 FFmpeg
 ## 验收门槛
 
 1. 类型检查、Runtime／SQLite／契约测试和完整浏览器流程通过。
-2. `pnpm test:desktop` 在临时工作区启动真实 Electron，验证生产协议、沙箱预加载、IPC／Node、系统凭据、编辑历史、只读制作检查、同身份素材恢复与媒体自动重读、媒体 Range／路径边界、实际 MP4、断连重连及重启草稿。正式包清单必须包含制作检查和素材恢复的原生通过记录。
+2. `pnpm test:desktop` 在临时工作区启动真实 Electron，验证生产协议、沙箱预加载、IPC／Node、系统凭据、编辑历史、只读制作检查、同身份素材恢复与媒体自动重读、媒体 Range／路径边界、实际 MP4、转场关键帧与播放器像素对照、断连重连及重启草稿。正式包清单必须包含制作检查和素材恢复的原生通过记录。
 3. `pnpm test:desktop --packaged` 对本次实际打包应用执行同样的原生检查。
 4. 包外执行独立 PDF 解析，本地 HTTP CLI 验证恢复和三比例成片，FFmpeg 实际编码覆盖横屏、竖屏、方形及 4K。
 5. Windows 在中文和空格路径验证安装、覆盖、待审任务继续、默认卸载保留以及明确删除范围；Mac 实际解压 ZIP 后验证覆盖、任务继续和移除应用后的数据保留。

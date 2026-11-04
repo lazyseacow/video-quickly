@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { Sparkles, Square, RefreshCw, ChevronDown, Pause, Play } from 'lucide-react';
-import { type AssetRecord, type ModelProfile, type ProjectDocument, type RunSummary, type Shot, type ShotCandidate, type ShotCandidateField, type ShotCandidateKind, usesVideoAudio } from '@video-quickly/contracts';
+import { type ImageEditInput, type ImageRectangle, assetSchema, type AssetRecord, type ModelProfile, type ProjectDocument, type RunSummary, type Shot, type ShotCandidate, type ShotCandidateField, type ShotCandidateKind, usesVideoAudio } from '@video-quickly/contracts';
 import { candidateKindLabels, candidateRunActive, readCandidateAssets, readShotCandidate, readShotCandidates, watchCandidateRun } from '../lib/shot-candidates';
 import { getAssetUrl, rpc } from '../lib/client';
 import { Button, Dialog, Field, Notice, Status, Select } from './Primitives';
@@ -10,11 +10,12 @@ import { readAudioLevels, usePreparedProjectMix } from '../lib/audio-mix';
 import { PlaybackClock, usePlayback } from '../lib/playback';
 import PreparedMixPreview from './PreparedMixPreview';
 import './shot-regeneration-dialog.css';
+import ImageEditRegion from './ImageEditRegion';
 
 export interface ShotRegenerationDialogProps {
   project: ProjectDocument; shot: Shot; models: ModelProfile[]; assets: AssetRecord[];
   onClose: () => void;
-  onGenerate: (input: { kind: ShotCandidateKind; modelId?: string; instruction?: string }) => Promise<{ id: string } | null>;
+  onGenerate: (input: { kind: ShotCandidateKind; modelId?: string; instruction?: string; imageEdit?: ImageEditInput }) => Promise<{ id: string } | null>;
   onApply: (candidate: ShotCandidate, fields?: ShotCandidateField[]) => Promise<boolean>;
 }
 const fieldLabels: Record<ShotCandidateField, string> = { title: '标题', narration: '旁白', visualPrompt: '画面要求', durationUs: '时长' };
@@ -23,6 +24,8 @@ const capabilities = { script: 'text', image: 'image', video: 'video' } as const
 
 export default function ShotRegenerationDialog({ project, shot, models, assets, onClose, onGenerate, onApply }: ShotRegenerationDialogProps) {
   const [kind, setKind] = useState<ShotCandidateKind>('script');
+  const [editRectangle, setEditRectangle] = useState<ImageRectangle>();
+  const [editError, setEditError] = useState('');
   const [modelId, setModelId] = useState('');
   const [instruction, setInstruction] = useState('');
   const [items, setItems] = useState<ShotCandidate[]>([]);
@@ -49,6 +52,7 @@ export default function ShotRegenerationDialog({ project, shot, models, assets, 
   const detailRequest = useRef(0);
   const availableModels = models.filter(model => model.enabled && model.capabilities.includes(capabilities[kind]));
   const selectedModelId = availableModels.some(model => model.id === modelId) ? modelId : availableModels[0]?.id ?? '';
+  useEffect(() => { setEditRectangle(undefined); }, [kind, selectedModelId, shot.assetId]);
   const running = Boolean(runId && (!run || run.id !== runId || candidateRunActive(run)));
   const resumable = run?.status === 'queued' && Boolean(run.error);
   const allAssets = useMemo(() => [...new Map([...extraAssets, ...assets].map(asset => [asset.id, asset])).values()], [extraAssets, assets]);
@@ -111,7 +115,13 @@ export default function ShotRegenerationDialog({ project, shot, models, assets, 
     if (!selectedModelId) return;
     setGenerating(true); setError('');
     try {
-      const started = await onGenerate({ kind, modelId: selectedModelId, ...(instruction.trim() ? { instruction: instruction.trim() } : {}) });
+      let imageEdit: ImageEditInput | undefined;
+      if (kind === 'image' && editRectangle) {
+        if (!shot.assetId || !instruction.trim()) throw new Error('请填写局部改图要求。');
+        const mask = assetSchema.parse(await rpc('image.createMask', { assetId: shot.assetId, rectangle: editRectangle }));
+        imageEdit = { sourceAssetId: shot.assetId, maskAssetId: mask.id };
+      }
+      const started = await onGenerate({ kind, modelId: selectedModelId, ...(imageEdit ? { imageEdit } : {}), ...(instruction.trim() ? { instruction: instruction.trim() } : {}) });
       if (!alive.current) return;
       if (!started) { setError('生成未开始，请核对保存状态和模型连接。'); return; }
       setRun(undefined); setRunId(started.id);
@@ -149,6 +159,7 @@ export default function ShotRegenerationDialog({ project, shot, models, assets, 
       <p className="shot-regeneration__target">{shot.title}</p>
       <div className="shot-regeneration__form"><Field label="生成内容"><Select value={kind} disabled={generating || applying || running} onChange={event => setKind(event.target.value as ShotCandidateKind)}>{Object.entries(candidateKindLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</Select></Field><Field label="生成模型"><Select value={selectedModelId} disabled={generating || applying || running} onChange={event => setModelId(event.target.value)}><option value="" disabled>选择模型</option>{availableModels.map(model => <option key={model.id} value={model.id}>{model.name}</option>)}</Select></Field></div>
       <Field label="本次调整要求"><textarea value={instruction} maxLength={10000} disabled={generating || applying || running} onChange={event => setInstruction(event.target.value)} placeholder="说明这个镜头希望如何修改…" /></Field>
+      {kind === 'image' && !shot.sceneTemplate && allAssets.find(asset => asset.id === shot.assetId) && availableModels.find(model => model.id === selectedModelId)?.provider === 'openai-compatible' && <ImageEditRegion asset={allAssets.find(asset => asset.id === shot.assetId)!} disabled={generating || applying || running} rectangle={editRectangle} onChange={setEditRectangle} onError={setEditError} />}
       {!availableModels.length && <p className="tiny-meta">请先在模型连接中添加具备{candidateKindLabels[kind]}能力的模型。</p>}
       {shot.locked && <Notice>请先解锁当前镜头，再生成或应用候选。</Notice>}
       <div className="shot-regeneration__generate"><Button variant="primary" busy={generating} disabled={applying || running || !selectedModelId || shot.locked} onClick={() => void generate()}><Sparkles size={14} />生成候选</Button><span className="tiny-meta">生成结果会先保留为候选，应用前不会替换当前镜头。</span></div>

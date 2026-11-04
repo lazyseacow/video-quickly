@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import type Database from 'better-sqlite3';
 import { z } from 'zod';
-import { assetSchema, characterProfileSchema, pageInputSchema, type AssetRecord, type CharacterProfile, type RecordPage, type Shot } from '@video-quickly/contracts';
+import { assetSchema, characterProfileSchema, creativeReferenceAssetIds, pageInputSchema, projectCharacterIds, type AssetRecord, type CharacterProfile, type CreativeContext, type RecordPage, type Shot } from '@video-quickly/contracts';
 import { DocumentStore } from './database.js';
 
 export interface CharacterBundle { characters: CharacterProfile[]; assets: AssetRecord[] }
@@ -12,10 +12,16 @@ const editableCharacter = characterProfileSchema.pick({ name: true, description:
 const saveInput = z.object({ character: editableCharacter.extend({ id: z.string().min(1).optional(), revision: z.number().int().positive().optional() }) });
 const characterIdInput = z.object({ characterId: z.string().min(1) });
 
-function publicReference(asset: AssetRecord | undefined): AssetRecord {
-  if (!asset?.active || asset.kind !== 'image' || asset.projectId !== undefined) throw new Error('角色参考图只能使用公共素材库中有效的图片，请先将图片导入公共素材库。');
+function publicReference(asset: AssetRecord | undefined, label = '角色'): AssetRecord {
+  if (!asset?.active || asset.kind !== 'image' || asset.projectId !== undefined) throw new Error(`${label}参考图只能使用公共素材库中有效的图片，请先将图片导入公共素材库。`);
   return asset;
 }
+
+const retainedReferenceIds = [
+  "SELECT reference.value AS asset_id FROM documents profile, json_each(profile.body, '$.referenceAssetIds') reference WHERE profile.kind = 'character'",
+  "SELECT reference.value AS asset_id FROM documents snapshot, json_each(snapshot.body, '$.characters') profile, json_each(profile.value, '$.referenceAssetIds') reference WHERE snapshot.kind IN ('run-snapshot','export-batch-snapshot')",
+  ...[['project', '$.creativeContext.entities'], ['story-work', '$.defaults.creativeContext.entities'], ['run-snapshot', '$.project.creativeContext.entities'], ['run-snapshot', '$.trial.inputProject.creativeContext.entities'], ['export-batch-snapshot', '$.project.creativeContext.entities']].map(([kind, path]) => `SELECT reference.value AS asset_id FROM documents profile, json_each(profile.body, '${path}') entity, json_each(entity.value, '$.referenceAssetIds') reference WHERE profile.kind = '${kind}'`),
+].join(' UNION ALL ');
 
 export function createCharacterLibrary({ database, store, onChanged }: CharacterLibraryOptions) {
   function get(id: string): CharacterProfile {
@@ -30,20 +36,20 @@ export function createCharacterLibrary({ database, store, onChanged }: Character
     if (revision !== profile.revision) throw new Error('角色已在其他视图修改，请刷新后重新保存。');
   }
   function isReferenced(id: string): boolean {
-    return Boolean(database.prepare("SELECT 1 FROM documents project, json_each(project.body, '$.shots') shot, json_each(shot.value, '$.characterIds') character WHERE project.kind = 'project' AND character.value = ? LIMIT 1").get(id));
+    return Boolean(database.prepare("SELECT 1 FROM documents project WHERE project.kind = 'project' AND (EXISTS (SELECT 1 FROM json_each(project.body, '$.creativeContext.characterIds') WHERE value = ?) OR EXISTS (SELECT 1 FROM json_each(project.body, '$.shots') shot, json_each(shot.value, '$.characterIds') character WHERE character.value = ?)) UNION ALL SELECT 1 FROM documents work, json_each(work.body, '$.defaults.creativeContext.characterIds') role WHERE work.kind = 'story-work' AND role.value = ? LIMIT 1").get(id, id, id));
   }
   function assetInUse(id: string): boolean {
-    // Archived characters remain restorable, so their reference images are retained too.
-    return Boolean(database.prepare("SELECT 1 FROM documents profile, json_each(profile.body, '$.referenceAssetIds') reference WHERE profile.kind = 'character' AND reference.value = ? LIMIT 1").get(id));
+    // Archived settings and frozen generation inputs remain restorable.
+    return Boolean(database.prepare(`SELECT 1 FROM (${retainedReferenceIds}) WHERE asset_id = ? LIMIT 1`).get(id));
   }
   function assetsInUse(ids: readonly string[]): Set<string> {
     if (!ids.length) return new Set();
     // Scan current and archived references once for this page, without retaining a cross-request cache.
-    const rows = database.prepare("SELECT DISTINCT reference.value AS asset_id FROM documents profile, json_each(profile.body, '$.referenceAssetIds') reference WHERE profile.kind = 'character' AND reference.value IN (SELECT value FROM json_each(?))").all(JSON.stringify(ids)) as { asset_id: string }[];
+    const rows = database.prepare(`SELECT DISTINCT asset_id FROM (${retainedReferenceIds}) WHERE asset_id IN (SELECT value FROM json_each(?))`).all(JSON.stringify(ids)) as { asset_id: string }[];
     return new Set(rows.map(row => row.asset_id));
   }
-  function profilesFor(project: { shots: ReadonlyArray<Pick<Shot, 'characterIds'>> }): CharacterBundle {
-    const ids = new Set(project.shots.flatMap(shot => shot.characterIds ?? []));
+  function profilesFor(project: { creativeContext?: CreativeContext | null; shots: ReadonlyArray<Pick<Shot, 'characterIds'>> }): CharacterBundle {
+    const ids = projectCharacterIds(project);
     const assets = new Map<string, AssetRecord>();
     const characters = [...ids].map(id => {
       const profile = get(id);
@@ -51,6 +57,10 @@ export function createCharacterLibrary({ database, store, onChanged }: Character
       for (const asset of references(profile)) assets.set(asset.id, asset);
       return profile;
     });
+    for (const id of creativeReferenceAssetIds(project)) {
+      const asset = publicReference(store.get<AssetRecord>('asset', id), '场景与道具');
+      assets.set(asset.id, asset);
+    }
     return { characters, assets: [...assets.values()] };
   }
   function prepareImport(bundle: CharacterBundle, assetIdMap: ReadonlyMap<string, string>): ImportedCharacters {
@@ -99,7 +109,7 @@ export function createCharacterLibrary({ database, store, onChanged }: Character
         const profile = database.transaction(() => {
           const previous = get(input.characterId); requireRevision(previous, input.revision);
           const archived = method === 'character.archive';
-          if (archived && isReferenced(previous.id)) throw new Error('仍有项目镜头使用此角色，请先移除镜头中的角色关联。');
+          if (archived && isReferenced(previous.id)) throw new Error('仍有项目镜头使用此角色，或项目角色池、作品默认设置包含此角色，请先移除对应关联。');
           if (!archived) references(previous);
           const value = { ...previous, archived, revision: previous.revision + 1, updatedAt: new Date().toISOString() };
           store.put('character', value.id, value); return value;

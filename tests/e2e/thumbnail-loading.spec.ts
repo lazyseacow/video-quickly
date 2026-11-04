@@ -78,12 +78,25 @@ test('cancels real frame reads without retaining thumbnail video elements or poi
   }, asset);
   expect(result.canceled).toBeGreaterThan(0); expect(result.blue).toBe(true);
   const session = await page.context().newCDPSession(page);
+  async function sourcedVideos() {
+    const prototype = await session.send('Runtime.evaluate', { expression: 'HTMLVideoElement.prototype', objectGroup: 'thumbnail-cleanup' });
+    const objects = await session.send('Runtime.queryObjects', { prototypeObjectId: prototype.result.objectId, objectGroup: 'thumbnail-cleanup' });
+    try {
+      const observed = await session.send('Runtime.callFunctionOn', { objectId: objects.objects.objectId, returnByValue: true, functionDeclaration: "function () { return this.filter(video => video.getAttribute('src')).map(video => ({ path: new URL(video.src).searchParams.get('path'), time: video.currentTime, paused: video.paused, ready: video.readyState })).sort((a,b) => a.time-b.time); }" });
+      return observed.result.value as Array<{ path: string; time: number; paused: boolean; ready: number }>;
+    } finally { await session.send('Runtime.releaseObjectGroup', { objectGroup: 'thumbnail-cleanup' }); }
+  }
   try {
-    await expect.poll(async () => {
-      const prototype = await session.send('Runtime.evaluate', { expression: 'HTMLVideoElement.prototype', objectGroup: 'thumbnail-cleanup' });
-      const objects = await session.send('Runtime.queryObjects', { prototypeObjectId: prototype.result.objectId, objectGroup: 'thumbnail-cleanup' });
-      const result = await session.send('Runtime.callFunctionOn', { objectId: objects.objects.objectId, returnByValue: true, functionDeclaration: "function () { return this.filter(video => video.getAttribute('src')).length; }" });
-      await session.send('Runtime.releaseObjectGroup', { objectGroup: 'thumbnail-cleanup' }); return result.result.value;
-    }).toBe(1);
+    // Only the current scene and the next scene's preloaded first frame own a
+    // decoder. Canceled thumbnail jobs and the successful retry must own none.
+    await expect.poll(async () => (await sourcedVideos()).map(video => ({ path: video.path, timeMs: Math.round(video.time * 1000), paused: video.paused, ready: video.ready >= 2 }))).toEqual([
+      { path: asset.path, timeMs: 500, paused: true, ready: true },
+      { path: asset.path, timeMs: 1500, paused: true, ready: true },
+    ]);
+    const ownedScenes = await sourcedVideos();
+    const empty = await rpc<ProjectDocument>(request, 'project.create', { title: `缩略图资源释放 ${randomUUID().slice(0, 8)}` }); await openProjectFromList(page, empty.title);
+    await expect.poll(sourcedVideos).toEqual([]);
+    await info.attach('thumbnail-cancellation-decoder-ownership', { body: JSON.stringify({ ...result, ownedScenes, afterProjectSwitch: await sourcedVideos() }), contentType: 'application/json' });
+    expect((await rpc<{ project: ProjectDocument }>(request, 'project.get', { projectId: project.id })).project).toEqual(project);
   } finally { await session.detach(); }
 });

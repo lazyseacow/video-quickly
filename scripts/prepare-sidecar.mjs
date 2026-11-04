@@ -131,6 +131,7 @@ for(const folder of await readdir(packageStore,{withFileTypes:true})){
 }
 await writeFile(join(notices,'manifest.json'),JSON.stringify(manifest,null,2));
 await cp(join(root,'apps/desktop/src/assets/platforms/LICENSE'),join(notices,'platform-icons-LICENSE.txt'));
+await cp(join(root,'THIRD_PARTY_NOTICES.md'),join(notices,'project-adaptations-LICENSE.md'));
 await writeFile(join(stage,'runtime-info.json'),JSON.stringify({nodeVersion:portableNode?.version??process.version,platform:process.platform,architecture:process.arch,portability:development&&process.platform!=='win32'?'development-link':'bundled',nodeProvenance:portableNode?.provenance},null,2));
 if(resolve(sidecar)!==join(root,'.generated','sidecar'))throw new Error('非法执行组件目录');
 await rm(sidecar,{recursive:true,force:true});

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { SkipBack, Volume2, VolumeX, Pause, Play } from 'lucide-react';
 import { audioLevelWindowSchema, type AudioLevelWindow, type PreparedAudioMix } from '@video-quickly/contracts';
 import { getAssetUrl } from '../lib/client';
@@ -13,12 +13,14 @@ export interface PreparedMixPreviewProps {
   playing?: boolean;
   timeUs?: number;
   muted?: boolean;
+  volume?: number;
   controls?: boolean;
+  showLevels?: boolean;
   onError?: (message: string, error?: boolean) => void;
   onReadyChange?: (ready: boolean) => void;
 }
 
-export default function PreparedMixPreview({ mix, onLevels, playing, timeUs, muted, controls = true, onError, onReadyChange }: PreparedMixPreviewProps) {
+export default function PreparedMixPreview({ mix, onLevels, playing, timeUs, muted, volume = 1, controls = true, showLevels = true, onError, onReadyChange }: PreparedMixPreviewProps) {
   const audio = useRef<HTMLAudioElement>(null);
   const [localTimeUs, setLocalTimeUs] = useState(0), [localPlaying, setLocalPlaying] = useState(false), [localMuted, setLocalMuted] = useState(false);
   const [ready, setReady] = useState(false), [audioFailure, setAudioFailure] = useState(''), [audioRetry, setAudioRetry] = useState(0), [levelRetry, setLevelRetry] = useState(0);
@@ -29,8 +31,8 @@ export default function PreparedMixPreview({ mix, onLevels, playing, timeUs, mut
   const levelTimeUs = Math.max(0, Math.min(mix.durationUs - 1, currentTimeUs));
   const windowStartUs = Math.floor(levelTimeUs / 10_000_000) * 10_000_000;
   const identity = JSON.stringify([mix.key, mix.sha256, mix.path, mix.durationUs]);
-  const latest = useRef({ controlled, playing, timeUs: currentTimeUs, muted: muted ?? localMuted, onError, onLevels, onReadyChange });
-  latest.current = { controlled, playing, timeUs: currentTimeUs, muted: muted ?? localMuted, onError, onLevels, onReadyChange };
+  const latest = useRef({ controlled, playing, timeUs: currentTimeUs, muted: muted ?? localMuted, volume, onError, onLevels, onReadyChange });
+  latest.current = { controlled, playing, timeUs: currentTimeUs, muted: muted ?? localMuted, volume, onError, onLevels, onReadyChange };
   const latestIdentity = useRef(identity); latestIdentity.current = identity;
   useEffect(() => { alive.current = true; return () => { alive.current = false; }; }, []);
 
@@ -42,7 +44,7 @@ export default function PreparedMixPreview({ mix, onLevels, playing, timeUs, mut
     function fail(message: string) { if (!active) return; setAudioFailure(message); setReady(false); latest.current.onReadyChange?.(false); latest.current.onError?.(message, true); }
     function sync() {
       if (!active || !element) return;
-      const state = latest.current; element.muted = state.muted;
+      const state = latest.current; element.muted = state.muted; element.volume = state.volume;
       if (element.readyState < 1 || !Number.isFinite(element.duration)) return;
       const target = Math.min(Math.max(0, state.timeUs / 1e6), Math.max(0, element.duration - .001));
       if (Math.abs(element.currentTime - target) > (state.controlled && state.playing ? .15 : .001)) element.currentTime = target;
@@ -66,7 +68,7 @@ export default function PreparedMixPreview({ mix, onLevels, playing, timeUs, mut
       element.pause(); element.removeAttribute('src'); element.load();
     };
   }, [identity, audioRetry]);
-  useEffect(() => { synchronize.current?.(); }, [playing, timeUs, muted, localMuted]);
+  useLayoutEffect(() => { synchronize.current?.(); }, [playing, timeUs, muted, localMuted, volume]);
   useEffect(() => {
     if (controlled || !localPlaying) return;
     let request: number;
@@ -76,6 +78,7 @@ export default function PreparedMixPreview({ mix, onLevels, playing, timeUs, mut
   }, [controlled, localPlaying, identity]);
 
   useEffect(() => {
+    if (!showLevels) return;
     const controller = new AbortController();
     const durationUs = Math.min(10_000_000, mix.durationUs - windowStartUs);
     void latest.current.onLevels(mix, windowStartUs, durationUs, controller.signal).then(value => {
@@ -85,7 +88,7 @@ export default function PreparedMixPreview({ mix, onLevels, playing, timeUs, mut
       setLevels({ identity, startUs: windowStartUs, window });
     }).catch(error => { if (!controller.signal.aborted) setLevels({ identity, startUs: windowStartUs, error: error instanceof Error ? error.message : String(error) }); });
     return () => controller.abort();
-  }, [identity, windowStartUs, levelRetry]);
+  }, [identity, windowStartUs, levelRetry, showLevels]);
   const currentLevels = levels?.identity === identity && levels.startUs === windowStartUs ? levels : undefined;
   async function toggle() {
     const element = audio.current; if (!element || !ready || controlled) return;
@@ -99,7 +102,7 @@ export default function PreparedMixPreview({ mix, onLevels, playing, timeUs, mut
     <audio ref={audio} preload="metadata" data-audio-role="处理后混音" hidden />
     {controls && <div className="prepared-mix-preview__controls"><IconButton label="试听回到开头" disabled={!ready} onClick={() => seek(0)}><SkipBack size={15} /></IconButton><Button aria-label={localPlaying ? '暂停处理试听' : '播放处理试听'} disabled={!ready || controlled} onClick={() => void toggle()}>{localPlaying ? <Pause size={15} /> : <Play size={15} />}{localPlaying ? "暂停" : "播放"}</Button><input type="range" aria-label="试听播放位置" aria-valuetext={formatTime(currentTimeUs)} min={0} max={Math.ceil(mix.durationUs / 1000)} step={10} value={Math.round(currentTimeUs / 1000)} disabled={!ready || controlled} onChange={event => seek(Math.min(mix.durationUs - 1, Number(event.target.value) * 1000))} /><span>{formatTime(currentTimeUs)} / {formatTime(mix.durationUs)}</span><IconButton label={(muted ?? localMuted) ? '开启处理试听声音' : '静音处理试听'} aria-pressed={muted ?? localMuted} disabled={muted !== undefined} onClick={() => setLocalMuted(value => !value)}>{(muted ?? localMuted) ? <VolumeX size={15} /> : <Volume2 size={15} />}</IconButton></div>}
     {audioFailure ? <Notice kind="error">{audioFailure}<Button aria-label="重新载入试听音频" variant="ghost" onClick={() => setAudioRetry(value => value + 1)}>重新载入</Button></Notice> : !ready && <p className="tiny-meta" role="status">正在载入处理后的混音…</p>}
-    <AudioLevelMeter window={currentLevels?.window} timeUs={levelTimeUs} analysis={mix.analysis} loading={!currentLevels} error={currentLevels?.error} onRetry={() => setLevelRetry(value => value + 1)} compact={!controls} />
+    {showLevels && <AudioLevelMeter window={currentLevels?.window} timeUs={levelTimeUs} analysis={mix.analysis} loading={!currentLevels} error={currentLevels?.error} onRetry={() => setLevelRetry(value => value + 1)} compact={!controls} />}
     {mix.warnings.length > 0 && <ul className="prepared-mix-preview__warnings">{mix.warnings.map((warning, index) => <li key={index}>{warning}</li>)}</ul>}
   </div>;
 }

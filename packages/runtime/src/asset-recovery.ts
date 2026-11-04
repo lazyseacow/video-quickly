@@ -84,7 +84,7 @@ export function createAssetRecovery(options: AssetRecoveryOptions) {
     if (projectId && !options.store.database.prepare("SELECT 1 FROM documents WHERE kind = 'project' AND id = ?").get(projectId)) throw new Error('项目不存在，无法检查其素材。');
     const projectReferences = options.store.database.prepare('SELECT project_id, asset_id FROM project_asset_references WHERE (? IS NULL OR project_id = ?)').all(projectId ?? null, projectId ?? null) as { project_id: string; asset_id: string }[];
     const needed = new Set(projectReferences.map(row => row.asset_id));
-    const characterRows = projectId ? options.store.database.prepare("SELECT character.value AS id FROM documents project, json_each(project.body, '$.shots') shot, json_each(shot.value, '$.characterIds') character WHERE project.kind = 'project' AND project.id = ?").all(projectId) as { id: string }[] : [];
+    const characterRows = projectId ? options.store.database.prepare("SELECT character.value AS id FROM documents project, json_each(project.body, '$.shots') shot, json_each(shot.value, '$.characterIds') character WHERE project.kind = 'project' AND project.id = ? UNION SELECT character.value AS id FROM documents project, json_each(project.body, '$.creativeContext.characterIds') character WHERE project.kind = 'project' AND project.id = ?").all(projectId, projectId) as { id: string }[] : [];
     const characterIds = new Set(characterRows.map(row => row.id));
     const profiles = options.store.list<unknown>('character').filter(value => !projectId || characterIds.has(String(object(value).id)));
     for (const profile of profiles) for (const id of values(object(profile).referenceAssetIds)) if (typeof id === 'string') needed.add(id);
