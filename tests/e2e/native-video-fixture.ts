@@ -17,7 +17,7 @@ async function latest(request: APIRequestContext, projectId: string) { return (a
 async function pick(dialog: Locator, label: string, model: ModelProfile) { await pickProductionModel(dialog, label, model); }
 async function open(page: Page, project: ProjectDocument) { await page.goto('/'); await openProjectFromList(page, project.title); await page.locator('.project-heading-actions').getByRole('button', { name: '制作设置', exact: true }).click(); const dialog = page.getByRole('dialog', { name: '制作设置', exact: true }); await expect(dialog).toBeVisible(); return dialog; }
 
-async function fixture(request: APIRequestContext, info: TestInfo, hold = false, shotCount = 1) {
+async function fixture(request: APIRequestContext, info: TestInfo, hold = false, shotCount = 1, documents: { brief?: string; style?: string } = {}) {
   const path = info.outputPath('native-source.mp4');
   await promisify(execFile)(process.env.VIDEO_QUICKLY_FFMPEG ?? 'ffmpeg', ['-hide_banner', '-loglevel', 'error', '-y', '-f', 'lavfi', '-i', 'color=c=blue:s=160x90:r=30:d=1', '-f', 'lavfi', '-i', 'sine=frequency=440:sample_rate=48000:duration=1', '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-c:a', 'aac', '-shortest', path]);
   const bytes = await readFile(path), requests: Record<string, unknown>[] = [];
@@ -30,7 +30,7 @@ async function fixture(request: APIRequestContext, info: TestInfo, hold = false,
     let body = ''; for await (const chunk of incoming) body += chunk; const value = JSON.parse(body); requests.push(value);
     if (incoming.url?.includes('contents/generations/tasks')) { response.end(JSON.stringify({ id: `video-${requests.length}` })); return; }
     if (hold && !held) { held = true; entered(); await gate; }
-    const prompt = JSON.stringify(value), content = prompt.includes('自动视频制作步骤：旁白与分镜') ? JSON.stringify({ shots: Array.from({ length: shotCount }, (_, index) => ({ title: `生成的蓝色镜头${shotCount > 1 ? ` ${index + 1}` : ''}`, narration: '天空是蓝色的。', visualPrompt: '蓝色天空', soundPrompt: '自然讲述', durationUs: 1_000_000 })) }) : '采用柔和蓝色画面，面向普通观众讲述。';
+    const prompt = JSON.stringify(value), content = prompt.includes('自动视频制作步骤：旁白与分镜') ? JSON.stringify({ shots: Array.from({ length: shotCount }, (_, index) => ({ title: `生成的蓝色镜头${shotCount > 1 ? ` ${index + 1}` : ''}`, narration: '天空是蓝色的。', visualPrompt: '蓝色天空', soundPrompt: '自然讲述', durationUs: 1_000_000 })) }) : (prompt.includes('自动视频制作步骤：创意简报') ? documents.brief : documents.style) ?? '采用柔和蓝色画面，面向普通观众讲述。';
     response.end(JSON.stringify({ choices: [{ message: { content } }] }));
   });
   await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve)); const address = server.address(); if (!address || typeof address === 'string') throw new Error('No fixture address'); baseUrl = `http://127.0.0.1:${address.port}`;

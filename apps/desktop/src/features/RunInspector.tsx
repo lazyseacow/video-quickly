@@ -1,7 +1,7 @@
 import { useId, useState } from 'react';
-import { ChevronDown, Download, FolderOpen, History, RefreshCw } from 'lucide-react';
-import { activitySchema, recordPageSchema, runDiagnosticsSchema, runEventSchema, runInspectionSchema, runStepPayloadSchema, stepOutputVersionSchema, type RunInspection, type RunStepSummary, type RunSummary } from '@video-quickly/contracts';
-import { Button, Dialog, Notice, Status, statusLabels } from '../components/Primitives';
+import { ChevronDown, Download, FolderOpen, PencilLine, RefreshCw } from 'lucide-react';
+import { activitySchema, recordPageSchema, runDiagnosticsSchema, runEventSchema, runInspectionSchema, runStepPayloadSchema, type RunInspection, type RunStepSummary, type RunSummary } from '@video-quickly/contracts';
+import { Button, Dialog, Notice, Status } from '../components/Primitives';
 import { nativeDesktop, revealFile } from '../components/PathPicker';
 import { getAssetUrl, rpc } from '../lib/client';
 import { useRecordPage } from '../lib/use-record-page';
@@ -10,9 +10,9 @@ import type { StepOutputSelection } from '../lib/types';
 import RunActions from './RunActions';
 import StepResultView from '../components/StepResultView';
 import { stepGuidance } from '../lib/workflow-guidance';
+import { isPlanningSection, planningLabels, planningResultValue, type PlanningControls, type PlanningSection } from '../lib/planning-edits';
 import './run-inspector.css';
 
-const versionsSchema = recordPageSchema(stepOutputVersionSchema);
 const eventsSchema = recordPageSchema(runEventSchema);
 const activitiesSchema = recordPageSchema(activitySchema);
 const stepStates: Record<string, string> = { pending: '待执行', skipped: '未经过', not_recorded: '未记录' };
@@ -67,7 +67,7 @@ export function StepStatus({ step }: { step: RunStepSummary }) {
   return stepStates[step.status] ? <span className="run-inspector__state">{stepStates[step.status]}</span> : <Status value={step.status} />;
 }
 
-export function StepDetail({ inspection, step, version, onOpenOutput, defaultTab, currentRun = false }: { inspection: RunInspection; step: RunStepSummary; version: number; onOpenOutput: (selection: StepOutputSelection) => void; defaultTab?: 'output' | 'status'; currentRun?: boolean }) {
+export function StepDetail({ inspection, step, version, onOpenOutput, defaultTab, currentRun = false, planning }: { inspection: RunInspection; step: RunStepSummary; version: number; onOpenOutput: (selection: StepOutputSelection) => void; defaultTab?: 'output' | 'status'; currentRun?: boolean; planning?: PlanningControls }) {
   const [tab, setTab] = useState<'output' | 'status'>(defaultTab ?? (step.outputAvailable ? 'output' : 'status'));
   const [logOpen, setLogOpen] = useState(false);
   const id = useId();
@@ -75,8 +75,10 @@ export function StepDetail({ inspection, step, version, onOpenOutput, defaultTab
   const detail = selected.data?.selected;
   const help = stepGuidance(detail?.node ?? { kind: step.kind, config: {} });
   const tabs = [{ id: 'output', label: '步骤产物' }, { id: 'status', label: '制作信息' }] as const;
+  const currentPlanning = !inspection.run.selection && inspection.steps.filter(item => item.kind !== 'subflow').length > 1 && (!inspection.run.purpose || inspection.run.purpose === 'production') ? planning : undefined;
+  const planningSection = currentPlanning && isPlanningSection(step.kind) ? step.kind : undefined;
   return <section className="run-inspector__detail" aria-label={`步骤详情：${step.label}`}>
-    <header className="run-inspector__step-heading"><div><h3>{step.label}</h3>{tab === 'status' && <p>{step.description || help.purpose}</p>}</div>{tab === 'status' && <StepStatus step={step} />}</header>
+    <header className="run-inspector__step-heading"><div><h3>{step.label}</h3>{tab === 'status' && <p>{step.description || help.purpose}</p>}{tab === 'output' && planningSection && <p className="run-inspector__planning-label">当前项目内容</p>}</div>{tab === 'status' ? <StepStatus step={step} /> : planningSection && currentPlanning && <Button static aria-label={`编辑${planningLabels[planningSection]}`} disabled={Boolean(currentPlanning.disabledReason)} onClick={() => currentPlanning.onEdit(planningSection)}><PencilLine size={16} />编辑内容</Button>}</header>
     <div className="run-inspector__tabs" role="tablist" aria-label="步骤详情视图">{tabs.map(item => <button key={item.id} id={`${id}-${item.id}`} type="button" role="tab" aria-selected={tab === item.id} aria-controls={`${id}-panel`} tabIndex={tab === item.id ? 0 : -1} onClick={() => setTab(item.id)} onKeyDown={event => {
       const index = tabs.findIndex(item => item.id === tab);
       const next = event.key === 'ArrowRight' ? (index + 1) % tabs.length : event.key === 'ArrowLeft' ? (index + tabs.length - 1) % tabs.length : event.key === 'Home' ? 0 : event.key === 'End' ? tabs.length - 1 : undefined;
@@ -84,7 +86,7 @@ export function StepDetail({ inspection, step, version, onOpenOutput, defaultTab
       event.preventDefault(); setTab(tabs[next].id); event.currentTarget.parentElement?.querySelectorAll<HTMLButtonElement>('[role="tab"]')[next]?.focus();
     }}>{item.label}</button>)}</div>
     <div id={`${id}-panel`} role="tabpanel" aria-labelledby={`${id}-${tab}`} className="run-inspector__panel">
-      {tab === 'output' && <StepOutputs inspection={inspection} step={step} version={version} onOpenOutput={onOpenOutput} />}
+      {tab === 'output' && <StepOutputs inspection={inspection} step={step} version={version} onOpenOutput={onOpenOutput} planning={currentPlanning} />}
       {tab === 'status' && <><p className="run-inspector__reason" role={step.error ? 'alert' : 'status'}>{step.reason}</p>{selected.error && <Notice kind="error">{selected.error}<Button aria-label="重试读取配置" onClick={selected.refresh}>重试</Button></Notice>}
         <dl className="run-inspector__facts"><div><dt>本步产出</dt><dd>{help.result}</dd></div>{detail && <><div><dt>{currentRun ? step.activityCount > 0 ? '本次使用的模型' : '本次配置的模型' : '制作模型'}</dt><dd>{detail.model ? `${detail.model.name} · ${detail.model.model}` : detail.node.modelId ? `所选模型不可用 · ${detail.node.modelId}` : help.local}</dd></div><div><dt>前置步骤</dt><dd>{detail.dependencies.map(id => inspection.steps.find(step => step.id === id)?.label ?? id).join('、') || '从项目内容开始'}</dd></div>{detail.skills.length > 0 && <div><dt>采用的规范</dt><dd>{detail.skills.map(skill => skill.name).join('、')}</dd></div>}</>}{step.startedAt && <div><dt>开始时间</dt><dd>{date(step.startedAt)}</dd></div>}{step.completedAt && <div><dt>完成时间</dt><dd>{date(step.completedAt)}</dd></div>}</dl>
         {currentRun && <StepExecutionPrompt runId={inspection.run.id} step={step} version={version} configuredPrompt={detail?.node.prompt} />}
@@ -109,32 +111,29 @@ function StepExecutionPrompt({ runId, step, version, configuredPrompt }: { runId
   </section>;
 }
 
-function StepOutputs({ inspection, step, version, onOpenOutput }: { inspection: RunInspection; step: RunStepSummary; version: number; onOpenOutput: (selection: StepOutputSelection) => void }) {
-  const [historyOpen, setHistoryOpen] = useState(false);
-  const [comparisonId, setComparisonId] = useState('');
-  const output = useRuntimeRead('run.step.payload', { runId: inspection.run.id, nodeId: step.id, kind: 'output' }, version, runStepPayloadSchema);
-  const applicable = inspection.run.purpose !== 'workflow-assistant' && ['script', 'style', 'assets', 'animation', 'research'].includes(step.kind);
-  const open = (runId: string) => onOpenOutput({ projectId: inspection.run.projectId, runId, nodeId: step.id, kind: step.kind });
-  return <>{output.error && <Notice kind="error">{output.error}<Button aria-label="重试读取产物" onClick={output.refresh}>重试</Button></Notice>}
-    {historyOpen && <OutputVersions runId={inspection.run.id} nodeId={step.id} comparisonId={comparisonId} onCompare={setComparisonId} />}
-    {!output.data && !output.error && <p role="status">正在读取步骤产物…</p>}
-    {output.data && !output.data.available && <p>这个步骤尚未保存产物。</p>}
-    <div className={`run-inspector__outputs${comparisonId ? ' run-inspector__outputs--compare' : ''}`}>
-      {output.data?.available && <section aria-label="本次产物">{comparisonId && <h4>本次产物</h4>}<StepResultView value={output.data.value} kind={step.kind} /></section>}
-      {comparisonId && <HistoricalOutput key={comparisonId} runId={comparisonId} nodeId={step.id} kind={step.kind} applicable={applicable} onOpen={() => open(comparisonId)} onClose={() => setComparisonId('')} />}
-    </div>
-    <div className="run-inspector__output-actions"><Button variant="ghost" aria-expanded={historyOpen} onClick={() => setHistoryOpen(value => !value)}><History size={16} />历史产物</Button>{applicable && output.data?.available && <Button aria-label="在项目中查看与应用" onClick={() => open(inspection.run.id)}>在工作台使用</Button>}</div>
+interface StepOutputsProps { inspection: RunInspection; step: RunStepSummary; version: number; onOpenOutput: (selection: StepOutputSelection) => void; planning?: PlanningControls }
+function StepOutputs(props: StepOutputsProps) {
+  if (props.planning && isPlanningSection(props.step.kind) && props.inspection.run.purpose !== 'workflow-assistant') return <PlanningOutput section={props.step.kind} planning={props.planning} />;
+  return <RecordedStepOutput {...props} />;
+}
+
+function PlanningOutput({ section, planning }: { section: PlanningSection; planning: PlanningControls }) {
+  return <>
+    {planning.disabledReason && <p className="run-inspector__muted">{planning.disabledReason}</p>}
+    <section aria-label="本次产物"><StepResultView value={planningResultValue(planning.project, section)} kind={section} /></section>
   </>;
 }
 
-function OutputVersions({ runId, nodeId, comparisonId, onCompare }: { runId: string; nodeId: string; comparisonId: string; onCompare: (id: string) => void }) {
-  const history = useRecordPage('run.step.versions', { runId, nodeId, limit: 20 }, 0, versionsSchema);
-  return <div className="run-inspector__versions" aria-label="历史产物版本">{history.error && <Notice kind="error">{history.error}<Button aria-label="重试读取版本" onClick={history.refresh}>重试</Button></Notice>}{history.items.filter(item => item.id !== runId).map(item => <button type="button" key={item.id} data-run-id={item.id} aria-pressed={comparisonId === item.id} onClick={() => onCompare(item.id)}><strong>{date(item.createdAt)}</strong><span>{item.label}</span><span>来源制作：{statusLabels[item.status] ?? item.status}</span></button>)}{!history.busy && !history.error && !history.items.some(item => item.id !== runId) && <p>没有其他已保存的产物版本。</p>}{history.nextCursor !== null && <Button aria-label="加载更多版本" busy={history.loadingMore} disabled={!history.canLoadMore} onClick={() => void history.loadMore()}><ChevronDown size={16} />加载更多</Button>}</div>;
-}
-
-function HistoricalOutput({ runId, nodeId, kind, applicable, onOpen, onClose }: { runId: string; nodeId: string; kind: RunStepSummary['kind']; applicable: boolean; onOpen: () => void; onClose: () => void }) {
-  const output = useRuntimeRead('run.step.payload', { runId, nodeId, kind: 'output' }, 0, runStepPayloadSchema);
-  return <section aria-label="历史产物"><h4>历史产物</h4>{output.error && <Notice kind="error">{output.error}<Button aria-label="重试读取历史产物" onClick={output.refresh}>重试</Button></Notice>}{!output.data && !output.error && <p role="status">正在读取历史产物…</p>}{output.data?.available && <><StepResultView value={output.data.value} kind={kind} />{applicable && <Button aria-label="在项目中查看与应用此版本" onClick={onOpen}>使用此版本</Button>}</>}<Button variant="ghost" onClick={onClose}>取消对比</Button></section>;
+function RecordedStepOutput({ inspection, step, version, onOpenOutput }: StepOutputsProps) {
+  const output = useRuntimeRead('run.step.payload', { runId: inspection.run.id, nodeId: step.id, kind: 'output' }, version, runStepPayloadSchema);
+  const applicable = inspection.run.purpose !== 'workflow-assistant' && ['script', 'style', 'assets', 'animation', 'research'].includes(step.kind);
+  const open = () => onOpenOutput({ projectId: inspection.run.projectId, runId: inspection.run.id, nodeId: step.id, kind: step.kind });
+  return <>{output.error && <Notice kind="error">{output.error}<Button aria-label="重试读取产物" onClick={output.refresh}>重试</Button></Notice>}
+    {!output.data && !output.error && <p role="status">正在读取步骤产物…</p>}
+    {output.data && !output.data.available && <p>这个步骤尚未保存产物。</p>}
+    {output.data?.available && <section aria-label="本次产物"><StepResultView value={output.data.value} kind={step.kind} /></section>}
+    {applicable && output.data?.available && <div className="run-inspector__output-actions"><Button aria-label="在项目中查看与应用" onClick={open}>在工作台使用</Button></div>}
+  </>;
 }
 
 function RunLog({ runId, nodeId, version }: { runId: string; nodeId?: string; version: number }) {

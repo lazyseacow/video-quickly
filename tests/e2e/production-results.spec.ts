@@ -1,0 +1,92 @@
+import { expect, test, type Page, type APIRequestContext, type TestInfo } from '@playwright/test';
+import { fixture, latest, open, rpc, saved } from './native-video-fixture';
+
+const brief = [
+  '主题：职场人如何用 AI 提效',
+  '目标观众：20–35 岁的职场白领',
+  '核心信息：通过三个实用方法，让职场人用 AI 改善日常工作，缓解工作焦虑。',
+  '叙事顺序：',
+  '1. **黄金 3 秒开场（Hook）**：直接提出痛点，建立悬念。',
+  '2. **痛点与共鸣（Problem）**：还原日常办公场景。',
+  '3. **解决方案（Value）**：用写稿、邮件和会议三个例子说明方法。',
+  '4. **互动与结尾（CTA）**：引导观众收藏和分享。',
+  '预期时长：约 45 秒',
+  `表达要求：保持角色外观一致。${'语气真诚自然，使用短句；先说明操作，再展示具体效果。'.repeat(12)}成片规格为{"width":1920,"height":1080,"frameRate":{"numerator":60000,"denominator":1001},"fitMode":"contain","previewScale":0.5}；保留最后一条表达要求。`,
+].join('\n');
+const style = '## 视觉风格\n采用**柔和蓝色**的漫画画面。\n\n### 画面要点\n- 保持人物服装一致\n- 突出办公桌和屏幕\n\n```html\n<img src="https://invalid.example/never-load.png" onerror="alert(1)">\n```\n最后一段仍然可读。';
+
+async function produced(page: Page, request: APIRequestContext, info: TestInfo) {
+  const source = await fixture(request, info, false, 1, { brief, style });
+  try {
+    await rpc(request, 'workflow.save', { projectId: source.project.id, workflow: { ...source.project.workflow, production: { ...source.project.workflow.production!, textModelId: source.models[0].id, videoModelId: source.video.id } } });
+    await rpc(request, 'run.start', { projectId: source.project.id });
+    await expect.poll(async () => (await latest(request, source.project.id))?.status, { timeout: 30000 }).toBe('succeeded');
+    await open(page, source.project).then(dialog => dialog.getByRole('button', { name: '取消', exact: true }).click());
+    const trigger = page.getByRole('button', { name: '打开阶段：策划与分镜', exact: true });
+    await trigger.click();
+    const dialog = page.getByRole('dialog', { name: '本次制作', exact: true });
+    await expect(dialog.getByRole('heading', { name: '职场人如何用 AI 提效', exact: true })).toBeVisible();
+    return { source, dialog, trigger };
+  } catch (error) { await source.close(); throw error; }
+}
+
+for (const { width, theme } of [{ width: 1536, theme: 'dark' }, { width: 1024, theme: 'light' }, { width: 390, theme: 'dark' }]) {
+  test(`makes production results readable and preserves navigation at ${width}px in ${theme}`, async ({ page, request }, info) => {
+    const errors: string[] = [];
+    page.on('pageerror', error => errors.push(error.message));
+    page.on('console', message => { if (['error', 'warning'].includes(message.type())) errors.push(message.text()); });
+    await page.setViewportSize({ width, height: 960 });
+    await page.addInitScript(theme => localStorage.setItem('vq-theme', theme), theme);
+    if (width === 390) await page.emulateMedia({ reducedMotion: 'reduce' });
+    const { source, dialog, trigger } = await produced(page, request, info);
+    try {
+      const baseline = await saved(request, source.project.id), requests = source.requests.length;
+      const document = dialog.getByRole('article', { name: '创作简报', exact: true });
+      const overview = document.getByRole('definition').filter({ hasText: '20–35 岁' });
+      await expect(overview).toBeVisible(); await expect(document.getByText('约 45 秒', { exact: true })).toBeVisible();
+      await expect(document.getByRole('region', { name: '核心信息', exact: true })).toContainText('三个实用方法');
+      const sequence = document.getByRole('region', { name: '叙事顺序', exact: true });
+      await expect(sequence.locator('ol > li')).toHaveCount(4); await expect(sequence.locator('strong').first()).toHaveText('黄金 3 秒开场（Hook）');
+      await expect(dialog.locator('.stage-run-view__completion')).toHaveText('3/ 3 项任务完成');
+      await expect(document.locator('details').filter({ has: page.locator('summary', { hasText: '表达要求' }) })).not.toHaveAttribute('open');
+      await page.screenshot({ path: info.outputPath(`production-brief-${width}-${theme}.png`) });
+
+      const navigation = dialog.getByRole('navigation', { name: '本阶段制作步骤', exact: true });
+      const before = await navigation.boundingBox();
+      const panel = dialog.locator('.run-inspector__panel');
+      await document.locator('summary').filter({ hasText: '表达要求' }).click();
+      const specs = document.getByRole('definition').filter({ hasText: '1920 × 1080' });
+      await expect(specs).toBeVisible(); await expect(document).toContainText('59.94 fps');
+      await expect(document).toContainText('完整显示');
+      await document.locator('summary').filter({ hasText: '查看完整原文' }).click();
+      await expect(document.locator('.result-document__original pre')).toHaveText(brief);
+      await panel.hover(); await page.mouse.wheel(0, 5000);
+      await expect.poll(() => panel.evaluate(element => element.scrollTop)).toBeGreaterThan(0);
+      const after = await navigation.boundingBox();
+      expect(Math.abs(after!.y - before!.y)).toBeLessThan(2);
+      await expect(dialog.getByRole('tablist', { name: '制作阶段记录', exact: true })).toBeVisible();
+      await expect(dialog.getByRole('tablist', { name: '步骤详情视图', exact: true })).toBeVisible();
+      await expect(dialog.getByRole('button', { name: '关闭', exact: true })).toBeVisible();
+      expect(await dialog.evaluate(element => element.scrollWidth <= element.clientWidth)).toBe(true);
+
+      await navigation.getByRole('button', { name: /风格与角色/ }).click();
+      const visual = dialog.getByRole('article', { name: '视觉风格', exact: true });
+      await expect(visual.getByRole('heading', { name: '画面要点', exact: true })).toBeVisible();
+      await expect(visual.locator('ul > li')).toHaveCount(2);
+      await expect(visual.locator('pre').first()).toContainText('<img src=');
+      await expect(visual.locator('img, script, iframe')).toHaveCount(0);
+      await expect(visual).toContainText('最后一段仍然可读。');
+      await page.screenshot({ path: info.outputPath(`production-style-${width}-${theme}.png`) });
+      const outputTab = dialog.getByRole('tab', { name: '步骤产物', exact: true });
+      await outputTab.focus(); await page.keyboard.press('ArrowRight');
+      await expect(dialog.getByRole('tab', { name: '制作信息', exact: true })).toHaveAttribute('aria-selected', 'true');
+      await expect(dialog.getByText(/文本一 .* · 文本一/)).toBeVisible();
+      await page.keyboard.press('ArrowLeft');
+      await expect(outputTab).toHaveAttribute('aria-selected', 'true');
+      expect(await saved(request, source.project.id)).toEqual(baseline); expect(source.requests.length).toBe(requests);
+      await expect(page).toHaveTitle(/Video Quickly/); expect(new URL(page.url()).pathname).toBe('/');
+      await expect(page.locator('vite-error-overlay')).toHaveCount(0); expect(errors).toEqual([]);
+      await page.keyboard.press('Escape'); await expect(dialog).toHaveCount(0); await expect(trigger).toBeFocused();
+    } finally { await source.close(); }
+  });
+}

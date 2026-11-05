@@ -40,10 +40,10 @@ let pageErrors: string[] = [], consoleErrors: string[] = [], expectedErrors: str
 test.beforeEach(async ({ page }) => { pageErrors = []; consoleErrors = []; expectedErrors = []; page.on('pageerror', error => pageErrors.push(error.message)); page.on('console', message => { if (message.type() === 'error') consoleErrors.push(message.text()); }); });
 test.afterEach(async ({ page }) => { expect(pageErrors).toEqual([]); expect(consoleErrors).toEqual(expectedErrors); await expect(page.locator('vite-error-overlay')).toHaveCount(0); });
 
-test('shows visual results without execution inputs, compares versions, exports diagnostics and applies a selected version with undo', async ({ page, request }, info) => {
+test('shows the selected run output, exports diagnostics and applies it with undo', async ({ page, request }, info) => {
   const source = await fixture(request);
   try {
-    const older = await source.start(); const newer = await source.start();
+    await source.start(); const newer = await source.start();
     const calls: Array<{ method: string; kind?: string }> = [];
     page.on('request', request => { if (request.url().endsWith('/__desktop_rpc')) { const input = request.postDataJSON(); calls.push({ method: input.method, kind: input.params?.kind }); } });
     const dialog = await open(page, newer.id);
@@ -51,73 +51,46 @@ test('shows visual results without execution inputs, compares versions, exports 
     await dialog.getByRole('tab', { name: '制作信息', exact: true }).click();
     await expect(dialog).not.toContainText('人工审阅');
     expect(calls.filter(call => call.kind === 'input')).toEqual([]); expect(calls.map(call => call.method)).not.toContain('run.step.versions'); expect(calls.map(call => call.method)).not.toContain('run.events');
-    await expect(dialog.getByRole('tab', { name: '制作信息', exact: true })).toHaveAttribute('aria-selected', 'true');
     await dialog.getByRole('navigation', { name: '冻结流程步骤' }).getByRole('button', { name: /冻结风格步骤/ }).click();
     await dialog.getByRole('tab', { name: '步骤产物', exact: true }).click();
-    await expect(dialog.getByRole('tab', { name: '步骤产物', exact: true })).toHaveAttribute('aria-selected', 'true');
+    await expect(dialog.getByRole('button', { name: '历史产物', exact: true })).toHaveCount(0);
+    await expect(dialog.getByRole('region', { name: '本次产物', exact: true })).toContainText('第 2 版生成风格');
     await expect(dialog.getByRole('tab', { name: '执行输入', exact: true })).toHaveCount(0);
-    await expect(dialog).not.toContainText('完整产物数据');
-    await expect(dialog).not.toContainText('冻结步骤配置');
     await dialog.getByRole('tab', { name: '制作信息', exact: true }).click();
     await expect(dialog.getByText('执行时的模型 · inspector-fixture', { exact: true })).toBeVisible();
-    await expect(dialog).not.toContainText('冻结的创作输入');
-    await expect(dialog).not.toContainText('按照创作输入生成风格');
-    await expect(dialog).not.toContainText('inspector-fixture-secret');
-    expect(await saved(request, source.project.id)).toEqual(source.project);
-    await dialog.getByRole('tab', { name: '步骤产物', exact: true }).click();
-    await expect(dialog.getByRole('region', { name: '本次产物', exact: true })).toContainText('第 2 版生成风格');
-    await dialog.getByRole('button', { name: '历史产物', exact: true }).click();
-    await dialog.getByLabel('历史产物版本', { exact: true }).locator(`[data-run-id="${older.id}"]`).click();
-    await expect(dialog.getByRole('region', { name: '历史产物', exact: true })).toContainText('第 1 版生成风格');
-    expect(source.calls()).toBe(2);
-    await dialog.getByRole('tab', { name: '制作信息', exact: true }).click();
+    await expect(dialog).not.toContainText('冻结的创作输入'); await expect(dialog).not.toContainText('inspector-fixture-secret');
     await dialog.locator('.run-inspector__logs-toggle > summary').click();
     await expect(dialog.locator('.run-inspector__activity')).toHaveCount(1);
-    await expect(dialog.locator('.run-inspector__logs')).toContainText('冻结风格步骤');
-    await dialog.locator('.run-inspector__tools > summary').click();
-    await dialog.getByRole('button', { name: '导出诊断', exact: true }).click();
+    await dialog.locator('.run-inspector__tools > summary').click(); await dialog.getByRole('button', { name: '导出诊断', exact: true }).click();
     const downloadPromise = page.waitForEvent('download'); await dialog.getByRole('link', { name: '下载诊断文件', exact: true }).click();
     const path = info.outputPath('run-diagnostic.json.gz'); await (await downloadPromise).saveAs(path);
     const diagnostic = runDiagnosticBundleSchema.parse(JSON.parse(gunzipSync(await readFile(path)).toString()));
     expect(diagnostic.inspection.run.id).toBe(newer.id); expect(diagnostic.steps).toHaveLength(1);
-    expect(JSON.stringify(diagnostic)).toContain('冻结的创作输入'); expect(JSON.stringify(diagnostic)).toContain('按照创作输入生成风格');
-    await dialog.locator('.run-inspector__tools > summary').click();
-    expect(JSON.stringify(diagnostic)).not.toContain('inspector-fixture-secret'); expect(source.calls()).toBe(2);
-    await dialog.getByRole('tab', { name: '步骤产物', exact: true }).click(); await dialog.getByRole('button', { name: '历史产物', exact: true }).click();
-    await dialog.getByLabel('历史产物版本', { exact: true }).locator(`[data-run-id="${older.id}"]`).click();
-    await expect(dialog.getByRole('region', { name: '历史产物', exact: true })).toContainText('第 1 版生成风格');
-    await page.screenshot({ path: info.outputPath('run-history-comparison-dark.png') });
-    await dialog.getByRole('button', { name: '在项目中查看与应用此版本', exact: true }).click();
+    expect(JSON.stringify(diagnostic)).toContain('冻结的创作输入'); expect(JSON.stringify(diagnostic)).not.toContain('inspector-fixture-secret');
+    await dialog.locator('.run-inspector__tools > summary').click(); await dialog.getByRole('tab', { name: '步骤产物', exact: true }).click();
+    await dialog.getByRole('button', { name: '在项目中查看与应用', exact: true }).click();
     const output = page.getByRole('dialog', { name: '步骤产物', exact: true });
-    await expect(output).toContainText('第 1 版生成风格'); await output.getByRole('button', { name: '应用到项目', exact: true }).click(); await confirmAction(page, '确认应用'); await expect(output).toHaveCount(0);
-    await expect.poll(async () => (await saved(request, source.project.id)).style).toBe('第 1 版生成风格');
+    await expect(output).toContainText('第 2 版生成风格'); await output.getByRole('button', { name: '应用到项目', exact: true }).click(); await confirmAction(page, '确认应用'); await expect(output).toHaveCount(0);
+    await expect.poll(async () => (await saved(request, source.project.id)).style).toBe('第 2 版生成风格');
     await page.getByRole('button', { name: '撤销', exact: true }).click(); await expect.poll(async () => (await saved(request, source.project.id)).style).toBe(source.project.style);
-    await page.getByRole('button', { name: '重做', exact: true }).click(); await expect.poll(async () => (await saved(request, source.project.id)).style).toBe('第 1 版生成风格');
-    expect(source.calls()).toBe(2);
+    await page.getByRole('button', { name: '重做', exact: true }).click(); await expect.poll(async () => (await saved(request, source.project.id)).style).toBe('第 2 版生成风格');
+    expect(source.calls()).toBe(2); expect(calls.map(call => call.method)).not.toContain('run.step.versions');
   } finally { await close(source.server); }
 });
 
-test('keeps late historical reads scoped and retains manual edits when an older output is applied', async ({ page, request }) => {
-  const source = await fixture(request); let release!: () => void;
-  const gate = new Promise<void>(resolve => { release = resolve; });
+test('retains manual project changes when applying an inspected output would overwrite them', async ({ page, request }) => {
+  const source = await fixture(request);
   try {
-    const first = await source.start(); const second = await source.start(); const current = await source.start();
-    const dialog = await open(page, current.id);
+    const run = await source.start(); const dialog = await open(page, run.id);
     await dialog.getByRole('navigation', { name: '冻结流程步骤' }).getByRole('button', { name: /冻结风格步骤/ }).click();
-    await dialog.getByRole('tab', { name: '步骤产物', exact: true }).click(); await dialog.getByRole('button', { name: '历史产物', exact: true }).click();
-    let delayed = 0;
-    await page.route('**/__desktop_rpc', async route => { const input = route.request().postDataJSON(); if (input.method === 'run.step.payload' && input.params.runId === first.id) { delayed++; const response = await route.fetch(); await gate; await route.fulfill({ response }); } else await route.continue(); });
-    const versions = dialog.getByLabel('历史产物版本', { exact: true });
-    await versions.locator(`[data-run-id="${first.id}"]`).click(); await expect.poll(() => delayed).toBe(1);
-    await versions.locator(`[data-run-id="${second.id}"]`).click(); await expect(dialog.getByRole('region', { name: '历史产物', exact: true })).toContainText('第 2 版生成风格');
-    release(); await expect(dialog.getByRole('region', { name: '历史产物', exact: true })).not.toContainText('第 1 版生成风格');
+    await dialog.getByRole('tab', { name: '步骤产物', exact: true }).click();
     const manual = await rpc<ProjectDocument>(request, 'project.update', { projectId: source.project.id, revision: source.project.revision, patch: { style: '人工精修后保留的风格' } });
-    await dialog.getByRole('button', { name: '在项目中查看与应用此版本', exact: true }).click();
-    const output = page.getByRole('dialog', { name: '步骤产物', exact: true }); await expect(output).toContainText('第 2 版生成风格');
+    await dialog.getByRole('button', { name: '在项目中查看与应用', exact: true }).click();
+    const output = page.getByRole('dialog', { name: '步骤产物', exact: true }); await expect(output).toContainText('第 1 版生成风格');
     expectedErrors = ['Failed to load resource: the server responded with a status of 400 (Bad Request)']; await output.getByRole('button', { name: '应用到项目', exact: true }).click(); await confirmAction(page, '确认应用');
     await expect(page.getByRole('alert')).toContainText('项目已在生成后修改'); await expect(output).toBeVisible();
-    expect(await saved(request, source.project.id)).toEqual(manual); expect(source.calls()).toBe(3);
-  } finally { release(); await page.unrouteAll({ behavior: 'wait' }); await close(source.server); }
+    expect(await saved(request, source.project.id)).toEqual(manual); expect(source.calls()).toBe(1);
+  } finally { await close(source.server); }
 });
 
 test('recovers a failed detail read explicitly and keeps tabs, tokens and actions usable in both themes at narrow width', async ({ page, request }, info) => {

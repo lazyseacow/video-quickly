@@ -1,19 +1,55 @@
 import { createHash } from 'node:crypto';
 import { spawn, spawnSync } from 'node:child_process';
-import { mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, readdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, expect, it, vi } from 'vitest';
 import type { AssetRecord } from '@video-quickly/contracts';
 import { createWaveformReader } from './waveform';
 
+vi.mock('node:fs/promises', async importOriginal => {
+  const original = await importOriginal<typeof import('node:fs/promises')>();
+  return { ...original, rename: vi.fn(original.rename) };
+});
+
 const ffmpeg = process.env.VIDEO_QUICKLY_FFMPEG ?? 'ffmpeg';
 const mediaAvailable = spawnSync(ffmpeg, ['-version'], { stdio: 'ignore' }).status === 0;
 const directories: string[] = [];
 const readers: ReturnType<typeof createWaveformReader>[] = [];
 afterEach(async () => {
+  vi.mocked(rename).mockReset();
   await Promise.all(readers.splice(0).map(reader => reader.close()));
   await Promise.all(directories.splice(0).map(path => rm(path, { recursive: true, force: true })));
+});
+
+it.skipIf(!mediaAvailable)('reuses a validated content cache when another publisher wins a Windows rename race', async () => {
+  const { directory, asset } = await fixture();
+  vi.mocked(rename).mockImplementationOnce(async (temporary, destination) => {
+    const decoded = JSON.parse(await readFile(temporary, 'utf8'));
+    await writeFile(destination, JSON.stringify({ ...decoded, assetId: 'another-record' }));
+    throw Object.assign(new Error('Destination is already open'), { code: 'EPERM' });
+  });
+  const reader = createWaveformReader({ dataDirectory: directory, ffmpegPath: ffmpeg }); readers.push(reader);
+  const result = await reader.read(asset);
+  expect(result.assetId).toBe(asset.id); expect(result.peaks).toHaveLength(200); expect(result.peaks[120]).toBeCloseTo(.8, 3);
+  expect((await readdir(join(directory, 'derived'), { recursive: true })).filter(name => name.endsWith('.tmp'))).toEqual([]);
+  const restarted = createWaveformReader({ dataDirectory: directory, ffmpegPath: '/not-a-decoder' }); readers.push(restarted);
+  expect(await restarted.read(asset)).toEqual(result);
+});
+
+it.skipIf(!mediaAvailable)('keeps rename failures visible when the competing cache is invalid or belongs to other content', async () => {
+  const { directory, asset } = await fixture();
+  for (const winner of ['invalid JSON', 'wrong hash']) {
+    vi.mocked(rename).mockImplementationOnce(async (temporary, destination) => {
+      const decoded = JSON.parse(await readFile(temporary, 'utf8'));
+      await writeFile(destination, winner === 'invalid JSON' ? '{broken' : JSON.stringify({ ...decoded, sha256: '0'.repeat(64) }));
+      throw Object.assign(new Error('Cache publishing failed'), { code: 'EPERM' });
+    });
+    const reader = createWaveformReader({ dataDirectory: directory, ffmpegPath: ffmpeg }); readers.push(reader);
+    await expect(reader.read(asset)).rejects.toThrow('Cache publishing failed');
+    await reader.close();
+  }
+  expect((await readdir(join(directory, 'derived'), { recursive: true })).filter(name => name.endsWith('.tmp'))).toEqual([]);
 });
 
 async function fixture() {

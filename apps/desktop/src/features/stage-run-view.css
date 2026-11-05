@@ -3,6 +3,10 @@
 .stage-run-view--empty h3, .stage-run-view__empty h3 { margin: 0; font-size: var(--text-size-body); font-weight: var(--font-weight-semibold); }
 .stage-run-view__summary time, .stage-run-view__hint, .stage-run-view--empty p, .stage-run-view__empty p { margin: 0; color: var(--text-secondary); font-size: var(--text-size-caption); line-height: var(--line-height-body); overflow-wrap: anywhere; }
 .stage-run-view__summary time { font-variant-numeric: tabular-nums; }
+.stage-run-view__completion { display: flex; align-items: baseline; gap: var(--space-2); margin: 0 0 var(--space-1); font-size: var(--text-size-caption); color: var(--text-secondary); }
+.stage-run-view__completion > strong { font-size: var(--text-size-number-compact); line-height: var(--line-height-number); font-weight: var(--font-weight-semibold); color: var(--text); font-variant-numeric: tabular-nums; }
+.stage-run-view__saved { flex-shrink: 0; margin-left: auto; color: var(--text-secondary); }
+.stage-run-view__summary-actions { display: flex; align-items: center; gap: var(--space-3); flex-shrink: 0; }
 .stage-run-view__failure > div { min-width: 0; }
 .stage-run-view__failure p { margin: var(--space-1) 0 0; overflow-wrap: anywhere; }
 .stage-run-view__failure > .button { flex-shrink: 0; }
@@ -10,7 +14,6 @@
 .stage-run-view__empty .button { justify-self: start; margin-top: var(--space-2); }
 .stage-run-view__footer { display: grid; gap: var(--space-3); padding-top: var(--space-4); border-top: 1px solid var(--border); }
 .stage-run-view__actions { display: flex; justify-content: flex-end; flex-wrap: wrap; gap: var(--space-2); }
-.stage-run-view__actions > .button:first-child { margin-right: auto; }
 .stage-run-view pre { white-space: pre-wrap; overflow-wrap: anywhere; font-size: var(--text-size-caption); line-height: var(--line-height-body); margin-block: var(--space-3); }
 .run-inspector__execution-prompt { display: grid; gap: var(--space-2); margin-top: var(--space-5); min-width: 0; }
 .run-inspector__execution-prompt h4 { margin: 0; font-size: var(--text-size-label); font-weight: var(--font-weight-semibold); }

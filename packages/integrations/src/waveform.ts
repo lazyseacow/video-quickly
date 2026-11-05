@@ -106,7 +106,24 @@ export function createWaveformReader(options: { dataDirectory: string; ffmpegPat
     try {
       await writeFile(temporary, JSON.stringify(result), { signal });
       signal.throwIfAborted();
-      await rename(temporary, cachePath);
+      try { await rename(temporary, cachePath); }
+      catch (error) {
+        if (error instanceof Error && 'code' in error && ['EPERM', 'EEXIST'].includes(String(error.code))) {
+          // Different asset paths can publish the same content-addressed cache.
+          // Windows may deny replacing that file while another reader has it open.
+          let cached;
+          try { cached = audioWaveformSchema.safeParse(JSON.parse(await readFile(cachePath, 'utf8'))); }
+          catch (readError) {
+            if (readError instanceof SyntaxError || readError instanceof Error && 'code' in readError && readError.code === 'ENOENT') throw error;
+            throw readError;
+          }
+          if (cached.success && cached.data.sha256 === actualHash) {
+            signal.throwIfAborted();
+            return { ...cached.data, assetId: asset.id };
+          }
+        }
+        throw error;
+      }
     } finally { await rm(temporary, { force: true }); }
     return result;
   }
