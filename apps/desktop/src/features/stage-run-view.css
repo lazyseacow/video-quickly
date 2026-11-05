@@ -15,10 +15,6 @@
 .stage-run-view__footer { display: grid; gap: var(--space-3); padding-top: var(--space-4); border-top: 1px solid var(--border); }
 .stage-run-view__actions { display: flex; justify-content: flex-end; flex-wrap: wrap; gap: var(--space-2); }
 .stage-run-view pre { white-space: pre-wrap; overflow-wrap: anywhere; font-size: var(--text-size-caption); line-height: var(--line-height-body); margin-block: var(--space-3); }
-.run-inspector__execution-prompt { display: grid; gap: var(--space-2); margin-top: var(--space-5); min-width: 0; }
-.run-inspector__execution-prompt h4 { margin: 0; font-size: var(--text-size-label); font-weight: var(--font-weight-semibold); }
-.run-inspector__execution-prompt > p { margin: 0; }
-.stage-run-view .run-inspector__execution-prompt .run-inspector__json { margin-block: 0; max-height: 240px; }
 @media (max-width: 750px) {
   .stage-run-view__failure { flex-direction: column; }
 }

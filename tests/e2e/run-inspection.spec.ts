@@ -59,6 +59,13 @@ test('shows the selected run output, exports diagnostics and applies it with und
     await dialog.getByRole('tab', { name: '制作信息', exact: true }).click();
     await expect(dialog.getByText('执行时的模型 · inspector-fixture', { exact: true })).toBeVisible();
     await expect(dialog).not.toContainText('冻结的创作输入'); await expect(dialog).not.toContainText('inspector-fixture-secret');
+    expect(calls.filter(call => call.kind === 'input')).toEqual([]);
+    await dialog.locator('.run-inspector__prompt-toggle > summary').click();
+    const prompt = dialog.getByRole('region', { name: '本次提示词记录', exact: true });
+    await expect(prompt).toContainText('按照创作输入生成风格');
+    await expect(prompt).toContainText('冻结的创作输入');
+    await expect(prompt).not.toContainText('inspector-fixture-secret');
+    expect(calls.filter(call => call.kind === 'input')).toHaveLength(1);
     await dialog.locator('.run-inspector__logs-toggle > summary').click();
     await expect(dialog.locator('.run-inspector__activity')).toHaveCount(1);
     await dialog.locator('.run-inspector__tools > summary').click(); await dialog.getByRole('button', { name: '导出诊断', exact: true }).click();

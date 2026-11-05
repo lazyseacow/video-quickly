@@ -67,18 +67,26 @@ export function StepStatus({ step }: { step: RunStepSummary }) {
   return stepStates[step.status] ? <span className="run-inspector__state">{stepStates[step.status]}</span> : <Status value={step.status} />;
 }
 
-export function StepDetail({ inspection, step, version, onOpenOutput, defaultTab, currentRun = false, planning }: { inspection: RunInspection; step: RunStepSummary; version: number; onOpenOutput: (selection: StepOutputSelection) => void; defaultTab?: 'output' | 'status'; currentRun?: boolean; planning?: PlanningControls }) {
-  const [tab, setTab] = useState<'output' | 'status'>(defaultTab ?? (step.outputAvailable ? 'output' : 'status'));
+export function CurrentStepResult({ inspection, step, version, onOpenOutput, planning }: StepOutputsProps) {
+  const currentPlanning = !inspection.run.selection && inspection.steps.filter(item => item.kind !== 'subflow').length > 1 && (!inspection.run.purpose || inspection.run.purpose === 'production') ? planning : undefined;
+  const planningSection = currentPlanning && isPlanningSection(step.kind) ? step.kind : undefined;
+  return <section className="run-inspector__detail" aria-label={`步骤详情：${step.label}`}>
+    <header className="run-inspector__step-heading"><div><h3>{step.label}</h3>{planningSection && <p className="run-inspector__planning-label">当前项目内容</p>}</div>{planningSection && currentPlanning && <Button static aria-label={`编辑${planningLabels[planningSection]}`} disabled={Boolean(currentPlanning.disabledReason)} onClick={() => currentPlanning.onEdit(planningSection)}><PencilLine size={16} />编辑内容</Button>}</header>
+    <div className="run-inspector__panel"><StepOutputs inspection={inspection} step={step} version={version} onOpenOutput={onOpenOutput} planning={currentPlanning} /></div>
+  </section>;
+}
+
+function StepDetail({ inspection, step, version, onOpenOutput }: StepOutputsProps) {
+  const [tab, setTab] = useState<'output' | 'status'>(step.outputAvailable ? 'output' : 'status');
+  const [promptOpen, setPromptOpen] = useState(false);
   const [logOpen, setLogOpen] = useState(false);
   const id = useId();
   const selected = useRuntimeRead('run.inspect', { runId: inspection.run.id, nodeId: step.id }, version, runInspectionSchema);
   const detail = selected.data?.selected;
   const help = stepGuidance(detail?.node ?? { kind: step.kind, config: {} });
   const tabs = [{ id: 'output', label: '步骤产物' }, { id: 'status', label: '制作信息' }] as const;
-  const currentPlanning = !inspection.run.selection && inspection.steps.filter(item => item.kind !== 'subflow').length > 1 && (!inspection.run.purpose || inspection.run.purpose === 'production') ? planning : undefined;
-  const planningSection = currentPlanning && isPlanningSection(step.kind) ? step.kind : undefined;
   return <section className="run-inspector__detail" aria-label={`步骤详情：${step.label}`}>
-    <header className="run-inspector__step-heading"><div><h3>{step.label}</h3>{tab === 'status' && <p>{step.description || help.purpose}</p>}{tab === 'output' && planningSection && <p className="run-inspector__planning-label">当前项目内容</p>}</div>{tab === 'status' ? <StepStatus step={step} /> : planningSection && currentPlanning && <Button static aria-label={`编辑${planningLabels[planningSection]}`} disabled={Boolean(currentPlanning.disabledReason)} onClick={() => currentPlanning.onEdit(planningSection)}><PencilLine size={16} />编辑内容</Button>}</header>
+    <header className="run-inspector__step-heading"><div><h3>{step.label}</h3>{tab === 'status' && <p>{step.description || help.purpose}</p>}</div>{tab === 'status' && <StepStatus step={step} />}</header>
     <div className="run-inspector__tabs" role="tablist" aria-label="步骤详情视图">{tabs.map(item => <button key={item.id} id={`${id}-${item.id}`} type="button" role="tab" aria-selected={tab === item.id} aria-controls={`${id}-panel`} tabIndex={tab === item.id ? 0 : -1} onClick={() => setTab(item.id)} onKeyDown={event => {
       const index = tabs.findIndex(item => item.id === tab);
       const next = event.key === 'ArrowRight' ? (index + 1) % tabs.length : event.key === 'ArrowLeft' ? (index + tabs.length - 1) % tabs.length : event.key === 'Home' ? 0 : event.key === 'End' ? tabs.length - 1 : undefined;
@@ -86,10 +94,10 @@ export function StepDetail({ inspection, step, version, onOpenOutput, defaultTab
       event.preventDefault(); setTab(tabs[next].id); event.currentTarget.parentElement?.querySelectorAll<HTMLButtonElement>('[role="tab"]')[next]?.focus();
     }}>{item.label}</button>)}</div>
     <div id={`${id}-panel`} role="tabpanel" aria-labelledby={`${id}-${tab}`} className="run-inspector__panel">
-      {tab === 'output' && <StepOutputs inspection={inspection} step={step} version={version} onOpenOutput={onOpenOutput} planning={currentPlanning} />}
+      {tab === 'output' && <StepOutputs inspection={inspection} step={step} version={version} onOpenOutput={onOpenOutput} />}
       {tab === 'status' && <><p className="run-inspector__reason" role={step.error ? 'alert' : 'status'}>{step.reason}</p>{selected.error && <Notice kind="error">{selected.error}<Button aria-label="重试读取配置" onClick={selected.refresh}>重试</Button></Notice>}
-        <dl className="run-inspector__facts"><div><dt>本步产出</dt><dd>{help.result}</dd></div>{detail && <><div><dt>{currentRun ? step.activityCount > 0 ? '本次使用的模型' : '本次配置的模型' : '制作模型'}</dt><dd>{detail.model ? `${detail.model.name} · ${detail.model.model}` : detail.node.modelId ? `所选模型不可用 · ${detail.node.modelId}` : help.local}</dd></div><div><dt>前置步骤</dt><dd>{detail.dependencies.map(id => inspection.steps.find(step => step.id === id)?.label ?? id).join('、') || '从项目内容开始'}</dd></div>{detail.skills.length > 0 && <div><dt>采用的规范</dt><dd>{detail.skills.map(skill => skill.name).join('、')}</dd></div>}</>}{step.startedAt && <div><dt>开始时间</dt><dd>{date(step.startedAt)}</dd></div>}{step.completedAt && <div><dt>完成时间</dt><dd>{date(step.completedAt)}</dd></div>}</dl>
-        {currentRun && <StepExecutionPrompt runId={inspection.run.id} step={step} version={version} configuredPrompt={detail?.node.prompt} />}
+        <dl className="run-inspector__facts"><div><dt>本步产出</dt><dd>{help.result}</dd></div>{detail && <><div><dt>制作模型</dt><dd>{detail.model ? `${detail.model.name} · ${detail.model.model}` : detail.node.modelId ? `所选模型不可用 · ${detail.node.modelId}` : help.local}</dd></div><div><dt>前置步骤</dt><dd>{detail.dependencies.map(id => inspection.steps.find(step => step.id === id)?.label ?? id).join('、') || '从项目内容开始'}</dd></div>{detail.skills.length > 0 && <div><dt>采用的规范</dt><dd>{detail.skills.map(skill => skill.name).join('、')}</dd></div>}</>}{step.startedAt && <div><dt>开始时间</dt><dd>{date(step.startedAt)}</dd></div>}{step.completedAt && <div><dt>完成时间</dt><dd>{date(step.completedAt)}</dd></div>}</dl>
+        <details className="run-inspector__prompt-toggle" onToggle={event => setPromptOpen(event.currentTarget.open)}><summary>提示词记录</summary>{promptOpen && <StepExecutionPrompt runId={inspection.run.id} step={step} version={version} configuredPrompt={detail?.node.prompt} />}</details>
         <details className="run-inspector__logs-toggle" onToggle={event => setLogOpen(event.currentTarget.open)}><summary>活动与日志</summary>{logOpen && <RunLog runId={inspection.run.id} nodeId={step.id} version={version} />}</details>
       </>}
     </div>

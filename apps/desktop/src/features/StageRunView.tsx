@@ -7,7 +7,7 @@ import { useRuntimeRead } from '../lib/use-runtime-read';
 import { isConfigurationFailure } from '../lib/run-recovery';
 import type { StepOutputSelection } from '../lib/types';
 import type { PlanningControls } from '../lib/planning-edits';
-import { StepDetail, StepStatus } from './RunInspector';
+import { CurrentStepResult, StepStatus } from './RunInspector';
 import './stage-run-view.css';
 
 export interface StageRunViewProps {
@@ -78,7 +78,7 @@ function RecordedStageRun({ runId, stageId, nodeIds, configurableNodeIds = nodeI
         {missingCount > 0 && <p className="stage-run-view__hint">本阶段另有 {missingCount} 项任务未纳入这次制作。</p>}
         <div className="run-inspector__layout">
           <nav className="run-inspector__steps" aria-label="本阶段制作步骤">{steps.map((step, index) => <button type="button" key={step.id} aria-current={selected?.id === step.id ? 'step' : undefined} onClick={() => setSelectedId(step.id)}><span className="run-inspector__index">{String(index + 1).padStart(2, '0')}</span><span><strong>{step.label}</strong><StepStatus step={step} /></span>{step.outputAvailable && <FileCheck2 className="stage-run-view__saved" size={16} aria-label="已保存产物" />}</button>)}</nav>
-          {selected && <StepDetail key={`${runId}:${selected.id}`} inspection={data} step={selected} version={version} onOpenOutput={onOpenOutput} defaultTab={selected.error ? 'status' : undefined} currentRun planning={planning} />}
+          {selected && <CurrentStepResult key={`${runId}:${selected.id}`} inspection={data} step={selected} version={version} onOpenOutput={onOpenOutput} planning={planning} />}
         </div>
       </> : data.snapshotAvailable && <div className="stage-run-view__empty"><h3>这次制作未包含本阶段</h3><p>本阶段没有执行记录。</p>{configureId && <Button onClick={() => onConfigure?.(configureId)}>查看制作设置</Button>}</div>}
       {(canResume || data.recovery.cancel || repairNodeId && ['failed', 'needs_attention', 'canceled'].includes(data.run.status)) && <footer className="stage-run-view__footer">

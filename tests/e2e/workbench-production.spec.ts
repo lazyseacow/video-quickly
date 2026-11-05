@@ -65,7 +65,7 @@ for (const viewport of [{ width: 1536, height: 960, theme: 'dark' }, { width: 39
       await panel.getByRole('list', { name: '制作步骤进度', exact: true }).getByRole('button', { name: '打开步骤：风格确认', exact: true }).click();
       const detail = page.getByRole('dialog', { name: '本次制作', exact: true });
       await expect(detail.getByRole('region', { name: '步骤详情：风格确认', exact: true })).toBeVisible();
-      await detail.getByRole('tab', { name: '制作信息', exact: true }).click(); await expect(detail).not.toContainText('人工审阅');
+      await expect(detail.getByRole('tab', { name: '制作信息', exact: true })).toHaveCount(0); await expect(detail).not.toContainText('人工审阅');
       await detail.getByRole('button', { name: '关闭对话框', exact: true }).click();
       await page.reload(); await selectProject(page, source.project);
       await production(page).getByRole('button', { name: '打开步骤：分镜确认', exact: true }).click();

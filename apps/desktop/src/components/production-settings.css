@@ -14,9 +14,8 @@
 .production-results-dialog .run-inspector__steps { padding: var(--space-4) var(--space-3); overflow-y: auto; }
 .production-results-dialog .run-inspector__steps > button { padding: var(--space-3); gap: var(--space-3); }
 .production-results-dialog .run-inspector__detail { display: flex; flex-direction: column; min-height: 0; overflow: hidden; padding: var(--space-5) var(--space-6); }
-.production-results-dialog .run-inspector__step-heading { flex-shrink: 0; }
+.production-results-dialog .run-inspector__step-heading { flex-shrink: 0; margin-bottom: var(--space-5); padding-bottom: var(--space-4); border-bottom: 1px solid var(--border); }
 .production-results-dialog .run-inspector__step-heading h3 { font-size: var(--text-size-subtitle); }
-.production-results-dialog .run-inspector__tabs { flex-shrink: 0; margin: var(--space-3) 0 var(--space-5); }
 .production-results-dialog .run-inspector__panel { flex: 1; min-height: 0; overflow-y: auto; scrollbar-gutter: stable; padding-right: var(--space-3); overscroll-behavior: contain; }
 .production-results-dialog .stage-run-view__footer { padding: var(--space-3) var(--space-6); }
 .production-results-dialog .stage-run-view__empty { padding-inline: var(--space-6); }

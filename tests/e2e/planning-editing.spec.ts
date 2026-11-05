@@ -145,7 +145,7 @@ test('disables planning editing while the current production is active', async (
     await open(page, source.project).then(settings => settings.getByRole('button', { name: '取消', exact: true }).click());
     await page.getByRole('button', { name: '打开阶段：策划与分镜', exact: true }).click();
     const dialog = page.getByRole('dialog', { name: '本次制作', exact: true });
-    await dialog.getByRole('tab', { name: '步骤产物', exact: true }).click();
+    await expect(dialog.getByRole('tablist', { name: '步骤详情视图', exact: true })).toHaveCount(0);
     await expect(dialog.getByRole('button', { name: '编辑创意简报', exact: true })).toBeDisabled();
     await expect(dialog).toContainText('完成或停止后可修改策划内容');
   } finally { if (runId) await rpc(request, 'run.cancel', { runId }); await source.close(); }

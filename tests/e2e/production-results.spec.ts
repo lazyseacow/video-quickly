@@ -35,6 +35,12 @@ for (const { width, theme } of [{ width: 1536, theme: 'dark' }, { width: 1024, t
     const errors: string[] = [];
     page.on('pageerror', error => errors.push(error.message));
     page.on('console', message => { if (['error', 'warning'].includes(message.type())) errors.push(message.text()); });
+    const detailReads: string[] = [];
+    page.on('request', request => {
+      if (!request.url().endsWith('/__desktop_rpc')) return;
+      const { method, params } = request.postDataJSON();
+      if (method === 'run.inspect' && params.nodeId || method === 'run.step.payload' && params.kind === 'input' || ['run.events', 'run.activities'].includes(method)) detailReads.push(method);
+    });
     await page.setViewportSize({ width, height: 960 });
     await page.addInitScript(theme => localStorage.setItem('vq-theme', theme), theme);
     if (width === 390) await page.emulateMedia({ reducedMotion: 'reduce' });
@@ -65,7 +71,8 @@ for (const { width, theme } of [{ width: 1536, theme: 'dark' }, { width: 1024, t
       const after = await navigation.boundingBox();
       expect(Math.abs(after!.y - before!.y)).toBeLessThan(2);
       await expect(dialog.getByRole('tablist', { name: '制作阶段记录', exact: true })).toBeVisible();
-      await expect(dialog.getByRole('tablist', { name: '步骤详情视图', exact: true })).toBeVisible();
+      await expect(dialog.getByRole('tablist', { name: '步骤详情视图', exact: true })).toHaveCount(0);
+      await expect(dialog.getByRole('button', { name: '编辑创意简报', exact: true })).toBeInViewport();
       await expect(dialog.getByRole('button', { name: '关闭', exact: true })).toBeVisible();
       expect(await dialog.evaluate(element => element.scrollWidth <= element.clientWidth)).toBe(true);
 
@@ -77,12 +84,9 @@ for (const { width, theme } of [{ width: 1536, theme: 'dark' }, { width: 1024, t
       await expect(visual.locator('img, script, iframe')).toHaveCount(0);
       await expect(visual).toContainText('最后一段仍然可读。');
       await page.screenshot({ path: info.outputPath(`production-style-${width}-${theme}.png`) });
-      const outputTab = dialog.getByRole('tab', { name: '步骤产物', exact: true });
-      await outputTab.focus(); await page.keyboard.press('ArrowRight');
-      await expect(dialog.getByRole('tab', { name: '制作信息', exact: true })).toHaveAttribute('aria-selected', 'true');
-      await expect(dialog.getByText(/文本一 .* · 文本一/)).toBeVisible();
-      await page.keyboard.press('ArrowLeft');
-      await expect(outputTab).toHaveAttribute('aria-selected', 'true');
+      await expect(dialog.getByRole('tab')).toHaveText(['策划与分镜', '素材与配音', '剪辑与动画', '审阅与导出']);
+      await expect(dialog.getByRole('button', { name: '编辑风格与角色', exact: true })).toBeInViewport();
+      expect(detailReads).toEqual([]);
       expect(await saved(request, source.project.id)).toEqual(baseline); expect(source.requests.length).toBe(requests);
       await expect(page).toHaveTitle(/Video Quickly/); expect(new URL(page.url()).pathname).toBe('/');
       await expect(page.locator('vite-error-overlay')).toHaveCount(0); expect(errors).toEqual([]);

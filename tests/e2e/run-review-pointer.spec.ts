@@ -43,7 +43,8 @@ for (const surface of ['workbench', 'history'] as const) {
     await panel.getByRole('button', { name: surface === 'workbench' ? '打开步骤：第二步生成' : '查看步骤', exact: true }).click();
     const detail = page.getByRole('dialog', { name: surface === 'workbench' ? '本次制作' : '制作步骤详情', exact: true });
     await expect(detail.getByRole('navigation', { name: surface === 'workbench' ? '本阶段制作步骤' : '冻结流程步骤', exact: true })).toContainText('第二步生成');
-    await detail.getByRole('tab', { name: '制作信息', exact: true }).click();
+    if (surface === 'history') await detail.getByRole('tab', { name: '制作信息', exact: true }).click();
+    else await expect(detail.getByRole('tab', { name: '制作信息', exact: true })).toHaveCount(0);
     await expect(detail).not.toContainText('人工审阅'); await expect(detail.getByRole('button', { name: /通过审阅|停止并修改/ })).toHaveCount(0);
     await detail.getByRole('button', { name: '关闭', exact: true }).click();
     expect(reviews).toEqual([]); expect((await source.current()).completedNodeIds).toEqual(['first', 'second']);
