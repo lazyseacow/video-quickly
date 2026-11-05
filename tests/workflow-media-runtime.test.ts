@@ -22,6 +22,27 @@ async function fixture(baseUrl: string, options: Partial<Parameters<typeof creat
 }
 async function body(request: Parameters<RequestListener>[0]) { let text = ''; for await (const chunk of request) text += chunk; return JSON.parse(text); }
 function restart(directory: string) { const runtime = createRuntime({ dataDirectory: directory, seed: false, preflightActivity: validateMediaActivity, executeActivity: createActivityExecutor() }); runtimes.push(runtime); return runtime; }
+it('recovers a rejected image in the same run and retains the completed sibling after a restart', async () => {
+  const posts: { shot: string; key: string | string[] | undefined }[] = [];
+  const base = await service(async (request, response) => {
+    if (request.method === 'POST') {
+      const shot = (await body(request)).name; posts.push({ shot, key: request.headers['idempotency-key'] });
+      if (posts.length === 2) { response.writeHead(400).end(); return; }
+      response.setHeader('Content-Type', 'application/json'); response.end(JSON.stringify({ url: `${base}/${shot}` })); return;
+    }
+    response.end(Buffer.from(png, 'base64'));
+  });
+  const { runtime, directory, project } = await fixture(base), modelId = project.workflow.nodes[0].modelId!;
+  await runtime.dispatch('workflow.save', { projectId: project.id, revision: project.revision, workflow: { ...project.workflow, execution: { maxConcurrentShots: 1, modelLimits: { [modelId]: 1 } } } });
+  const run = await runtime.dispatch('run.start', { projectId: project.id }) as RunRecord; await runtime.waitForIdle();
+  const failed = await runtime.dispatch('run.inspect', { runId: run.id }) as RunInspection;
+  expect(failed.run.error).toContain('HTTP 400'); expect(failed.steps[0]).toMatchObject({ status: 'needs_attention', unknownSubmission: false, retry: { allowed: true } });
+  await runtime.close();
+  const recovered = restart(directory); await recovered.dispatch('run.step.retry', { runId: run.id, nodeId: 'images' }); await recovered.waitForIdle();
+  const completed = await recovered.dispatch('run.inspect', { runId: run.id }) as RunInspection;
+  expect(completed.run.status).toBe('succeeded'); expect(completed.steps[0].status).toBe('succeeded');
+  expect(posts).toEqual([{ shot: 'shot-0', key: `${run.id}:images:shot-0` }, { shot: 'shot-1', key: `${run.id}:images:shot-1` }, { shot: 'shot-1', key: `${run.id}:images:shot-1:attempt:2` }]);
+});
 it('checks the whole batch before any fresh sibling POST when another shot has a prepared or unknown receipt', async () => {
   const posts: string[] = []; let release!: () => void, submitted!: () => void;
   const gate = new Promise<void>(resolve => { release = resolve; }), received = new Promise<void>(resolve => { submitted = resolve; });
@@ -40,7 +61,7 @@ it('checks the whole batch before any fresh sibling POST when another shot has a
   // still-unsubmitted sibling, so only a full-batch receipt check can stop it.
   await expect(createActivityExecutor()(context)).rejects.toThrow('核对'); expect(posts).toEqual(['shot-1']);
 });
-it.each([429, 503])('stops native sibling requests on HTTP %i and preserves the original receipt across restart', async status => {
+it.each([408, 409, 503])('stops native sibling requests on HTTP %i and preserves the original receipt across restart', async status => {
   const posts: string[] = [];
   const base = await service(async (request, response) => {
     if (request.method === 'POST') posts.push((await body(request)).name);

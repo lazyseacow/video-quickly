@@ -1,4 +1,4 @@
-import { lazy, Suspense, useId, useRef, useState } from 'react';
+import { lazy, Suspense, useCallback, useEffect, useId, useRef, useState } from 'react';
 import { ChevronLeft, ChevronRight } from 'lucide-react';
 import { applyWorkflowProposal, productionSettingsSchema, resolveProductionWorkflow, supportsPromptExperiment, videoProfileSchema, type AssetRecord, type ProductionSettings, type ProjectDocument, type RunSummary, type WorkflowDefinition, type WorkflowNode } from '@video-quickly/contracts';
 import type { WorkspaceView, StepOutputSelection } from '../lib/types';
@@ -11,6 +11,7 @@ import VideoSettings from './VideoSettings';
 import { ProjectSettingsActions, type ProjectSettingsAction } from './ProjectSettingsPanel';
 import ReferenceAudioPicker from './ReferenceAudioPicker';
 import CreativeContextEditor from './CreativeContextEditor';
+import ToastNotice, { type ToastMessage } from './ToastNotice';
 import './production-settings.css';
 
 const StageRunView = lazy(() => import('../features/StageRunView'));
@@ -21,11 +22,11 @@ const steps = [{ id: 'planning', label: '创作要求' }, { id: 'materials', lab
 type ConfigurationStep = typeof steps[number]['id'];
 export interface ProductionConfiguration { nodes: WorkflowNode[]; production: ProductionSettings; project: ProductionProjectSettings; }
 
-export default function ProductionSettingsDialog({ project, projectId, projectRevision, workflow, workspace, run, version, usedEntityKeys = [], initialStage = 'planning', initialNodeId, initialTab, pendingConfiguration, configurationError, onSave, onDiscardPending, onClose, onOpenOutput, onOpenCandidate, onOpenTool, onSectionChange, onImportReferenceAudio, planning }: {
+export default function ProductionSettingsDialog({ project, projectId, projectRevision, workflow, workspace, run, version, usedEntityKeys = [], initialStage = 'planning', initialNodeId, initialTab, flatRecords, pendingConfiguration, configurationError, onSave, onDiscardPending, onClose, onOpenOutput, onOpenCandidate, onOpenTool, onSectionChange, onImportReferenceAudio, planning }: {
   project: Pick<ProjectDocument, 'brief' | 'style' | 'profile' | 'creativeContext'>; workflow: WorkflowDefinition; workspace: WorkspaceView; run?: RunSummary; version: number; usedEntityKeys?: string[];
   projectId?: string; projectRevision?: number; onOpenCandidate?(shotId: string): void;
   planning?: PlanningControls;
-  initialStage?: string; initialNodeId?: string; initialTab?: 'settings' | 'run'; pendingConfiguration?: boolean; configurationError?: string;
+  initialStage?: string; initialNodeId?: string; initialTab?: 'settings' | 'run'; flatRecords?: boolean; pendingConfiguration?: boolean; configurationError?: string;
   onSave: (value: ProductionConfiguration) => Promise<boolean>;
   onDiscardPending?: () => Promise<boolean>; onClose: () => void; onOpenOutput: (value: StepOutputSelection) => void;
   onOpenTool: (action: ProjectSettingsAction) => void; onSectionChange?: (section: string) => void;
@@ -45,9 +46,23 @@ export default function ProductionSettingsDialog({ project, projectId, projectRe
   const [requestedTool, setRequestedTool] = useState<ProjectSettingsAction>();
   const [error, setError] = useState('');
   const [pending, setPending] = useState<'save' | 'discard' | 'import'>();
+  const [runActionsTarget, setRunActionsTarget] = useState<HTMLDivElement | null>(null);
+  const [notice, setNotice] = useState<ToastMessage>();
+  const noticeState = useRef({ id: 0, text: '' });
+  const showNotice = useCallback((text: string) => {
+    if (noticeState.current.text === text) return;
+    noticeState.current = { id: noticeState.current.id + 1, text };
+    setNotice(text ? noticeState.current : undefined);
+  }, []);
+  useEffect(() => {
+    if (!notice) return;
+    const timer = setTimeout(() => setNotice(current => current === notice ? undefined : current), 2000);
+    return () => clearTimeout(timer);
+  }, [notice]);
   const inFlight = useRef(false), closed = useRef(false);
   const id = useId(), form = useRef<HTMLFormElement>(null), content = useRef<HTMLDivElement>(null);
   const records = initialTab === 'run';
+  const flat = flatRecords ?? workflow.id === 'native-video';
   const active = Boolean(run && ['queued', 'running', 'waiting_review', 'waiting_external', 'retry_scheduled'].includes(run.status));
   const resolved = resolveProductionWorkflow({ ...workflow, nodes, production: settings });
   const assistantNode = resolved.nodes.find(node => node.id === assistantNodeId);
@@ -137,7 +152,7 @@ export default function ProductionSettingsDialog({ project, projectId, projectRe
         {pendingConfiguration && <Notice><span>已保存待用配置。</span>{onDiscardPending && <Button static disabled={Boolean(pending)} onClick={() => void discard()}>放弃待用配置</Button>}</Notice>}
         {(configurationError || error) && <Notice kind="error">{configurationError || error}</Notice>}
       </div>}
-      {records ? <div className="production-settings__run"><SettingsSections label="制作阶段记录" layout="tabs" value={runStage} onValueChange={setRunStage} sections={stages.map(item => ({ id: item.id, label: item.label, content: item.id === selectedStage?.id ? <Suspense fallback={<p role="status">正在读取制作记录…</p>}><StageRunView planning={planning} runId={run?.id} stageId={item.id} nodeIds={item.nodeIds} initialNodeId={initialNodeId} version={version} onOpenOutput={onOpenOutput} configurableNodeIds={[]} /></Suspense> : null }))} /></div> : <form ref={form} noValidate className="production-settings__form" onSubmit={event => { event.preventDefault(); if (step === 'review') void submit(); else next(); }}>
+      {records ? <div className="production-settings__run">{flat ? <Suspense fallback={<p role="status">正在读取制作记录…</p>}><StageRunView flat planning={planning} runId={run?.id} nodes={resolved.nodes} nodeIds={resolved.nodes.map(node => node.id)} initialNodeId={initialNodeId} version={version} actionsTarget={runActionsTarget} onNotice={showNotice} onOpenOutput={onOpenOutput} configurableNodeIds={[]} /></Suspense> : <SettingsSections label="制作阶段记录" layout="tabs" value={runStage} onValueChange={setRunStage} sections={stages.map(item => ({ id: item.id, label: item.label, content: item.id === selectedStage?.id ? <Suspense fallback={<p role="status">正在读取制作记录…</p>}><StageRunView planning={planning} runId={run?.id} stageId={item.id} nodeIds={item.nodeIds} initialNodeId={initialNodeId} version={version} actionsTarget={runActionsTarget} onNotice={showNotice} onOpenOutput={onOpenOutput} configurableNodeIds={[]} /></Suspense> : null }))} />}</div> : <form ref={form} noValidate className="production-settings__form" onSubmit={event => { event.preventDefault(); if (step === 'review') void submit(); else next(); }}>
         <fieldset disabled={Boolean(pending)} className="production-settings__fieldset"><div ref={content} className="production-settings__content">
           <p className="production-settings__position" role="status">第 {stepIndex + 1} 步，共 {steps.length} 步</p>
           <section data-production-step="planning" hidden={step !== 'planning'} aria-label="创作要求配置">
@@ -175,7 +190,8 @@ export default function ProductionSettingsDialog({ project, projectId, projectRe
         </div></fieldset>
       </form>}
     </div>
-    <div className="dialog__footer"><Button onClick={close}>{records ? '关闭' : '取消'}</Button>{!records && <>{stepIndex > 0 && <Button disabled={Boolean(pending)} onClick={() => selectStep(steps[stepIndex - 1].id)}><ChevronLeft size={14} />上一步</Button>}{step === 'review' ? <Button variant="primary" busy={pending === 'save'} disabled={Boolean(pending || configurationError)} onClick={() => void submit()}>{requestedTool ? '保存并打开' : active ? '保存待用配置' : '保存设置'}</Button> : <Button variant="primary" disabled={Boolean(pending || configurationError)} onClick={next}>下一步<ChevronRight size={14} /></Button>}</>}</div>
+    <div className="dialog__footer">{records ? <div ref={setRunActionsTarget} className="production-settings__record-actions" /> : <><Button onClick={close}>取消</Button>{stepIndex > 0 && <Button disabled={Boolean(pending)} onClick={() => selectStep(steps[stepIndex - 1].id)}><ChevronLeft size={14} />上一步</Button>}{step === 'review' ? <Button variant="primary" busy={pending === 'save'} disabled={Boolean(pending || configurationError)} onClick={() => void submit()}>{requestedTool ? '保存并打开' : active ? '保存待用配置' : '保存设置'}</Button> : <Button variant="primary" disabled={Boolean(pending || configurationError)} onClick={next}>下一步<ChevronRight size={14} /></Button>}</>}</div>
+    {records && <ToastNotice toast={notice} onDismiss={() => setNotice(undefined)} />}
     {promptNode && projectId && projectRevision && <Suspense fallback={<p role="status">正在打开提示词实验…</p>}><PromptWorkbench projectId={projectId} projectRevision={projectRevision} node={promptNode} context={{ ...fields, production: settings }} models={workspace.models} skills={workspace.skills} version={version} onClose={() => setPromptNode(undefined)} onApplyPrompt={value => { updateNode(promptNode, { prompt: value.prompt, promptBindings: value.promptBindings, promptTemplate: value.promptTemplate }); }} onOpenOutput={onOpenOutput} onOpenCandidate={onOpenCandidate} /></Suspense>}
     {assistantNode && projectId && projectRevision && <Suspense fallback={<p role="status">正在打开修改预览…</p>}><WorkflowAssistant projectId={projectId} projectRevision={projectRevision} node={assistantNode} models={workspace.models} onClose={() => setAssistantNodeId(undefined)} onApply={(_next, proposal) => {
       const current = resolved.nodes.find(node => node.id === proposal.baseline.id);

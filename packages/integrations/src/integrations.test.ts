@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { basename, join, relative } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createNativeVideoWorkflow, DEFAULT_VIDEO_PROFILE, type ModelProfile, type ProjectDocument } from '@video-quickly/contracts';
-import { createActivityExecutor, type MediaActivityContext, type MediaDiagnosticEvent } from './index';
+import { createActivityExecutor, validateMediaActivity, type MediaActivityContext, type MediaDiagnosticEvent } from './index';
 
 const temporaryDirectories: string[] = [];
 const servers: Server[] = [];
@@ -43,6 +43,52 @@ async function pollingContextFor(baseUrl: string) {
 }
 
 describe('media generation request receipts', () => {
+  it.each([
+    { width: 1920, height: 1080, expected: '2560x1440' },
+    { width: 1080, height: 1920, expected: '1440x2560' },
+    { width: 1080, height: 1080, expected: '1920x1920' },
+    { width: 3840, height: 2160, expected: '3840x2160' },
+    { width: 8192, height: 8192, expected: '4096x4096' },
+  ])('uses a supported Seedream 5 canvas for $width × $height while preserving the export profile', async ({ width, height, expected }) => {
+    let size: unknown;
+    const baseUrl = await listen(async (request, response) => {
+      let text = ''; for await (const chunk of request) text += chunk; size = JSON.parse(text).size;
+      response.setHeader('Content-Type', 'application/json'); response.end(JSON.stringify({ data: [{ b64_json: 'aW1hZ2UtZml4dHVyZQ==' }] }));
+    });
+    const context = await contextFor(baseUrl); context.model = { ...context.model!, model: 'doubao-seedream-5-0-lite-260128' }; context.project.profile = { ...context.project.profile, width, height };
+    await createActivityExecutor()(context); expect(size).toBe(expected); expect(context.project.profile).toMatchObject({ width, height }); expect(context.model.parameters).toEqual({});
+  });
+  it('validates explicit Seedream 5 size before submission and respects a valid configured size', async () => {
+    const sizes: unknown[] = [];
+    const baseUrl = await listen(async (request, response) => {
+      let text = ''; for await (const chunk of request) text += chunk; sizes.push(JSON.parse(text).size);
+      response.setHeader('Content-Type', 'application/json'); response.end(JSON.stringify({ data: [{ b64_json: 'aW1hZ2UtZml4dHVyZQ==' }] }));
+    });
+    const context = await contextFor(baseUrl); context.model = { ...context.model!, model: 'doubao-seedream-5-0-lite-260128', parameters: { size: '1920x1080' } };
+    await expect(validateMediaActivity(context)).rejects.toThrow('size=1920x1080'); await expect(createActivityExecutor()(context)).rejects.toThrow('3,686,400'); expect(sizes).toEqual([]);
+    context.model.parameters.size = '2048x2048'; await createActivityExecutor()(context); expect(sizes).toEqual(['2048x2048']);
+  });
+  it.each([400, 401, 429])('allows an explicit retry after HTTP %i rejection using a new attempt identity', async status => {
+    const keys: (string | string[] | undefined)[] = [];
+    const baseUrl = await listen((request, response) => {
+      request.resume(); keys.push(request.headers['idempotency-key']);
+      if (keys.length === 1) { response.writeHead(status).end(JSON.stringify({ error: { message: 'private provider detail' } })); return; }
+      response.setHeader('Content-Type', 'application/json'); response.end(JSON.stringify({ data: [{ b64_json: 'aW1hZ2UtZml4dHVyZQ==' }] }));
+    });
+    const context = await contextFor(baseUrl);
+    await expect(createActivityExecutor()(context)).rejects.toMatchObject({ name: 'MediaRequestRejectedError', status, message: expect.stringContaining(`HTTP ${status}`) });
+    const activityPath = join(context.dataDirectory, 'projects', context.project.id, 'activities');
+    const directory = join(activityPath, (await readdir(activityPath))[0]);
+    const path = join(directory, (await readdir(directory)).find(name => name.endsWith('.receipt.json'))!);
+    const rejected = await readFile(path, 'utf8');
+    expect(JSON.parse(rejected)).toMatchObject({ state: 'rejected', attempt: 1, rejection: { status } });
+    expect(rejected).not.toContain('private provider detail');
+    await expect(validateMediaActivity(context)).resolves.toBeUndefined();
+    await expect(createActivityExecutor()(context)).resolves.toMatchObject({ assets: [{ shotId: 'shot-1' }] });
+    expect(keys).toEqual(['run-1:assets:shot-1', 'run-1:assets:shot-1:attempt:2']);
+    expect(JSON.parse(await readFile(path, 'utf8'))).toMatchObject({ state: 'completed', attempt: 2 });
+    await createActivityExecutor()(context); expect(keys).toHaveLength(2);
+  });
   it('prepares the local timeline and rejects a generation model on the editing step', async () => {
     const context = await contextFor('http://127.0.0.1:1');
     context.node = context.project.workflow.nodes.find(node => node.config.operation === 'prepare-edit')!;

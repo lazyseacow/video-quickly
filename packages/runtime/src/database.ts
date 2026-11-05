@@ -210,6 +210,12 @@ export const WORKSPACE_MIGRATIONS: readonly DatabaseMigration[] = [
     .replaceAll(clipSummaryBody('new.body'), episodeSummaryBody('new.body'))
     .replaceAll("UNION SELECT value FROM json_each(new.body, '$.workflow.production.referenceAudioAssetIds') WHERE type = 'text'", "UNION SELECT value FROM json_each(new.body, '$.workflow.production.referenceAudioAssetIds') WHERE type = 'text' UNION SELECT image.value FROM json_each(new.body, '$.creativeContext.entities') entity JOIN json_each(entity.value, '$.referenceAssetIds') image WHERE image.type = 'text'")
     + "INSERT INTO runtime_metadata(key, value) VALUES ('media-extensions', '1');" },
+  // Older schedulers treat a completed single-node graph as a completed run.
+  { version: 16, name: 'single-step-retry-checkpoints', sql: "INSERT INTO runtime_metadata(key, value) VALUES ('single-step-retry', '1');" },
+  // A local text receipt must never be interpreted as a resumable provider task.
+  { version: 17, name: 'script-response-receipts', sql: "INSERT INTO runtime_metadata(key, value) VALUES ('script-response-receipts', '1');" },
+  { version: 18, name: 'text-request-rejection-receipts', sql: "INSERT INTO runtime_metadata(key, value) VALUES ('text-request-rejections', '1');" },
+  { version: 19, name: 'media-request-rejection-receipts', sql: "INSERT INTO runtime_metadata(key, value) VALUES ('media-request-rejections', '1');" },
 ];
 
 export function openDatabase(directory: string) {

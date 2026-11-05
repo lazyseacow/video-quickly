@@ -92,7 +92,7 @@ it('bounds persistent replacement failures and keeps the prepared submission blo
   const run = runSchema.parse(await runtime.dispatch('run.start', { projectId: project.id })); await runtime.waitForIdle();
   expect(runInspectionSchema.parse(await runtime.dispatch('run.inspect', { runId: run.id })).run.status).toBe('failed');
   expect(attempts).toEqual({ download: 6, unknown: 6 }); expect(calls()).toEqual({ posts: 1, downloads: 0 });
-  const saved = await receipt(directory, project.id); expect(saved.value).toEqual({ state: 'prepared' }); await close(runtime);
+  const saved = await receipt(directory, project.id); expect(saved.value).toEqual({ state: 'prepared', attempt: 1 }); await close(runtime);
   vi.mocked(rename).mockImplementation(nativeFs.rename);
   const recovered = open(directory); await recovered.dispatch('run.resume', { runId: run.id }); await recovered.waitForIdle();
   expect(runInspectionSchema.parse(await recovered.dispatch('run.inspect', { runId: run.id })).run.status).toBe('failed');
@@ -108,7 +108,7 @@ it('does not retry a non-locking file error or resubmit its prepared operation',
   });
   const run = runSchema.parse(await runtime.dispatch('run.start', { projectId: project.id })); await runtime.waitForIdle();
   expect(runInspectionSchema.parse(await runtime.dispatch('run.inspect', { runId: run.id })).run.status).toBe('failed');
-  expect(failedReplacements).toBe(2); expect((await receipt(directory, project.id)).value).toEqual({ state: 'prepared' });
+  expect(failedReplacements).toBe(2); expect((await receipt(directory, project.id)).value).toEqual({ state: 'prepared', attempt: 1 });
   await close(runtime); vi.mocked(rename).mockImplementation(nativeFs.rename);
   const recovered = open(directory); await recovered.dispatch('run.resume', { runId: run.id }); await recovered.waitForIdle();
   expect(runInspectionSchema.parse(await recovered.dispatch('run.inspect', { runId: run.id })).run.status).toBe('failed'); expect(calls()).toEqual({ posts: 1, downloads: 0 });

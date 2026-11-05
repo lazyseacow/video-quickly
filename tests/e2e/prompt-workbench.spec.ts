@@ -84,7 +84,7 @@ test('runs a frozen experiment, restores its output, and uses the existing expli
     await expect(dialog.getByText('实验草稿已保存。', { exact: true })).toBeVisible();
     await dialog.getByRole('button', { name: '查看试运行', exact: true }).click();
     await dialog.getByRole('button', { name: '试运行（产生用量）', exact: true }).click();
-    await expect(dialog.getByText('实验生成的创意简报正文', { exact: true })).toBeVisible();
+    await expect(dialog.getByRole('article', { name: '创作简报', exact: true }).getByRole('paragraph').filter({ hasText: '实验生成的创意简报正文' })).toBeVisible();
     expect(source.prompts).toEqual([prompt]); expect(await source.current()).toEqual(source.project);
     await expect(dialog.getByLabel('实验费用', { exact: true })).toContainText('1 条用量记录');
     await expect(dialog.getByLabel('实验费用', { exact: true })).toContainText('输入 Token 17 · 输出 Token 9');
@@ -97,7 +97,7 @@ test('runs a frozen experiment, restores its output, and uses the existing expli
     const saved = await rpc<{ items: { id: string }[] }>(request, 'promptSession.list', { projectId: source.project.id });
     await reopened.getByRole('combobox', { name: '继续实验', exact: true }).selectOption(saved.items[0].id);
     await reopened.getByRole('button', { name: '查看试运行', exact: true }).click();
-    await expect(reopened.getByText('实验生成的创意简报正文', { exact: true })).toBeVisible();
+    await expect(reopened.getByRole('article', { name: '创作简报', exact: true }).getByRole('paragraph').filter({ hasText: '实验生成的创意简报正文' })).toBeVisible();
     await reopened.getByRole('button', { name: '查看并应用产物', exact: true }).click();
     await expect(page.getByRole('dialog', { name: '步骤产物', exact: true })).toBeVisible();
     await page.getByRole('button', { name: '应用到项目', exact: true }).click();

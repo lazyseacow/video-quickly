@@ -85,7 +85,7 @@ for (const viewport of [{ width: 1536, height: 960, theme: 'light' }, { width: 6
     await dialog.getByRole('button', { name: '取消', exact: true }).click(); await expect(dialog).toHaveCount(0);
     const zoom = page.getByRole('slider', { name: '时间轴缩放', exact: true });
     await zoom.focus(); await zoom.press('Home'); await zoom.press('ArrowRight'); await expect(zoom).toHaveValue('1.1'); await expect(zoom).toBeFocused();
-    const help = page.getByRole('button', { name: '素材与配音说明', exact: true });
+    const help = page.getByRole('button', { name: '镜头视频生成说明', exact: true });
     await keyboardFocus(page, help); await help.click(); await expect(page.getByRole('tooltip')).toBeVisible();
     await page.keyboard.press('Escape'); await expect(page.getByRole('tooltip')).toHaveCount(0); await expect(help).toBeFocused(); await expect(help).toHaveCSS('outline-style', 'none');
     await keyboardFocus(page, help); await expect(page.getByRole('tooltip')).toBeVisible();

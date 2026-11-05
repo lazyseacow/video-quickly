@@ -2,6 +2,24 @@ import { openProjectFromList } from './workspace-navigation';
 import { createServer } from 'node:http';
 import { expect, test, type APIRequestContext, type Page } from '@playwright/test';
 
+test('shows the workspace media requirement once without reserving a page row', async ({ page, request }, info) => {
+  const title = `媒体准备提示 ${Date.now()}`;
+  const created = await request.post('/__desktop_rpc', { data: { method: 'project.create', params: { title } } }); expect(created.ok()).toBe(true);
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  await page.route('**/__desktop_rpc', async route => {
+    if (route.request().postDataJSON().method !== 'workspace.summary') { await route.continue(); return; }
+    const response = await route.fetch(), payload = await response.json(); payload.result.system.ffmpegAvailable = false; await route.fulfill({ response, json: payload });
+  });
+  await page.goto('/'); await openProjectFromList(page, title);
+  const toast = page.locator('.toast'), guide = page.getByRole('region', { name: '制作指引', exact: true });
+  await expect(toast).toContainText('导出前需准备 FFmpeg 和 FFprobe。'); await expect(guide.locator('.workbench-guide__hint')).toHaveCount(0);
+  const bounds = await page.locator('.preview-panel').boundingBox();
+  await page.screenshot({ path: info.outputPath('workspace-media-notice.png') });
+  await expect(toast).not.toBeVisible({ timeout: 4000 }); expect(await page.locator('.preview-panel').boundingBox()).toEqual(bounds);
+  await page.getByRole('button', { name: '我的项目', exact: true }).click(); await openProjectFromList(page, title); await expect(guide).toBeVisible(); await expect(toast).not.toBeVisible();
+  await expect(page.locator('vite-error-overlay')).toHaveCount(0);
+});
+
 async function openModels(page: Page, request: APIRequestContext, title: string) {
   const created = await request.post('/__desktop_rpc', { data: { method: 'project.create', params: { title } } });
   expect(created.ok()).toBe(true);

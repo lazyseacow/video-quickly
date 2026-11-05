@@ -3,7 +3,7 @@ import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { afterEach, expect, it } from 'vitest';
-import { characterProfileSchema, modelSchema, productionQueueDetailSchema, productionQueueEnqueueResultSchema, projectSchema, projectSummarySchema, runSchema, workDefaultsSchema, workSchema, workflowNodeSchema, type ProjectDocument, type ProductionQueue, type StoryWork } from '@video-quickly/contracts';
+import { characterProfileSchema, modelSchema, productionQueueDetailSchema, productionQueueEnqueueResultSchema, projectSchema, projectSummarySchema, runInspectionSchema, runSchema, workDefaultsSchema, workSchema, workflowNodeSchema, type ProjectDocument, type ProductionQueue, type StoryWork } from '@video-quickly/contracts';
 import { createRuntime, SimulatedProcessExit, type RuntimeOptions } from '../packages/runtime/src/index';
 import { openDatabase, DocumentStore } from '../packages/runtime/src/database';
 
@@ -31,6 +31,27 @@ async function enqueue(source: Awaited<ReturnType<typeof fixture>>, selected = s
 }
 async function detail(runtime: ReturnType<typeof createRuntime>, queueId: string) { return productionQueueDetailSchema.parse(await runtime.dispatch('productionQueue.get', { queueId })); }
 async function start(runtime: ReturnType<typeof createRuntime>, queue: ProductionQueue) { await runtime.dispatch('productionQueue.start', { queueId: queue.id, revision: queue.revision }); }
+
+it('retries only the failed step of a queued episode and keeps later episodes waiting until explicit continuation', async () => {
+  let mediaCalls = 0;
+  const source = await fixture({ executeActivity: async () => { if (++mediaCalls === 1) throw new Error('controlled queue media failure'); return { assets: [] }; } });
+  const first = source.projects[0];
+  source.projects[0] = projectSchema.parse(await source.runtime.dispatch('project.update', { projectId: first.id, revision: first.revision, patch: { workflow: {
+    ...first.workflow, nodes: [...first.workflow.nodes, workflowNodeSchema.parse({ id: 'images', kind: 'assets', label: '待重试素材' }), workflowNodeSchema.parse({ id: 'finish', kind: 'join', label: '后续收尾' })],
+    edges: [...first.workflow.edges, { id: 'media', source: 'style', target: 'images' }, { id: 'finish', source: 'images', target: 'finish' }],
+  } } }));
+  const { result } = await enqueue(source); await start(source.runtime, result.queue!); await source.runtime.waitForIdle();
+  const failed = await detail(source.runtime, result.queue!.id), runId = failed.items[0].runId!;
+  expect(failed.items.map(item => item.status)).toEqual(['failed', 'queued', 'queued']); expect(source.calls).toHaveLength(2);
+  await source.runtime.dispatch('run.step.retry', { runId, nodeId: 'images' }); await source.runtime.waitForIdle();
+  const retried = await detail(source.runtime, result.queue!.id);
+  expect(retried.items.map(item => item.status)).toEqual(['needs_attention', 'queued', 'queued']); expect(source.calls).toHaveLength(2); expect(mediaCalls).toBe(2);
+  const inspection = runInspectionSchema.parse(await source.runtime.dispatch('run.inspect', { runId }));
+  expect(inspection.steps.find(step => step.id === 'images')?.status).toBe('succeeded'); expect(inspection.steps.find(step => step.id === 'finish')?.status).toBe('pending');
+  await source.runtime.dispatch('run.resume', { runId }); await source.runtime.waitForIdle();
+  expect((await detail(source.runtime, result.queue!.id)).items.map(item => item.status)).toEqual(['succeeded', 'succeeded', 'succeeded']);
+  expect(source.calls).toHaveLength(6); expect(mediaCalls).toBe(2);
+});
 
 it('creates episodes atomically and idempotently, projects their membership and applies work defaults explicitly', async () => {
   const source = await fixture();

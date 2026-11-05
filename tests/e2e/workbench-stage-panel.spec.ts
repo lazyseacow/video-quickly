@@ -1,7 +1,7 @@
 import { expect, test } from '@playwright/test';
 import { openProduction, pickProductionModel, productionFixture, productionStep, saveProduction } from './production-settings';
 
-const stages = ['策划与分镜', '素材与配音', '剪辑与动画', '审阅与导出'];
+const generationLabels = ['简报生成', '风格与角色生成', '分镜生成', '镜头视频生成'];
 const configurationSteps = ['创作要求', '模型与素材', '声音与成片', '确认保存'];
 
 for (const viewport of [{ width: 1536, height: 960, theme: 'dark' }, { width: 1024, height: 720, theme: 'light' }, { width: 390, height: 844, theme: 'light' }]) {
@@ -33,14 +33,14 @@ for (const viewport of [{ width: 1536, height: 960, theme: 'dark' }, { width: 10
     await expect(entry).toHaveCount(1); await expect(entry).toBeFocused();
     await expect(page.getByRole('button', { name: '打开制作设置', exact: true })).toHaveCount(0);
     await expect(page.getByRole('button', { name: '填写创意简报', exact: true })).toHaveCount(0);
-    const progress = page.getByRole('list', { name: '制作阶段进度', exact: true });
-    await expect(progress.locator('.workbench-guide__step-copy > strong')).toHaveText(stages);
-    for (const stage of stages) {
-      const trigger = progress.getByRole('button', { name: `打开阶段：${stage}`, exact: true });
+    const progress = page.getByRole('list', { name: '模型生成进度', exact: true });
+    await expect(progress.locator('.workbench-guide__step-copy > strong')).toHaveText(generationLabels);
+    for (const label of generationLabels) {
+      const trigger = progress.getByRole('button', { name: `打开步骤：${label}`, exact: true });
       await trigger.focus(); await trigger.press('Enter');
       const records = page.getByRole('dialog', { name: '本次制作', exact: true });
-      await expect(records).toBeVisible(); await expect(records.getByRole('tab', { name: stage, exact: true })).toHaveAttribute('aria-selected', 'true');
-      await expect(records).toContainText('本阶段尚未开始制作');
+      await expect(records).toBeVisible(); await expect(records.getByRole('tablist', { name: '制作阶段记录', exact: true })).toHaveCount(0);
+      await expect(records).toContainText('尚未开始制作');
       await expect(records.getByRole('combobox', { name: '文本模型', exact: true })).toHaveCount(0);
       await expect(records.getByRole('button', { name: '制作设置', exact: true })).toHaveCount(0);
       await page.keyboard.press('Escape'); await expect(records).toHaveCount(0); await expect(trigger).toBeFocused();

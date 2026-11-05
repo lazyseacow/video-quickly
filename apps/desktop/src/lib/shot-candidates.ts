@@ -6,8 +6,8 @@ export const candidateKindLabels: Record<ShotCandidateKind, string> = { script: 
 export const candidatePageSchema = z.object({ items: z.array(shotCandidateSchema), total: z.number().int().nonnegative(), activeRun: runSummarySchema.nullish() });
 export const candidateRunActive = (run: Pick<RunSummary, 'status'> | undefined) => !!run && ['queued', 'running', 'waiting_external', 'retry_scheduled'].includes(run.status);
 
-export async function readShotCandidates(projectId: string, shotId: string, offset = 0) {
-  return candidatePageSchema.parse(await rpc('shot.candidates', { projectId, shotId, offset, limit: 8 }));
+export async function readShotCandidates(projectId: string, shotId: string, offset = 0, source?: { runId: string; nodeId: string }) {
+  return candidatePageSchema.parse(await rpc('shot.candidates', { projectId, shotId, offset, limit: 8, source }));
 }
 export async function readShotCandidate(projectId: string, shotId: string, candidateId: string) {
   const candidate = shotCandidateSchema.parse(await rpc('shot.candidate.get', { projectId, candidateId }));

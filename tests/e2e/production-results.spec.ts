@@ -22,7 +22,7 @@ async function produced(page: Page, request: APIRequestContext, info: TestInfo) 
     await rpc(request, 'run.start', { projectId: source.project.id });
     await expect.poll(async () => (await latest(request, source.project.id))?.status, { timeout: 30000 }).toBe('succeeded');
     await open(page, source.project).then(dialog => dialog.getByRole('button', { name: '取消', exact: true }).click());
-    const trigger = page.getByRole('button', { name: '打开阶段：策划与分镜', exact: true });
+    const trigger = page.getByRole('button', { name: '打开步骤：简报生成', exact: true });
     await trigger.click();
     const dialog = page.getByRole('dialog', { name: '本次制作', exact: true });
     await expect(dialog.getByRole('heading', { name: '职场人如何用 AI 提效', exact: true })).toBeVisible();
@@ -53,11 +53,11 @@ for (const { width, theme } of [{ width: 1536, theme: 'dark' }, { width: 1024, t
       await expect(document.getByRole('region', { name: '核心信息', exact: true })).toContainText('三个实用方法');
       const sequence = document.getByRole('region', { name: '叙事顺序', exact: true });
       await expect(sequence.locator('ol > li')).toHaveCount(4); await expect(sequence.locator('strong').first()).toHaveText('黄金 3 秒开场（Hook）');
-      await expect(dialog.locator('.stage-run-view__completion')).toHaveText('3/ 3 项任务完成');
+      await expect(dialog.locator('.stage-run-view__completion')).toHaveText('7/ 7 项任务完成');
       await expect(document.locator('details').filter({ has: page.locator('summary', { hasText: '表达要求' }) })).not.toHaveAttribute('open');
       await page.screenshot({ path: info.outputPath(`production-brief-${width}-${theme}.png`) });
 
-      const navigation = dialog.getByRole('navigation', { name: '本阶段制作步骤', exact: true });
+      const navigation = dialog.getByRole('navigation', { name: '本次制作步骤', exact: true });
       const before = await navigation.boundingBox();
       const panel = dialog.locator('.run-inspector__panel');
       await document.locator('summary').filter({ hasText: '表达要求' }).click();
@@ -70,10 +70,10 @@ for (const { width, theme } of [{ width: 1536, theme: 'dark' }, { width: 1024, t
       await expect.poll(() => panel.evaluate(element => element.scrollTop)).toBeGreaterThan(0);
       const after = await navigation.boundingBox();
       expect(Math.abs(after!.y - before!.y)).toBeLessThan(2);
-      await expect(dialog.getByRole('tablist', { name: '制作阶段记录', exact: true })).toBeVisible();
+      await expect(dialog.getByRole('tablist', { name: '制作阶段记录', exact: true })).toHaveCount(0);
       await expect(dialog.getByRole('tablist', { name: '步骤详情视图', exact: true })).toHaveCount(0);
       await expect(dialog.getByRole('button', { name: '编辑创意简报', exact: true })).toBeInViewport();
-      await expect(dialog.getByRole('button', { name: '关闭', exact: true })).toBeVisible();
+      await expect(dialog.getByRole('button', { name: '关闭对话框', exact: true })).toBeVisible();
       expect(await dialog.evaluate(element => element.scrollWidth <= element.clientWidth)).toBe(true);
 
       await navigation.getByRole('button', { name: /风格与角色/ }).click();
@@ -84,7 +84,7 @@ for (const { width, theme } of [{ width: 1536, theme: 'dark' }, { width: 1024, t
       await expect(visual.locator('img, script, iframe')).toHaveCount(0);
       await expect(visual).toContainText('最后一段仍然可读。');
       await page.screenshot({ path: info.outputPath(`production-style-${width}-${theme}.png`) });
-      await expect(dialog.getByRole('tab')).toHaveText(['策划与分镜', '素材与配音', '剪辑与动画', '审阅与导出']);
+      await expect(navigation.getByRole('button').locator('strong')).toHaveText(['简报生成', '风格与角色生成', '分镜生成', '参考素材准备', '镜头视频生成', '剪辑与运镜准备', '导出成片']);
       await expect(dialog.getByRole('button', { name: '编辑风格与角色', exact: true })).toBeInViewport();
       expect(detailReads).toEqual([]);
       expect(await saved(request, source.project.id)).toEqual(baseline); expect(source.requests.length).toBe(requests);

@@ -5,7 +5,7 @@ import { dirname, extname, join, resolve } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { z } from 'zod';
 import { probeMedia, renderProject } from '@video-quickly/video/node';
-import { buildMediaPrompt, VideoGenerationError, isVideoGenerationNode, validateCreativeReferences } from '@video-quickly/contracts';
+import { buildMediaPrompt, MediaRequestRejectedError, VideoGenerationError, isVideoGenerationNode, validateCreativeReferences } from '@video-quickly/contracts';
 import { providerReportedUsage, sumProviderUsage, requestModelParameters, validateModelParameters, type ProviderUsage, type AssetRecord, type CharacterProfile, type JsonValue, type ModelProfile, type PreparedAudioMix, type ProjectDocument, type Shot, type WorkflowNode } from '@video-quickly/contracts';
 import { MediaRequestQueue, mapMediaShots } from './media-concurrency.js';
 import { resolveCharacterReferences, type ResolvedCharacterReferences } from './character-references.js';
@@ -21,7 +21,7 @@ export interface MediaDiagnosticEvent {
   phase?: 'queue' | 'generate' | 'submit' | 'poll' | 'download' | 'validate' | 'render';
   shotId?: string;
   assetId?: string;
-  state?: 'prepared' | 'submitted' | 'download' | 'completed' | 'unknown';
+  state?: 'prepared' | 'submitted' | 'download' | 'completed' | 'unknown' | 'rejected';
   durationMs?: number;
   queueMs?: number;
   byteSize?: number;
@@ -58,7 +58,9 @@ export interface MediaActivityContext {
 }
 
 interface Receipt {
-  state: 'prepared' | 'submitted' | 'download' | 'completed' | 'unknown';
+  state: 'prepared' | 'submitted' | 'download' | 'completed' | 'unknown' | 'rejected';
+  attempt?: number;
+  rejection?: { status: number };
   taskId?: string;
   asset?: AssetRecord;
   downloadUrl?: string;
@@ -71,6 +73,7 @@ interface Receipt {
 
 const objectSchema = z.record(z.string(), z.unknown());
 const MAX_MEDIA_BYTES = 512 * 1024 * 1024;
+const rejectedPostStatuses = new Set([400, 401, 402, 403, 404, 405, 406, 410, 413, 414, 415, 422, 429]);
 const stringOrUndefined = (value: unknown) => typeof value === 'string' ? value : undefined;
 const nested = (value: unknown, ...keys: string[]): unknown => keys.reduce<unknown>((current, key) => current && typeof current === 'object' ? Reflect.get(current, key) : undefined, value);
 const atPath = (value: unknown, path: unknown): unknown => typeof path === 'string' ? nested(value, ...path.split('.')) : undefined;
@@ -192,6 +195,32 @@ function validateReferenceProtocol(context: MediaPreflightContext, shot: Shot, r
   } else if (model.provider !== 'openai-compatible') throw new Error('所选视频协议尚未支持角色参考图。');
 }
 
+function imageRequestSize(model: ModelProfile, profile: ProjectDocument['profile']): JsonValue {
+  const configured = model.parameters.size;
+  if (!/seedream[-_.](?:image[-_.])?v?5[-_.]0(?:[-_.]|$)/i.test(model.model)) {
+    // GPT Image chooses a supported canvas independently of the export profile.
+    return configured ?? (model.provider === 'openai-compatible' && (model.model.startsWith('gpt-image-') || model.model === 'chatgpt-image-latest') ? 'auto' : `${profile.width}x${profile.height}`);
+  }
+  const minimumPixels = 3_686_400, maximumPixels = 16_777_216;
+  let width = profile.width, height = profile.height;
+  if (configured !== undefined) {
+    const dimensions = typeof configured === 'string' && /^(\d+)x(\d+)$/.exec(configured);
+    if (!dimensions) throw new Error('Seedream 5 的图片尺寸 size 须填写宽x高，例如 2560x1440。');
+    width = Number(dimensions[1]); height = Number(dimensions[2]);
+  } else {
+    const pixels = width * height;
+    if (pixels < minimumPixels || pixels > maximumPixels) {
+      const scale = Math.sqrt((pixels < minimumPixels ? minimumPixels : maximumPixels) / pixels);
+      const round = pixels < minimumPixels ? Math.ceil : Math.floor;
+      width = round(width * scale); height = round(height * scale);
+    }
+  }
+  if (width * height < minimumPixels || width * height > maximumPixels || width / height < 1 / 16 || width / height > 16) {
+    throw new Error(`图片尺寸 size=${width}x${height} 不符合 Seedream 5 要求：总像素须为 3,686,400–16,777,216，宽高比须为 1:16–16:1。`);
+  }
+  return `${width}x${height}`;
+}
+
 /** Local preflight runs before the external-operation journal or estimated-cost reservation. */
 export async function validateMediaActivity(context: MediaPreflightContext): Promise<void> {
   validateCreativeReferences(context.project);
@@ -202,6 +231,7 @@ export async function validateMediaActivity(context: MediaPreflightContext): Pro
   if (capability && !model.capabilities.includes(capability)) throw new Error(`所选模型不具备${capability === 'image' ? '图片' : '视频'}生成能力`);
   const protocols: Record<string, string[]> = { assets: ['openai-compatible', 'seedream', 'comfyui', 'custom-http'], animation: ['openai-compatible', 'seedance', 'comfyui', 'custom-http'] };
   if (protocols[context.node.kind] && !protocols[context.node.kind].includes(model.provider)) throw new Error('所选模型的服务协议不适用于此制作步骤');
+  if (capability === 'image' && ['openai-compatible', 'seedream'].includes(model.provider)) imageRequestSize(model, context.project.profile);
   if (capability && context.operationId && context.dataDirectory) {
     // Check the frozen batch before native tasks are replayed. A queued sibling
     // can run before the failed task; its own missing receipt is not permission
@@ -318,7 +348,11 @@ async function requestJson(url: string, context: MediaActivityContext, init: Req
       signal: AbortSignal.any([context.signal, AbortSignal.timeout(120000)]),
     });
     statusCode = response.status;
-    if (!response.ok) { await response.body?.cancel(); throw Object.assign(new Error(`模型请求未完成（HTTP ${response.status}），请检查服务配置`), { status: response.status, retryAfterMs: retryAfterMilliseconds(response.headers.get('retry-after')) }); }
+    if (!response.ok) {
+      await response.body?.cancel().catch(() => undefined);
+      if (phase === 'submit' && rejectedPostStatuses.has(response.status)) throw new MediaRequestRejectedError(response.status);
+      throw Object.assign(new Error(`模型请求未完成（HTTP ${response.status}），请检查服务配置`), { status: response.status, retryAfterMs: retryAfterMilliseconds(response.headers.get('retry-after')) });
+    }
     const bytes = await boundedResponseBytes(response, 64 * 1024 * 1024);
     const result = objectSchema.parse(JSON.parse(new TextDecoder().decode(bytes)));
     context.onDiagnostic?.({ event: 'media.request_completed', level, phase, statusCode, byteSize: bytes.byteLength, durationMs: performance.now() - started });
@@ -355,7 +389,7 @@ async function downloadReceipt(path: string, receiptPath: string, receipt: Recei
   const validationStarted = performance.now();
   context.onDiagnostic?.({ event: 'media.validation_started', level: 'info', phase: 'validate' });
   const asset = await assetFor(path, context, kind, shot);
-  await atomicJson(receiptPath, { state: 'completed', taskId: receipt.taskId, asset, providerUsage: receipt.providerUsage });
+  await atomicJson(receiptPath, { state: 'completed', attempt: receipt.attempt, taskId: receipt.taskId, asset, providerUsage: receipt.providerUsage });
   context.onDiagnostic?.({ event: 'media.validation_completed', level: 'info', phase: 'validate', assetId: asset.id, byteSize: asset.size, durationMs: performance.now() - validationStarted });
   return asset;
 }
@@ -399,11 +433,14 @@ async function generateMedia(context: MediaActivityContext, directory: string, s
   }
   if (receipt?.state === 'download') { const asset = await downloadReceipt(destination, receiptPath, receipt, context, kind, shot); onUsage(receipt.providerUsage); return asset; }
   if (receipt?.state === 'unknown' || receipt?.state === 'prepared') throw new Error('该镜头上次提交结果不明确，请核对服务端任务后再重新生成');
+  const attempt = (receipt?.attempt ?? 1) + (receipt?.state === 'rejected' ? 1 : 0);
+  if (receipt?.state === 'rejected') receipt = undefined;
+  const requestId = `${context.operationId}:${shot.id}${attempt > 1 ? `:attempt:${attempt}` : ''}`;
 
   // Local file and request-size failures remain retryable before recording a submission.
   const seedanceBody = !receipt && kind === 'video' && model.provider === 'seedance' ? await seedanceVideoBody({ ...context, model }, shot, references, parameters) : '';
   if (!receipt) {
-    receipt = { state: 'prepared' };
+    receipt = { state: 'prepared', attempt };
     await atomicJson(receiptPath, receipt);
     try {
       if (model.provider === 'custom-http') {
@@ -411,17 +448,14 @@ async function generateMedia(context: MediaActivityContext, directory: string, s
         const template = model.parameters.requestTemplate;
         if (template === undefined) throw new Error('请为自定义 HTTP 模型配置 requestTemplate');
         const result = await requestJson(endpoint(model.baseUrl, requestPath), context, {
-          method: 'POST', headers: { 'Idempotency-Key': `${context.operationId}:${shot.id}` },
+          method: 'POST', headers: { 'Idempotency-Key': requestId },
           body: JSON.stringify(fillTemplate(template, { prompt, character_images: references.images.map(image => image.dataUrl), narration: shot.narration, instruction, model: model.model, width: context.project.profile.width, height: context.project.profile.height, duration: shot.durationUs / 1_000_000 })),
         });
         const taskId = stringOrUndefined(atPath(result, model.parameters.taskIdPath));
         receipt = taskId ? { state: 'submitted', taskId } : { state: 'download', downloadUrl: stringOrUndefined(atPath(result, model.parameters.resultUrlPath)), base64: stringOrUndefined(atPath(result, model.parameters.resultBase64Path)) };
         receipt.providerUsage = providerReportedUsage(result);
       } else if (kind === 'image' && model.provider !== 'comfyui') {
-        // GPT Image chooses a valid generation resolution independently of the
-        // export profile; arbitrary project dimensions may violate its limits.
-        const defaultSize = model.provider === 'openai-compatible' && (model.model.startsWith('gpt-image-') || model.model === 'chatgpt-image-latest') ? 'auto' : `${context.project.profile.width}x${context.project.profile.height}`;
-        const imageParameters = { ...parameters, model: model.model, prompt, n: 1, size: parameters.size ?? defaultSize };
+        const imageParameters = { ...parameters, model: model.model, prompt, n: 1, size: imageRequestSize(model, context.project.profile) };
         const editing = references.images.length > 0 && model.provider === 'openai-compatible';
         const imageBody = JSON.stringify({ ...imageParameters, ...(editing ? { images: references.images.map(image => ({ image_url: image.dataUrl })) } : references.images.length && model.provider === 'seedream' ? { image: references.images.map(image => image.dataUrl) } : {}) });
         let requestBody: string | FormData = imageBody;
@@ -434,13 +468,13 @@ async function generateMedia(context: MediaActivityContext, directory: string, s
         }
         const result = await requestJson(endpoint(model.baseUrl, editing || imageEdit ? 'images/edits' : 'images/generations'), context, {
           method: 'POST', body: requestBody,
-          headers: { 'Idempotency-Key': `${context.operationId}:${shot.id}` },
+          headers: { 'Idempotency-Key': requestId },
         });
         const first = Array.isArray(result.data) ? objectSchema.parse(result.data[0]) : undefined;
         receipt = { state: 'download', downloadUrl: stringOrUndefined(first?.url), base64: stringOrUndefined(first?.b64_json), providerUsage: providerReportedUsage(result) };
       } else if (model.provider === 'comfyui') {
         const workflow = comfyPrompt(context, shot, references);
-        const result = await requestJson(endpoint(model.baseUrl, 'prompt'), context, { method: 'POST', body: JSON.stringify({ prompt: workflow, client_id: `${context.operationId}:${shot.id}` }) });
+        const result = await requestJson(endpoint(model.baseUrl, 'prompt'), context, { method: 'POST', body: JSON.stringify({ prompt: workflow, client_id: requestId }) });
         const taskId = z.string().parse(result.prompt_id);
         receipt = { state: 'submitted', taskId, providerUsage: providerReportedUsage(result) };
         context.persistRemoteTask(taskId);
@@ -461,17 +495,20 @@ async function generateMedia(context: MediaActivityContext, directory: string, s
           body = form;
         }
         const result = await requestJson(endpoint(model.baseUrl, seedance ? 'contents/generations/tasks' : 'videos'), context, {
-          method: 'POST', headers: { 'Idempotency-Key': `${context.operationId}:${shot.id}` },
+          method: 'POST', headers: { 'Idempotency-Key': requestId },
           body,
         });
         const taskId = z.string().parse(result.id ?? result.task_id);
         receipt = { state: 'submitted', taskId, providerUsage: providerReportedUsage(result) };
         context.persistRemoteTask(taskId);
       } else throw new Error('该服务协议尚不支持此素材类型');
+      receipt.attempt = attempt;
       await atomicJson(receiptPath, receipt);
       if (!receipt.taskId) context.persistRemoteTask(`receipt:${context.operationId}:${shot.id}`);
     } catch (error) {
-      await atomicJson(receiptPath, { ...receipt, state: 'unknown', error: '提交结果需要核对' });
+      await atomicJson(receiptPath, error instanceof MediaRequestRejectedError
+        ? { ...receipt, attempt, state: 'rejected', rejection: { status: error.status }, error: error.message }
+        : { ...receipt, attempt, state: 'unknown', error: '提交结果需要核对' });
       throw error;
     }
   }

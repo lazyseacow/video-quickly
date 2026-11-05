@@ -14,6 +14,7 @@ import ImageEditRegion from './ImageEditRegion';
 
 export interface ShotRegenerationDialogProps {
   project: ProjectDocument; shot: Shot; models: ModelProfile[]; assets: AssetRecord[];
+  source?: { runId: string; nodeId: string; kind: 'image' | 'video'; modelName: string };
   onClose: () => void;
   onGenerate: (input: { kind: ShotCandidateKind; modelId?: string; instruction?: string; imageEdit?: ImageEditInput }) => Promise<{ id: string } | null>;
   onApply: (candidate: ShotCandidate, fields?: ShotCandidateField[]) => Promise<boolean>;
@@ -22,8 +23,8 @@ const fieldLabels: Record<ShotCandidateField, string> = { title: '标题', narra
 const scriptFields: ShotCandidateField[] = ['title', 'narration', 'visualPrompt', 'durationUs'];
 const capabilities = { script: 'text', image: 'image', video: 'video' } as const;
 
-export default function ShotRegenerationDialog({ project, shot, models, assets, onClose, onGenerate, onApply }: ShotRegenerationDialogProps) {
-  const [kind, setKind] = useState<ShotCandidateKind>('script');
+export default function ShotRegenerationDialog({ project, shot, models, assets, source, onClose, onGenerate, onApply }: ShotRegenerationDialogProps) {
+  const [kind, setKind] = useState<ShotCandidateKind>(source?.kind ?? 'script');
   const [editRectangle, setEditRectangle] = useState<ImageRectangle>();
   const [editError, setEditError] = useState('');
   const [modelId, setModelId] = useState('');
@@ -51,10 +52,11 @@ export default function ShotRegenerationDialog({ project, shot, models, assets, 
   const listRequest = useRef(0);
   const detailRequest = useRef(0);
   const availableModels = models.filter(model => model.enabled && model.capabilities.includes(capabilities[kind]));
-  const selectedModelId = availableModels.some(model => model.id === modelId) ? modelId : availableModels[0]?.id ?? '';
+  const selectedModelId = source ? '' : availableModels.some(model => model.id === modelId) ? modelId : availableModels[0]?.id ?? '';
   useEffect(() => { setEditRectangle(undefined); }, [kind, selectedModelId, shot.assetId]);
   const running = Boolean(runId && (!run || run.id !== runId || candidateRunActive(run)));
-  const resumable = run?.status === 'queued' && Boolean(run.error);
+  const resumable = run?.status === 'queued' && Boolean(run.error) || Boolean(source && run && ['failed', 'needs_attention'].includes(run.status));
+  const unfinishedSource = Boolean(source && run && !['succeeded', 'canceled'].includes(run.status));
   const allAssets = useMemo(() => [...new Map([...extraAssets, ...assets].map(asset => [asset.id, asset])).values()], [extraAssets, assets]);
   const preview = useMemo(() => {
     if (!candidate || candidate.kind === 'script' || !candidate.baseline.clipEdit) return undefined;
@@ -69,7 +71,7 @@ export default function ShotRegenerationDialog({ project, shot, models, assets, 
   const load = useCallback(async (offset = 0, selectRunId?: string) => {
     const request = ++listRequest.current; setLoading(true); setListError('');
     try {
-      const page = await readShotCandidates(project.id, shot.id, offset);
+      const page = await readShotCandidates(project.id, shot.id, offset, source ? { runId: source.runId, nodeId: source.nodeId } : undefined);
       if (!alive.current || request !== listRequest.current) return;
       setTotal(page.total);
       setNextOffset(offset + page.items.length);
@@ -77,10 +79,10 @@ export default function ShotRegenerationDialog({ project, shot, models, assets, 
       setSelectedId(current => page.items.find(item => item.runId === selectRunId)?.id ?? current ?? page.items[0]?.id);
       // Only the server can identify an unfinished task belonging to this exact shot.
       const restored = page.activeRun;
-      if (restored && candidateRunActive(restored)) { setRun(restored); setRunId(restored.id); }
+      if (restored && (candidateRunActive(restored) || source && !['succeeded', 'canceled'].includes(restored.status))) { setRun(restored); setRunId(restored.id); }
     } catch (error) { if (alive.current && request === listRequest.current) setListError(error instanceof Error ? error.message : String(error)); }
     finally { if (alive.current && request === listRequest.current) setLoading(false); }
-  }, [project.id, shot.id]);
+  }, [project.id, shot.id, source?.runId, source?.nodeId]);
   useEffect(() => { void load(); }, [load]);
 
   useEffect(() => {
@@ -112,7 +114,7 @@ export default function ShotRegenerationDialog({ project, shot, models, assets, 
   }, [runId, project.id, load, progressRefresh]);
 
   async function generate() {
-    if (!selectedModelId) return;
+    if (!selectedModelId && !source) return;
     setGenerating(true); setError('');
     try {
       let imageEdit: ImageEditInput | undefined;
@@ -121,7 +123,7 @@ export default function ShotRegenerationDialog({ project, shot, models, assets, 
         const mask = assetSchema.parse(await rpc('image.createMask', { assetId: shot.assetId, rectangle: editRectangle }));
         imageEdit = { sourceAssetId: shot.assetId, maskAssetId: mask.id };
       }
-      const started = await onGenerate({ kind, modelId: selectedModelId, ...(imageEdit ? { imageEdit } : {}), ...(instruction.trim() ? { instruction: instruction.trim() } : {}) });
+      const started = await onGenerate({ kind, ...(!source ? { modelId: selectedModelId } : {}), ...(imageEdit ? { imageEdit } : {}), ...(instruction.trim() ? { instruction: instruction.trim() } : {}) });
       if (!alive.current) return;
       if (!started) { setError('生成未开始，请核对保存状态和模型连接。'); return; }
       setRun(undefined); setRunId(started.id);
@@ -133,7 +135,7 @@ export default function ShotRegenerationDialog({ project, shot, models, assets, 
     setCanceling(true); setError('');
     try { await rpc('run.cancel', { runId }); }
     catch (error) { if (alive.current) setError(error instanceof Error ? error.message : String(error)); }
-    finally { if (alive.current) setCanceling(false); }
+    finally { if (alive.current) { setCanceling(false); setProgressRefresh(value => value + 1); } }
   }
   async function resume() {
     if (!runId) return;
@@ -157,13 +159,13 @@ export default function ShotRegenerationDialog({ project, shot, models, assets, 
   return <Dialog title="镜头候选" onClose={onClose} className="shot-regeneration-dialog">
     <div className="dialog__body">
       <p className="shot-regeneration__target">{shot.title}</p>
-      <div className="shot-regeneration__form"><Field label="生成内容"><Select value={kind} disabled={generating || applying || running} onChange={event => setKind(event.target.value as ShotCandidateKind)}>{Object.entries(candidateKindLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</Select></Field><Field label="生成模型"><Select value={selectedModelId} disabled={generating || applying || running} onChange={event => setModelId(event.target.value)}><option value="" disabled>选择模型</option>{availableModels.map(model => <option key={model.id} value={model.id}>{model.name}</option>)}</Select></Field></div>
+      {source ? <Notice>只重新生成此镜头的{source.kind === 'video' ? '视频' : '图片'}，沿用本次制作的上游产物、提示词与模型：{source.modelName}。其他镜头保留。</Notice> : <div className="shot-regeneration__form"><Field label="生成内容"><Select value={kind} disabled={generating || applying || running} onChange={event => setKind(event.target.value as ShotCandidateKind)}>{Object.entries(candidateKindLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</Select></Field><Field label="生成模型"><Select value={selectedModelId} disabled={generating || applying || running} onChange={event => setModelId(event.target.value)}><option value="" disabled>选择模型</option>{availableModels.map(model => <option key={model.id} value={model.id}>{model.name}</option>)}</Select></Field></div>}
       <Field label="本次调整要求"><textarea value={instruction} maxLength={10000} disabled={generating || applying || running} onChange={event => setInstruction(event.target.value)} placeholder="说明这个镜头希望如何修改…" /></Field>
       {kind === 'image' && !shot.sceneTemplate && allAssets.find(asset => asset.id === shot.assetId) && availableModels.find(model => model.id === selectedModelId)?.provider === 'openai-compatible' && <ImageEditRegion asset={allAssets.find(asset => asset.id === shot.assetId)!} disabled={generating || applying || running} rectangle={editRectangle} onChange={setEditRectangle} onError={setEditError} />}
-      {!availableModels.length && <p className="tiny-meta">请先在模型连接中添加具备{candidateKindLabels[kind]}能力的模型。</p>}
+      {!source && !availableModels.length && <p className="tiny-meta">请先在模型连接中添加具备{candidateKindLabels[kind]}能力的模型。</p>}
       {shot.locked && <Notice>请先解锁当前镜头，再生成或应用候选。</Notice>}
-      <div className="shot-regeneration__generate"><Button variant="primary" busy={generating} disabled={applying || running || !selectedModelId || shot.locked} onClick={() => void generate()}><Sparkles size={14} />生成候选</Button><span className="tiny-meta">生成结果会先保留为候选，应用前不会替换当前镜头。</span></div>
-      {runId && <div className="shot-regeneration__run" role="status"><Status value={run?.status ?? 'queued'} /><span>{resumable ? run?.error : running ? '生成在后台继续；关闭后可重新打开或查看制作记录。' : run?.status === 'succeeded' ? '候选已保存，可比较后选择应用。' : run?.status === 'canceled' ? '已请求停止，已提交的远端任务请在制作记录中核对。' : run?.error}</span>{resumable && <Button aria-label="继续生成" busy={resuming} disabled={canceling} onClick={() => void resume()}>继续</Button>}{running && <Button aria-label="停止生成" busy={canceling} disabled={resuming} onClick={() => void cancel()}><Square size={13} />停止</Button>}</div>}
+      <div className="shot-regeneration__generate"><Button variant="primary" busy={generating} disabled={applying || running || unfinishedSource || !selectedModelId && !source || shot.locked} onClick={() => void generate()}><Sparkles size={14} />生成候选</Button><span className="tiny-meta">生成结果会先保留为候选，应用前不会替换当前镜头。</span></div>
+      {runId && <div className="shot-regeneration__run" role="status"><Status value={run?.status ?? 'queued'} /><span>{resumable ? run?.error : running ? '生成在后台继续；关闭后可重新打开或查看制作记录。' : run?.status === 'succeeded' ? '候选已保存，可比较后选择应用。' : run?.status === 'canceled' ? '已请求停止，已提交的远端任务请在制作记录中核对。' : run?.error}</span>{resumable && <Button aria-label="继续生成" busy={resuming} disabled={canceling} onClick={() => void resume()}>继续</Button>}{(running || unfinishedSource) && <Button aria-label="停止生成" busy={canceling} disabled={resuming} onClick={() => void cancel()}><Square size={13} />停止</Button>}</div>}
       {progressError && <Notice kind="error">{progressError}<Button aria-label="重试生成进度" onClick={() => setProgressRefresh(value => value + 1)}>重试</Button></Notice>}
       <div className="shot-regeneration__workspace">
         <aside className="shot-regeneration__history" aria-label="候选历史"><div className="shot-regeneration__history-heading"><h3>候选历史 <span>{total}</span></h3><Button aria-label="刷新候选" variant="ghost" disabled={loading || applying} onClick={() => void load()}><RefreshCw size={13} />刷新</Button></div>

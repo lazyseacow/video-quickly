@@ -161,7 +161,7 @@ test('retries failed progress reads while automatic generation completes without
       await route.continue();
     });
     await open(page, source.project); await page.getByRole('button', { name: '开始制作', exact: true }).click();
-    const panel = production(page); await expect(panel).toContainText('制作进度读取暂时失败');
+    const panel = production(page); await expect(panel).toContainText('进度读取失败');
     await panel.getByRole('button', { name: '重试读取制作进度', exact: true }).click();
     await expect.poll(async () => (await latest(request, source.project.id)).status).toBe('succeeded');
     await expect(panel).toContainText('已完成'); await expect(panel.getByRole('button', { name: '打开步骤：分镜确认', exact: true })).toBeEnabled();

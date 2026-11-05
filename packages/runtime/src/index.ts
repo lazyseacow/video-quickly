@@ -9,7 +9,7 @@ import { readResearchSource, searchWikipedia, selectResearchPassages, parseResea
 import type { MediaDiagnosticEvent } from '@video-quickly/integrations';
 import { SqliteSaver } from '@langchain/langgraph-checkpoint-sqlite';
 import {
-  MAX_REFERENCE_AUDIO_BYTES, applyShotCandidate, assetSchema, audioWaveformSchema, characterProfileSchema, claimSchema, clipSourceAssetIds, DEFAULT_VIDEO_PROFILE, LockedShotChangeError, modelSchema, pageInputSchema, projectSchema, providerUsageSchema, sumProviderUsage, runSelectionSchema, runStatusSchema, shotCandidateFieldSchema, shotCandidateKindSchema, shotCandidateSchema, shotSchema, validateClipEditContent, validateClipEditHistory, validateModelConnection, getModelCapabilities, validateModelParameters, videoProfileSchema, workflowSchema,
+  MAX_REFERENCE_AUDIO_BYTES, applyShotCandidate, assetSchema, audioWaveformSchema, characterProfileSchema, claimSchema, clipSourceAssetIds, DEFAULT_VIDEO_PROFILE, LockedShotChangeError, modelSchema, pageInputSchema, projectSchema, providerUsageSchema, runInspectionSchema, runSchema, sumProviderUsage, runSelectionSchema, runStatusSchema, shotCandidateFieldSchema, shotCandidateKindSchema, shotCandidateSchema, shotSchema, validateClipEditContent, validateClipEditHistory, validateModelConnection, getModelCapabilities, validateModelParameters, videoProfileSchema, workflowSchema,
   type AssetRecord, type AudioWaveform, type CharacterProfile, type JsonValue, type ModelCapability, type ModelProfile, type PreparedAudioMix, type ProjectDocument, type ReadinessIssue, type RunEvent, type RunPlan, type RunRecord, type RunSelection, type RuntimeEvent, type RuntimeSystem, type Shot, type ShotCandidate, type ShotCandidateKind, type SkillPackage, type WorkflowDefinition, type WorkflowNode, type WorkspaceSnapshot,
 } from '@video-quickly/contracts';
 import { ActivityJournal, AmbiguousActivityError, fingerprint, SimulatedProcessExit, type ActivityHooks, type ActivitySafety } from './activities.js';
@@ -19,10 +19,11 @@ import { createExecutionGraph } from './graph.js';
 import { AsyncLocalStorageProviderSingleton } from '@langchain/core/singletons';
 import { validateWorkflowComposition, workflowNodesWithSubflows, workflowEdgesWithSubflows, resolveSubflowInputs, substituteSubflowInputs, subflowNodeId, subflowThreadId, subflowValueAt, type SubflowDefinition } from '@video-quickly/contracts';
 import { createWorkflowTemplateLibrary } from './workflow-templates.js';
-import { buildWorkflowPrompt, parseWorkflowScript, type WorkflowUpstreamResult } from './workflow-prompts.js';
-import { creativeContextSchema, projectCharacterIds, shotCreativePrompt, validateCreativeReferences } from '@video-quickly/contracts';
+import { buildWorkflowPrompt, parseWorkflowScript, scriptOutputJsonSchema, type WorkflowUpstreamResult } from './workflow-prompts.js';
+import { createModelResponses, ModelResponseValidationError } from './model-responses.js';
+import { creativeContextSchema, MediaRequestRejectedError, projectCharacterIds, shotCreativePrompt, validateCreativeReferences } from '@video-quickly/contracts';
 import { executeMediaGraph } from './media-graph.js';
-import { discoverModels, generateText, testModelConnection, type ModelRequestPhase, type TextProvider } from './providers.js';
+import { discoverModels, generateText, testModelConnection, TextRequestRejectedError, type ModelRequestPhase, type TextProvider } from './providers.js';
 import { seedExampleProject } from './seed.js';
 import { createNativeVideoWorkflow, resolveProductionWorkflow, isVideoGenerationNode, DEFAULT_AUDIO_PROCESSING } from '@video-quickly/contracts';
 import { importSkill } from './skills.js';
@@ -120,6 +121,7 @@ export interface RunSnapshot {
   research?: { sourceIds?: string[]; instruction?: string };
   selection?: RunSelection;
   trial?: { inputProject: ProjectDocument; upstream: WorkflowUpstreamResult[]; preview: PromptPreview };
+  sourceGeneration?: { inputProject: ProjectDocument; upstream: WorkflowUpstreamResult[]; requestHash: string };
 }
 
 const entityId = z.object({ projectId: z.string().min(1) });
@@ -178,6 +180,7 @@ export function createRuntime(options: RuntimeOptions) {
   function emit(event: RuntimeEvent) { for (const listener of listeners) listener(event); }
   const assetRecovery = createAssetRecovery({ directory, store, onRestored(assetIds) { workspaceVersion++; emit({ type: 'workspace.changed', data: { repairedAssetIds: assetIds } }); } });
   const journal = new ActivityJournal(database, { failpoint: options.failpoint, onEvent: changed, logger });
+  const modelResponses = createModelResponses(store);
   const costs = createCostLedger({ database, store, onChanged: changed });
   const characters = createCharacterLibrary({ database, store, onChanged: changed });
   const seriesTemplates = createSeriesTemplateLibrary({ database, store, onChanged: changed });
@@ -285,14 +288,14 @@ export function createRuntime(options: RuntimeOptions) {
   function requireCandidateResearch(value: ProjectDocument, candidate: ShotCandidate) {
     const claimIds = candidate.baseline.claimIds;
     if (!claimIds.length) return;
-    const rows = database.prepare("SELECT c.value AS body FROM documents s, json_each(s.body, '$.project.claims') c WHERE s.kind = 'run-snapshot' AND s.id = ? AND json_extract(c.value, '$.id') IN (SELECT value FROM json_each(?)) ORDER BY json_extract(c.value, '$.id')").all(candidate.runId, JSON.stringify(claimIds)) as { body: string }[];
+    const rows = database.prepare("SELECT c.value AS body FROM documents s, json_each(CASE WHEN json_type(s.body, '$.sourceGeneration') = 'object' THEN json_extract(s.body, '$.sourceGeneration.inputProject') ELSE json_extract(s.body, '$.project') END, '$.claims') c WHERE s.kind = 'run-snapshot' AND s.id = ? AND json_extract(c.value, '$.id') IN (SELECT value FROM json_each(?)) ORDER BY json_extract(c.value, '$.id')").all(candidate.runId, JSON.stringify(claimIds)) as { body: string }[];
     const parsedClaims = rows.map(row => claimSchema.parse(JSON.parse(row.body)));
     const claims = claimIds.map(id => parsedClaims.find(claim => claim.id === id));
     const current = claimIds.map(id => value.claims.find(claim => claim.id === id));
     if (claims.some(claim => !claim) || fingerprint(claims) !== fingerprint(current)) throw new Error('生成后镜头引用的主张或核验结论已变化，请基于当前资料重新生成。');
     const sourceIds = [...new Set(parsedClaims.flatMap(claim => claim.evidence?.map(evidence => evidence.sourceId) ?? []))].sort();
     if (!sourceIds.length) return;
-    const sources = database.prepare("SELECT json_object('id', json_extract(c.value, '$.id'), 'title', json_extract(c.value, '$.title'), 'kind', json_extract(c.value, '$.kind'), 'sha256', json_extract(c.value, '$.sha256'), 'capturedAt', json_extract(c.value, '$.capturedAt'), 'url', json_extract(c.value, '$.url'), 'fileName', json_extract(c.value, '$.fileName')) AS body FROM documents s, json_each(s.body, '$.project.researchSources') c WHERE s.kind = 'run-snapshot' AND s.id = ? AND json_extract(c.value, '$.id') IN (SELECT value FROM json_each(?)) ORDER BY json_extract(c.value, '$.id')").all(candidate.runId, JSON.stringify(sourceIds)) as { body: string }[];
+    const sources = database.prepare("SELECT json_object('id', json_extract(c.value, '$.id'), 'title', json_extract(c.value, '$.title'), 'kind', json_extract(c.value, '$.kind'), 'sha256', json_extract(c.value, '$.sha256'), 'capturedAt', json_extract(c.value, '$.capturedAt'), 'url', json_extract(c.value, '$.url'), 'fileName', json_extract(c.value, '$.fileName')) AS body FROM documents s, json_each(CASE WHEN json_type(s.body, '$.sourceGeneration') = 'object' THEN json_extract(s.body, '$.sourceGeneration.inputProject') ELSE json_extract(s.body, '$.project') END, '$.researchSources') c WHERE s.kind = 'run-snapshot' AND s.id = ? AND json_extract(c.value, '$.id') IN (SELECT value FROM json_each(?)) ORDER BY json_extract(c.value, '$.id')").all(candidate.runId, JSON.stringify(sourceIds)) as { body: string }[];
     const metadata = sourceIds.map(id => { const source = value.researchSources?.find(source => source.id === id); return source ? { id: source.id, title: source.title, kind: source.kind, sha256: source.sha256, capturedAt: source.capturedAt, url: source.url ?? null, fileName: source.fileName ?? null } : undefined; });
     const parsedSources = sources.map(row => JSON.parse(row.body) as { id: string });
     if (sources.length !== sourceIds.length || fingerprint(sourceIds.map(id => parsedSources.find(source => source.id === id))) !== fingerprint(metadata)) throw new Error('生成后镜头证据来源已变化，请基于当前资料重新生成。');
@@ -303,7 +306,7 @@ export function createRuntime(options: RuntimeOptions) {
     if (!stored) throw new Error('候选不存在。');
     const candidate = shotCandidateSchema.parse(stored);
     const record = store.get<RunRecord>('run', candidate.runId);
-    const row = database.prepare("SELECT json_extract(body, '$.regeneration') AS regeneration, json_extract(body, '$.characters') AS characters, json_extract(body, '$.characterAssets') AS characterAssets, CASE WHEN json_type(body, '$.trial') = 'object' THEN json_extract(body, '$.trial.inputProject.creativeContext') ELSE json_extract(body, '$.project.creativeContext') END AS creativeContext FROM documents WHERE kind = 'run-snapshot' AND id = ?").get(candidate.runId) as { regeneration: string | null; characters: string | null; characterAssets: string | null; creativeContext: string | null } | undefined;
+    const row = database.prepare("SELECT json_extract(body, '$.regeneration') AS regeneration, json_extract(body, '$.characters') AS characters, json_extract(body, '$.characterAssets') AS characterAssets, CASE WHEN json_type(body, '$.sourceGeneration') = 'object' THEN json_extract(body, '$.sourceGeneration.inputProject.creativeContext') WHEN json_type(body, '$.trial') = 'object' THEN json_extract(body, '$.trial.inputProject.creativeContext') ELSE json_extract(body, '$.project.creativeContext') END AS creativeContext FROM documents WHERE kind = 'run-snapshot' AND id = ?").get(candidate.runId) as { regeneration: string | null; characters: string | null; characterAssets: string | null; creativeContext: string | null } | undefined;
     const metadata = row?.regeneration ? z.object({ shotId: z.string(), kind: shotCandidateKindSchema, baseline: shotSchema, imageEdit: imageEditInputSchema.optional() }).parse(JSON.parse(row.regeneration)) : undefined;
     const activity = journal.get(candidate.runId, candidate.nodeId);
     if (candidate.projectId !== projectId || record?.projectId !== projectId || record.status !== 'succeeded' || activity?.status !== 'completed' || metadata?.shotId !== candidate.shotId || metadata.kind !== candidate.kind || fingerprint(metadata.baseline) !== fingerprint(candidate.baseline) || candidate.shot.id !== candidate.shotId) throw new Error('候选未完成或不属于当前镜头项目。');
@@ -382,6 +385,7 @@ export function createRuntime(options: RuntimeOptions) {
   }
 
   function upstreamResults(runId: string, node: WorkflowNode, saved: RunSnapshot): WorkflowUpstreamResult[] {
+    if (saved.sourceGeneration) return saved.sourceGeneration.upstream;
     if (saved.trial) return saved.trial.upstream;
     const edges = saved.inspectionEdges ?? saved.project.workflow.edges;
     const ancestors = new Set(edges.filter(edge => edge.target === node.id).map(edge => edge.source));
@@ -691,9 +695,9 @@ export function createRuntime(options: RuntimeOptions) {
     updateRun(runId, { status: 'running', currentNodeId: node.id, error: undefined });
     recordEvent(runId, 'node.started', `开始：${node.label}`, node.id);
     const scopedProject = saved.regeneration ? { ...saved.project, creativeContext: saved.project.creativeContext ? { ...saved.project.creativeContext, characterIds: [] } : undefined, shots: saved.project.shots.filter(shot => shot.id === saved.regeneration!.shotId) } : saved.project;
-    const executionProject = store.get<ProjectDocument>('node-project', `${runId}:${node.id}`) ?? store.get<ProjectDocument>('run-project', runId) ?? saved.trial?.inputProject ?? scopedProject;
+    const executionProject = store.get<ProjectDocument>('node-project', `${runId}:${node.id}`) ?? store.get<ProjectDocument>('run-project', runId) ?? saved.sourceGeneration?.inputProject ?? saved.trial?.inputProject ?? scopedProject;
     store.put('node-project', `${runId}:${node.id}`, executionProject);
-    if (saved.trial) await validatePromptAssets(saved.assets ?? []);
+    if (saved.trial || saved.sourceGeneration) await validatePromptAssets(saved.assets ?? []);
     if (node.config.imageEdit !== undefined && (!saved.regeneration?.imageEdit || fingerprint(node.config.imageEdit) !== fingerprint(saved.regeneration.imageEdit))) throw new Error('局部改图输入须由镜头候选冻结，请重新选择改图区域。');
     const selectedModel = node.modelId ? saved.models.find(model => model.id === node.modelId) : undefined;
     validateExecutionModel(node, selectedModel);
@@ -734,11 +738,14 @@ export function createRuntime(options: RuntimeOptions) {
     }
     const deepAgent = node.kind === 'agent' && selectedModel?.capabilities.includes('tools') && selectedModel.provider !== 'ollama';
     const researchContext = usesProvider && node.kind === 'research' ? selectResearchPassages(executionProject, saved.research?.sourceIds ?? (Array.isArray(node.config.sourceIds) ? node.config.sourceIds.filter((id): id is string => typeof id === 'string') : undefined), saved.research?.instruction ?? node.prompt) : undefined;
-    const prompt = saved.assistant ? node.prompt : usesProvider ? researchContext ? researchPrompt(executionProject, node, saved.skills, researchContext) : buildWorkflowPrompt(executionProject, node, saved.skills, Boolean(saved.regeneration), executionCharacters, upstreamResults(runId, node, saved)) : '';
+    const retryIssues = node.kind === 'script' ? modelResponses.retryIssues(`${runId}:${node.id}`) : undefined;
+    const basePrompt = saved.assistant ? node.prompt : usesProvider ? researchContext ? researchPrompt(executionProject, node, saved.skills, researchContext) : buildWorkflowPrompt(executionProject, node, saved.skills, Boolean(saved.regeneration), executionCharacters, upstreamResults(runId, node, saved)) : '';
+    const prompt = `${basePrompt}${retryIssues?.length ? `\n\n上次分镜返回的字段校验错误：${JSON.stringify(retryIssues)}\n本次请修正上述字段，仍依据本次已完成的简报与风格返回完整 JSON 对象，不要只返回修补片段。` : ''}`;
     if (!cached || cached.status === 'prepared') runInspector.captureInput(runId, node.id, { inputHash: fingerprint(input), recordedAt: now(),
       prompt: usesProvider || saved.trial ? redactInspectionText(saved.trial?.preview.prompt ?? prompt, text => redactError(text, saved.models, transientSecrets, Number.POSITIVE_INFINITY)) : undefined });
     const capability: ModelCapability | undefined = node.kind === 'assets' ? 'image' : node.kind === 'animation' ? 'video' : usesProvider ? 'text' : undefined;
-    const costOperation = selectedModel && capability && !deepAgent ? `${runId}:${node.id}` : undefined;
+    const responseAttempt = node.kind === 'script' ? modelResponses.attempt(`${runId}:${node.id}`) : undefined;
+    const costOperation = selectedModel && capability && !deepAgent ? `${runId}:${node.id}${responseAttempt ? `:response:${responseAttempt}` : ''}` : undefined;
     if (costOperation && selectedModel && capability) {
       const existing = costs.get(costOperation);
       if (cached?.status !== 'completed' || existing) costs.begin({ operationId: costOperation, runId, nodeId: node.id, shotId: saved.regeneration?.shotId ?? (typeof node.config.shotId === 'string' ? node.config.shotId : undefined), projectId: saved.project.id, model: selectedModel, capability, requestMetrics: requestCostMetrics(executionProject, node, selectedModel) });
@@ -748,11 +755,12 @@ export function createRuntime(options: RuntimeOptions) {
     const result = await journal.execute(runId, node.id, input, safety, async context => {
       if (usesProvider) {
         const generate = async () => {
+          if (node.kind === 'script') runInspector.captureInput(runId, node.id, { inputHash: fingerprint(input), recordedAt: now(), prompt: redactInspectionText(prompt, text => redactError(text, saved.models, transientSecrets, Number.POSITIVE_INFINITY)) });
           const started = performance.now();
           let requestPhase: ModelRequestPhase | undefined;
           nodeLogger.info('provider.request_started', { phase: 'submit' });
           try {
-            const result = await (options.provider ?? generateText)({ model: selectedModel, secret, prompt, operationId: context.operationId, signal: controller.signal, onRequestPhase: phase => { requestPhase = phase; } });
+            const result = await (options.provider ?? generateText)({ model: selectedModel, secret, prompt, operationId: responseAttempt ? `${context.operationId}:response:${responseAttempt}` : context.operationId, signal: controller.signal, outputSchema: node.kind === 'script' ? scriptOutputJsonSchema : undefined, promptOutputFormat: node.kind === 'script' && modelResponses.promptFormat(context.operationId), onOutputFormatFallback: () => { modelResponses.usePromptFormat(context.operationId); nodeLogger.info('provider.output_format_fallback'); }, onRequestPhase: phase => { requestPhase = phase; } });
             nodeLogger.info('provider.request_completed', { durationMs: performance.now() - started });
             return result;
           } catch (error) {
@@ -770,13 +778,23 @@ export function createRuntime(options: RuntimeOptions) {
               const mcpServers = await Promise.all((saved.mcpServers ?? []).filter(server => server.enabled && selectedServers.includes(server.id)).map(async server => ({ ...server, secret: server.credentialRef ? rememberSecret(await options.secretStore?.get(server.credentialRef)) : undefined })));
               return executeDeepAgent({ database, model: selectedModel, secret, prompt, signal: controller.signal, runId, nodeId: node.id, project: executionProject, skills: saved.skills.filter(skill => skill.enabled && node.skillIds.includes(skill.id)), mcpServers, dataDirectory: directory, failpoint: options.failpoint, costs });
             })()
-          : await generate();
+          : node.kind === 'script' ? await modelResponses.generate({ operationId: context.operationId, inputHash: fingerprint(input), recordReceipt: context.recordRemoteId, generate }) : await generate();
         const text = typeof generated === 'string' ? generated : generated.text;
-        if (!text.trim()) throw new Error('模型没有返回可用内容，请检查模型配置后重试。');
         const usage = typeof generated === 'string' ? undefined : generated.usage;
         if (costOperation) costs.status(costOperation, 'completed', usage);
+        if (node.kind === 'script') {
+          try {
+            if (typeof generated !== 'string' && generated.incomplete) throw new ModelResponseValidationError([{ path: '$', message: '模型输出被截断，请提高最大输出 Token 或减少镜头数量。' }]);
+            const script = parseWorkflowScript(text, executionProject, Boolean(saved.regeneration), executionCharacters);
+            return { text, source: 'model', modelId: selectedModel.id, ...(usage ? { providerUsage: usage } : {}), ...script } as JsonValue;
+          } catch (error) {
+            if (error instanceof ModelResponseValidationError) modelResponses.validationFailed(context.operationId, error.issues);
+            throw error;
+          }
+        }
+        if (!text.trim()) throw new Error('模型没有返回可用内容，请检查模型配置后重试。');
         if (researchContext) return { ...parseResearchResult(text, executionProject, researchContext, runId, node.id), ...(usage ? { providerUsage: usage } : {}) } as unknown as JsonValue;
-        return { text, source: 'model', modelId: selectedModel.id, ...(usage ? { providerUsage: usage } : {}), ...(node.kind === 'script' ? parseWorkflowScript(text, executionProject, Boolean(saved.regeneration), executionCharacters) : {}) } as JsonValue;
+        return { text, source: 'model', modelId: selectedModel.id, ...(usage ? { providerUsage: usage } : {}) } as JsonValue;
       }
       if (media && options.executeActivity) {
         const batch = saved.exportBatch;
@@ -866,7 +884,7 @@ export function createRuntime(options: RuntimeOptions) {
     });
     return result;
     } catch (error) {
-      if (costOperation && !(error instanceof SimulatedProcessExit)) costs.status(costOperation, controller.signal.aborted ? 'canceled' : 'unknown');
+      if (costOperation && !(error instanceof SimulatedProcessExit)) costs.status(costOperation, controller.signal.aborted ? 'canceled' : error instanceof TextRequestRejectedError || error instanceof MediaRequestRejectedError ? 'failed' : 'unknown');
       throw error;
     }
   }
@@ -898,7 +916,8 @@ export function createRuntime(options: RuntimeOptions) {
     // task's checkpoint map or scratchpad from LangChain's ambient context.
     const invokeChild = (input: Parameters<typeof graph.invoke>[0]) => AsyncLocalStorageProviderSingleton.runWithConfig(config, () => graph.invoke(input, config));
     const state = await graph.getState(config);
-    await invokeChild(state.values && Object.keys(state.values).length ? null : { completed: [], skipped: [], currentNodeId: '', outputs: {} });
+    const input = state.values && Object.keys(state.values).length ? state.values : { completed: [], skipped: [], currentNodeId: '', outputs: {} };
+    await invokeChild(state.next.length ? null : input);
     controller.signal.throwIfAborted();
     const outputs: Record<string, JsonValue> = {};
     for (const output of definition.outputs) {
@@ -914,24 +933,41 @@ export function createRuntime(options: RuntimeOptions) {
     if (active.has(runId)) return;
     if (closing) throw new Error('运行环境正在关闭。');
     const saved = store.get<RunSnapshot>('run-snapshot', runId);
-    if (!saved || ![1, 2, 3].includes(saved.handlerVersion)) throw new Error('运行版本不兼容，请复制项目并创建新的运行。');
+    if (!saved || ![1, 2, 3, 4].includes(saved.handlerVersion)) throw new Error('运行版本不兼容，请复制项目并创建新的运行。');
+    const retry = run(runId).stepRetry;
+    const retryNode = retry?.status === 'pending' ? (saved.inspectionNodes ?? saved.nodes).find(node => node.id === retry.nodeId) : undefined;
+    if (retry?.status === 'pending' && !retryNode) throw new Error('本次制作中没有所选的重试步骤。');
     const controller = new AbortController();
     const promise = Promise.resolve().then(async () => {
-      updateRun(runId, { status: 'running', error: undefined });
-      const nodeIds = new Set(saved.nodes.map(node => node.id));
-      const workflow = { ...saved.project.workflow, nodes: saved.nodes, edges: saved.project.workflow.edges.filter(edge => nodeIds.has(edge.source) && nodeIds.has(edge.target)) };
+      updateRun(runId, { status: 'running', error: undefined, stepRetry: retryNode ? retry : undefined });
+      const nodes = retryNode ? [retryNode] : saved.nodes;
+      const nodeIds = new Set(nodes.map(node => node.id));
+      const workflow = { ...saved.project.workflow, nodes, edges: saved.project.workflow.edges.filter(edge => nodeIds.has(edge.source) && nodeIds.has(edge.target)) };
       const graph = createExecutionGraph(database, workflow, {
         execute: node => trackWork(() => executeNode(runId, node, saved, controller)),
         advanced: node => recordEvent(runId, 'node.completed', `已完成：${node.label}`, node.id),
       });
-      const config = { configurable: { thread_id: runId }, durability: 'sync' as const, signal: controller.signal, recursionLimit: 400 };
+      const config = { configurable: { thread_id: retryNode ? saved.inspectionThreads?.[retryNode.id] ?? runId : runId, checkpoint_ns: '' }, durability: 'sync' as const, signal: controller.signal, recursionLimit: 400 };
       const state = await graph.getState(config);
       logger.info('run.execution_started', { runId, projectId: saved.project.id, resumed: Boolean(state.values && Object.keys(state.values).length) });
-      await graph.invoke(state.values && Object.keys(state.values).length ? null : { completed: [], skipped: [], currentNodeId: '', outputs: {} }, config);
+      // A single-step retry ends its graph while retaining the original thread's
+      // completed nodes and outputs. A later full resume dispatches from that state.
+      const input = state.values && Object.keys(state.values).length ? state.values : { completed: [], skipped: [], currentNodeId: '', outputs: {} };
+      await graph.invoke(state.next.length ? null : input, config);
       const latest = run(runId);
       if (latest.status !== 'canceled') {
+        if (retryNode) {
+          const root = await graph.getState({ configurable: { thread_id: runId } });
+          if (controller.signal.aborted || run(runId).status === 'canceled') return;
+          const complete = saved.nodes.every(node => root.values.completed?.includes(node.id) || root.values.skipped?.includes(node.id));
+          recordEvent(runId, 'run.step_retried', `已完成步骤重试：${retryNode.label}`, retryNode.id);
+          if (!complete) {
+            updateRun(runId, { status: 'needs_attention', currentNodeId: undefined, error: undefined, stepRetry: { nodeId: retryNode.id, status: 'completed' } });
+            return;
+          }
+        }
         applyProductionResult(runId, saved);
-        updateRun(runId, { status: 'succeeded', currentNodeId: undefined });
+        updateRun(runId, { status: 'succeeded', currentNodeId: undefined, stepRetry: undefined });
         recordEvent(runId, 'run.completed', '所选步骤已完成');
       }
     }).catch(error => {
@@ -1150,6 +1186,11 @@ export function createRuntime(options: RuntimeOptions) {
           const row = database.prepare("SELECT json_object('exportBatch', json_extract(body, '$.exportBatch'), 'regeneration', json_extract(body, '$.regeneration'), 'research', json_extract(body, '$.research'), 'nodes', json_extract(body, '$.nodes'), 'selection', json_extract(body, '$.selection'), 'profile', json_extract(body, '$.project.profile'), 'workflowNodeCount', json_array_length(body, '$.project.workflow.nodes')) AS body FROM documents WHERE kind = 'run-snapshot' AND id = ?").get(parent.id) as { body: string } | undefined;
           if (!row) throw new Error('父运行快照不存在，无法确认重新制作范围。');
           const saved = JSON.parse(row.body) as Pick<RunSnapshot, 'exportBatch' | 'regeneration' | 'research' | 'nodes' | 'selection'> & { profile: ProjectDocument['profile']; workflowNodeCount: number | null };
+          if (parent.regenerationSource && saved.regeneration) {
+            if (parent.status !== 'canceled') throw new Error('请先停止原镜头候选，再重新生成。');
+            if ([input.nodeId, input.profile, input.destination, input.regeneration, input.research, input.selection].some(value => value !== undefined)) throw new Error('重新生成必须保留原镜头与制作来源。');
+            return dispatch('shot.regenerate', { projectId: parent.projectId, revision: input.revision ?? project(parent.projectId).revision, shotId: parent.regenerationSource.shotId, kind: saved.regeneration.kind, instruction: saved.regeneration.instruction, source: { runId: parent.regenerationSource.runId, nodeId: parent.regenerationSource.nodeId, requestId: randomUUID() } });
+          }
           const originalNodeCount = saved.workflowNodeCount ?? 0;
           if (saved.selection && (!input.selection || saved.selection.nodeId !== input.selection.nodeId || saved.selection.mode !== input.selection.mode)) throw new Error('请先预览原任务的执行范围，再重新制作。');
           const single = !saved.selection && !saved.exportBatch && !saved.regeneration && !saved.research && saved.nodes.length === 1 ? saved.nodes[0] : undefined;
@@ -1274,16 +1315,65 @@ export function createRuntime(options: RuntimeOptions) {
         return dispatch('run.start', { projectId: input.projectId, revision: input.revision, research: { modelId: input.modelId, sourceIds: input.sourceIds, instruction: input.instruction } });
       }
       case 'shot.regenerate': {
-        const input = entityId.merge(regenerationInput).extend({ revision: z.number().int().positive() }).parse(rawParams);
+        const input = entityId.merge(regenerationInput).extend({ revision: z.number().int().positive(), source: z.object({ runId: z.string().min(1), nodeId: z.string().min(1), requestId: z.string().uuid() }).optional() }).parse(rawParams);
+        if (input.source) {
+          if (input.kind === 'script' || input.imageEdit) throw new Error('制作记录只支持重新生成所选镜头的图片或视频。');
+          const source = input.source, requestHash = fingerprint({ projectId: input.projectId, shotId: input.shotId, kind: input.kind, instruction: input.instruction?.trim() ?? '', runId: source.runId, nodeId: source.nodeId });
+          const repeated = () => {
+            const row = database.prepare("SELECT body FROM documents WHERE kind = 'run' AND json_extract(body, '$.regenerationSource.requestId') = ? LIMIT 1").get(source.requestId) as { body: string } | undefined;
+            if (!row) return undefined;
+            const previous = runSchema.parse(JSON.parse(row.body)), snapshot = store.get<RunSnapshot>('run-snapshot', previous.id);
+            if (snapshot?.sourceGeneration?.requestHash !== requestHash) throw new Error('生成请求标识已用于其他镜头或输入。');
+            return previous;
+          };
+          const previous = repeated(); if (previous) return hydrateRun(previous);
+          const value = project(input.projectId); requireRevision(value, input.revision);
+          const baseline = value.shots.find(shot => shot.id === input.shotId);
+          if (value.archived || !baseline || baseline.locked) throw new Error('请选择存在且已解锁的项目镜头。');
+          const original = run(source.runId), frozen = store.get<RunSnapshot>('run-snapshot', original.id);
+          if (original.projectId !== value.id || original.purpose && original.purpose !== 'production' || !frozen) throw new Error('原制作不属于当前项目或没有冻结配置。');
+          const originalNode = store.get<WorkflowNode>('node-definition', `${original.id}:${source.nodeId}`) ?? (frozen.inspectionNodes ?? frozen.nodes).find(node => node.id === source.nodeId);
+          const result = store.get<JsonValue>('node-result', `${original.id}:${source.nodeId}`), sourceProject = store.get<ProjectDocument>('node-project', `${original.id}:${source.nodeId}`);
+          const sourceShot = sourceProject?.shots.find(shot => shot.id === input.shotId);
+          if (!originalNode || originalNode.kind !== regenerationKinds[input.kind].nodeKind || journal.get(original.id, source.nodeId)?.status !== 'completed' || !sourceProject || !sourceShot || !result || !nodeResultAssets(result).some(asset => asset.shotId === input.shotId && asset.kind === input.kind)) throw new Error('原步骤没有这个镜头对应的已完成生成产物。');
+          const model = frozen.models.find(model => model.id === originalNode.modelId);
+          if (!model?.enabled || !model.capabilities.includes(regenerationKinds[input.kind].capability)) throw new Error('本次制作未保存可用的对应生成模型。');
+          const pending = database.prepare("SELECT body FROM documents WHERE kind = 'run' AND json_extract(body, '$.projectId') = ? AND json_extract(body, '$.regenerationSource.runId') = ? AND json_extract(body, '$.regenerationSource.nodeId') = ? AND json_extract(body, '$.regenerationSource.shotId') = ? AND json_extract(body, '$.status') NOT IN ('succeeded','canceled') ORDER BY rowid DESC LIMIT 1").get(value.id, source.runId, source.nodeId, input.shotId) as { body: string } | undefined;
+          if (pending) return hydrateRun(runSchema.parse(JSON.parse(pending.body)));
+          const inputProject = { ...sourceProject, shots: [{ ...sourceShot, locked: false }] };
+          const upstream = upstreamResults(original.id, originalNode, frozen);
+          const selectedCharacters = (frozen.characters ?? []).filter(profile => sourceShot.characterIds?.includes(profile.id));
+          const referenceIds = new Set([...selectedCharacters.flatMap(profile => profile.referenceAssetIds), ...creativeReferenceAssetIds(inputProject, sourceShot)]);
+          const characterAssets = (frozen.characterAssets ?? []).filter(asset => referenceIds.has(asset.id));
+          const ids = new Set([...inputProject.shots.flatMap(shot => [shot.assetId, shot.videoAssetId, shot.audioAssetId]), ...(inputProject.workflow.production.referenceAudioAssetIds ?? []), ...referenceIds].filter((id): id is string => Boolean(id)));
+          const knownAssets = new Map([...(frozen.assets ?? []), ...(frozen.characterAssets ?? []), ...upstream.flatMap(item => nodeResultAssets(item.output))].map(asset => [asset.id, asset]));
+          const assets = [...ids].map(id => knownAssets.get(id) ?? store.get<AssetRecord>('asset', id));
+          if (assets.some(asset => !asset)) throw new Error('本次制作的参考素材记录缺失，请先恢复素材。');
+          const frozenAssets = assets.filter((asset): asset is AssetRecord => Boolean(asset));
+          await validatePromptAssets(frozenAssets);
+          requireRevision(project(value.id), input.revision);
+          const existing = repeated(); if (existing) return hydrateRun(existing);
+          if (batches.blocked(value.id) || projectBusy(value.id) || [...active.keys()].some(runId => run(runId).projectId === value.id)) throw new Error('该项目已有未完成的制作，请先处理现有任务。');
+          const id = randomUUID(), instruction = input.instruction?.trim();
+          const node: WorkflowNode = { ...originalNode, id: 'regenerate', requiresReview: false, label: `重新生成镜头${regenerationKinds[input.kind].label}`, prompt: [originalNode.prompt, instruction].filter(Boolean).join('\n\n'), config: { ...originalNode.config, shotId: baseline.id, regenerationKind: input.kind, ...(instruction ? { instruction } : {}) } };
+          const saved: RunSnapshot = { project: structuredClone(value), models: frozen.models, skills: frozen.skills, mcpServers: frozen.mcpServers, nodes: [node], handlerVersion: 4, characters: selectedCharacters, characterAssets, assets: frozenAssets,
+            regeneration: { shotId: baseline.id, kind: input.kind, baseline: structuredClone(baseline), instruction }, sourceGeneration: { inputProject: structuredClone(inputProject), upstream: structuredClone(upstream), requestHash } };
+          const createdAt = now();
+          const record: RunRecord = { id, projectId: value.id, projectRevision: value.revision, workflowVersion: frozen.project.workflow.version, snapshotDigest: fingerprint(saved), parentRunId: original.id, status: 'queued', stepCount: 1, createdAt, updatedAt: createdAt, events: [], activities: [], regenerationSource: { ...source, shotId: baseline.id } };
+          database.transaction(() => { store.put('run-snapshot', id, saved); store.put('run', id, record); })();
+          recordEvent(id, 'run.created', `沿用本次制作，单独重新生成：${sourceShot.title}`, node.id); schedule(id); return hydrateRun(record);
+        }
         return dispatch('run.start', { projectId: input.projectId, revision: input.revision, regeneration: { shotId: input.shotId, kind: input.kind, modelId: input.modelId, instruction: input.instruction, imageEdit: input.imageEdit } });
       }
       case 'shot.candidates': {
-        const input = entityId.extend({ shotId: z.string().min(1), offset: z.number().int().nonnegative().default(0), limit: z.number().int().min(1).max(100).default(20) }).parse(rawParams);
+        const input = entityId.extend({ shotId: z.string().min(1), offset: z.number().int().nonnegative().default(0), limit: z.number().int().min(1).max(100).default(20), source: z.object({ runId: z.string().min(1), nodeId: z.string().min(1) }).optional() }).parse(rawParams);
         if (!database.prepare("SELECT 1 FROM documents WHERE kind = 'project-summary' AND id = ?").get(input.projectId)) throw new Error('项目不存在或已被移除。');
-        const filter = "FROM documents c JOIN documents r ON r.kind = 'run' AND r.id = json_extract(c.body, '$.runId') WHERE c.kind = 'shot-candidate' AND json_extract(c.body, '$.projectId') = ? AND json_extract(c.body, '$.shotId') = ? AND json_extract(r.body, '$.status') = 'succeeded'";
-        const total = database.prepare(`SELECT count(*) AS total ${filter}`).get(input.projectId, input.shotId) as { total: number };
-        const rows = database.prepare(`SELECT c.body ${filter} ORDER BY json_extract(c.body, '$.createdAt') DESC, c.id DESC LIMIT ? OFFSET ?`).all(input.projectId, input.shotId, input.limit, input.offset) as { body: string }[];
-        const pending = database.prepare("SELECT r.body FROM documents r JOIN documents s ON s.kind = 'run-snapshot' AND s.id = r.id WHERE r.kind = 'run' AND json_extract(r.body, '$.projectId') = ? AND json_extract(s.body, '$.regeneration.shotId') = ? AND json_extract(r.body, '$.status') IN ('queued','running','waiting_review','waiting_external','retry_scheduled') ORDER BY json_extract(r.body, '$.createdAt') DESC, r.id DESC LIMIT 1").get(input.projectId, input.shotId) as { body: string } | undefined;
+        const sourceFilter = " AND (@sourceRun IS NULL OR json_extract(r.body, '$.regenerationSource.runId') = @sourceRun AND json_extract(r.body, '$.regenerationSource.nodeId') = @sourceNode)";
+        const params = { projectId: input.projectId, shotId: input.shotId, sourceRun: input.source?.runId ?? null, sourceNode: input.source?.nodeId ?? null };
+        const filter = "FROM documents c JOIN documents r ON r.kind = 'run' AND r.id = json_extract(c.body, '$.runId') WHERE c.kind = 'shot-candidate' AND json_extract(c.body, '$.projectId') = @projectId AND json_extract(c.body, '$.shotId') = @shotId AND json_extract(r.body, '$.status') = 'succeeded'" + sourceFilter;
+        const total = database.prepare(`SELECT count(*) AS total ${filter}`).get(params) as { total: number };
+        const rows = database.prepare(`SELECT c.body ${filter} ORDER BY json_extract(c.body, '$.createdAt') DESC, c.id DESC LIMIT @limit OFFSET @offset`).all({ ...params, limit: input.limit, offset: input.offset }) as { body: string }[];
+        const pending = database.prepare("SELECT r.body FROM documents r JOIN documents s ON s.kind = 'run-snapshot' AND s.id = r.id WHERE r.kind = 'run' AND json_extract(r.body, '$.projectId') = @projectId AND json_extract(s.body, '$.regeneration.shotId') = @shotId AND (json_extract(r.body, '$.status') IN ('queued','running','waiting_review','waiting_external','retry_scheduled') OR (@sourceRun IS NOT NULL AND json_extract(r.body, '$.status') IN ('failed','needs_attention')))" + sourceFilter + " ORDER BY json_extract(r.body, '$.createdAt') DESC, r.id DESC LIMIT 1").get(params) as { body: string } | undefined;
         return { items: rows.map(row => shotCandidateSchema.parse(JSON.parse(row.body))), total: total.total, ...(pending ? { activeRun: reads.runSummary(JSON.parse(pending.body) as RunRecord) } : {}) };
       }
       case 'shot.candidate.get': {
@@ -1304,7 +1394,8 @@ export function createRuntime(options: RuntimeOptions) {
         const currentCharacters = characters.profilesFor({ shots: [current] }).characters;
         if (fingerprint(currentCharacters) !== fingerprint(candidate.characters ?? [])) throw new Error('生成后角色设定或参考图已修改，请重新生成后应用。');
         requireCandidateResearch(value, candidate);
-        const frozenContext = store.get<RunSnapshot>('run-snapshot', candidate.runId)?.project;
+        const candidateSnapshot = store.get<RunSnapshot>('run-snapshot', candidate.runId);
+        const frozenContext = candidateSnapshot?.sourceGeneration?.inputProject ?? candidateSnapshot?.project;
         if (frozenContext && (shotCreativePrompt(frozenContext, candidate.baseline) !== shotCreativePrompt(value, current) || fingerprint(creativeReferenceAssetIds(frozenContext, candidate.baseline)) !== fingerprint(creativeReferenceAssetIds(value, current)))) throw new Error('生成后镜头的创作设定或连续性要求已修改，请重新生成候选。');
         if (candidate.baseline.clipEdit) {
           const oldPlanRow = database.prepare("SELECT p.value AS body FROM documents s, json_each(s.body, '$.project.clipEditPlans') p WHERE s.kind = 'run-snapshot' AND s.id = ? AND json_extract(p.value, '$.id') = ?").get(candidate.runId, candidate.baseline.clipEdit.planId) as { body: string } | undefined;
@@ -1339,6 +1430,36 @@ export function createRuntime(options: RuntimeOptions) {
         return saveProject({ ...next, shots: next.shots.map(shot => shot.id === current.id ? merged : shot) });
       }
       case 'run.get': return reads.runSummary(run(runIdInput.parse(rawParams).runId));
+      case 'run.step.retry': {
+        const { runId, nodeId } = runIdInput.extend({ nodeId: z.string().min(1) }).strict().parse(rawParams);
+        let value = run(runId);
+        if (active.has(runId)) {
+          if (value.stepRetry?.status === 'pending' && value.stepRetry.nodeId === nodeId) return hydrateRun(value);
+          throw new Error('本次制作仍在执行，请等待当前步骤结束。');
+        }
+        const inspection = runInspectionSchema.parse(await runInspector.dispatch('run.inspect', { runId }));
+        const step = inspection.steps.find(step => step.id === nodeId);
+        if (!step?.retry?.allowed) throw new Error(step?.retry?.reason || '只能重试本次制作中选中的失败步骤。');
+        value = run(runId);
+        if (active.has(runId)) {
+          if (value.stepRetry?.status === 'pending' && value.stepRetry.nodeId === nodeId) return hydrateRun(value);
+          throw new Error('本次制作仍在执行，请等待当前步骤结束。');
+        }
+        if (value.updatedAt !== inspection.run.updatedAt || value.status !== inspection.run.status || value.currentNodeId !== nodeId) throw new Error('步骤状态已变化，请刷新后重试。');
+        if (batches.blocked(value.projectId) || projectBusy(value.projectId, undefined, value.productionQueueItemId)) throw new Error('该项目已有其他未完成的运行，请先处理现有任务。');
+        const previousRetry = value.stepRetry;
+        const restoreResponse = modelResponses.prepareRetry(`${runId}:${nodeId}`);
+        updateRun(runId, { stepRetry: { nodeId, status: 'pending' } });
+        try {
+          if (value.productionQueueItemId) await productionQueue!.resumeOwnedRun(runId);
+          else { updateRun(runId, { status: 'queued', error: undefined }); schedule(runId); }
+        } catch (error) {
+          if (!active.has(runId)) { restoreResponse?.(); updateRun(runId, { stepRetry: previousRetry }); }
+          throw error;
+        }
+        recordEvent(runId, 'run.step_retry_requested', `仅重试：${step.label}`, nodeId);
+        return hydrateRun(run(runId));
+      }
       case 'run.resume': {
         const { runId } = runIdInput.parse(rawParams); const value = run(runId);
         if (value.productionQueueItemId) { await productionQueue!.resumeOwnedRun(runId); return hydrateRun(run(runId)); }

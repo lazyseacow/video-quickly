@@ -8,11 +8,12 @@ import type Database from 'better-sqlite3';
 import { SqliteSaver } from '@langchain/langgraph-checkpoint-sqlite';
 import { z } from 'zod';
 import {
-  jsonValueSchema, modelSchema, pageInputSchema, runInspectionSchema, runStepPayloadSchema, skillSchema, workflowNodeSchema, workflowSchema,
+  isModelGenerationNode, jsonValueSchema, modelSchema, pageInputSchema, runInspectionSchema, runStepPayloadSchema, skillSchema, workflowNodeSchema, workflowSchema,
   type JsonValue, type ModelProfile, type ProjectDocument, type RecordPage, type RunInspection, type RunRecord, type RunStepSummary, type SkillPackage, type StepOutputVersion, type WorkflowNode,
 } from '@video-quickly/contracts';
 import { DocumentStore } from './database.js';
 import { activityNodeId, createReadModels } from './read-models.js';
+import { createModelResponses } from './model-responses.js';
 
 const runInput = z.object({ runId: z.string().min(1) });
 const stepInput = runInput.extend({ nodeId: z.string().min(1) });
@@ -27,7 +28,7 @@ interface Snapshot {
   project: ProjectDocument; nodes: WorkflowNode[]; inspectionNodes?: WorkflowNode[]; inspectionThreads?: Record<string, string>; models: ModelProfile[]; skills: SkillPackage[]; handlerVersion: number;
   regeneration?: JsonValue; research?: JsonValue; exportBatch?: JsonValue;
 }
-interface SnapshotRow { title: string; nodes: string; models: string; skills: string; edges: string; stages: string | null; handlerVersion: number; inspectionThreads: string | null }
+interface SnapshotRow { title: string; workflowId: string | null; nodes: string; models: string; skills: string; edges: string; stages: string | null; handlerVersion: number; inspectionThreads: string | null; exportBatch: string | null }
 interface ActivitySummaryRow {
   node_id: string; count: number; unknown_count: number; started_at: string; completed_at: string | null; error: string | null;
 }
@@ -58,11 +59,11 @@ export function createRunInspector(options: {
   secrets: (models: readonly ModelProfile[]) => Promise<readonly string[]>;
   redactText: (text: string, models: ModelProfile[], secrets: readonly string[]) => string;
 }) {
-  const { database, store } = options, reads = createReadModels(database, store);
+  const { database, store } = options, reads = createReadModels(database, store), responses = createModelResponses(store);
   function metadata(runId: string) {
-    const row = database.prepare("SELECT json_extract(body, '$.project.title') AS title, coalesce(json_extract(body, '$.inspectionNodes'), json_extract(body, '$.nodes')) AS nodes, json_extract(body, '$.models') AS models, json_extract(body, '$.skills') AS skills, coalesce(json_extract(body, '$.inspectionEdges'), json_extract(body, '$.project.workflow.edges')) AS edges, json_extract(body, '$.project.workflow.stages') AS stages, json_extract(body, '$.handlerVersion') AS handlerVersion, json_extract(body, '$.inspectionThreads') AS inspectionThreads FROM documents WHERE kind = 'run-snapshot' AND id = ?").get(runId) as SnapshotRow | undefined;
+    const row = database.prepare("SELECT json_extract(body, '$.project.title') AS title, json_extract(body, '$.project.workflow.id') AS workflowId, coalesce(json_extract(body, '$.inspectionNodes'), json_extract(body, '$.nodes')) AS nodes, json_extract(body, '$.models') AS models, json_extract(body, '$.skills') AS skills, coalesce(json_extract(body, '$.inspectionEdges'), json_extract(body, '$.project.workflow.edges')) AS edges, json_extract(body, '$.project.workflow.stages') AS stages, json_extract(body, '$.handlerVersion') AS handlerVersion, json_extract(body, '$.inspectionThreads') AS inspectionThreads, json_type(body, '$.exportBatch') AS exportBatch FROM documents WHERE kind = 'run-snapshot' AND id = ?").get(runId) as SnapshotRow | undefined;
     if (!row) return undefined;
-    return { title: row.title, nodes: z.array(workflowNodeSchema).parse(JSON.parse(row.nodes)), models: z.array(modelSchema).parse(JSON.parse(row.models)), skills: z.array(skillSchema).parse(JSON.parse(row.skills)), edges: z.array(z.object({ source: z.string(), target: z.string() })).parse(JSON.parse(row.edges)), stages: row.stages ? workflowSchema.shape.stages.parse(JSON.parse(row.stages)) : undefined, handlerVersion: row.handlerVersion, inspectionThreads: row.inspectionThreads ? z.record(z.string(), z.string()).parse(JSON.parse(row.inspectionThreads)) : {} };
+    return { title: row.title, workflowId: row.workflowId, nodes: z.array(workflowNodeSchema).parse(JSON.parse(row.nodes)), models: z.array(modelSchema).parse(JSON.parse(row.models)), skills: z.array(skillSchema).parse(JSON.parse(row.skills)), edges: z.array(z.object({ source: z.string(), target: z.string() })).parse(JSON.parse(row.edges)), stages: row.stages ? workflowSchema.shape.stages.parse(JSON.parse(row.stages)) : undefined, handlerVersion: row.handlerVersion, inspectionThreads: row.inspectionThreads ? z.record(z.string(), z.string()).parse(JSON.parse(row.inspectionThreads)) : {}, exportBatch: row.exportBatch !== null };
   }
   async function nativeState(runId: string) {
     const tuple = await new SqliteSaver(database).getTuple({ configurable: { thread_id: runId } });
@@ -82,12 +83,12 @@ export function createRunInspector(options: {
       SELECT a.rowid AS cursor, a.*, coalesce((SELECT value FROM json_each(@nodes) WHERE a.activity_id = value OR substr(a.activity_id, 1, length(value) + 1) = value || ':' ORDER BY length(value) DESC LIMIT 1), substr(a.activity_id, 1, instr(a.activity_id || ':', ':') - 1)) AS node_id
       FROM activities a WHERE run_id = @runId
     ), grouped AS (
-      SELECT node_id, count(*) AS count, sum(CASE WHEN status IN ('dispatched', 'unknown') AND safety = 'external' AND remote_id IS NULL THEN 1 ELSE 0 END) AS unknown_count,
+      SELECT node_id, count(*) AS count, sum(CASE WHEN status IN ('dispatched', 'unknown') AND safety = 'external' AND (remote_id IS NULL OR (remote_id LIKE 'model-response:%' AND NOT EXISTS (SELECT 1 FROM documents response WHERE response.kind = 'model-response' AND response.id = substr(receipts.remote_id, 16) AND json_extract(response.body, '$.status') IN ('received', 'rejected')))) THEN 1 ELSE 0 END) AS unknown_count,
         min(started_at) AS started_at, max(completed_at) AS completed_at, max(cursor) AS latest FROM receipts GROUP BY node_id
     ) SELECT g.*, a.error FROM grouped g JOIN activities a ON a.rowid = g.latest`).all({ runId, nodes: JSON.stringify(ids) }) as ActivitySummaryRow[];
     const byNode = new Map(rows.map(row => [row.node_id, row]));
     const keys = ids.map(id => `${runId}:${id}`);
-    const documents = database.prepare("SELECT kind, id FROM documents WHERE kind IN ('node-project', 'node-result') AND id IN (SELECT value FROM json_each(?))").all(JSON.stringify(keys)) as { kind: string; id: string }[];
+    const documents = database.prepare("SELECT kind, id FROM documents WHERE kind IN ('node-project', 'node-result', 'model-response-head') AND id IN (SELECT value FROM json_each(?))").all(JSON.stringify(keys)) as { kind: string; id: string }[];
     const has = (kind: string, id: string) => documents.some(row => row.kind === kind && row.id === `${runId}:${id}`);
     const unknown = run.status !== 'running' && rows.some(row => row.unknown_count > 0);
     const resume = ['failed', 'needs_attention', 'waiting_external', 'retry_scheduled', 'queued', 'waiting_review'].includes(run.status) && !unknown;
@@ -120,19 +121,25 @@ export function createRunInspector(options: {
         : status === 'running' ? '正在执行这个步骤。'
         : has('node-result', node.id) ? '产物已保存，编排检查点尚未推进；继续执行时会先校验已有结果。'
         : '尚未执行；等待调度或上游步骤完成。';
-      return { id: node.id, label: node.label, kind: node.kind, description: node.description, requiresReview: node.requiresReview, status, reason,
-        inputAvailable: has('node-project', node.id), outputAvailable: has('node-result', node.id), activityCount: receipt?.count ?? 0,
-        unknownSubmission: unknown && Boolean(receipt?.unknown_count), startedAt: receipt?.started_at, completedAt: status === 'succeeded' ? receipt?.completed_at ?? undefined : undefined, error };
+      const retryReason = unknown ? '存在结果未确认的外部提交，请先核对原任务。'
+        : !nodeState.available || nodeState.values.currentNodeId !== node.id ? '没有可恢复到此步骤的检查点，请核对制作记录。'
+        : saved?.exportBatch ? '批量导出请从导出记录继续原任务。'
+        : !saved || ![1, 2, 3, 4].includes(saved.handlerVersion) ? '运行版本不兼容，请创建新的运行。'
+        : '';
+      const retry = current && node.kind !== 'subflow' && ['failed', 'needs_attention'].includes(status) ? { allowed: !retryReason, reason: retryReason } : undefined;
+      return { id: node.id, label: node.label, kind: node.kind, description: node.description, requiresReview: node.requiresReview, modelGeneration: isModelGenerationNode(node), status, reason,
+        inputAvailable: has('node-project', node.id), outputAvailable: has('node-result', node.id), responseAvailable: has('model-response-head', node.id), activityCount: receipt?.count ?? 0,
+        unknownSubmission: unknown && Boolean(receipt?.unknown_count), retry, startedAt: receipt?.started_at, completedAt: status === 'succeeded' ? receipt?.completed_at ?? undefined : undefined, error };
     });
     const selectedNode = nodeId ? store.get<WorkflowNode>('node-definition', `${runId}:${nodeId}`) ?? saved?.nodes.find(node => node.id === nodeId) : undefined, model = selectedNode?.modelId ? saved?.models.find(value => value.id === selectedNode.modelId) : undefined;
-    return runInspectionSchema.parse({ run: reads.runSummary(run), projectTitle: saved?.title ?? '历史制作', snapshotAvailable: !!saved, checkpointAvailable: state.available, steps, stages: saved?.stages,
-      recovery: { review: false, resume, cancel: ['running', 'queued', 'waiting_review', 'waiting_external', 'retry_scheduled', 'needs_attention'].includes(run.status), restart: run.status === 'canceled' && run.purpose !== 'prompt-trial' && !run.productionQueueItemId, reason: unknown ? '存在结果未确认的外部提交，请先核对原任务。' : '' },
+    return runInspectionSchema.parse({ run: reads.runSummary(run), projectTitle: saved?.title ?? '历史制作', workflowId: saved?.workflowId ?? undefined, snapshotAvailable: !!saved, checkpointAvailable: state.available, steps, stages: saved?.stages,
+      recovery: { review: false, resume, cancel: ['running', 'queued', 'waiting_review', 'waiting_external', 'retry_scheduled', 'needs_attention'].includes(run.status), restart: run.status === 'canceled' && run.purpose !== 'prompt-trial' && !run.productionQueueItemId, reason: unknown ? '存在结果未确认的外部提交，请先核对原任务。' : run.status === 'needs_attention' && run.stepRetry?.status === 'completed' ? '此步骤已完成重试，后续步骤尚未执行。可点击“继续”恢复剩余制作。' : '' },
       selected: selectedNode && saved ? { node: redact(json(selectedNode)), dependencies: saved.edges.filter(edge => edge.target === nodeId).map(edge => edge.source),
         model: model ? { id: model.id, name: model.name, provider: model.provider, model: model.model } : undefined,
         skills: saved.skills.filter(skill => selectedNode.skillIds.includes(skill.id)).map(skill => ({ id: skill.id, name: skill.name, version: skill.version, enabled: skill.enabled })), handlerVersion: saved.handlerVersion } : undefined,
     });
   }
-  function readPayload(runId: string, nodeId: string, kind: 'input' | 'output', saved: Snapshot, redact: (value: JsonValue) => JsonValue) {
+  function readPayload(runId: string, nodeId: string, kind: 'input' | 'output', saved: Snapshot, redact: (value: JsonValue) => JsonValue, responseAttempt?: number) {
     const node = store.get<WorkflowNode>('node-definition', `${runId}:${nodeId}`) ?? (saved.inspectionNodes ?? saved.nodes).find(value => value.id === nodeId);
     if (!node) throw new Error('该运行的冻结流程中没有这个步骤。');
     const captured = store.get<CapturedInput>('node-inspection-input', `${runId}:${nodeId}`);
@@ -143,13 +150,21 @@ export function createRunInspector(options: {
       regeneration: saved.regeneration, research: saved.research, exportBatch: saved.exportBatch,
       resolvedPrompt: captured?.prompt,
     }) : undefined;
-    return runStepPayloadSchema.parse({ runId, nodeId, kind, available: value !== undefined, value: value === undefined ? null : redact(value), inputHash: captured?.inputHash, resolvedPromptRecorded: kind === 'input' ? captured?.prompt !== undefined : undefined });
+    const mediaOutput = kind === 'output' && value && typeof value === 'object' && !Array.isArray(value) && Array.isArray(value.assets) && value.assets.length > 0;
+    const mediaShots = mediaOutput ? database.prepare("SELECT json_extract(shot.value, '$.id') AS id, json_extract(shot.value, '$.title') AS title, json_extract(shot.value, '$.durationUs') AS durationUs FROM documents input, json_each(input.body, '$.shots') shot WHERE input.kind = 'node-project' AND input.id = ? ORDER BY CAST(shot.key AS INTEGER)").all(`${runId}:${nodeId}`) : undefined;
+    const model = saved.models.find(model => model.id === node.modelId && model.enabled);
+    const mediaKind = node.kind === 'assets' ? 'image' : node.kind === 'animation' && node.config.operation !== 'prepare-edit' ? 'video' : undefined;
+    const mediaGeneration = mediaOutput && mediaKind && model?.capabilities.includes(mediaKind) ? { kind: mediaKind, modelName: model.name } : undefined;
+    const response = kind === 'output' ? responses.current(`${runId}:${nodeId}`, responseAttempt) : undefined;
+    const modelResponseHistory = kind === 'output' ? responses.history(`${runId}:${nodeId}`).map(item => ({ ...item, invalid: Boolean(item.invalid) })) : undefined;
+    const modelResponse = response?.status === 'received' && response.response && response.receivedAt ? redact(json({ attempt: response.attempt, receivedAt: response.receivedAt, ...response.response, issues: response.issues })) : undefined;
+    return runStepPayloadSchema.parse({ runId, nodeId, kind, available: value !== undefined, value: value === undefined ? null : redact(value), inputHash: captured?.inputHash, resolvedPromptRecorded: kind === 'input' ? captured?.prompt !== undefined : undefined, mediaShots: mediaShots ? redact(json(mediaShots)) : undefined, mediaGeneration, modelResponse, modelResponseHistory });
   }
-  async function payload(runId: string, nodeId: string, kind: 'input' | 'output') {
+  async function payload(runId: string, nodeId: string, kind: 'input' | 'output', responseAttempt?: number) {
     options.run(runId);
     const saved = store.get<Snapshot>('run-snapshot', runId);
     if (!saved) throw new Error('该运行没有保存冻结流程。');
-    return readPayload(runId, nodeId, kind, saved, await redactor(saved.models));
+    return readPayload(runId, nodeId, kind, saved, await redactor(saved.models), responseAttempt);
   }
   function versions(runId: string, nodeId: string, before: number | undefined, limit: number): RecordPage<StepOutputVersion> {
     const run = options.run(runId), saved = metadata(runId), node = saved?.nodes.find(value => value.id === nodeId);
@@ -206,7 +221,7 @@ export function createRunInspector(options: {
     captureInput,
     async dispatch(method: string, raw: unknown) {
       if (method === 'run.inspect') { const input = runInput.extend({ nodeId: z.string().min(1).optional() }).parse(raw); return inspect(input.runId, input.nodeId); }
-      if (method === 'run.step.payload') { const input = stepInput.extend({ kind: z.enum(['input', 'output']) }).parse(raw); return payload(input.runId, input.nodeId, input.kind); }
+      if (method === 'run.step.payload') { const input = stepInput.extend({ kind: z.enum(['input', 'output']), responseAttempt: z.number().int().positive().optional() }).parse(raw); return payload(input.runId, input.nodeId, input.kind, input.responseAttempt); }
       if (method === 'run.step.versions') { const input = stepInput.merge(pageInputSchema).parse(raw); return versions(input.runId, input.nodeId, input.before, input.limit); }
       if (method === 'run.diagnostics') return diagnostics(runInput.parse(raw).runId);
       throw new Error('未知的步骤详情操作。');

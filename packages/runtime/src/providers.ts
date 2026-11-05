@@ -9,10 +9,36 @@ export interface TextGenerationRequest {
   operationId: string;
   signal?: AbortSignal;
   onRequestPhase?: (phase: ModelRequestPhase) => void;
+  outputSchema?: Record<string, unknown>;
+  promptOutputFormat?: boolean;
+  onOutputFormatFallback?: () => void;
 }
 
-export interface TextGenerationResult { text: string; usage?: ProviderUsage }
+export interface TextGenerationResult { text: string; usage?: ProviderUsage; incomplete?: boolean }
 export type TextProvider = (request: TextGenerationRequest) => Promise<string | TextGenerationResult>;
+
+/** An explicit request rejection is distinct from an unconfirmed submission. */
+export class TextRequestRejectedError extends Error {
+  constructor(readonly status: number, readonly unsupportedOutputFormat = false) {
+    super(unsupportedOutputFormat ? `模型服务不支持本次输出格式（HTTP ${status}），请求已被拒绝。` : `模型服务已拒绝请求（HTTP ${status}），请核对请求参数、模型及访问权限。`);
+    this.name = 'TextRequestRejectedError';
+  }
+}
+
+const rejectedTextStatuses = new Set([400, 401, 402, 403, 404, 405, 406, 410, 413, 414, 415, 422, 429]);
+function hasConfiguredOutputFormat(parameters: Record<string, JsonValue>) { return Boolean(parameters.response_format || parameters.format || parameters.output_config || parameters.text); }
+function unsupportedOutputFormat(value: unknown): boolean {
+  if (!value || typeof value !== 'object') return false;
+  const body = value as Record<string, unknown>, detail = body.error && typeof body.error === 'object' ? body.error as Record<string, unknown> : body;
+  const description = [detail.param, detail.code, detail.message, detail.type, typeof body.error === 'string' ? body.error : ''].filter(item => typeof item === 'string').join(' ');
+  return /text[.\s_]+format|response_format|json_schema|output_config|structured[\s_-]*outputs?/i.test(description)
+    && /unsupported|not supported|does not support|not support|not allowed|not permitted|unrecognized|unknown (?:parameter|field)|extra (?:fields|inputs)|不支持/i.test(description);
+}
+function maasRequestFormatRejection(value: unknown): boolean {
+  if (!value || typeof value !== 'object' || !('error' in value) || !value.error || typeof value.error !== 'object') return false;
+  const error = value.error as Record<string, unknown>;
+  return error.code === '400001' && error.type === 'invalid_request_error' && typeof error.message === 'string' && /rejected by an internal MaaS component/i.test(error.message);
+}
 
 export { providerReportedUsage as textProviderUsage } from '@video-quickly/contracts';
 import { providerReportedUsage as textProviderUsage } from '@video-quickly/contracts';
@@ -35,8 +61,14 @@ function modelHeaders(model: ModelProfile, secret?: string): Record<string, stri
     : headers(secret);
 }
 
-export function textRequestParameters(model: ModelProfile): Record<string, JsonValue> {
+export function textRequestParameters(model: ModelProfile, outputSchema?: Record<string, unknown>): Record<string, JsonValue> {
   const parameters = requestModelParameters(model, 'text');
+  if (outputSchema && !hasConfiguredOutputFormat(parameters)) {
+    if (model.provider === 'ollama') parameters.format = outputSchema as JsonValue;
+    else if (model.textProtocol === 'messages') parameters.output_config = { format: { type: 'json_schema', schema: outputSchema as JsonValue } };
+    else if (model.textProtocol === 'responses') parameters.response_format = { type: 'json_schema', json_schema: { name: 'video_storyboard', schema: outputSchema as JsonValue, strict: false } };
+    else parameters.response_format = { type: 'json_object' };
+  }
   if (model.provider === 'ollama') return parameters;
   const maximum = parameters.max_tokens ?? parameters.max_completion_tokens ?? parameters.max_output_tokens;
   if (model.textProtocol === 'responses' || model.textProtocol === 'messages') {
@@ -80,48 +112,79 @@ export async function readModelResponse(response: Response, onRequestPhase?: Tex
   return JSON.parse(text);
 }
 
-export const generateText: TextProvider = async ({ model, secret, prompt, operationId, signal, onRequestPhase }) => {
+export const generateText: TextProvider = async ({ model, secret, prompt, operationId, signal, onRequestPhase, outputSchema, promptOutputFormat, onOutputFormatFallback }) => {
   onRequestPhase?.('prepare');
   const ollama = model.provider === 'ollama';
   const protocol = model.textProtocol ?? 'chat-completions';
   const requestUrl = modelEndpoint(model.baseUrl, ollama ? 'api/chat' : textProtocols.find(item => item.id === protocol)!.path);
+  const parameters = textRequestParameters(model, promptOutputFormat ? undefined : outputSchema);
+  const automaticFormat = Boolean(outputSchema && !promptOutputFormat && !hasConfiguredOutputFormat(requestModelParameters(model, 'text')));
+  const body = {
+    ...(!ollama && protocol === 'responses' ? { store: false } : {}), model: model.model,
+    ...(!ollama && protocol === 'responses' ? { input: [{ role: 'user', content: prompt }] } : { messages: [{ role: 'user', content: prompt }] }), stream: false,
+  };
   const request = {
     method: 'POST',
     headers: { ...modelHeaders(model, secret), 'X-Client-Request-Id': operationId },
-    body: JSON.stringify({
-      ...(!ollama && protocol === 'responses' ? { store: false } : {}),
-      ...textRequestParameters(model),
-      model: model.model,
-      ...(!ollama && protocol === 'responses' ? { input: [{ role: 'user', content: prompt }] } : { messages: [{ role: 'user', content: prompt }] }),
-      stream: false,
-    }),
+    body: JSON.stringify({ ...parameters, ...body }),
     signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(120_000)]) : AbortSignal.timeout(120_000),
   };
   onRequestPhase?.('send');
-  const response = await fetch(requestUrl, request);
+  let response = await fetch(requestUrl, request);
   onRequestPhase?.('headers');
-  if (!response.ok) { await response.body?.cancel(); throw Object.assign(new Error(`模型服务返回 HTTP ${response.status}，请检查服务地址、模型及访问权限。`), { status: response.status }); }
+  if (!response.ok) {
+    const status = response.status;
+    let formatRejected = false, maasFormatProbe = false;
+    if (status === 400 || status === 422) {
+      try {
+        const errorBody = await readModelResponse(response);
+        formatRejected = unsupportedOutputFormat(errorBody);
+        maasFormatProbe = status === 400 && protocol === 'responses' && maasRequestFormatRejection(errorBody);
+      }
+      catch { /* The explicit HTTP rejection remains known even without a readable error body. */ }
+    } else await response.body?.cancel();
+    if (automaticFormat && (formatRejected || maasFormatProbe)) {
+      // MaaS can reject Responses JSON Schema with generic 400001 and no param.
+      // Probe without our automatic format only after an explicit rejection.
+      // Keep the same prompt and frozen model; never replay an uncertain request.
+      onOutputFormatFallback?.();
+      request.headers['X-Client-Request-Id'] = `${operationId}:prompt-format`;
+      request.body = JSON.stringify({ ...textRequestParameters(model), ...body });
+      onRequestPhase?.('send'); response = await fetch(requestUrl, request); onRequestPhase?.('headers');
+    } else {
+      if (rejectedTextStatuses.has(status)) throw new TextRequestRejectedError(status, formatRejected);
+      throw Object.assign(new Error(`模型服务返回 HTTP ${status}，请检查服务地址、模型及访问权限。`), { status });
+    }
+  }
+  if (!response.ok) {
+    await response.body?.cancel();
+    if (rejectedTextStatuses.has(response.status)) throw new TextRequestRejectedError(response.status);
+    throw Object.assign(new Error(`模型服务返回 HTTP ${response.status}，请检查服务地址、模型及访问权限。`), { status: response.status });
+  }
   const data = await readModelResponse(response, onRequestPhase);
   onRequestPhase?.('validate');
   if (!data || typeof data !== 'object') throw new Error('模型服务返回了无效结果。');
   const value = data as Record<string, unknown>;
   if (!ollama && protocol === 'responses') {
-    if (value.status === 'failed' || value.status === 'incomplete') throw new Error('Responses 未完整生成结果，请检查模型限制或提高最大输出 Token。');
+    const incomplete = value.status === 'failed' || value.status === 'incomplete';
+    if (incomplete && !outputSchema) throw new Error('Responses 未完整生成结果，请检查模型限制或提高最大输出 Token。');
     const text = Array.isArray(value.output) ? value.output.flatMap(item => item && typeof item === 'object' && item.type === 'message' ? [textBlocks(item.content, 'output_text')] : []).filter(Boolean).join('\n') : '';
-    if (!text.trim()) throw new Error('模型未返回文本内容。');
-    return { text, usage: textProviderUsage(value) };
+    if (!text.trim() && !outputSchema) throw new Error('模型未返回文本内容。');
+    return { text, usage: textProviderUsage(value), ...(incomplete ? { incomplete: true } : {}) };
   }
   if (!ollama && protocol === 'messages') {
-    if (value.stop_reason === 'max_tokens') throw new Error('Messages 达到最大输出 Token，未完整生成结果。');
+    const incomplete = value.stop_reason === 'max_tokens';
+    if (incomplete && !outputSchema) throw new Error('Messages 达到最大输出 Token，未完整生成结果。');
     const text = textBlocks(value.content, 'text');
-    if (!text.trim()) throw new Error('模型未返回文本内容。');
-    return { text, usage: textProviderUsage(value) };
+    if (!text.trim() && !outputSchema) throw new Error('模型未返回文本内容。');
+    return { text, usage: textProviderUsage(value), ...(incomplete ? { incomplete: true } : {}) };
   }
   const message = ollama ? value.message : Array.isArray(value.choices) ? (value.choices[0] as { message?: unknown } | undefined)?.message : undefined;
   if (!message || typeof message !== 'object') throw new Error('模型结果缺少消息内容。');
   const content = (message as { content?: unknown }).content;
-  if (typeof content !== 'string' || !content.trim()) throw new Error('模型未返回文本内容。');
-  return { text: content, usage: textProviderUsage(value, ollama) };
+  if (typeof content !== 'string' || (!content.trim() && !outputSchema)) throw new Error('模型未返回文本内容。');
+  const incomplete = ollama ? value.done_reason === 'length' : (value.choices as { finish_reason?: string }[])[0]?.finish_reason === 'length';
+  return { text: content, usage: textProviderUsage(value, ollama), ...(incomplete ? { incomplete: true } : {}) };
 };
 
 export async function testModelConnection(model: ModelProfile, secret?: string) {

@@ -1,7 +1,7 @@
-import { useId, useState } from 'react';
-import { ChevronDown, Download, FolderOpen, PencilLine, RefreshCw } from 'lucide-react';
+import { useId, useRef, useState } from 'react';
+import { ChevronDown, Download, FolderOpen, PencilLine, RefreshCw, RotateCcw } from 'lucide-react';
 import { activitySchema, recordPageSchema, runDiagnosticsSchema, runEventSchema, runInspectionSchema, runStepPayloadSchema, type RunInspection, type RunStepSummary, type RunSummary } from '@video-quickly/contracts';
-import { Button, Dialog, Notice, Status } from '../components/Primitives';
+import { Button, Dialog, Notice, Select, Status } from '../components/Primitives';
 import { nativeDesktop, revealFile } from '../components/PathPicker';
 import { getAssetUrl, rpc } from '../lib/client';
 import { useRecordPage } from '../lib/use-record-page';
@@ -27,17 +27,20 @@ export default function RunInspector({ runId, initialNodeId, version, onClose, o
   const [selectedId, setSelectedId] = useState(initialNodeId ?? '');
   const [pending, setPending] = useState('');
   const [error, setError] = useState('');
+  const inFlight = useRef(false);
   const [diagnostic, setDiagnostic] = useState<ReturnType<typeof runDiagnosticsSchema.parse> & { url: string }>();
   const data = inspection.data;
   const selected = data?.steps.find(step => step.id === selectedId) ?? data?.steps.find(step => step.id === data.run.currentNodeId) ?? data?.steps[0];
   async function perform(method: string, params: Record<string, unknown> = {}) {
+    if (inFlight.current) return;
+    inFlight.current = true;
     setPending(method); setError('');
     try {
       const result = await rpc(method, { runId, ...params });
       if (method === 'run.diagnostics') { const saved = runDiagnosticsSchema.parse(result); setDiagnostic({ ...saved, url: await getAssetUrl(saved.path) }); }
       else { inspection.refresh(); onChanged(); }
     } catch (error) { setError(error instanceof Error ? error.message : String(error)); }
-    finally { setPending(''); }
+    finally { inFlight.current = false; setPending(''); }
   }
   return <Dialog title="制作步骤详情" onClose={onClose} className="dialog--wide run-inspector">
     <div className="dialog__body run-inspector__body">
@@ -50,7 +53,7 @@ export default function RunInspector({ runId, initialNodeId, version, onClose, o
         {(!data.snapshotAvailable || !data.checkpointAvailable) && <Notice>{!data.snapshotAvailable ? '这次历史制作没有冻结流程，保留原始活动与日志供核对。' : '这次历史制作没有可验证的编排检查点；产物与日志按实际保存情况展示。'}</Notice>}
         {data.steps.length ? <div className="run-inspector__layout">
           <nav className="run-inspector__steps" aria-label="冻结流程步骤">{data.steps.map((step, index) => <button type="button" key={step.id} aria-current={selected?.id === step.id ? 'step' : undefined} onClick={() => setSelectedId(step.id)}><span className="run-inspector__index">{index + 1}</span><span><strong>{step.label}</strong><StepStatus step={step} /></span>{step.outputAvailable && <span className="run-inspector__output-mark" aria-label="已保存产物" />}</button>)}</nav>
-          {selected && <StepDetail key={`${runId}:${selected.id}`} inspection={data} step={selected} version={version} onOpenOutput={onOpenOutput} />}
+          {selected && <StepDetail key={`${runId}:${selected.id}`} inspection={data} step={selected} version={version} onOpenOutput={onOpenOutput} retry={{ busy: pending === 'run.step.retry', disabled: Boolean(pending || inspection.error), onRetry: () => { setSelectedId(selected.id); void perform('run.step.retry', { nodeId: selected.id }); } }} />}
         </div> : <RunLog runId={runId} version={version} />}
       </>}
       {diagnostic && <div className="run-inspector__diagnostic" role="status"><span>诊断已导出 · {diagnostic.bytes.toLocaleString()} 字节</span><code>{diagnostic.path}</code>{nativeDesktop ? <Button aria-label="打开文件夹" onClick={() => void revealFile(diagnostic.path).catch(error => setError(String(error)))}><FolderOpen size={16} />打开文件夹</Button> : <a className="button" href={diagnostic.url} download>下载诊断文件</a>}</div>}
@@ -67,16 +70,17 @@ export function StepStatus({ step }: { step: RunStepSummary }) {
   return stepStates[step.status] ? <span className="run-inspector__state">{stepStates[step.status]}</span> : <Status value={step.status} />;
 }
 
-export function CurrentStepResult({ inspection, step, version, onOpenOutput, planning }: StepOutputsProps) {
-  const currentPlanning = !inspection.run.selection && inspection.steps.filter(item => item.kind !== 'subflow').length > 1 && (!inspection.run.purpose || inspection.run.purpose === 'production') ? planning : undefined;
+export function CurrentStepResult({ inspection, step, version, onOpenOutput, planning, retry }: StepOutputsProps) {
+  const currentPlanning = !inspection.run.selection && inspection.run.stepRetry?.nodeId !== step.id && inspection.steps.filter(item => item.kind !== 'subflow').length > 1 && (!inspection.run.purpose || inspection.run.purpose === 'production') ? planning : undefined;
   const planningSection = currentPlanning && isPlanningSection(step.kind) ? step.kind : undefined;
   return <section className="run-inspector__detail" aria-label={`步骤详情：${step.label}`}>
     <header className="run-inspector__step-heading"><div><h3>{step.label}</h3>{planningSection && <p className="run-inspector__planning-label">当前项目内容</p>}</div>{planningSection && currentPlanning && <Button static aria-label={`编辑${planningLabels[planningSection]}`} disabled={Boolean(currentPlanning.disabledReason)} onClick={() => currentPlanning.onEdit(planningSection)}><PencilLine size={16} />编辑内容</Button>}</header>
-    <div className="run-inspector__panel"><StepOutputs inspection={inspection} step={step} version={version} onOpenOutput={onOpenOutput} planning={currentPlanning} /></div>
+    <StepRetryAction step={step} controls={retry} />
+    <div className="run-inspector__panel"><ModelResponseDetails runId={inspection.run.id} step={step} version={version} /><StepOutputs inspection={inspection} step={step} version={version} onOpenOutput={onOpenOutput} planning={currentPlanning} showApply={step.kind !== 'assets'} /></div>
   </section>;
 }
 
-function StepDetail({ inspection, step, version, onOpenOutput }: StepOutputsProps) {
+function StepDetail({ inspection, step, version, onOpenOutput, retry }: StepOutputsProps) {
   const [tab, setTab] = useState<'output' | 'status'>(step.outputAvailable ? 'output' : 'status');
   const [promptOpen, setPromptOpen] = useState(false);
   const [logOpen, setLogOpen] = useState(false);
@@ -87,6 +91,7 @@ function StepDetail({ inspection, step, version, onOpenOutput }: StepOutputsProp
   const tabs = [{ id: 'output', label: '步骤产物' }, { id: 'status', label: '制作信息' }] as const;
   return <section className="run-inspector__detail" aria-label={`步骤详情：${step.label}`}>
     <header className="run-inspector__step-heading"><div><h3>{step.label}</h3>{tab === 'status' && <p>{step.description || help.purpose}</p>}</div>{tab === 'status' && <StepStatus step={step} />}</header>
+    <StepRetryAction step={step} controls={retry} />
     <div className="run-inspector__tabs" role="tablist" aria-label="步骤详情视图">{tabs.map(item => <button key={item.id} id={`${id}-${item.id}`} type="button" role="tab" aria-selected={tab === item.id} aria-controls={`${id}-panel`} tabIndex={tab === item.id ? 0 : -1} onClick={() => setTab(item.id)} onKeyDown={event => {
       const index = tabs.findIndex(item => item.id === tab);
       const next = event.key === 'ArrowRight' ? (index + 1) % tabs.length : event.key === 'ArrowLeft' ? (index + tabs.length - 1) % tabs.length : event.key === 'Home' ? 0 : event.key === 'End' ? tabs.length - 1 : undefined;
@@ -94,6 +99,7 @@ function StepDetail({ inspection, step, version, onOpenOutput }: StepOutputsProp
       event.preventDefault(); setTab(tabs[next].id); event.currentTarget.parentElement?.querySelectorAll<HTMLButtonElement>('[role="tab"]')[next]?.focus();
     }}>{item.label}</button>)}</div>
     <div id={`${id}-panel`} role="tabpanel" aria-labelledby={`${id}-${tab}`} className="run-inspector__panel">
+      <ModelResponseDetails runId={inspection.run.id} step={step} version={version} />
       {tab === 'output' && <StepOutputs inspection={inspection} step={step} version={version} onOpenOutput={onOpenOutput} />}
       {tab === 'status' && <><p className="run-inspector__reason" role={step.error ? 'alert' : 'status'}>{step.reason}</p>{selected.error && <Notice kind="error">{selected.error}<Button aria-label="重试读取配置" onClick={selected.refresh}>重试</Button></Notice>}
         <dl className="run-inspector__facts"><div><dt>本步产出</dt><dd>{help.result}</dd></div>{detail && <><div><dt>制作模型</dt><dd>{detail.model ? `${detail.model.name} · ${detail.model.model}` : detail.node.modelId ? `所选模型不可用 · ${detail.node.modelId}` : help.local}</dd></div><div><dt>前置步骤</dt><dd>{detail.dependencies.map(id => inspection.steps.find(step => step.id === id)?.label ?? id).join('、') || '从项目内容开始'}</dd></div>{detail.skills.length > 0 && <div><dt>采用的规范</dt><dd>{detail.skills.map(skill => skill.name).join('、')}</dd></div>}</>}{step.startedAt && <div><dt>开始时间</dt><dd>{date(step.startedAt)}</dd></div>}{step.completedAt && <div><dt>完成时间</dt><dd>{date(step.completedAt)}</dd></div>}</dl>
@@ -101,6 +107,22 @@ function StepDetail({ inspection, step, version, onOpenOutput }: StepOutputsProp
         <details className="run-inspector__logs-toggle" onToggle={event => setLogOpen(event.currentTarget.open)}><summary>活动与日志</summary>{logOpen && <RunLog runId={inspection.run.id} nodeId={step.id} version={version} />}</details>
       </>}
     </div>
+  </section>;
+}
+
+function ModelResponseDetails({ runId, step, version }: { runId: string; step: RunStepSummary; version: number }) {
+  return step.responseAvailable ? <SavedModelResponse runId={runId} nodeId={step.id} version={version} /> : null;
+}
+function SavedModelResponse({ runId, nodeId, version }: { runId: string; nodeId: string; version: number }) {
+  const [attempt, setAttempt] = useState('');
+  const output = useRuntimeRead('run.step.payload', { runId, nodeId, kind: 'output', ...(attempt ? { responseAttempt: Number(attempt) } : {}) }, version, runStepPayloadSchema);
+  const response = output.data?.modelResponse;
+  return <section className="run-inspector__model-response" aria-label="模型返回记录">
+    {output.error && <Notice kind="error">{output.error}<Button aria-label="重试读取模型返回" onClick={output.refresh}>重试</Button></Notice>}
+    {(Boolean(attempt) || (output.data?.modelResponseHistory?.length ?? 0) > (response ? 1 : 0)) && <Select aria-label="模型返回版本" value={attempt} onChange={event => setAttempt(event.target.value)}><option value="">最新返回</option>{output.data?.modelResponseHistory?.map(item => <option key={item.attempt} value={item.attempt}>第 {item.attempt} 次 · {item.invalid ? '校验未通过' : '已收到'}</option>)}</Select>}
+    {response && <>{Boolean(response.issues?.length) && <Notice kind="error"><div><strong>模型已返回，分镜校验未通过</strong><ul>{response.issues?.map((issue, index) => <li key={index}><code>{issue.path}</code>：{issue.message}</li>)}</ul></div></Notice>}
+      <details><summary><ChevronDown size={14} />查看模型原始返回</summary><p className="run-inspector__muted">第 {response.attempt} 次返回 · {date(response.receivedAt)} · 只读，敏感内容已隐藏</p><pre className="run-inspector__json">{response.text || '模型返回了空文本。'}</pre></details>
+    </>}
   </section>;
 }
 
@@ -119,7 +141,13 @@ function StepExecutionPrompt({ runId, step, version, configuredPrompt }: { runId
   </section>;
 }
 
-interface StepOutputsProps { inspection: RunInspection; step: RunStepSummary; version: number; onOpenOutput: (selection: StepOutputSelection) => void; planning?: PlanningControls }
+interface StepRetryControls { busy: boolean; disabled: boolean; onRetry: () => void }
+interface StepOutputsProps { inspection: RunInspection; step: RunStepSummary; version: number; onOpenOutput: (selection: StepOutputSelection) => void; planning?: PlanningControls; retry?: StepRetryControls; showApply?: boolean }
+function StepRetryAction({ step, controls }: { step: RunStepSummary; controls?: StepRetryControls }) {
+  const id = useId();
+  if (!step.retry || !controls) return null;
+  return <div className="run-inspector__retry"><Button static aria-label="重试此步骤" aria-describedby={id} busy={controls.busy} disabled={controls.disabled || !step.retry.allowed} onClick={controls.onRetry}><RotateCcw size={16} />重试此步骤</Button><p id={id} className="run-inspector__muted">{step.retry.reason || '沿用本次制作的配置与上游产物，完成后停在此步骤。'}</p></div>;
+}
 function StepOutputs(props: StepOutputsProps) {
   if (props.planning && isPlanningSection(props.step.kind) && props.inspection.run.purpose !== 'workflow-assistant') return <PlanningOutput section={props.step.kind} planning={props.planning} />;
   return <RecordedStepOutput {...props} />;
@@ -132,14 +160,14 @@ function PlanningOutput({ section, planning }: { section: PlanningSection; plann
   </>;
 }
 
-function RecordedStepOutput({ inspection, step, version, onOpenOutput }: StepOutputsProps) {
+function RecordedStepOutput({ inspection, step, version, onOpenOutput, showApply = true }: StepOutputsProps) {
   const output = useRuntimeRead('run.step.payload', { runId: inspection.run.id, nodeId: step.id, kind: 'output' }, version, runStepPayloadSchema);
-  const applicable = inspection.run.purpose !== 'workflow-assistant' && ['script', 'style', 'assets', 'animation', 'research'].includes(step.kind);
+  const applicable = showApply && inspection.run.purpose !== 'workflow-assistant' && ['script', 'style', 'assets', 'animation', 'research'].includes(step.kind);
   const open = () => onOpenOutput({ projectId: inspection.run.projectId, runId: inspection.run.id, nodeId: step.id, kind: step.kind });
   return <>{output.error && <Notice kind="error">{output.error}<Button aria-label="重试读取产物" onClick={output.refresh}>重试</Button></Notice>}
     {!output.data && !output.error && <p role="status">正在读取步骤产物…</p>}
     {output.data && !output.data.available && <p>这个步骤尚未保存产物。</p>}
-    {output.data?.available && <section aria-label="本次产物"><StepResultView value={output.data.value} kind={step.kind} /></section>}
+    {output.data?.available && <section aria-label="本次产物"><StepResultView value={output.data.value} kind={step.kind} mediaShots={output.data.mediaShots} mediaGeneration={output.data.mediaGeneration} onRegenerate={!inspection.run.purpose || inspection.run.purpose === 'production' ? (shotId, kind) => onOpenOutput({ projectId: inspection.run.projectId, runId: inspection.run.id, nodeId: step.id, kind: step.kind, regeneration: { shotId, kind, modelName: output.data?.mediaGeneration?.modelName ?? '' } }) : undefined} /></section>}
     {applicable && output.data?.available && <div className="run-inspector__output-actions"><Button aria-label="在项目中查看与应用" onClick={open}>在工作台使用</Button></div>}
   </>;
 }

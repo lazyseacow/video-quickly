@@ -29,7 +29,7 @@ const methodWords = new Set(('workspace snapshot summary project create get upda
   'skill import toggle tool register cost task tasks character references workflow workflowTemplate seriesTemplate render batch export research search analyze source read ' +
   'asset select retain waveform caption system status runtime reconnect host secret set audio preview levels silence mix prepare edit history undo redo readiness recovery scan confirm').split(' '));
 const builtinNodeIds = new Set(['brief', 'research', 'style', 'script', 'assets', 'video', 'animation', 'export', 'review', 'join', 'condition', 'subflow', 'agent']);
-const errorNames = new Set(['Error', 'TypeError', 'SyntaxError', 'RangeError', 'ReferenceError', 'AggregateError', 'URIError', 'EvalError', 'AbortError', 'TimeoutError', 'ZodError', 'AmbiguousActivityError', 'ActivityInputChangedError', 'LockedShotChangeError', 'VideoGenerationError']);
+const errorNames = new Set(['Error', 'TypeError', 'SyntaxError', 'RangeError', 'ReferenceError', 'AggregateError', 'URIError', 'EvalError', 'AbortError', 'TimeoutError', 'ZodError', 'AmbiguousActivityError', 'ActivityInputChangedError', 'LockedShotChangeError', 'VideoGenerationError', 'ModelResponseValidationError', 'TextRequestRejectedError', 'MediaRequestRejectedError']);
 const errorCodes = new Set([
   'EACCES', 'EADDRINUSE', 'EADDRNOTAVAIL', 'EAGAIN', 'EAI_AGAIN', 'EBADF', 'EBUSY', 'ECANCELED', 'ECONNABORTED', 'ECONNREFUSED', 'ECONNRESET',
   'EEXIST', 'EHOSTDOWN', 'EHOSTUNREACH', 'EINTR', 'EINVAL', 'EIO', 'EISDIR', 'ELOOP', 'EMFILE', 'ENAMETOOLONG', 'ENETDOWN', 'ENETUNREACH',

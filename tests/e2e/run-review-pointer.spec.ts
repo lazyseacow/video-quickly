@@ -46,7 +46,7 @@ for (const surface of ['workbench', 'history'] as const) {
     if (surface === 'history') await detail.getByRole('tab', { name: '制作信息', exact: true }).click();
     else await expect(detail.getByRole('tab', { name: '制作信息', exact: true })).toHaveCount(0);
     await expect(detail).not.toContainText('人工审阅'); await expect(detail.getByRole('button', { name: /通过审阅|停止并修改/ })).toHaveCount(0);
-    await detail.getByRole('button', { name: '关闭', exact: true }).click();
+    await detail.getByRole('button', { name: '关闭对话框', exact: true }).click();
     expect(reviews).toEqual([]); expect((await source.current()).completedNodeIds).toEqual(['first', 'second']);
     expect((await rpc<{ project: ProjectDocument }>(request, 'project.get', { projectId: source.project.id })).project).toEqual(source.project);
   });

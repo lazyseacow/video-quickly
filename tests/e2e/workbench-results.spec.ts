@@ -1,9 +1,9 @@
 import { productionStep, saveAndStartProduction } from './production-settings';
 import { expect, test } from '@playwright/test';
-import { fixture, open, pick, latest, rpc } from './native-video-fixture';
+import { fixture, open, pick, latest, rpc, saved } from './native-video-fixture';
 
-for (const { width, theme } of [{ width: 1536, theme: 'dark' }, { width: 600, theme: 'light' }]) test('shows concise storyboard, media and delivery outputs at ' + width + 'px', async ({ page, request }, info) => {
-  const source = await fixture(request, info, false, 3), errors: string[] = [];
+for (const { width, theme } of [{ width: 1536, theme: 'dark' }, { width: 600, theme: 'light' }, { width: 390, theme: 'light' }]) test('shows concise storyboard, media and delivery outputs at ' + width + 'px', async ({ page, request }, info) => {
+  const source = await fixture(request, info, false, 6), errors: string[] = [];
   page.on('pageerror', error => errors.push(error.message));
   page.on('console', message => { if (['error', 'warning'].includes(message.type())) errors.push(message.text()); });
   try {
@@ -20,36 +20,55 @@ for (const { width, theme } of [{ width: 1536, theme: 'dark' }, { width: 600, th
     await expect(page.getByRole('button', { name: '镜头声音处理', exact: true })).toHaveCount(0);
     await expect(page.getByLabel('轨道信息', { exact: true })).not.toContainText('旁白');
     await expect(page.getByRole('checkbox', { name: '启用视频原声', exact: true })).toBeChecked();
-    await page.locator('.workbench-guide__step').filter({ hasText: '策划与分镜' }).click();
+    await page.locator('.workbench-guide__step').filter({ hasText: '简报生成' }).click();
     const dialog = page.getByRole('dialog', { name: '本次制作', exact: true });
-    const stages = dialog.getByRole('tablist', { name: '制作阶段记录', exact: true }), steps = dialog.getByRole('navigation', { name: '本阶段制作步骤', exact: true });
-    await steps.getByRole('button', { name: /旁白与分镜/ }).click();
+    const steps = dialog.getByRole('navigation', { name: '本次制作步骤', exact: true });
+    await steps.getByRole('button', { name: /分镜生成/ }).click();
     const output = dialog.getByRole('region', { name: '本次产物', exact: true });
     const storyboard = output.getByRole('region', { name: '分镜预览', exact: true });
-    await expect(storyboard.locator('ol > li')).toHaveCount(3); await expect(storyboard).toContainText('3 个镜头');
+    await expect(storyboard.locator('ol > li')).toHaveCount(6); await expect(storyboard).toContainText('6 个镜头');
     await expect(storyboard.getByRole('heading', { name: '生成的蓝色镜头 1', exact: true })).toBeVisible();
     await expect(storyboard).toContainText('蓝色天空'); await expect(storyboard).toContainText('自然讲述');
     await expect(storyboard.locator('.step-result__visual')).toHaveCount(0);
     await page.screenshot({ path: info.outputPath('step-storyboard-' + width + '.png') });
-    await stages.getByRole('tab', { name: '素材与配音', exact: true }).click();
+    const baseline = await saved(request, source.project.id);
+    await rpc(request, 'project.update', { projectId: baseline.id, revision: baseline.revision, patch: { shots: baseline.shots.map(shot => ({ ...shot, title: '后来修改的镜头名称' })) } });
+    await expect(dialog.getByRole('tablist', { name: '制作阶段记录', exact: true })).toHaveCount(0);
     await steps.getByRole('button', { name: /参考素材准备/ }).click(); await expect(output).toContainText('本步骤未添加参考素材');
     await expect(output).not.toContainText('referenceAssetIds');
     await steps.getByRole('button', { name: /镜头视频生成/ }).click();
-    const media = output.getByRole('combobox', { name: '预览媒体', exact: true }); await expect(media.getByRole('option')).toHaveCount(3);
-    const first = await media.inputValue(); await media.focus(); await page.keyboard.press('Space'); await page.keyboard.press('ArrowDown'); await page.keyboard.press('Enter');
-    await expect(media).not.toHaveValue(first); await expect(output.locator('video')).toHaveCount(1);
+    const media = output.getByRole('group', { name: '选择预览素材', exact: true }), second = media.getByRole('button', { name: /^预览/ }).nth(1); await expect(media.getByRole('button', { name: /^预览/ })).toHaveCount(6);
+    await expect(media.getByRole('button', { name: /^预览/ }).first()).toContainText('生成的蓝色镜头 1'); await expect(media).not.toContainText('后来修改的镜头名称');
+    await expect(media.getByRole('button', { name: /^预览/ }).first()).toBeInViewport({ ratio: 1 });
+    if (width > 1000) await expect(media.getByRole('button', { name: /^预览/ }).last()).toBeInViewport({ ratio: 1 });
+    await expect.poll(() => media.getByRole('button', { name: /^预览/ }).first().locator('canvas').evaluate((canvas: HTMLCanvasElement) => canvas.width)).toBeGreaterThan(1);
+    const previous = await output.locator('video').elementHandle(); if (!previous) throw new Error('Missing initial video');
+    await previous.evaluate((video: HTMLVideoElement) => { video.muted = true; return video.play(); });
+    await second.focus(); await second.press('Enter');
+    await expect(second).toHaveAttribute('aria-pressed', 'true'); await expect(output.locator('video')).toHaveCount(1);
+    expect(await previous.evaluate((video: HTMLVideoElement) => video.paused && !video.hasAttribute('src'))).toBe(true); await previous.dispose();
+    await expect(output.locator('.step-result__preview-heading h4')).toHaveText('生成的蓝色镜头 2');
+    await expect(output.locator('.step-result__preview-navigation')).toContainText('2 / 6');
     await expect.poll(() => output.locator('video').evaluate(video => (video as HTMLVideoElement).readyState)).toBeGreaterThanOrEqual(2);
-    await expect(media).toBeFocused(); await expect(media).not.toHaveCSS('box-shadow', 'none');
+    await expect(second).toBeFocused();
+    await output.getByRole('button', { name: '下一个素材', exact: true }).click(); await expect(media.getByRole('button', { name: /^预览/ }).nth(2)).toHaveAttribute('aria-pressed', 'true');
+    await output.getByRole('button', { name: '上一个素材', exact: true }).click(); await expect(second).toHaveAttribute('aria-pressed', 'true');
+    expect(await output.locator('video').evaluate((video: HTMLVideoElement) => video.paused)).toBe(true);
+    await output.locator('.step-result__gallery-summary').scrollIntoViewIfNeeded();
+    await output.locator('video').evaluate(async (video: HTMLVideoElement) => { video.muted = true; await video.play(); video.pause(); });
+    await expect.poll(() => output.locator('video').evaluate(video => (video as HTMLVideoElement).readyState)).toBeGreaterThanOrEqual(3);
+    const generations = source.requests.length;
     await page.screenshot({ path: info.outputPath('step-video-' + width + '.png') });
-    await stages.getByRole('tab', { name: '剪辑与动画', exact: true }).click(); await expect(output).toContainText('3 个镜头已就绪');
+    await steps.getByRole('button', { name: /剪辑与运镜准备/ }).click(); await expect(output).toContainText('6 个镜头已就绪');
     await expect(output.locator('.step-result__fields')).toHaveCount(0);
-    await stages.getByRole('tab', { name: '审阅与导出', exact: true }).click();
+    await steps.getByRole('button', { name: /导出成片/ }).click();
     await expect(output.getByRole('link', { name: '下载成片', exact: true })).toBeVisible();
     await expect(output.locator('video')).toHaveCount(1);
     await expect(page.locator('.workbench-guide__step')).toHaveCount(4);
     await expect(page).toHaveTitle(/Video Quickly/); expect(new URL(page.url()).pathname).toBe('/');
     await expect(page.locator('vite-error-overlay')).toHaveCount(0); expect(errors).toEqual([]);
     expect(await dialog.evaluate(element => element.scrollWidth <= element.clientWidth)).toBe(true);
+    expect(source.requests).toHaveLength(generations);
   } finally { await source.close(); }
 });
 
@@ -60,7 +79,7 @@ test('expands a long storyboard without losing the remaining shots', async ({ pa
     const script = source.project.workflow.nodes.find(node => node.kind === 'script')!;
     await rpc(request, 'run.start', { projectId: source.project.id, nodeId: script.id });
     await expect.poll(async () => (await latest(request, source.project.id))?.status).toBe('succeeded');
-    await open(page, source.project).then(dialog => dialog.getByRole('button', { name: '取消', exact: true }).click()); await page.getByRole('button', { name: '打开阶段：策划与分镜', exact: true }).click(); const settings = page.getByRole('dialog', { name: '本次制作', exact: true });
+    await open(page, source.project).then(dialog => dialog.getByRole('button', { name: '取消', exact: true }).click()); await page.getByRole('button', { name: '打开步骤：分镜生成', exact: true }).click(); const settings = page.getByRole('dialog', { name: '本次制作', exact: true });
     const storyboard = settings.getByRole('region', { name: '分镜预览', exact: true });
     await expect(storyboard.locator('ol > li')).toHaveCount(20);
     await expect(storyboard).toContainText('21 个镜头');
@@ -68,5 +87,35 @@ test('expands a long storyboard without losing the remaining shots', async ({ pa
     await expect(storyboard.locator('ol > li')).toHaveCount(21);
     await expect(storyboard.getByRole('heading', { name: '生成的蓝色镜头 21', exact: true })).toBeVisible();
     await expect(storyboard.getByRole('button', { name: '显示更多镜头', exact: true })).toHaveCount(0);
+  } finally { await source.close(); }
+});
+
+for (const height of [960, 720]) test(`keeps the image preview in place while scrolling thumbnails at ${height}px height`, async ({ page, request }, info) => {
+  const shotCount = 12, source = await fixture(request, info, false, shotCount);
+  try {
+    await page.setViewportSize({ width: 1536, height }); await page.emulateMedia({ reducedMotion: 'reduce' });
+    const image = await rpc<{ id: string }>(request, 'model.save', { model: { name: '参考图夹具', provider: 'openai-compatible', connectionType: 'image', capabilities: ['image'], model: 'fixture-image', baseUrl: source.models[0].baseUrl } });
+    await rpc(request, 'workflow.save', { projectId: source.project.id, workflow: { ...source.project.workflow, production: { ...source.project.workflow.production!, textModelId: source.models[0].id, videoModelId: source.video.id, imageModelId: image.id, referenceMode: 'generate' } } });
+    await rpc(request, 'run.start', { projectId: source.project.id });
+    await expect.poll(async () => (await latest(request, source.project.id))?.status, { timeout: 30000 }).toBe('succeeded');
+    await open(page, source.project).then(dialog => dialog.getByRole('button', { name: '取消', exact: true }).click());
+    await page.getByRole('button', { name: '打开步骤：参考图生成', exact: true }).click();
+    const dialog = page.getByRole('dialog', { name: '本次制作', exact: true }), output = dialog.locator('.step-result');
+    const thumbnails = output.getByRole('group', { name: '选择预览素材', exact: true }), preview = output.locator('.step-result__preview');
+    await expect(dialog.getByRole('button', { name: '在项目中查看与应用', exact: true })).toHaveCount(0);
+    await expect(thumbnails.getByRole('button', { name: /^预览/ })).toHaveCount(shotCount);
+    await expect(output.getByRole('button', { name: /^重新生成镜头/ })).toHaveCount(shotCount);
+    await expect.poll(() => preview.locator('img').evaluate((image: HTMLImageElement) => image.complete && image.naturalWidth > 0)).toBe(true);
+    await thumbnails.hover(); const before = await preview.boundingBox(), generations = source.requests.length;
+    await page.mouse.wheel(0, 1200); await expect.poll(() => thumbnails.evaluate(element => element.scrollTop)).toBeGreaterThan(0);
+    await page.mouse.wheel(0, 1200); await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+    expect(await preview.boundingBox()).toEqual(before);
+    await expect(preview.locator('img')).toBeInViewport({ ratio: 1 });
+    const last = thumbnails.getByRole('button', { name: /^预览/ }).last(); await last.focus(); await last.press('Enter');
+    await expect(last).toHaveAttribute('aria-pressed', 'true'); await expect(preview).toContainText(`生成的蓝色镜头 ${shotCount}`);
+    await expect.poll(() => preview.locator('img').evaluate((image: HTMLImageElement) => image.complete && image.naturalWidth > 0)).toBe(true);
+    expect(await preview.boundingBox()).toEqual(before); expect(source.requests).toHaveLength(generations);
+    await expect(page).toHaveTitle(/Video Quickly/); await expect(page.locator('vite-error-overlay')).toHaveCount(0);
+    await page.screenshot({ path: info.outputPath('image-preview-scroll.png') });
   } finally { await source.close(); }
 });

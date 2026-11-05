@@ -1,10 +1,10 @@
-import { createServer, type IncomingHttpHeaders, type Server } from 'node:http';
+import { createServer, type IncomingHttpHeaders, type Server, type ServerResponse } from 'node:http';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, expect, it } from 'vitest';
 import { modelSchema, workflowNodeSchema, type ModelProfile, type RunRecord, type TextProtocol, type WorkspaceSnapshot } from '@video-quickly/contracts';
-import { generateText, testModelConnection, textRequestParameters } from '../src/providers.js';
+import { generateText, testModelConnection, textRequestParameters, TextRequestRejectedError } from '../src/providers.js';
 import { createRuntime } from '../src/index.js';
 
 const servers: Server[] = [], directories: string[] = [], runtimes: ReturnType<typeof createRuntime>[] = [];
@@ -14,11 +14,11 @@ afterEach(async () => {
   await Promise.all(directories.splice(0).map(path => rm(path, { recursive: true, force: true })));
 });
 
-async function service(handler: (path: string, body: Record<string, unknown>, headers: IncomingHttpHeaders) => unknown) {
+async function service(handler: (path: string, body: Record<string, unknown>, headers: IncomingHttpHeaders, response: ServerResponse) => unknown) {
   const server = createServer(async (request, response) => {
     let body = ''; for await (const chunk of request) body += chunk.toString();
     response.setHeader('Content-Type', 'application/json');
-    response.end(JSON.stringify(handler(request.url ?? '', body ? JSON.parse(body) : {}, request.headers)));
+    response.end(JSON.stringify(handler(request.url ?? '', body ? JSON.parse(body) : {}, request.headers, response)));
   });
   servers.push(server); await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
   const address = server.address(); if (!address || typeof address === 'string') throw new Error('测试服务未启动。');
@@ -29,6 +29,97 @@ function model(baseUrl: string, textProtocol?: TextProtocol): ModelProfile {
 }
 const openaiUsage = { input_tokens: 100, output_tokens: 20, total_tokens: 120, input_tokens_details: { cached_tokens: 10 } };
 const anthropicUsage = { input_tokens: 80, output_tokens: 20, cache_read_input_tokens: 10, cache_creation_input_tokens: 10 };
+
+for (const status of [400, 401, 403, 422, 429]) {
+  it(`classifies HTTP ${status} as a confirmed rejection without disclosing or automatically retrying its body`, async () => {
+    let calls = 0;
+    const baseUrl = await service((_path, _body, _headers, response) => { calls++; response.statusCode = status; return { error: { message: 'private-provider-body fixture-key', code: 'invalid_request_error' } }; });
+    await expect(generateText({ model: model(baseUrl), prompt: 'JSON', operationId: 'rejected', outputSchema: { type: 'object' } })).rejects.toMatchObject({ name: 'TextRequestRejectedError', status, unsupportedOutputFormat: false, message: expect.not.stringContaining('private-provider-body') });
+    expect(calls).toBe(1);
+  });
+}
+for (const status of [408, 409, 500, 503]) {
+  it(`keeps HTTP ${status} outside confirmed request rejection recovery`, async () => {
+    const baseUrl = await service((_path, _body, _headers, response) => { response.statusCode = status; return { error: { message: 'private-uncertain-body' } }; });
+    try { await generateText({ model: model(baseUrl), prompt: 'JSON', operationId: 'uncertain' }); throw new Error('Expected request failure'); }
+    catch (error) { expect(error).not.toBeInstanceOf(TextRequestRejectedError); expect(error).toMatchObject({ status }); }
+  });
+}
+for (const protocol of ['chat-completions', 'responses', 'messages', 'ollama'] as const) {
+  it(`falls back once after ${protocol} explicitly rejects an automatically added output format`, async () => {
+    const calls: { body: Record<string, unknown>; id: string | string[] | undefined }[] = [];
+    const baseUrl = await service((_path, body, headers, response) => {
+      calls.push({ body, id: headers['x-client-request-id'] });
+      if (calls.length === 1) { response.statusCode = 400; return { error: { param: 'text.format', code: 'unsupported_parameter', message: 'json_schema is not supported by this model' } }; }
+      return protocol === 'responses' ? { status: 'completed', output: [{ type: 'message', content: [{ type: 'output_text', text: '{"shots":[]}' }] }] } : protocol === 'messages' ? { stop_reason: 'end_turn', content: [{ type: 'text', text: '{"shots":[]}' }] } : protocol === 'ollama' ? { message: { content: '{"shots":[]}' } } : { choices: [{ message: { content: '{"shots":[]}' } }] };
+    });
+    let fallbacks = 0;
+    const selected = protocol === 'ollama' ? { ...model(baseUrl), provider: 'ollama' as const, parameters: {} } : model(baseUrl, protocol);
+    expect(await generateText({ model: selected, prompt: '固定 JSON 提示词', operationId: 'fallback', outputSchema: { type: 'object' }, onOutputFormatFallback: () => fallbacks++ })).toMatchObject({ text: '{"shots":[]}' });
+    expect(fallbacks).toBe(1); expect(calls).toHaveLength(2); expect(calls.map(call => call.id)).toEqual(['fallback', 'fallback:prompt-format']);
+    const field = protocol === 'responses' ? 'text' : protocol === 'messages' ? 'output_config' : protocol === 'ollama' ? 'format' : 'response_format';
+    expect(calls[0].body).toHaveProperty(field); expect(calls[1].body).not.toHaveProperty(field);
+    const { [field]: _removed, ...original } = calls[0].body; expect(calls[1].body).toEqual(original);
+  });
+}
+it('never overrides an explicit user format or replays a failed compatibility request', async () => {
+  let calls = 0;
+  const baseUrl = await service((_path, _body, _headers, response) => { calls++; response.statusCode = 400; return { error: { param: 'response_format', message: 'json_schema is not supported' } }; });
+  const configured = { ...model(baseUrl), parameters: { response_format: { type: 'json_object' } } };
+  await expect(generateText({ model: configured, prompt: 'JSON', operationId: 'configured', outputSchema: { type: 'object' } })).rejects.toBeInstanceOf(TextRequestRejectedError);
+  expect(calls).toBe(1);
+  calls = 0;
+  await expect(generateText({ model: model(baseUrl), prompt: 'JSON', operationId: 'two-only', outputSchema: { type: 'object' } })).rejects.toBeInstanceOf(TextRequestRejectedError);
+  expect(calls).toBe(2);
+});
+
+it('handles the MaaS 400001 Responses rejection by removing only the automatically added format', async () => {
+  const calls: Record<string, unknown>[] = [];
+  const baseUrl = await service((_path, body, _headers, response) => {
+    calls.push(body);
+    if (calls.length === 1) { response.statusCode = 400; return { error: { message: 'The request is invalid: the request was rejected by an internal MaaS component. Please check the request body, required fields, and request format.', type: 'invalid_request_error', param: '', code: '400001' } }; }
+    return { status: 'completed', output: [{ type: 'message', content: [{ type: 'output_text', text: '{"shots":[]}' }] }] };
+  });
+  let fallbacks = 0;
+  expect(await generateText({ model: model(baseUrl, 'responses'), prompt: '本次冻结的 JSON 提示词', operationId: 'maas-format', outputSchema: { type: 'object' }, onOutputFormatFallback: () => fallbacks++ })).toMatchObject({ text: '{"shots":[]}' });
+  expect(calls).toHaveLength(2); expect(fallbacks).toBe(1);
+  expect(calls[0]).toHaveProperty('text.format.type', 'json_schema'); expect(calls[1]).not.toHaveProperty('text');
+  const { text: _format, ...original } = calls[0]; expect(calls[1]).toEqual(original);
+});
+
+it('does not probe unrelated 400001 errors, explicit formats, or repeated MaaS rejections', async () => {
+  let calls = 0, reason = 'The request was rejected by an internal MaaS component.';
+  const baseUrl = await service((_path, _body, _headers, response) => { calls++; response.statusCode = 400; return { error: { message: reason, type: 'invalid_request_error', code: '400001' } }; });
+  const selected = model(baseUrl, 'responses'), request = { model: selected, prompt: 'JSON', operationId: 'maas-rejection', outputSchema: { type: 'object' } };
+  await expect(generateText(request)).rejects.toBeInstanceOf(TextRequestRejectedError); expect(calls).toBe(2);
+  calls = 0;
+  await expect(generateText({ ...request, model: { ...selected, parameters: { response_format: { type: 'json_object' } } } })).rejects.toBeInstanceOf(TextRequestRejectedError); expect(calls).toBe(1);
+  calls = 0; reason = 'The context length exceeds the limit.';
+  await expect(generateText(request)).rejects.toBeInstanceOf(TextRequestRejectedError); expect(calls).toBe(1);
+});
+
+it('adds protocol-specific JSON output constraints without replacing explicit model formats', () => {
+  const schema = { type: 'object', properties: { shots: { type: 'array' } }, required: ['shots'] };
+  const base = model('http://127.0.0.1:1');
+  expect(textRequestParameters(base, schema)).toMatchObject({ response_format: { type: 'json_object' } });
+  expect(textRequestParameters({ ...base, textProtocol: 'responses' }, schema)).toMatchObject({ text: { format: { type: 'json_schema', name: 'video_storyboard', schema, strict: false } } });
+  expect(textRequestParameters({ ...base, textProtocol: 'messages' }, schema)).toMatchObject({ output_config: { format: { type: 'json_schema', schema } } });
+  expect(textRequestParameters({ ...base, provider: 'ollama', parameters: {} }, schema)).toMatchObject({ format: schema });
+  const configured = { type: 'json_schema', json_schema: { name: 'user_schema', schema: { type: 'object' } } };
+  expect(textRequestParameters({ ...base, parameters: { response_format: configured } }, schema).response_format).toEqual(configured);
+  expect(textRequestParameters(base)).not.toHaveProperty('response_format');
+});
+
+for (const protocol of ['chat-completions', 'responses', 'messages'] as const) {
+  it(`returns the raw truncated ${protocol} text for script validation and preserves usage`, async () => {
+    const baseUrl = await service((_path, body) => {
+      if (protocol === 'responses') { expect(body.text).toEqual({ format: { type: 'json_schema', name: 'video_storyboard', schema: { type: 'object' }, strict: false } }); return { status: 'incomplete', output: [{ type: 'message', content: [{ type: 'output_text', text: '{"shots":[' }] }], usage: openaiUsage }; }
+      if (protocol === 'messages') { expect(body.output_config).toBeDefined(); return { stop_reason: 'max_tokens', content: [{ type: 'text', text: '{"shots":[' }], usage: anthropicUsage }; }
+      expect(body.response_format).toEqual({ type: 'json_object' }); return { choices: [{ finish_reason: 'length', message: { content: '{"shots":[' } }], usage: { prompt_tokens: 100, completion_tokens: 20 } };
+    });
+    expect(await generateText({ model: model(baseUrl, protocol), prompt: '返回 JSON', operationId: 'structured-response', outputSchema: { type: 'object' } })).toMatchObject({ text: '{"shots":[', incomplete: true, usage: { outputTokens: 20 } });
+  });
+}
 
 for (const protocol of ['chat-completions', 'responses', 'messages'] as const) {
   it(`sends and parses real ${protocol} HTTP requests, parameters, authentication, connection checks and usage`, async () => {

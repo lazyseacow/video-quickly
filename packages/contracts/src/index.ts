@@ -11,7 +11,7 @@ import { motionKeyframesSchema } from './keyframes.js';
 import { creativeContextSchema, creativeEntityKeysSchema } from './creative-context.js';
 export { creativeContextSchema, creativeEntitySchema, creativeEntityKeysSchema, creativeCharacterBindings, projectCharacterIds, validateCreativeReferences, shotCreativePrompt, creativeEntityLabels, creativeReferenceAssetIds, type CreativeContext, type CreativeEntity } from './creative-context.js';
 import { productionSettingsSchema, resolveProductionWorkflow } from './production.js';
-export { productionSettingsSchema, resolveProductionWorkflow, isVideoGenerationNode, captionsEnabled, MAX_REFERENCE_AUDIO_BYTES, MAX_REFERENCE_AUDIOS, type ProductionSettings } from './production.js';
+export { productionSettingsSchema, resolveProductionWorkflow, isVideoGenerationNode, isModelGenerationNode, captionsEnabled, MAX_REFERENCE_AUDIO_BYTES, MAX_REFERENCE_AUDIOS, type ProductionSettings } from './production.js';
 export * from './asset-recovery.js';
 export { motionKeyframeSchema, motionKeyframesSchema, motionEasingSchema, type MotionKeyframe, type MotionEasing } from './keyframes.js';
 export { modelPlatforms, getModelPlatform, platformForConnection, type ModelPlatformPreset } from './model-platforms.js';
@@ -27,6 +27,12 @@ export { clipSourceAssetIds, validateClipEditContent, validateClipEditHistory, t
 // A fixed application message is safe to retain across the external-activity boundary.
 export class VideoGenerationError extends Error {
   constructor() { super('生成结果缺少有效画面或音轨，已保留下载文件，请核对原任务。'); }
+}
+export class MediaRequestRejectedError extends Error {
+  constructor(readonly status: number) {
+    super(`模型服务已拒绝素材生成请求（HTTP ${status}），请核对模型、尺寸和请求参数。`);
+    this.name = 'MediaRequestRejectedError';
+  }
 }
 export class LockedShotChangeError extends Error {
   constructor() { super('分镜结果改变了锁定镜头，请保留锁定镜头后重新生成。'); }
@@ -442,6 +448,8 @@ export const runSchema = z.object({
   id: z.string(), projectId: z.string(), projectRevision: z.number().int(), status: runStatusSchema,
   workflowVersion: z.number().int(), snapshotDigest: z.string(), currentNodeId: z.string().optional(),
   parentRunId: z.string().optional(), selection: runSelectionSchema.optional(), stepCount: z.number().int().positive().optional(), createdAt: z.string(), updatedAt: z.string(), error: z.string().optional(),
+  stepRetry: z.object({ nodeId: z.string().min(1), status: z.enum(['pending', 'completed']) }).optional(),
+  regenerationSource: z.object({ runId: z.string().min(1), nodeId: z.string().min(1), shotId: z.string().min(1), requestId: z.string().uuid() }).optional(),
   events: z.array(runEventSchema).default([]), activities: z.array(activitySchema).default([]),
   purpose: z.enum(['production', 'prompt-trial', 'workflow-assistant']).optional(), promptSessionId: z.string().optional(), promptSessionRevision: z.number().int().positive().optional(),
   productionQueueId: z.string().optional(), productionQueueItemId: z.string().optional(),
@@ -509,16 +517,22 @@ export type PromptSession = z.infer<typeof promptSessionSchema>;
 export { resolvePromptBindings, applyPromptLibraryItem, supportsPromptExperiment } from './prompt-bindings.js';
 export { buildMediaPrompt, characterReferencePrompt } from './media-prompts.js';
 export const runStepStatusSchema = z.enum(['pending', 'running', 'waiting_review', 'waiting_external', 'retry_scheduled', 'needs_attention', 'succeeded', 'failed', 'canceled', 'skipped', 'not_recorded']);
+export const modelResponseIssueSchema = z.object({ path: z.string(), message: z.string() });
+export type ModelResponseIssue = z.infer<typeof modelResponseIssueSchema>;
 export const runStepSummarySchema = z.object({
   id: z.string().min(1), label: z.string(), kind: nodeKindSchema, description: z.string(), requiresReview: z.boolean(),
   status: runStepStatusSchema, reason: z.string(), inputAvailable: z.boolean(), outputAvailable: z.boolean(),
   activityCount: z.number().int().nonnegative(), unknownSubmission: z.boolean(),
+  modelGeneration: z.boolean().optional(),
+  responseAvailable: z.boolean().optional(),
+  retry: z.object({ allowed: z.boolean(), reason: z.string() }).optional(),
   startedAt: z.string().optional(), completedAt: z.string().optional(), error: z.string().optional(),
 });
 export type RunStepSummary = z.infer<typeof runStepSummarySchema>;
 export const runRecoverySchema = z.object({ review: z.boolean(), resume: z.boolean(), cancel: z.boolean(), restart: z.boolean(), reason: z.string() });
 export const runInspectionSchema = z.object({
   stages: z.array(workflowStageSchema).optional(),
+  workflowId: z.string().optional(),
   run: runSummarySchema, projectTitle: z.string(), snapshotAvailable: z.boolean(), checkpointAvailable: z.boolean(),
   steps: z.array(runStepSummarySchema).max(1000), recovery: runRecoverySchema,
   selected: z.object({
@@ -532,6 +546,10 @@ export type RunInspection = z.infer<typeof runInspectionSchema>;
 export const runStepPayloadSchema = z.object({
   runId: z.string(), nodeId: z.string(), kind: z.enum(['input', 'output']), available: z.boolean(),
   value: jsonValueSchema.nullable(), inputHash: z.string().optional(), resolvedPromptRecorded: z.boolean().optional(),
+  mediaShots: z.array(shotSchema.pick({ id: true, title: true, durationUs: true })).optional(),
+  mediaGeneration: z.object({ kind: z.enum(['image', 'video']), modelName: z.string() }).optional(),
+  modelResponse: z.object({ attempt: z.number().int().positive(), receivedAt: z.string(), text: z.string(), incomplete: z.boolean().optional(), issues: z.array(modelResponseIssueSchema).optional() }).optional(),
+  modelResponseHistory: z.array(z.object({ attempt: z.number().int().positive(), receivedAt: z.string(), invalid: z.boolean() })).optional(),
 });
 export type RunStepPayload = z.infer<typeof runStepPayloadSchema>;
 export const stepOutputVersionSchema = z.object({
@@ -553,7 +571,7 @@ export const workspaceSummarySchema = z.object({
 export type WorkspaceSummary = z.infer<typeof workspaceSummarySchema>;
 export const projectDetailSchema = z.object({
   id: z.string(), revision: z.number().int().positive(), assetsVersion: z.number().int().nonnegative(),
-  project: projectSchema.optional(), assets: z.array(assetSchema).optional(), latestRun: runSummarySchema.optional(),
+  project: projectSchema.optional(), assets: z.array(assetSchema).optional(), latestRun: runSummarySchema.optional(), activeRun: runSummarySchema.optional(),
 });
 export type ProjectDetail = z.infer<typeof projectDetailSchema>;
 export const pageInputSchema = z.object({ before: z.number().int().positive().optional(), limit: z.number().int().min(1).max(100).default(100) });

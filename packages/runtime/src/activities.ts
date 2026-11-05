@@ -1,9 +1,11 @@
-import { VideoGenerationError } from '@video-quickly/contracts';
+import { MediaRequestRejectedError, VideoGenerationError } from '@video-quickly/contracts';
 import { createHash } from 'node:crypto';
 import type Database from 'better-sqlite3';
 import { LockedShotChangeError } from '@video-quickly/contracts';
 import { DocumentStore } from './database.js';
 import { logError, type DiagnosticLogger } from './logging.js';
+import { ModelResponseValidationError } from './model-responses.js';
+import { TextRequestRejectedError } from './providers.js';
 
 export type ActivitySafety = 'local' | 'idempotent' | 'external';
 export interface ActivityRecord {
@@ -119,11 +121,15 @@ export class ActivityJournal {
       return result;
     } catch (error) {
       if (error instanceof SimulatedProcessExit) throw error;
-      const message = error instanceof LockedShotChangeError || error instanceof VideoGenerationError ? error.message : safety === 'external' ? '外部调用未完成，结果需要核对。' : error instanceof Error ? error.message : '活动执行失败';
-      this.database.prepare('UPDATE activities SET status = ?, error = ? WHERE run_id = ? AND activity_id = ?').run(safety === 'external' ? 'unknown' : 'failed', message, runId, activityId);
-      logger?.error('activity.failed', { status: safety === 'external' ? 'unknown' : 'failed', durationMs: Math.round(performance.now() - started), error: logError(error) });
+      const knownResponse = error instanceof ModelResponseValidationError || error instanceof TextRequestRejectedError || error instanceof MediaRequestRejectedError;
+      const status = safety === 'external' && !knownResponse ? 'unknown' : 'failed';
+      const message = knownResponse || error instanceof LockedShotChangeError || error instanceof VideoGenerationError ? error.message : safety === 'external' ? '外部调用未完成，结果需要核对。' : error instanceof Error ? error.message : '活动执行失败';
+      this.database.prepare('UPDATE activities SET status = ?, error = ? WHERE run_id = ? AND activity_id = ?').run(status, message, runId, activityId);
+      logger?.error('activity.failed', { status, durationMs: Math.round(performance.now() - started), error: logError(error) });
       // LangGraph also persists thrown errors in pending writes. Replace the
       // error before crossing that boundary; redacting only UI logs is too late.
+      if (error instanceof TextRequestRejectedError) throw new TextRequestRejectedError(error.status, error.unsupportedOutputFormat);
+      if (error instanceof MediaRequestRejectedError) throw new MediaRequestRejectedError(error.status);
       if (safety === 'external') throw new Error(message);
       throw error;
     }

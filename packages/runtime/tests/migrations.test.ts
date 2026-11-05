@@ -15,6 +15,63 @@ afterEach(async () => { for (const directory of directories.splice(0)) await rm(
 async function directory() { const path = await mkdtemp(join(tmpdir(), 'vq-migration-')); directories.push(path); return path; }
 
 describe('workspace database upgrades', () => {
+  it('protects confirmed text rejections without guessing the outcome of old submitted receipts', async () => {
+    const path = await directory(), previous = new Database(join(path, 'workspace.sqlite'));
+    previous.function('vq_thumbnail', { deterministic: true }, body => JSON.stringify(thumbnailShot(JSON.parse(String(body)))));
+    const legacy = WORKSPACE_MIGRATIONS.filter(migration => migration.version <= 17);
+    migrateDatabase(previous, path, legacy);
+    new DocumentStore(previous).put('model-response', 'run:script:1', { attempt: 1, inputHash: 'fixed', status: 'submitted', submittedAt: 'original-time' });
+    previous.prepare("INSERT INTO activities(run_id, activity_id, input_hash, safety, status, remote_id, started_at) VALUES ('run', 'script', 'fixed', 'external', 'unknown', 'model-response:run:script:1', 'original-time')").run();
+    const rows = previous.prepare('SELECT * FROM activities').all(); previous.close();
+    const upgraded = openDatabase(path);
+    try {
+      expect(upgraded.prepare('SELECT * FROM activities').all()).toEqual(rows);
+      expect(new DocumentStore(upgraded).get('model-response', 'run:script:1')).toMatchObject({ status: 'submitted' });
+      expect(upgraded.prepare("SELECT value FROM runtime_metadata WHERE key = 'text-request-rejections'").get()).toEqual({ value: '1' });
+      expect(upgraded.prepare("SELECT value FROM runtime_metadata WHERE key = 'media-request-rejections'").get()).toEqual({ value: '1' });
+      expect(() => migrateDatabase(upgraded, path, WORKSPACE_MIGRATIONS.filter(migration => migration.version <= 18))).toThrow('高于此客户端支持的版本');
+      expect(() => migrateDatabase(upgraded, path, legacy)).toThrow('高于此客户端支持的版本');
+    } finally { upgraded.close(); }
+  });
+  it('preserves existing execution records and rejects clients without text response receipt recovery', async () => {
+    const path = await directory(), previous = new Database(join(path, 'workspace.sqlite'));
+    previous.function('vq_thumbnail', { deterministic: true }, body => JSON.stringify(thumbnailShot(JSON.parse(String(body)))));
+    const legacy = WORKSPACE_MIGRATIONS.filter(migration => migration.version <= 16);
+    migrateDatabase(previous, path, legacy);
+    new DocumentStore(previous).put('run-snapshot', 'script-run', { handlerVersion: 3, nodes: [{ id: 'script' }] });
+    previous.prepare("INSERT INTO activities(run_id, activity_id, input_hash, safety, status, remote_id, started_at) VALUES ('script-run', 'script', 'fixed-hash', 'external', 'unknown', NULL, 'original-time')").run();
+    const records = previous.prepare('SELECT * FROM activities').all(); previous.close();
+    const upgraded = openDatabase(path);
+    try {
+      expect(upgraded.prepare('SELECT * FROM activities').all()).toEqual(records);
+      expect(new DocumentStore(upgraded).get('run-snapshot', 'script-run')).toEqual({ handlerVersion: 3, nodes: [{ id: 'script' }] });
+      expect(upgraded.prepare("SELECT value FROM runtime_metadata WHERE key = 'script-response-receipts'").get()).toEqual({ value: '1' });
+      expect(() => migrateDatabase(upgraded, path, legacy)).toThrow('高于此客户端支持的版本');
+    } finally { upgraded.close(); }
+  });
+  it('preserves v15 execution data and prevents older schedulers from consuming single-step retry checkpoints', async () => {
+    const path = await directory(), previous = new Database(join(path, 'workspace.sqlite'));
+    previous.function('vq_thumbnail', { deterministic: true }, body => JSON.stringify(thumbnailShot(JSON.parse(String(body)))));
+    const legacy = WORKSPACE_MIGRATIONS.filter(migration => migration.version <= 15);
+    migrateDatabase(previous, path, legacy);
+    const store = new DocumentStore(previous);
+    store.put('run', 'frozen-run', { id: 'frozen-run', status: 'failed', currentNodeId: 'assets' });
+    store.put('run-snapshot', 'frozen-run', { handlerVersion: 3, nodes: [{ id: 'assets' }], project: { id: 'project' } });
+    store.put('node-project', 'frozen-run:assets', { brief: '本次生成的上游简报' });
+    store.put('node-result', 'frozen-run:brief', { text: '本次生成的上游简报' });
+    previous.exec("CREATE TABLE checkpoints (thread_id TEXT PRIMARY KEY, checkpoint BLOB); INSERT INTO checkpoints VALUES ('frozen-run', X'010203');");
+    const documents = previous.prepare('SELECT rowid, kind, id, body FROM documents ORDER BY rowid').all(); previous.close();
+    const upgraded = openDatabase(path);
+    try {
+      expect(upgraded.pragma('user_version', { simple: true })).toBe(currentVersion);
+      expect(upgraded.prepare("SELECT value FROM runtime_metadata WHERE key = 'single-step-retry'").get()).toEqual({ value: '1' });
+      expect(upgraded.prepare('SELECT rowid, kind, id, body FROM documents ORDER BY rowid').all()).toEqual(documents);
+      expect(upgraded.prepare('SELECT hex(checkpoint) AS data FROM checkpoints').get()).toEqual({ data: '010203' });
+      expect(() => migrateDatabase(upgraded, path, legacy)).toThrow('高于此客户端支持的版本');
+    } finally { upgraded.close(); }
+    expect((await readdir(join(path, 'database-backups'))).some(name => name.startsWith(`workspace-v15-to-v${currentVersion}-`))).toBe(true);
+  });
+
   it('upgrades a v13 workspace, retains old snapshots and projects, and projects unique episode memberships', async () => {
     const path = await directory(), legacy = new Database(join(path, 'workspace.sqlite'));
     legacy.function('vq_thumbnail', { deterministic: true }, (body: unknown) => JSON.stringify(thumbnailShot(JSON.parse(String(body)))));
@@ -118,7 +175,7 @@ describe('workspace database upgrades', () => {
   it('creates a versioned database and does not back up on every reopen', async () => {
     const path = await directory(); const db = openDatabase(path);
     expect(db.pragma('user_version', { simple: true })).toBe(currentVersion);
-    expect(db.prepare('SELECT name FROM schema_migrations ORDER BY version').all()).toEqual([{ name: 'workspace-baseline' }, { name: 'execution-event-index' }, { name: 'workspace-read-models' }, { name: 'audio-asset-references' }, { name: 'project-summary-caption-style' }, { name: 'clip-edit-references-and-first-frame' }, { name: 'workflow-composition-and-keyframe-capabilities' }, { name: 'active-project-runs-index' }, { name: 'workflow-layout' }, { name: 'native-video-production' }, { name: 'production-reference-audio' }, { name: 'project-creative-context' }, { name: 'prompt-workbench' }, { name: 'work-episodes-production-queue' }, { name: 'creative-reference-images-and-media-derivations' }]);
+    expect(db.prepare('SELECT name FROM schema_migrations ORDER BY version').all()).toEqual([{ name: 'workspace-baseline' }, { name: 'execution-event-index' }, { name: 'workspace-read-models' }, { name: 'audio-asset-references' }, { name: 'project-summary-caption-style' }, { name: 'clip-edit-references-and-first-frame' }, { name: 'workflow-composition-and-keyframe-capabilities' }, { name: 'active-project-runs-index' }, { name: 'workflow-layout' }, { name: 'native-video-production' }, { name: 'production-reference-audio' }, { name: 'project-creative-context' }, { name: 'prompt-workbench' }, { name: 'work-episodes-production-queue' }, { name: 'creative-reference-images-and-media-derivations' }, { name: 'single-step-retry-checkpoints' }, { name: 'script-response-receipts' }, { name: 'text-request-rejection-receipts' }, { name: 'media-request-rejection-receipts' }]);
     db.close(); openDatabase(path).close();
     expect(await readdir(path)).not.toContain('database-backups');
   });

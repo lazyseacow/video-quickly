@@ -33,6 +33,22 @@ async function start(runtime: ReturnType<typeof createRuntime>, projectId: strin
 async function inspect(runtime: ReturnType<typeof createRuntime>, runId: string, nodeId?: string) { return runInspectionSchema.parse(await runtime.dispatch('run.inspect', { runId, nodeId })); }
 async function payload(runtime: ReturnType<typeof createRuntime>, runId: string, nodeId: string, kind: 'input' | 'output') { return runStepPayloadSchema.parse(await runtime.dispatch('run.step.payload', { runId, nodeId, kind })); }
 
+it('projects frozen model generation tasks instead of later configuration or local preparation', async () => {
+  let calls = 0;
+  const { runtime, project } = await fixture({ provider: async () => { calls++; throw new Error('controlled generation boundary'); } });
+  const ids: Record<string, string> = {};
+  for (const kind of ['text', 'image', 'video'] as const) ids[kind] = modelSchema.parse(await runtime.dispatch('model.save', { model: { name: kind, provider: 'openai-compatible', baseUrl: 'http://127.0.0.1:1', model: 'frozen-progress', connectionType: kind, capabilities: [kind] } })).id;
+  const configured = projectSchema.parse(await runtime.dispatch('workflow.save', { projectId: project.id, workflow: { ...project.workflow, production: { ...project.workflow.production, referenceMode: 'generate', textModelId: ids.text, imageModelId: ids.image, videoModelId: ids.video } } }));
+  const run = await start(runtime, project.id);
+  const before = await inspect(runtime, run.id);
+  expect(before.workflowId).toBe('native-video');
+  expect(before.steps.filter(step => step.modelGeneration).map(step => step.id)).toEqual(['brief', 'style', 'script', 'assets', 'video']);
+  expect(before.steps.filter(step => !step.modelGeneration).map(step => step.id)).toEqual(['animation', 'export']);
+  await runtime.dispatch('project.update', { projectId: project.id, revision: configured.revision, patch: { workflow: { ...configured.workflow, id: 'later-custom-flow', production: { ...configured.workflow.production, referenceMode: 'none' } } } });
+  const after = await inspect(runtime, run.id);
+  expect(after.workflowId).toBe('native-video'); expect(after.steps).toEqual(before.steps); expect(calls).toBe(1);
+});
+
 it('inspects frozen labels and effective inputs without executing or applying anything, then automatically resumes', async () => {
   const calls: { name: string; prompt: string }[] = [];
   let exited = false;
@@ -52,6 +68,7 @@ it('inspects frozen labels and effective inputs without executing or applying an
   expect(detail.steps.map(step => step.status)).toEqual(['pending', 'pending']);
   expect(detail.recovery).toMatchObject({ review: false, resume: true });
   expect(detail.steps[0]).toMatchObject({ inputAvailable: true, outputAvailable: true, unknownSubmission: false, activityCount: 1 });
+  expect(detail.workflowId).toBe('inspector-flow'); expect(detail.steps.map(step => step.modelGeneration)).toEqual([true, true]);
   expect(detail.steps[1]).toMatchObject({ inputAvailable: false, outputAvailable: false });
   expect(detail.stages).toEqual(stages);
   await runtime.dispatch('project.update', { projectId: project.id, revision: frozen.revision, patch: { title: '现在的标题', style: '现在的人工风格', workflow: { ...frozen.workflow, nodes: [{ ...first, label: '现在的步骤名称' }, second], stages: [{ ...stages[0], label: '现在的阶段名称', nodeIds: [first.id] }] } } });
@@ -227,8 +244,18 @@ it.each(['image', 'video'] as const)('reuses locked %s through the actual media 
   const run = await start(runtime, baseline.id);
   expect((await inspect(runtime, run.id)).run.status).toBe('succeeded');
   const output = await payload(runtime, run.id, 'assets', 'output'); expect(output.value).toMatchObject({ assets: [{ id: asset.id }], source: kind === 'video' ? 'model' : 'imported' });
+  expect(output.mediaShots).toEqual([{ id: baseline.shots[0].id, title: '已经确认的画面', durationUs: 1_000_000 }]);
   const applied = projectSchema.parse(await runtime.dispatch('node.apply', { runId: run.id, nodeId: 'assets', revision: baseline.revision }));
   expect(applied.shots).toEqual(baseline.shots);
+});
+
+it('reads media labels from the actual step input after project names change without including the full input payload', async () => {
+  const { runtime, baseline } = await mediaReuseFixture();
+  const run = await start(runtime, baseline.id);
+  await runtime.dispatch('project.update', { projectId: baseline.id, revision: baseline.revision, patch: { shots: baseline.shots.map(shot => ({ ...shot, title: '后来改名的镜头' })) } });
+  const output = await payload(runtime, run.id, 'assets', 'output');
+  expect(output.mediaShots).toEqual([{ id: baseline.shots[0].id, title: '已经确认的画面', durationUs: 1_000_000 }]);
+  expect(output.value).not.toHaveProperty('project'); expect(output.resolvedPromptRecorded).toBeUndefined();
 });
 
 

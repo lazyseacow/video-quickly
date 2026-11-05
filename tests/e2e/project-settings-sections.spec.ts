@@ -11,7 +11,7 @@ async function rpc<T>(request: APIRequestContext, method: string, params: unknow
 for (const grouped of [true, false]) test('keeps global project settings available for ' + (grouped ? 'grouped' : 'ungrouped') + ' custom workflows', async ({ page, request }) => {
   const created = await rpc<ProjectDocument>(request, 'project.create', { title: '自定义流程的项目设置 ' + grouped });
   const stages = grouped ? [{ id: 'custom', label: '自定义创作阶段', description: '', nodeIds: created.workflow.nodes.map(node => node.id) }] : undefined;
-  const project = await rpc<ProjectDocument>(request, 'project.update', { projectId: created.id, revision: created.revision, patch: { workflow: { ...created.workflow, stages } } });
+  const project = await rpc<ProjectDocument>(request, 'project.update', { projectId: created.id, revision: created.revision, patch: { workflow: { ...created.workflow, id: 'custom-project-settings', stages } } });
   await page.goto('/'); await openProjectFromList(page, project.title);
   await expect(page.locator('.workbench-guide__step')).toHaveCount(grouped ? 1 : created.workflow.nodes.length);
   await page.locator('.project-heading-actions').getByRole('button', { name: '制作设置', exact: true }).click();

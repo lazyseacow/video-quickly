@@ -9,7 +9,7 @@ async function prepared(page: Page, request: APIRequestContext, info: TestInfo) 
     await rpc(request, 'run.start', { projectId: source.project.id });
     await expect.poll(async () => (await latest(request, source.project.id))?.status, { timeout: 30000 }).toBe('succeeded');
     await open(page, source.project).then(dialog => dialog.getByRole('button', { name: '取消', exact: true }).click());
-    await page.getByRole('button', { name: '打开阶段：策划与分镜', exact: true }).click();
+    await page.getByRole('button', { name: '打开步骤：简报生成', exact: true }).click();
     const dialog = page.getByRole('dialog', { name: '本次制作', exact: true });
     await expect(dialog.getByRole('button', { name: '编辑创意简报', exact: true })).toBeVisible();
     return { source, dialog, run: (await latest(request, source.project.id))! };
@@ -43,7 +43,7 @@ for (const { width, theme } of [{ width: 1536, theme: 'dark' }, { width: 1024, t
       await briefEditor.getByRole('button', { name: '保存到项目', exact: true }).click();
       await expect(briefEditor).toHaveCount(0); await expect(dialog.getByRole('heading', { name: '修改后的创作主题', exact: true })).toBeVisible();
 
-      const steps = dialog.getByRole('navigation', { name: '本阶段制作步骤', exact: true });
+      const steps = dialog.getByRole('navigation', { name: '本次制作步骤', exact: true });
       await steps.getByRole('button', { name: /风格与角色/ }).click(); await dialog.getByRole('button', { name: '编辑风格与角色', exact: true }).click();
       const styleEditor = page.getByRole('dialog', { name: '编辑风格与角色', exact: true });
       await styleEditor.getByLabel('视觉风格', { exact: true }).fill('修改后的漫画风格');
@@ -51,7 +51,7 @@ for (const { width, theme } of [{ width: 1536, theme: 'dark' }, { width: 1024, t
       await styleEditor.getByRole('button', { name: '保存到项目', exact: true }).click(); await expect(styleEditor).toHaveCount(0);
       await expect(dialog.getByRole('region', { name: '本次产物', exact: true })).toContainText('全片保留同一件蓝色外套');
 
-      await steps.getByRole('button', { name: /旁白与分镜/ }).click(); await dialog.getByRole('button', { name: '编辑旁白与分镜', exact: true }).click();
+      await steps.getByRole('button', { name: /分镜生成/ }).click(); await dialog.getByRole('button', { name: '编辑旁白与分镜', exact: true }).click();
       const scriptEditor = page.getByRole('dialog', { name: '编辑旁白与分镜', exact: true }), first = scriptEditor.getByRole('group', { name: '镜头 1 内容', exact: true });
       await first.getByLabel('镜头标题', { exact: true }).fill('人工调整的第一镜');
       await first.getByLabel('旁白', { exact: true }).fill('修改后的旁白，先讲最重要的一点。');
@@ -65,12 +65,12 @@ for (const { width, theme } of [{ width: 1536, theme: 'dark' }, { width: 1024, t
       const modified = await saved(request, source.project.id);
       expect(modified).toMatchObject({ brief, style: '修改后的漫画风格', creativeContext: { continuity: '全片保留同一件蓝色外套' } });
       expect(mediaAndTiming(modified)).toEqual(mediaAndTiming(baseline)); expect(source.requests.length).toBe(calls);
-      await dialog.getByRole('button', { name: '关闭', exact: true }).click(); await expect(dialog).toHaveCount(0);
+      await dialog.getByRole('button', { name: '关闭对话框', exact: true }).click(); await expect(dialog).toHaveCount(0);
       await page.getByRole('button', { name: '撤销', exact: true }).click(); await expect.poll(async () => (await saved(request, source.project.id)).shots).toEqual(baseline.shots);
       expect((await saved(request, source.project.id)).brief).toBe(brief);
       await page.getByRole('button', { name: '重做', exact: true }).click(); await expect.poll(async () => (await saved(request, source.project.id)).shots).toEqual(modified.shots);
       await page.reload(); await open(page, source.project).then(settings => settings.getByRole('button', { name: '取消', exact: true }).click());
-      await page.getByRole('button', { name: '打开阶段：策划与分镜', exact: true }).click();
+      await page.getByRole('button', { name: '打开步骤：简报生成', exact: true }).click();
       await expect(dialog.getByRole('heading', { name: '修改后的创作主题', exact: true })).toBeVisible();
       const currentFrozen = await Promise.all(source.project.workflow.nodes.filter(node => ['brief', 'style', 'script'].includes(node.kind)).map(node => rpc(request, 'run.step.payload', { runId: run.id, nodeId: node.id, kind: 'output' })));
       expect(currentFrozen).toEqual(frozen); expect(source.requests.length).toBe(calls); expect(methods).not.toContain('run.step.versions');
@@ -126,7 +126,7 @@ test('keeps locked shot inputs read-only while allowing another shot to be edite
     const before = await saved(request, source.project.id);
     await rpc(request, 'project.update', { projectId: before.id, revision: before.revision, patch: { shots: before.shots.map((shot, index) => index === 0 ? { ...shot, locked: true } : shot) } });
     await expect(page.locator('[aria-label="解锁镜头"]')).toHaveCount(1);
-    await dialog.getByRole('navigation', { name: '本阶段制作步骤', exact: true }).getByRole('button', { name: /旁白与分镜/ }).click();
+    await dialog.getByRole('navigation', { name: '本次制作步骤', exact: true }).getByRole('button', { name: /分镜生成/ }).click();
     await dialog.getByRole('button', { name: '编辑旁白与分镜', exact: true }).click();
     const editor = page.getByRole('dialog', { name: '编辑旁白与分镜', exact: true });
     await expect(editor.getByRole('group', { name: '镜头 1 内容', exact: true }).getByLabel('旁白', { exact: true })).toBeDisabled();
@@ -143,7 +143,7 @@ test('disables planning editing while the current production is active', async (
     await rpc(request, 'workflow.save', { projectId: source.project.id, workflow: { ...source.project.workflow, production: { ...source.project.workflow.production!, textModelId: source.models[0].id, videoModelId: source.video.id } } });
     const run = await rpc<{ id: string }>(request, 'run.start', { projectId: source.project.id }); runId = run.id; await source.pending;
     await open(page, source.project).then(settings => settings.getByRole('button', { name: '取消', exact: true }).click());
-    await page.getByRole('button', { name: '打开阶段：策划与分镜', exact: true }).click();
+    await page.getByRole('button', { name: '打开步骤：简报生成', exact: true }).click();
     const dialog = page.getByRole('dialog', { name: '本次制作', exact: true });
     await expect(dialog.getByRole('tablist', { name: '步骤详情视图', exact: true })).toHaveCount(0);
     await expect(dialog.getByRole('button', { name: '编辑创意简报', exact: true })).toBeDisabled();

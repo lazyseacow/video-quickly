@@ -37,6 +37,14 @@
 .run-inspector__execution-prompt .run-inspector__json { margin-block: 0; max-height: 240px; }
 .run-inspector__output-actions { display: flex; justify-content: space-between; flex-wrap: wrap; gap: var(--space-2); margin-top: var(--space-4); padding-top: var(--space-3); border-top: 1px solid var(--border); }
 .run-inspector__step-heading .button { flex-shrink: 0; }
+.run-inspector__retry { display: grid; justify-items: start; gap: var(--space-2); margin-block: var(--space-3); }
+.run-inspector__retry p { margin: 0; }
+.run-inspector__model-response { margin-bottom: var(--space-4); min-width: 0; }
+.run-inspector__model-response summary { cursor: pointer; min-height: var(--control-hit-size); display: flex; align-items: center; gap: var(--space-2); color: var(--text-secondary); }
+.run-inspector__model-response details:not([open]) summary svg { transform: rotate(-90deg); }
+.run-inspector__model-response ul { margin: var(--space-2) 0 0; padding-left: var(--space-5); max-height: 180px; overflow: auto; }
+.run-inspector__model-response code { overflow-wrap: anywhere; }
+.run-inspector__model-response .run-inspector__json { max-height: 280px; }
 .run-inspector__step-heading .run-inspector__planning-label { margin: var(--space-1) 0 0; }
 .run-inspector__outputs { display: grid; gap: var(--space-4); min-width: 0; }
 .run-inspector__outputs > section { min-width: 0; }

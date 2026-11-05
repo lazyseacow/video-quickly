@@ -37,6 +37,12 @@ export function isVideoGenerationNode(node: Pick<WorkflowNode, 'kind' | 'config'
   return node.kind === 'animation' && node.config.operation !== 'prepare-edit';
 }
 
+export function isModelGenerationNode(node: Pick<WorkflowNode, 'kind' | 'config' | 'modelId'>): boolean {
+  if (node.config.operation === 'prepare-edit' || node.config.operation === 'prepare-references' && node.config.referenceMode !== 'generate') return false;
+  return ['brief', 'style', 'script', 'research', 'agent', 'assets', 'animation'].includes(node.kind)
+    && Boolean(node.modelId || node.config.requiresModel === true || node.config.operation === 'generate-native-video' || node.config.operation === 'prepare-references');
+}
+
 export function captionsEnabled(project: { workflow?: Pick<WorkflowDefinition, 'production'> }): boolean {
   return project.workflow?.production?.subtitleMode === 'script';
 }
