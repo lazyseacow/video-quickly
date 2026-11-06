@@ -64,6 +64,56 @@ async function persisted(page: Page, projectId: string, undoCount: number) {
   }, { projectId, undoCount })).toBe(true);
 }
 
+test('identifies the silent shot after switching to a still and restores its original audio through selection and history', async ({ page, request }, info) => {
+  test.setTimeout(90_000);
+  const errors = observe(page), source = await fixture(request, info);
+  const shot = { ...source.project.shots[0], audioProcessing: { ...DEFAULT_AUDIO_PROCESSING, version: 2 as const, videoAudio: { enabled: true, gainDb: 0 } } };
+  const project = await rpc<ProjectDocument>(request, 'project.update', { projectId: source.project.id, revision: source.project.revision, patch: { shots: [shot, { ...shot, id: 'switch-to-still', title: '切换画面的镜头' }] } });
+  await open(page, project); await expect(page).toHaveTitle(/Video Quickly/);
+  const main = page.locator('.preview-panel'); await mixReady(main);
+  await expect(main.locator('.prepared-mix-preview__warnings')).toHaveCount(0);
+  await page.locator('#project-outline .outline-shot').nth(1).click();
+  await expect(page.getByLabel('镜头标题', { exact: true })).toHaveValue('切换画面的镜头');
+  await page.getByLabel('镜头视频', { exact: true }).selectOption('');
+  await page.getByRole('button', { name: '保存镜头', exact: true }).click();
+  await expect.poll(async () => (await saved(request, project.id)).shots[1].videoAssetId).toBeUndefined();
+  await mixReady(main);
+  await expect(main.locator('.prepared-mix-preview__warnings li')).toHaveText(['第 2 个镜头未关联视频且未添加独立配音，镜头音轨为静音。']);
+  expect(await amplitudeOfPlayedMix(main, request, info, 'other-shot-preserved')).toBeGreaterThan(.17);
+  expect(await amplitudeOfPlayedMix(main, request, info, 'unlinked-shot', 880, 1.6)).toBeLessThan(.001);
+  await page.screenshot({ path: info.outputPath('unlinked-video-warning.png') });
+  const mixKey = await main.locator('.prepared-mix-preview').getAttribute('data-mix-key') ?? '';
+  await page.locator('#project-outline .outline-shot').first().click();
+  await expect(main.locator('.prepared-mix-preview__warnings')).toHaveCount(0);
+  await expect(main.locator('.prepared-mix-preview')).toHaveAttribute('data-mix-key', mixKey);
+  await page.screenshot({ path: info.outputPath('audible-shot-preview.png') });
+  await page.locator('#project-outline .outline-shot').nth(1).click();
+  await expect(main.locator('.prepared-mix-preview__warnings')).toContainText('第 2 个镜头未关联视频');
+  await main.getByRole('slider', { name: '播放器播放位置', exact: true }).press('Home');
+  await expect(main.locator('.prepared-mix-preview__warnings')).toHaveCount(0);
+  await main.getByRole('button', { name: '播放预览', exact: true }).click();
+  await expect(main.locator('.prepared-mix-preview__warnings')).toContainText('第 2 个镜头未关联视频');
+  await main.getByRole('button', { name: '暂停预览', exact: true }).click();
+  await page.getByLabel('镜头视频', { exact: true }).selectOption(source.asset.id);
+  await page.getByRole('button', { name: '保存镜头', exact: true }).click();
+  await expect.poll(async () => (await saved(request, project.id)).shots[1].videoAssetId).toBe(source.asset.id);
+  await mixReady(main); await expect(main.locator('.prepared-mix-preview__warnings')).toHaveCount(0);
+  expect(await amplitudeOfPlayedMix(main, request, info, 'relinked-shot', 880, 1.6)).toBeGreaterThan(.17);
+  await page.getByRole('button', { name: '撤销', exact: true }).click();
+  await expect.poll(async () => (await saved(request, project.id)).shots[1].videoAssetId).toBeUndefined();
+  await mixReady(main); await expect(main.locator('.prepared-mix-preview__warnings')).toContainText('第 2 个镜头未关联视频');
+  await page.reload(); await openProjectFromList(page, project.title);
+  await mixReady(main); await expect(main.locator('.prepared-mix-preview__warnings')).toHaveCount(0);
+  await page.locator('#project-outline .outline-shot').nth(1).click();
+  await expect(main.locator('.prepared-mix-preview__warnings')).toContainText('第 2 个镜头未关联视频');
+  await page.getByRole('button', { name: '重做', exact: true }).click();
+  await expect.poll(async () => (await saved(request, project.id)).shots[1].videoAssetId).toBe(source.asset.id);
+  await mixReady(main); await expect(main.locator('.prepared-mix-preview__warnings')).toHaveCount(0);
+  expect(await amplitudeOfPlayedMix(main, request, info, 'redone-shot', 880, 1.6)).toBeGreaterThan(.17);
+  await page.screenshot({ path: info.outputPath('relinked-video-audio.png') });
+  await healthy(page, errors);
+});
+
 test('keeps the original-sound toggle, actual playback, mute and undo across reload', async ({ page, request }, info) => {
   test.setTimeout(60_000);
   const errors = observe(page), { project } = await fixture(request, info); await open(page, project);

@@ -2,6 +2,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { SkipBack, Volume2, VolumeX, Pause, Play } from 'lucide-react';
 import { audioLevelWindowSchema, type AudioLevelWindow, type PreparedAudioMix } from '@video-quickly/contracts';
 import { getAssetUrl } from '../lib/client';
+import { audioMixWarningsAtTime } from '../lib/audio-mix';
 import { Button, IconButton, Notice, formatTime } from './Primitives';
 import AudioLevelMeter from './AudioLevelMeter';
 import './audio-processing.css';
@@ -28,6 +29,7 @@ export default function PreparedMixPreview({ mix, onLevels, playing, timeUs, mut
   const synchronize = useRef<(() => void) | undefined>(undefined), alive = useRef(true);
   const controlled = playing !== undefined && timeUs !== undefined;
   const currentTimeUs = controlled ? timeUs : localTimeUs;
+  const warnings = audioMixWarningsAtTime(mix, currentTimeUs);
   const levelTimeUs = Math.max(0, Math.min(mix.durationUs - 1, currentTimeUs));
   const windowStartUs = Math.floor(levelTimeUs / 10_000_000) * 10_000_000;
   const identity = JSON.stringify([mix.key, mix.sha256, mix.path, mix.durationUs]);
@@ -103,6 +105,6 @@ export default function PreparedMixPreview({ mix, onLevels, playing, timeUs, mut
     {controls && <div className="prepared-mix-preview__controls"><IconButton label="试听回到开头" disabled={!ready} onClick={() => seek(0)}><SkipBack size={15} /></IconButton><Button aria-label={localPlaying ? '暂停处理试听' : '播放处理试听'} disabled={!ready || controlled} onClick={() => void toggle()}>{localPlaying ? <Pause size={15} /> : <Play size={15} />}{localPlaying ? "暂停" : "播放"}</Button><input type="range" aria-label="试听播放位置" aria-valuetext={formatTime(currentTimeUs)} min={0} max={Math.ceil(mix.durationUs / 1000)} step={10} value={Math.round(currentTimeUs / 1000)} disabled={!ready || controlled} onChange={event => seek(Math.min(mix.durationUs - 1, Number(event.target.value) * 1000))} /><span>{formatTime(currentTimeUs)} / {formatTime(mix.durationUs)}</span><IconButton label={(muted ?? localMuted) ? '开启处理试听声音' : '静音处理试听'} aria-pressed={muted ?? localMuted} disabled={muted !== undefined} onClick={() => setLocalMuted(value => !value)}>{(muted ?? localMuted) ? <VolumeX size={15} /> : <Volume2 size={15} />}</IconButton></div>}
     {audioFailure ? <Notice kind="error">{audioFailure}<Button aria-label="重新载入试听音频" variant="ghost" onClick={() => setAudioRetry(value => value + 1)}>重新载入</Button></Notice> : !ready && <p className="tiny-meta" role="status">正在载入处理后的混音…</p>}
     {showLevels && <AudioLevelMeter window={currentLevels?.window} timeUs={levelTimeUs} analysis={mix.analysis} loading={!currentLevels} error={currentLevels?.error} onRetry={() => setLevelRetry(value => value + 1)} compact={!controls} />}
-    {mix.warnings.length > 0 && <ul className="prepared-mix-preview__warnings">{mix.warnings.map((warning, index) => <li key={index}>{warning}</li>)}</ul>}
+    {warnings.length > 0 && <ul className="prepared-mix-preview__warnings">{warnings.map((warning, index) => <li key={index}>{warning}</li>)}</ul>}
   </div>;
 }

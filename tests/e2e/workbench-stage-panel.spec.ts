@@ -19,14 +19,29 @@ for (const viewport of [{ width: 1536, height: 960, theme: 'dark' }, { width: 10
     await expect(dialog.getByRole('button', { name: '保存设置', exact: true })).toHaveCount(0);
     await expect(dialog.getByRole('button', { name: '保存并开始制作', exact: true })).toHaveCount(0);
     await expect(dialog.getByRole('button', { name: '本次制作', exact: true })).toHaveCount(0);
+    await expect(dialog.locator('.dialog__surface')).toHaveCSS('opacity', '1');
+    const content = dialog.locator('.production-settings__content');
+    if (viewport.width >= 1024) expect(await content.evaluate(element => element.scrollHeight - element.clientHeight)).toBeLessThanOrEqual(1);
     await page.screenshot({ path: info.outputPath('configuration-first-' + viewport.width + '.png') });
     await dialog.getByRole('button', { name: '下一步', exact: true }).click();
     await expect(dialog.getByRole('combobox', { name: '文本模型', exact: true })).toBeVisible();
     await expect(dialog.getByRole('listbox')).toHaveCount(0);
+    await pickProductionModel(dialog, '文本模型', source.text); await pickProductionModel(dialog, '视频模型', source.video);
+    await dialog.getByLabel('参考素材', { exact: true }).selectOption('generate'); await pickProductionModel(dialog, '图片模型', source.image);
+    if (viewport.width >= 1024) {
+      expect(await content.evaluate(element => element.scrollHeight - element.clientHeight)).toBeLessThanOrEqual(1);
+      await expect(dialog.locator('.production-settings__advanced > summary').filter({ hasText: /^高级编排$/ })).toBeInViewport({ ratio: 1 });
+    }
     await expect(dialog.getByRole('button', { name: '下一步', exact: true })).toBeInViewport();
     await page.screenshot({ path: info.outputPath('configuration-models-' + viewport.width + '.png') });
+    await productionStep(dialog, '声音与成片');
+    await expect(dialog.getByLabel('声音要求', { exact: true })).toBeVisible();
+    await dialog.getByLabel('字幕', { exact: true }).selectOption('script');
+    if (viewport.width >= 1024) expect(await content.evaluate(element => element.scrollHeight - element.clientHeight)).toBeLessThanOrEqual(1);
+    await page.screenshot({ path: info.outputPath('configuration-delivery-' + viewport.width + '.png') });
     await productionStep(dialog, '确认保存');
     await expect(dialog.getByRole('button', { name: '保存设置', exact: true })).toBeInViewport({ ratio: 1 });
+    if (viewport.width >= 1024) expect(await content.evaluate(element => element.scrollHeight - element.clientHeight)).toBeLessThanOrEqual(1);
     await page.screenshot({ path: info.outputPath('configuration-review-' + viewport.width + '.png') });
     await page.keyboard.press('Escape'); await expect(dialog).toHaveCount(0);
     const entry = page.getByRole('button', { name: '制作设置', exact: true });

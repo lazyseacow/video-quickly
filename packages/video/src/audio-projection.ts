@@ -1,6 +1,6 @@
 import { audioMixSettingsSchema, audioProcessingSchema, usesVideoAudio, DEFAULT_AUDIO_MIX_SETTINGS, DEFAULT_AUDIO_PROCESSING, type AssetRecord, type ProjectDocument } from '@video-quickly/contracts';
 import { resolveShotSpans } from './clip-edits.js';
-export const AUDIO_MIX_ALGORITHM = 'audio-mix-v3-video-source-48000-stereo';
+export const AUDIO_MIX_ALGORITHM = 'audio-mix-v5-video-source-48000-stereo';
 const mixDuration = (project: Pick<ProjectDocument, 'shots'>) => project.shots.reduce((sum, shot) => sum + shot.durationUs, 0);
 
 function audioAsset(id: string, projectId: string, assets: readonly AssetRecord[], label = '音频', kind: 'audio' | 'video' = 'audio'): AssetRecord {

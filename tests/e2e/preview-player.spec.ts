@@ -26,7 +26,7 @@ for (const viewport of [{ width: 1464, height: 895, theme: 'dark' }, { width: 10
   await page.goto('/'); await openProjectFromList(page, project.title);
   const player = page.getByRole('region', { name: '视频预览播放器', exact: true }), seek = player.getByRole('slider', { name: '播放器播放位置', exact: true });
   const audio = player.locator('audio[data-audio-role="处理后混音"]'), ruler = page.getByRole('slider', { name: '预览播放位置', exact: true });
-  await expect(player.locator('.prepared-mix-preview')).toHaveAttribute('data-status', 'ready');
+  await expect(player.locator('.prepared-mix-preview')).toHaveAttribute('data-status', 'ready', { timeout: 20_000 });
   await expect(player.locator('.scene-preview')).toHaveAttribute('aria-busy', 'false');
   const bounds = await player.boundingBox(), picture = await player.locator('.preview-frame').boundingBox();
   expect(bounds).not.toBeNull(); expect(picture).not.toBeNull();

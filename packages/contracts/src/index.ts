@@ -13,6 +13,7 @@ export { creativeContextSchema, creativeEntitySchema, creativeEntityKeysSchema, 
 import { productionSettingsSchema, resolveProductionWorkflow } from './production.js';
 export { productionSettingsSchema, resolveProductionWorkflow, isVideoGenerationNode, isModelGenerationNode, captionsEnabled, MAX_REFERENCE_AUDIO_BYTES, MAX_REFERENCE_AUDIOS, type ProductionSettings } from './production.js';
 export * from './asset-recovery.js';
+export { skillPromptContext, appendSkillContext, supportsSkillScript } from './skill-context.js';
 export { motionKeyframeSchema, motionKeyframesSchema, motionEasingSchema, type MotionKeyframe, type MotionEasing } from './keyframes.js';
 export { modelPlatforms, getModelPlatform, platformForConnection, type ModelPlatformPreset } from './model-platforms.js';
 export { textProtocols, mediaAdapters, getMediaAdapters } from './model-protocols.js';
@@ -387,10 +388,32 @@ export type CostSummary = z.infer<typeof costSummarySchema>;
 export const skillSchema = z.object({
   id: z.string(), name: z.string(), description: z.string(), source: z.string(), version: z.string(),
   enabled: z.boolean(), instructions: z.string().default(''), resources: z.array(z.string()).default([]),
+  referenceContents: z.record(z.string(), z.string()).optional(),
   tools: z.array(z.object({ id: z.string(), label: z.string(), enabled: z.boolean(), permissions: z.array(z.string()) })).default([]),
   contentHash: z.string(), importedAt: z.string(),
 });
 export type SkillPackage = z.infer<typeof skillSchema>;
+export const skillGroupSchema = z.object({
+  id: z.string().min(1), name: z.string().trim().min(1).max(120), source: z.string(),
+  skillIds: z.array(z.string().min(1)), createdAt: z.string(), updatedAt: z.string(),
+});
+export type SkillGroup = z.infer<typeof skillGroupSchema>;
+export const skillImportSourceSchema = z.object({
+  path: z.string().trim().min(1).optional(), url: z.string().trim().url().optional(), skillPath: z.string().min(1).optional(),
+}).refine(value => Boolean(value.path) !== Boolean(value.url), '请选择目录、ZIP 文件或 GitHub 链接。');
+export type SkillImportSource = z.infer<typeof skillImportSourceSchema>;
+export const skillImportResultSchema = z.union([
+  skillSchema,
+  z.object({ skills: z.array(skillSchema).min(1), group: skillGroupSchema }),
+]);
+export type SkillImportResult = z.infer<typeof skillImportResultSchema>;
+export const skillImportJobSchema = z.object({
+  id: z.string().uuid(), source: skillImportSourceSchema, groupName: z.string().optional(), groupId: z.string().optional(),
+  status: z.enum(['queued', 'running', 'succeeded', 'failed', 'interrupted']),
+  completed: z.number().int().nonnegative(), total: z.number().int().nonnegative().optional(),
+  skillIds: z.array(z.string()), error: z.string().optional(), createdAt: z.string(), updatedAt: z.string(),
+});
+export type SkillImportJob = z.infer<typeof skillImportJobSchema>;
 export const mcpServerSchema = z.object({
   id: z.string().min(1), name: z.string().min(1).max(120), transport: z.enum(['stdio', 'http']),
   command: z.string().optional(), args: z.array(z.string()).max(100).default([]), url: z.string().url().optional(),
@@ -485,6 +508,7 @@ export const systemSchema = z.object({
 export type RuntimeSystem = z.infer<typeof systemSchema>;
 export const workspaceSnapshotSchema = z.object({
   projects: z.array(projectSchema), models: z.array(modelSchema), skills: z.array(skillSchema),
+  skillGroups: z.array(skillGroupSchema).optional(), skillImports: z.array(skillImportJobSchema).optional(),
   runs: z.array(runSchema), assets: z.array(assetSchema), events: z.array(runEventSchema), system: systemSchema,
 });
 export type WorkspaceSnapshot = z.infer<typeof workspaceSnapshotSchema>;
@@ -585,6 +609,7 @@ export const runDiagnosticBundleSchema = z.object({
 });
 export const workspaceSummarySchema = z.object({
   projects: z.array(projectSummarySchema), models: z.array(modelSchema), skills: z.array(skillSchema), system: systemSchema,
+  skillGroups: z.array(skillGroupSchema).optional(), skillImports: z.array(skillImportJobSchema).optional(),
   version: z.number().int().nonnegative(), assetsVersion: z.number().int().nonnegative(),
 });
 export type WorkspaceSummary = z.infer<typeof workspaceSummarySchema>;

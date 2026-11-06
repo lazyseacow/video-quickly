@@ -46,6 +46,7 @@ for (const viewport of [{ width: 1536, height: 960, theme: 'dark' }, { width: 39
       await page.setViewportSize(viewport); await page.addInitScript(theme => localStorage.setItem('vq-theme', theme), viewport.theme);
       const dialog = await openProduction(page, source.project);
       await expect(page).toHaveTitle(/Video Quickly/); await expect(page.locator('vite-error-overlay')).toHaveCount(0);
+      await dialog.locator('.creative-context-editor__roles > summary').click();
       const pool = dialog.getByRole('group', { name: '项目角色池', exact: true });
       const role = pool.getByRole('checkbox', { name: source.profiles[0].name, exact: true });
       await role.focus(); await page.keyboard.press('Space'); await expect(role).toBeChecked();
@@ -85,6 +86,7 @@ test('keeps a running role snapshot while saving and reopening a different pendi
   const source = await fixture(request, true);
   try {
     let dialog = await openProduction(page, source.project);
+    await dialog.locator('.creative-context-editor__roles > summary').click();
     await dialog.getByRole('group', { name: '项目角色池', exact: true }).getByRole('checkbox', { name: source.profiles[0].name, exact: true }).check();
     await saveProduction(dialog); await expect(dialog).toHaveCount(0);
     const before = await source.current(), run = await rpc<RunSummary>(request, 'run.start', { projectId: before.id, nodeId: 'script' }); await source.started;

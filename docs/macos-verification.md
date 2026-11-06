@@ -29,6 +29,8 @@ pnpm test:desktop --packaged
 
 [CI 配置](../.github/workflows/ci.yml) 使用 `macos-15` 执行 arm64 验收，`macos-15-intel` 执行 Intel x64 验收；工作流启动时再次核对 Node 的实际架构。两个 job 均执行类型、全部自动测试、全部浏览器流程、本地 HTTP 恢复、四组实际编码（含 4K）、生产 ZIP、包内 portability、独立打包 PDF 和真实 Electron 专项。
 
+每个架构的浏览器流程各使用两个独立运行器执行 `--shard=1/2` 和 `--shard=2/2`，每片保持两个 worker 和文件内串行。原生 job 下载本架构、本提交的两份 blob 与截图／RPC 证据，核对分片身份后使用官方 Playwright 合并报告，再与当前 `--list` 逐用例核对，拒绝缺片、重复、替换、失败和跳过。完整结果仍写入 `browser-results.json`，完整性记录另存 `browser-coverage.json`；两个架构各自保留全部原生检查和归档门槛。
+
 `scripts/install-macos-smoke.mjs` 只在全新隔离 macOS CI 账号执行，拒绝已有 Electron 数据。它实际解压本次 ZIP、复制到中文／空格路径，创建真实项目、素材和待审检查点；覆盖应用后验证默认工作区、原任务继续和实际导出；移除应用前后比较数据库、WAL 和媒体摘要，证明移除 `.app` 默认保留项目数据。自动化提供系统交互的选择结果，Finder 的实际鼠标操作另验；结束仅清理本次创建的隔离账号数据。
 
 只有本架构所有报告均通过，`collect-macos-artifacts.mjs` 才归档 ZIP、来源／版本／摘要和验收清单。安装后的源版本、CPU 和完整功能验收必须由该次真实报告证明，另一架构或本机开发目录包的成功不能代替。

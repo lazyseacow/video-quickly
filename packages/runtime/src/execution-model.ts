@@ -14,6 +14,7 @@ export function validateExecutionModel(node: WorkflowNode, model: ModelProfile |
   catch (failure) { throw new ExecutionModelError(failure instanceof Error ? failure.message : '模型参数无效。', 'models'); }
   if (['brief', 'research', 'style', 'script', 'agent'].includes(node.kind) && !model.capabilities.includes('text')) throw new ExecutionModelError('此步骤需要具备文本能力的模型。', 'step');
   if (node.kind === 'agent' && !model.capabilities.includes('tools')) throw new ExecutionModelError('Agent 步骤需要具备工具调用能力的模型。', 'step');
+  if (node.kind === 'agent' && model.provider === 'ollama') throw new ExecutionModelError('Agent 制作请使用支持工具调用的 OpenAI 兼容连接；当前 Ollama 原生连接未接入 Agent 执行器。', 'models');
   const capability = node.kind === 'assets' ? 'image' : node.kind === 'animation' ? 'video' : undefined;
   if (capability && !model.capabilities.includes(capability)) throw new ExecutionModelError('所选模型不具备此步骤需要的生成能力，请修改配置后创建新的运行。', 'step');
   const protocols: Record<string, string[]> = { assets: ['openai-compatible', 'seedream', 'comfyui', 'custom-http'], animation: ['openai-compatible', 'seedance', 'comfyui', 'custom-http'] };

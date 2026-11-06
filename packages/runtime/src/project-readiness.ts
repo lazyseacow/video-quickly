@@ -52,7 +52,7 @@ export function createProjectReadiness(options: {
       if (!previous || previous.severity === 'warning' && severity === 'error') required.set(id, { asset, node, severity });
     }
     if (saved.blockedIssue) add({ ...saved.blockedIssue, severity: 'error' }, 'blocked');
-    if (nodes.some(node => node.kind === 'export') && (!options.hasMediaExecutor || !options.system.ffmpegAvailable)) add({ severity: 'error', category: 'environment', message: '媒体导出引擎尚未就绪。', hint: '请检查随应用安装的媒体组件，修复后重新连接执行器并再次检查。', fix: 'runtime' }, 'media-engine');
+    if (nodes.some(node => node.kind === 'export' || node.config.videoAgent === true) && (!options.hasMediaExecutor || !options.system.ffmpegAvailable)) add({ severity: 'error', category: 'environment', message: '媒体导出引擎尚未就绪。', hint: '请检查随应用安装的媒体组件，修复后重新连接执行器并再次检查。', fix: 'runtime' }, 'media-engine');
     const characterIds = new Set(projectCharacterIds(project));
     for (const id of characterIds) {
       const character = characters.get(id);
@@ -80,7 +80,7 @@ export function createProjectReadiness(options: {
         add({ severity: 'error', category: 'model', nodeId: node.id, modelId: node.modelId, message: failure instanceof Error ? failure.message : '模型配置无效。', fix: failure instanceof ExecutionModelError ? failure.target : 'models' }, node.id);
       }
       if (model?.hasSecret && !model.credentialRef) add({ severity: 'error', category: 'model', nodeId: node.id, modelId: model.id, message: '模型凭据配置不完整，请重新保存连接密钥。', fix: 'models' }, `credential:${model.id}`);
-      for (const id of node.skillIds) if (!enabledSkills.has(id)) add({ severity: 'warning', category: 'skill', nodeId: node.id, message: '步骤引用的 Skill 不可用，执行时不会采用该指令。', fix: 'step' }, `${node.id}:${id}`);
+      for (const id of node.skillIds) if (!enabledSkills.has(id)) add({ severity: 'error', category: 'skill', nodeId: node.id, message: '步骤引用的 Skill 不存在或已停用，请重新选择。', fix: 'step' }, `${node.id}:${id}`);
       if (!model) {
         if (node.kind === 'agent') add({ severity: 'error', category: 'model', nodeId: node.id, message: 'Agent 步骤需要选择具备文本和工具能力的模型。', fix: 'step' }, `agent:${node.id}`);
         if (node.kind === 'script' && !project.shots.length) add({ severity: futureShots ? 'warning' : 'error', category: 'workflow', nodeId: node.id, message: '本地脚本步骤没有可采用的分镜，请先添加镜头或选择文本模型。', fix: 'step' }, `script:${node.id}`);

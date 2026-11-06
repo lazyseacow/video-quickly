@@ -168,7 +168,10 @@ function PlanningOutput({ section, planning }: { section: PlanningSection; plann
 
 function RecordedStepOutput({ inspection, step, version, onOpenOutput, showApply = true }: StepOutputsProps) {
   const output = useRuntimeRead('run.step.payload', { runId: inspection.run.id, nodeId: step.id, kind: 'output' }, version, runStepPayloadSchema);
-  const applicable = showApply && inspection.run.purpose !== 'workflow-assistant' && ['script', 'style', 'assets', 'animation', 'research'].includes(step.kind);
+  const value = output.data?.value;
+  const hasMediaAssets = Boolean(value && typeof value === 'object' && !Array.isArray(value) && Array.isArray(value.assets) && value.assets.length);
+  const applicable = showApply && inspection.run.purpose !== 'workflow-assistant' && ['script', 'style', 'assets', 'animation', 'research'].includes(step.kind)
+    && (!['assets', 'animation'].includes(step.kind) || hasMediaAssets);
   const open = () => onOpenOutput({ projectId: inspection.run.projectId, runId: inspection.run.id, nodeId: step.id, kind: step.kind });
   return <>{output.error && <Notice kind="error">{output.error}<Button aria-label="重试读取产物" onClick={output.refresh}>重试</Button></Notice>}
     {!output.data && !output.error && <p role="status">正在读取步骤产物…</p>}

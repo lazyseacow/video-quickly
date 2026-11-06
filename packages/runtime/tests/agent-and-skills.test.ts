@@ -1,5 +1,5 @@
 import { createServer, type Server } from 'node:http';
-import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -48,6 +48,47 @@ describe('Skill resources and tools', () => {
 });
 
 describe('Deep Agents integration', () => {
+  it('discovers a Skill, reads its resources, and executes its enabled script once across replay', async () => {
+    const dataDirectory = await directory(), source = join(dataDirectory, 'capabilities.zip');
+    await writeFile(source, zipSync({
+      'fixture/SKILL.md': strToU8('---\nname: video-script-fixture\ndescription: 创建视频创作资料\n---\n先读取 references/guide.md，再调用已启用的脚本。'),
+      'fixture/references/guide.md': strToU8('reference-marker: use the selected visual method'),
+      'fixture/scripts/prepare.mjs': strToU8("import { appendFileSync } from 'node:fs'; let input=''; for await (const chunk of process.stdin) input += chunk; appendFileSync('invocations.txt','called\\n'); process.stdout.write('script-marker:' + input);"),
+    }));
+    const runtime = createRuntime({ dataDirectory }); runtimes.push(runtime);
+    const skill = await runtime.dispatch('skill.import', { path: source }) as SkillPackage;
+    await runtime.dispatch('skill.tool.toggle', { skillId: skill.id, toolId: 'scripts/prepare.mjs', enabled: true });
+    let calls = 0, sawReference = false, sawScript = false;
+    const server = createServer(async (request, response) => {
+      let body = ''; for await (const chunk of request) body += chunk.toString();
+      const payload = JSON.parse(body) as { tools: Array<{ function: { name: string } }>; messages: Array<{ role: string; content?: string }> };
+      calls++;
+      sawReference ||= payload.messages.some(message => message.role === 'tool' && message.content?.includes('reference-marker'));
+      sawScript ||= payload.messages.some(message => message.role === 'tool' && message.content?.includes('script-marker:agent-input'));
+      const scriptTool = payload.tools.find(item => item.function.name.startsWith('skill_'))?.function.name;
+      expect(scriptTool).toBeDefined();
+      const invocation = calls === 1 ? { id: 'discover-skill', name: 'list_capabilities', input: {} }
+        : calls === 2 ? { id: 'read-reference', name: 'read_skill', input: { skillId: skill.id, resource: 'references/guide.md' } }
+        : calls === 3 ? { id: 'execute-script', name: scriptTool!, input: { input: 'agent-input' } } : undefined;
+      response.setHeader('Content-Type', 'application/json');
+      response.end(JSON.stringify({ id: `skill-response-${calls}`, object: 'chat.completion', created: 1, model: 'fixture', choices: [{ index: 0, finish_reason: invocation ? 'tool_calls' : 'stop', message: invocation ? { role: 'assistant', content: null, tool_calls: [{ id: invocation.id, type: 'function', function: { name: invocation.name, arguments: JSON.stringify(invocation.input) } }] } : { role: 'assistant', content: '已使用 Skill 和脚本完成任务。' } }] }));
+    });
+    servers.push(server); await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
+    const address = server.address(); if (!address || typeof address === 'string') throw new Error('测试服务未启动。');
+    const initial = await runtime.dispatch('workspace.snapshot') as WorkspaceSnapshot;
+    const model = await runtime.dispatch('model.save', { model: { name: 'fixture', provider: 'openai-compatible', baseUrl: `http://127.0.0.1:${address.port}/v1`, model: 'fixture', connectionType: 'text', capabilities: ['text', 'tools'] } }) as ModelProfile;
+    await runtime.dispatch('workflow.save', { projectId: initial.projects[0].id, workflow: { id: 'skill', version: 1, name: 'Skill fixture', production: { mode: 'native-video', referenceMode: 'none', soundPrompt: '', subtitleMode: 'off' }, nodes: [workflowNodeSchema.parse({ id: 'agent', kind: 'agent', label: 'Agent', modelId: model.id, skillIds: [skill.id] })], edges: [] } });
+    const run = await runtime.dispatch('run.start', { projectId: initial.projects[0].id }) as RunRecord;
+    await runtime.waitForIdle();
+    const after = await runtime.dispatch('workspace.snapshot') as WorkspaceSnapshot;
+    expect(after.runs[0].status, after.runs[0].error).toBe('succeeded');
+    expect(sawReference).toBe(true); expect(sawScript).toBe(true);
+    expect(after.runs[0].activities.find(item => item.id === 'agent:tool:execute-script')?.status).toBe('completed');
+    await runtime.dispatch('run.replay', { runId: run.id });
+    expect(await readFile(join(dataDirectory, 'skills', skill.id, 'invocations.txt'), 'utf8')).toBe('called\n');
+    expect(calls).toBe(4);
+  });
+
   it('uses native persistence, invokes the project tool, and journals each model response', async () => {
     let calls = 0;
     let sawToolResult = false;
@@ -95,29 +136,33 @@ createInterface({ input: process.stdin }).on('line', line => {
   let result;
   if (message.method === 'initialize') result = { protocolVersion: '2025-06-18', capabilities: { tools: {} }, serverInfo: { name: 'fixture', version: '1.0.0' } };
   else if (message.method === 'tools/list') result = { tools: [{ name: 'echo', description: 'Return a fixture value', inputSchema: { type: 'object', properties: { value: { type: 'string' } }, required: ['value'] } }] };
-  else if (message.method === 'tools/call') result = { content: [{ type: 'text', text: 'mcp:' + message.params.arguments.value }] };
+  else if (message.method === 'tools/call') result = { content: [{ type: 'text', text: 'mcp:' + message.params.arguments.value }, { type: 'image', mimeType: 'image/png', data: Buffer.alloc(800000, 1).toString('base64') }] };
   else result = {};
   send({ jsonrpc: '2.0', id: message.id, result });
 });`);
     const runtime = createRuntime({ dataDirectory }); runtimes.push(runtime);
     const registered = await runtime.dispatch('tool.register', { server: { name: 'fixture', transport: 'stdio', command: process.execPath, args: [fixture], enabled: true } }) as { id: string };
+    const unavailable = await runtime.dispatch('tool.register', { server: { name: 'unused-unavailable', transport: 'stdio', command: join(dataDirectory, 'missing-tool'), enabled: true } }) as { id: string };
     const inspected = await runtime.dispatch('tool.inspect', { serverId: registered.id }) as { tools: Array<{ name: string }> };
     expect(inspected.tools[0].name).toBe('echo');
     let calls = 0; let sawMcp = false;
     const server = createServer(async (request, response) => {
       let body = ''; for await (const chunk of request) body += chunk.toString();
       const payload = JSON.parse(body) as { tools: Array<{ function: { name: string } }>; messages: Array<{ role: string; content?: string }> };
-      const mcpTool = payload.tools.find(item => item.function.name.startsWith('mcp_'))!;
       calls++;
       sawMcp ||= payload.messages.some(message => message.role === 'tool' && message.content?.includes('mcp:hello'));
       response.setHeader('Content-Type', 'application/json');
-      response.end(JSON.stringify({ id: `mcp-response-${calls}`, object: 'chat.completion', created: 1, model: 'fixture', choices: [{ index: 0, finish_reason: calls === 1 ? 'tool_calls' : 'stop', message: calls === 1 ? { role: 'assistant', content: null, tool_calls: [{ id: 'call-mcp', type: 'function', function: { name: mcpTool.function.name, arguments: '{"input":{"value":"hello"}}' } }] } : { role: 'assistant', content: 'MCP 已执行。' } }] }));
+      const invocation = calls === 1 ? { id: 'list-capabilities', name: 'list_capabilities', input: {} }
+        : calls === 2 ? { id: 'discover-mcp', name: 'discover_mcp_tools', input: { serverId: registered.id } }
+        : calls === 3 ? { id: 'call-mcp', name: 'call_mcp_tool', input: { serverId: registered.id, toolName: 'echo', input: { value: 'hello' } } } : undefined;
+      if (invocation) expect(payload.tools.some(item => item.function.name === invocation.name)).toBe(true);
+      response.end(JSON.stringify({ id: `mcp-response-${calls}`, object: 'chat.completion', created: 1, model: 'fixture', choices: [{ index: 0, finish_reason: invocation ? 'tool_calls' : 'stop', message: invocation ? { role: 'assistant', content: null, tool_calls: [{ id: invocation.id, type: 'function', function: { name: invocation.name, arguments: JSON.stringify(invocation.input) } }] } : { role: 'assistant', content: 'MCP 已执行。' } }] }));
     });
     servers.push(server); await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
     const address = server.address(); if (!address || typeof address === 'string') throw new Error('测试服务未启动。');
     const initial = await runtime.dispatch('workspace.snapshot') as WorkspaceSnapshot;
     const model = await runtime.dispatch('model.save', { model: { name: 'fixture', provider: 'openai-compatible', baseUrl: `http://127.0.0.1:${address.port}/v1`, model: 'fixture', connectionType: 'text', capabilities: ['text', 'tools'] } }) as ModelProfile;
-    const agent = workflowNodeSchema.parse({ id: 'agent', kind: 'agent', label: 'Agent', modelId: model.id, config: { mcpServerIds: [registered.id] } });
+    const agent = workflowNodeSchema.parse({ id: 'agent', kind: 'agent', label: 'Agent', modelId: model.id, config: { mcpServerIds: [registered.id, unavailable.id] } });
     await runtime.dispatch('workflow.save', { projectId: initial.projects[0].id, workflow: { id: 'mcp', version: 1, name: 'MCP fixture', production: { mode: 'native-video', referenceMode: 'none', soundPrompt: '', subtitleMode: 'off' }, nodes: [agent], edges: [] } });
     const run = await runtime.dispatch('run.start', { projectId: initial.projects[0].id }) as RunRecord;
     await runtime.waitForIdle();
@@ -126,7 +171,11 @@ createInterface({ input: process.stdin }).on('line', line => {
     expect(after.runs[0].status).toBe('succeeded');
     expect(sawMcp).toBe(true);
     expect(after.runs[0].activities.find(item => item.id === 'agent:tool:call-mcp')?.status).toBe('completed');
-    await runtime.dispatch('run.replay', { runId: run.id }); expect(calls).toBe(2);
+    const artifactDirectory = join(dataDirectory, 'tool-artifacts', run.id);
+    const artifacts = await readdir(artifactDirectory);
+    expect(artifacts).toHaveLength(1); expect(artifacts[0].endsWith('.png')).toBe(true);
+    expect(await readFile(join(artifactDirectory, artifacts[0]))).toEqual(Buffer.alloc(800000, 1));
+    await runtime.dispatch('run.replay', { runId: run.id }); expect(calls).toBe(4);
   }, 30_000);
 
   it('recovers a committed child model response when the native agent checkpoint lags', async () => {

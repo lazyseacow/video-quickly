@@ -17,7 +17,7 @@ async function records(directory: string, file = 'runtime.log') {
 
 it('preserves current readiness and recovery RPC labels without accepting unknown method words', async () => {
   const directory = await fixture(), logger = createLogger({ dataDirectory: directory, component: 'runtime' });
-  const methods = ['project.readiness', 'project.readiness.cancel', 'asset.recovery.start', 'asset.recovery.get', 'asset.recovery.scan', 'asset.recovery.confirm', 'asset.recovery.cancel'];
+  const methods = ['project.readiness', 'project.readiness.cancel', 'asset.recovery.start', 'asset.recovery.get', 'asset.recovery.scan', 'asset.recovery.confirm', 'asset.recovery.cancel', 'skill.import.start', 'skill.import.get', 'skill.import.retry', 'skill.group.update', 'skill.resource.read', 'skill.group.toggle', 'skill.uninstall', 'skill.group.uninstall'];
   for (const method of methods) logger.info('rpc.completed', { method });
   const privateWord = 'private-provider-token';
   logger.info('rpc.failed', { method: `project.${privateWord}` });

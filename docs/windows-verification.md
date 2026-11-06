@@ -6,6 +6,8 @@
 
 `Desktop verification` 工作流的 Windows job 在隔离 `windows-2025` 运行器执行锁定依赖、类型检查、完整自动测试、浏览器流程、本地 HTTP CLI 恢复、四组实际媒体导出、Electron 构建、独立打包 PDF、真实 Electron 应用和安装卸载验收。Node 与 pnpm 版本由 `.node-version` 和根 `package.json` 固定；Electron 与构建器精确版本在桌面包清单及锁文件中固定。
 
+浏览器流程分成两个独立 `windows-2025` job，以 `--shard=1/2` 和 `--shard=2/2` 执行；每片继续使用两个 worker，文件内保持串行。分片保存包含提交、系统、架构和片号的身份记录、Playwright blob、截图及 RPC 诊断，产物名称绑定平台、提交 SHA 和片号。原生验证 job 等待两片成功，再按确切名称下载，通过官方 `playwright merge-reports` 生成原有 `browser-results.json`。`scripts/browser-reports.ts` 将合并后的逐用例身份与当前 `--list` 发现结果比较，拒绝缺片、重复、替换、失败和跳过，另存 `browser-coverage.json`。随后保留全部原生、打包、安装和发布清单检查；浏览器证据与合并附件一并归档。
+
 `pnpm prepare:media` 按 `scripts/media-manifest.json` 下载、核对 FFmpeg 来源及 SHA-256。许可、来源和 Node 版本随执行组件归档。Electron 产物位于 `.generated/electron-release`；命令使用 `--publish never`，不发布 Release。
 
 `pnpm test:desktop --packaged` 在独立临时工作区启动本次实际目录包，验证沙箱／预加载、真实 IPC／Node、编辑历史、MP4 导出、媒体 Range 与读取边界、失联重连和重启草稿。报告为 `.generated/electron-results.json`，截图／失败证据在 `.generated/electron-artifacts`。发布清单只在所有要求的报告成功且非空时生成。

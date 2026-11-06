@@ -36,8 +36,10 @@ for (const { width, theme } of [{ width: 1536, theme: 'dark' }, { width: 600, th
     await expect(dialog.getByRole('tablist', { name: '制作阶段记录', exact: true })).toHaveCount(0);
     await steps.getByRole('button', { name: /参考素材准备/ }).click(); await expect(output).toContainText('本步骤未添加参考素材');
     await expect(output).not.toContainText('referenceAssetIds');
+    await expect(dialog.getByRole('button', { name: '在项目中查看与应用', exact: true })).toHaveCount(0);
     await steps.getByRole('button', { name: /镜头视频生成/ }).click();
     const media = output.getByRole('group', { name: '选择预览素材', exact: true }), second = media.getByRole('button', { name: /^预览/ }).nth(1); await expect(media.getByRole('button', { name: /^预览/ })).toHaveCount(6);
+    await expect(dialog.getByRole('button', { name: '在项目中查看与应用', exact: true })).toBeVisible();
     await expect(media.getByRole('button', { name: /^预览/ }).first()).toContainText('生成的蓝色镜头 1'); await expect(media).not.toContainText('后来修改的镜头名称');
     await expect(media.getByRole('button', { name: /^预览/ }).first()).toBeInViewport({ ratio: 1 });
     if (width > 1000) await expect(media.getByRole('button', { name: /^预览/ }).last()).toBeInViewport({ ratio: 1 });
@@ -61,6 +63,8 @@ for (const { width, theme } of [{ width: 1536, theme: 'dark' }, { width: 600, th
     await page.screenshot({ path: info.outputPath('step-video-' + width + '.png') });
     await steps.getByRole('button', { name: /剪辑与运镜准备/ }).click(); await expect(output).toContainText('6 个镜头已就绪');
     await expect(output.locator('.step-result__fields')).toHaveCount(0);
+    await expect(dialog.getByRole('button', { name: '在项目中查看与应用', exact: true })).toHaveCount(0);
+    await page.screenshot({ path: info.outputPath('step-edit-preparation-' + width + '.png') });
     await steps.getByRole('button', { name: /导出成片/ }).click();
     await expect(output.getByRole('link', { name: '下载成片', exact: true })).toBeVisible();
     await expect(output.locator('video')).toHaveCount(1);

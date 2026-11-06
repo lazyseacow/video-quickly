@@ -26,15 +26,14 @@ export default function ReferenceAudioPicker({ assets, value, onChange, onImport
     finally { setBusy(false); }
   }
   return <section className="production-settings__reference-audio" aria-label="参考音频">
-    <Field label="参考音频" hint="WAV / MP3，每个文件不超过 15 MB；在声音要求中描述音色、语气或配乐的参考方式。">
-      <PathPicker label="参考音频文件路径" value={path} onChange={setPath} extensions={['wav', 'mp3']} placeholder="选择本地音频文件…" disabled={disabled} />
+    <Field label="参考音频">
+      <PathPicker label="参考音频文件路径" value={path} onChange={setPath} extensions={['wav', 'mp3']} placeholder="WAV / MP3" disabled={disabled} />
     </Field>
     <Button static busy={busy} disabled={disabled || !path.trim() || value.length >= MAX_REFERENCE_AUDIOS} onClick={() => void add()}><Plus size={14} />添加参考音频</Button>
     {value.length > 0 && <ul className="production-settings__reference-audio-list" aria-label="已选参考音频">{value.map((id, index) => {
       const asset = available.get(id), name = asset?.name ?? '音频素材不可用';
       return <li key={id}><span>{index + 1}. {name}</span><IconButton label={`移除参考音频：${name}`} disabled={disabled} onClick={() => onChange(value.filter(value => value !== id))}><Trash2 size={14} /></IconButton></li>;
     })}</ul>}
-    <p className="production-settings__note">用于 Seedance 生成。2.0 最多 3 段、总计 15 秒，需同时提供参考图片；2.5 最多 10 段、总计 30 秒，可仅提供音频。</p>
     {error && <Notice kind="error">{error}</Notice>}
   </section>;
 }

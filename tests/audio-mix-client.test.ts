@@ -1,7 +1,7 @@
 import { afterEach, expect, it, vi } from 'vitest';
 import { createNativeVideoWorkflow, DEFAULT_VIDEO_PROFILE, projectSchema, type AudioMixJob, type PreparedAudioMix } from '@video-quickly/contracts';
 import { rpc } from '../apps/desktop/src/lib/client';
-import { prepareAudioMixPreview, readAudioLevels } from '../apps/desktop/src/lib/audio-mix';
+import { audioMixWarningsAtTime, prepareAudioMixPreview, readAudioLevels } from '../apps/desktop/src/lib/audio-mix';
 
 vi.mock('../apps/desktop/src/lib/client', () => ({ rpc: vi.fn() }));
 const request = vi.mocked(rpc), key = 'a'.repeat(64);
@@ -9,6 +9,20 @@ const project = () => projectSchema.parse({ id: 'mix-project', title: '试听', 
 const result = (): PreparedAudioMix => ({ version: 1, key, path: '/derived/mix.wav', sha256: 'b'.repeat(64), durationUs: 2_000_000, shotDurations: [{ shotId: 'shot-1', durationUs: 1_000_000 }, { shotId: 'shot-2', durationUs: 1_000_000 }], analysis: { sampleRate: 48000, channels: 2 }, warnings: [] });
 const job = (status: AudioMixJob['status'], mix = result()): AudioMixJob => ({ id: 'job', key, status, progress: status === 'succeeded' ? 1 : .5, ...(status === 'succeeded' ? { result: mix } : {}) });
 afterEach(() => { vi.useRealTimers(); vi.resetAllMocks(); });
+
+it('shows warnings for the playing shot using its resolved duration while retaining mix-wide warnings', () => {
+  const scoped: PreparedAudioMix = { ...result(), durationUs: 2_500_000,
+    shotDurations: [{ shotId: 'shot-1', durationUs: 1_500_000 }, { shotId: 'shot-2', durationUs: 1_000_000 }],
+    warnings: ['镜头声音提示', '整段响度提示'],
+    warningDetails: [{ shotId: 'shot-2', message: '镜头声音提示' }, { message: '整段响度提示' }],
+  };
+  expect(audioMixWarningsAtTime(scoped, 0)).toEqual(['整段响度提示']);
+  expect(audioMixWarningsAtTime(scoped, 1_200_000)).toEqual(['整段响度提示']);
+  expect(audioMixWarningsAtTime(scoped, 1_500_000)).toEqual(['镜头声音提示', '整段响度提示']);
+  expect(audioMixWarningsAtTime(scoped, scoped.durationUs)).toEqual(['镜头声音提示', '整段响度提示']);
+  expect(audioMixWarningsAtTime({ ...scoped, shotDurations: scoped.shotDurations!.toReversed() }, 0)).toEqual(['镜头声音提示', '整段响度提示']);
+  expect(audioMixWarningsAtTime({ ...scoped, shotDurations: undefined }, 0)).toEqual(['整段响度提示']);
+});
 
 it('observes one shared job until ready and validates its complete shot duration mapping', async () => {
   vi.useFakeTimers();

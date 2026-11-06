@@ -158,7 +158,8 @@ async function prepare(options: PrepareAudioMixOptions, key: string): Promise<Pr
   const path = join(options.outputDirectory, `mix-${key}.wav`), hit = await cached(path, key, signal);
   if (hit) { for (const asset of used) await verifyAudio(asset, signal); options.onProgress?.(1); return hit; }
   const temporary = await mkdtemp(join(options.outputDirectory, '.mix-'));
-  const totalSamples = sampleAt(durationUs), settings = audioMixSettingsSchema.parse(project.audioMix ?? DEFAULT_AUDIO_MIX_SETTINGS), warnings: string[] = [];
+  const totalSamples = sampleAt(durationUs), settings = audioMixSettingsSchema.parse(project.audioMix ?? DEFAULT_AUDIO_MIX_SETTINGS);
+  const warnings: NonNullable<PreparedAudioMix['warningDetails']> = [];
   const stems = new Map<string, { path: string; samples: number }>();
   async function stem(asset: AssetRecord, denoise: boolean, reduction: number) {
     const stemKey = digest(JSON.stringify([asset.sha256, asset.kind, denoise, denoise ? reduction : 0, ALGORITHM]));
@@ -205,7 +206,11 @@ async function prepare(options: PrepareAudioMixOptions, key: string): Promise<Pr
     for (const [index, shot] of project.shots.entries()) {
       const output = join(temporary, `voice-${index}.wav`), processing = audioProcessingSchema.parse(shot.audioProcessing ?? DEFAULT_AUDIO_PROCESSING);
       const source = shot.audioAssetId ? await stem(audioAsset(shot.audioAssetId, project.id, options.assets), processing.denoise, processing.noiseReductionDb) : undefined;
-      if (!source && !usesVideoAudio(shot)) warnings.push(`“${shot.title}”尚未添加配音，本镜头使用静音音轨。`);
+      const label = `第 ${index + 1} 个镜头`;
+      if (!source && !usesVideoAudio(shot)) {
+        const reason = processing.version === 2 && processing.videoAudio.enabled ? '未关联视频' : '未使用视频原声';
+        warnings.push({ shotId: shot.id, message: `${label}${reason}且未添加独立配音，镜头音轨为静音。` });
+      }
       await writeShotTrack(shot, source, 'audio', cursorUs, processing.gainDb, output); voiceFiles.push(output);
       if (originals.length) {
         let original: Awaited<ReturnType<typeof stem>> | undefined;
@@ -213,7 +218,7 @@ async function prepare(options: PrepareAudioMixOptions, key: string): Promise<Pr
           const asset = audioAsset(shot.videoAssetId, project.id, options.assets, '视频原声', 'video');
           if (!videoTracks.has(asset.id)) videoTracks.set(asset.id, (await probeMedia(asset.path, ffprobe, signal)).audio);
           if (videoTracks.get(asset.id)) original = await stem(asset, false, 0);
-          else warnings.push(`“${shot.title}”关联的视频没有音轨，原声使用静音。`);
+          else warnings.push({ shotId: shot.id, message: `${label}关联的视频没有音轨，原声使用静音。` });
         }
         const originalOutput = join(temporary, `original-${index}.wav`);
         await writeShotTrack(shot, original, 'video', cursorUs, processing.version === 2 ? processing.videoAudio.gainDb : 0, originalOutput); originalFiles.push(originalOutput);
@@ -259,8 +264,8 @@ async function prepare(options: PrepareAudioMixOptions, key: string): Promise<Pr
     if (settings.loudness.enabled && ['input_i', 'input_tp', 'input_lra', 'input_thresh', 'target_offset'].every(field => Number.isFinite(Number(measured[field])))) {
       const target = settings.loudness;
       normalized.push(`loudnorm=I=${target.targetLufs}:TP=${target.truePeakDb}:LRA=11:measured_I=${measured.input_i}:measured_TP=${measured.input_tp}:measured_LRA=${measured.input_lra}:measured_thresh=${measured.input_thresh}:offset=${measured.target_offset}:linear=true`);
-    } else if (settings.loudness.enabled) warnings.push('音轨为静音或无法测得有限响度，已保留原采样。');
-    if (!settings.loudness.enabled && Number(measured.input_tp) > 0) warnings.push('混音超过 0 dBFS，输出会削波；请降低电平或开启响度处理。');
+    } else if (settings.loudness.enabled) warnings.push({ message: '音轨为静音或无法测得有限响度，已保留原采样。' });
+    if (!settings.loudness.enabled && Number(measured.input_tp) > 0) warnings.push({ message: '混音超过 0 dBFS，输出会削波；请降低电平或开启响度处理。' });
     const mixed = join(temporary, 'mix.wav');
     normalized.push('aresample=48000', `apad=whole_len=${totalSamples}`, `atrim=end_sample=${totalSamples}`);
     await runMedia(ffmpeg, ['-nostdin', '-v', 'error', '-y', '-i', rawMix, '-af', normalized.join(','), '-c:a', 'pcm_s16le', '-ar', '48000', '-ac', '2', mixed], { signal });
@@ -269,7 +274,7 @@ async function prepare(options: PrepareAudioMixOptions, key: string): Promise<Pr
     const levels = await buildLevels(pcm, join(temporary, 'levels.bin'), signal);
     for (const asset of used) await verifyAudio(asset, signal);
     const finite = (value: string) => Number.isFinite(Number(value)) ? Number(value) : undefined;
-    const result = preparedAudioMixSchema.parse({ version: 1, key, path, sha256: await fileHash(mixed, signal), durationUs, shotDurations: project.shots.map(shot => ({ shotId: shot.id, durationUs: shot.durationUs })), analysis: { integratedLufs: finite(finalStats.input_i), truePeakDb: finite(finalStats.input_tp), sampleRate: SAMPLE_RATE, channels: 2 }, warnings });
+    const result = preparedAudioMixSchema.parse({ version: 1, key, path, sha256: await fileHash(mixed, signal), durationUs, shotDurations: project.shots.map(shot => ({ shotId: shot.id, durationUs: shot.durationUs })), analysis: { integratedLufs: finite(finalStats.input_i), truePeakDb: finite(finalStats.input_tp), sampleRate: SAMPLE_RATE, channels: 2 }, warnings: warnings.map(value => value.message), warningDetails: warnings });
     signal?.throwIfAborted();
     await rename(mixed, path); await rename(join(temporary, 'levels.bin'), levelsPath(path));
     const manifest = join(temporary, 'manifest.json'); await writeFile(manifest, JSON.stringify({ result, levels } satisfies MixManifest)); await rename(manifest, manifestPath(path));

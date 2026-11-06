@@ -48,21 +48,25 @@ export default function WorkbenchProduction({ workflow, run, version, action, no
   const synchronized = Boolean(!inspection.error && data && data.run.id === run.id && data.run.status === run.status && data.run.updatedAt === run.updatedAt && data.run.currentNodeId === run.currentNodeId);
   const steps = data?.steps ?? [];
   const native = (data?.workflowId ?? workflow.id) === 'native-video';
+  const agent = steps.find(step => step.id === 'video-agent' && step.kind === 'agent');
+  const autonomous = Boolean(agent && !run.selection);
+  const flat = native || autonomous;
   const recorded = new Map(steps.map(step => [step.id, step]));
   // A scoped run supplies statuses; it must not hide the rest of the workflow.
-  const tasks: ProgressTask[] = native && data?.snapshotAvailable && !run.selection
-    ? steps.map(step => ({ id: step.id, label: step.label, description: step.description, node: workflow.nodes.find(node => node.id === step.id), step }))
+  const tasks: ProgressTask[] = flat && data?.snapshotAvailable && !run.selection
+    ? steps.filter(step => !autonomous || step.id !== agent?.id).map(step => ({ id: step.id, label: step.label, description: step.description, node: workflow.nodes.find(node => node.id === step.id), step }))
     : workflow.nodes.map(node => ({ id: node.id, label: recorded.get(node.id)?.label ?? node.label, description: node.description || stepGuidance(node).result, node, step: recorded.get(node.id) }));
   const configured = new Set(tasks.map(task => task.id));
-  for (const step of steps) if (!configured.has(step.id)) tasks.push({ ...step, step });
+  for (const step of steps) if (!configured.has(step.id) && (!autonomous || step.id !== agent?.id)) tasks.push({ ...step, step });
   const current = steps.find(step => step.id === run.currentNodeId);
   const configurationFailure = isConfigurationFailure(run.error ?? current?.error);
   const isCurrent = (task: ProgressTask) => task.id === run.currentNodeId && !taskCompleted(task) && !['succeeded', 'canceled'].includes(run.status);
-  const visibleTasks = native ? tasks.filter(task => task.step?.modelGeneration ?? Boolean(task.node && isModelGenerationNode(task.node))) : tasks;
-  const stages = native ? undefined : groupProgress(data?.stages ?? resolveWorkbenchStages(workflow), tasks);
-  const groups = stages ?? visibleTasks.map(task => ({ key: `task:${task.id}`, label: native ? generationLabel(task.label) : task.label, description: task.description, tasks: [task] }));
+  const visibleTasks = flat ? tasks.filter(task => task.step?.modelGeneration ?? Boolean(task.node && isModelGenerationNode(task.node))) : tasks;
+  const stages = flat ? undefined : groupProgress(data?.stages ?? resolveWorkbenchStages(workflow), tasks);
+  const groups = stages ?? visibleTasks.map(task => ({ key: `task:${task.id}`, label: flat ? generationLabel(task.label) : task.label, description: task.description, tasks: [task] }));
+  const exportTask = autonomous ? tasks.findLast(task => task.step?.kind === 'export') : undefined;
   // Completion clears the execution pointer; keep the last executed item selected.
-  const latestStep = steps.filter(step => !native || visibleTasks.some(task => task.id === step.id)).reduce<RunStepSummary | undefined>((latest, step) => {
+  const latestStep = steps.filter(step => !flat || visibleTasks.some(task => task.id === step.id)).reduce<RunStepSummary | undefined>((latest, step) => {
     if (!step.startedAt && !step.outputAvailable && step.status !== 'succeeded') return latest;
     const timestamp = step.completedAt ?? step.startedAt, previous = latest?.completedAt ?? latest?.startedAt;
     return !latest || !timestamp || !previous || timestamp >= previous ? step : latest;
@@ -80,11 +84,11 @@ export default function WorkbenchProduction({ workflow, run, version, action, no
   const blocked = !synchronized;
   function openStage(group: StageProgress, nodeId?: string) {
     onPausePreview();
-    const selectedId = nodeId ?? (native ? group.tasks[0]?.id : undefined);
+    const selectedId = nodeId ?? (flat ? group.tasks[0]?.id : undefined);
     const frozenStage = selectedId ? data?.stages?.find(stage => stage.nodeIds.includes(selectedId)) : undefined;
     const stage = frozenStage ? { ...frozenStage, nodes: workflow.nodes.filter(node => frozenStage.nodeIds.includes(node.id)) } : resolveWorkbenchStages(workflow)?.find(stage => `stage:${stage.id}` === group.key || selectedId && stage.nodeIds.includes(selectedId))
       ?? { id: group.key.startsWith('stage:') ? group.key.slice(6) : group.key, label: group.label, description: group.description, nodeIds: group.tasks.map(task => task.id), nodes: group.tasks.flatMap(task => task.node ? [task.node] : []) };
-    onConfigureStage(stage, { tab: 'run', nodeId: selectedId, flatRecords: native });
+    onConfigureStage(stage, { tab: 'run', nodeId: selectedId, flatRecords: flat });
   }
   async function perform(method: string, params: Record<string, unknown> = {}) {
     if (inFlight.current || blocked) return;
@@ -95,8 +99,9 @@ export default function WorkbenchProduction({ workflow, run, version, action, no
     } finally { inFlight.current = false; setPending(''); }
   }
   return <section className="workbench-production" aria-label="当前制作">
+    {autonomous && <div className="workbench-production__agent" role="status" aria-label="Agent 制作状态"><span>{!synchronized ? '正在同步 Agent 进度' : run.status === 'running' ? run.currentNodeId === agent?.id ? 'Agent 正在选择下一项任务' : 'Agent 正在制作' : `Agent · ${progressLabel(run.status)}`}</span>{exportTask?.step ? <Button static variant="ghost" onClick={() => openStage({ key: `task:${exportTask.id}`, label: exportTask.label, description: exportTask.description, tasks: [exportTask] }, exportTask.id)}>导出成片 · {synchronized ? exportTask.step.status === 'running' ? stepProgressText(exportTask.step) : progressLabel(exportTask.step.status) : '正在同步进度'}</Button> : <span>尚未导出</span>}</div>}
     <div className="workbench-production__progress">
-      <ol ref={progressList} className={`workbench-guide__steps ${stages ? 'workbench-guide__steps--stages' : ''} ${native ? 'workbench-guide__steps--generation' : ''} workbench-production__stage-steps`} aria-label={native ? '模型生成进度' : stages ? '制作阶段进度' : '制作步骤进度'}>{groups.map((stage, index) => {
+      <ol ref={progressList} className={`workbench-guide__steps ${stages ? 'workbench-guide__steps--stages' : ''} ${flat ? 'workbench-guide__steps--generation' : ''} workbench-production__stage-steps`} aria-label={flat ? '模型生成进度' : stages ? '制作阶段进度' : '制作步骤进度'}>{groups.map((stage, index) => {
         const active = synchronized && stage.tasks.some(isCurrent);
         const highlighted = index === visibleGroup;
         const finished = synchronized && !active && stage.tasks.every(taskCompleted);

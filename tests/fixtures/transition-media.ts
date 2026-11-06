@@ -41,10 +41,14 @@ export function transitionPoints(width: number, height: number): PixelPoint[] {
   return [.2, .5].flatMap(y => [.12, .36, .64, .88].map(x => ({ x: Math.floor(width * x), y: Math.floor(height * y) })));
 }
 
-export function coloredCaptionPixels(bytes: ArrayLike<number>, width: number, height: number, channels: 3 | 4) {
+export function coloredCaptionPixels(source: ArrayLike<number> | HTMLCanvasElement, width?: number, height?: number, channels: 3 | 4 = 4) {
+  const canvas = 'getContext' in source ? source : undefined;
+  const bytes = canvas ? canvas.getContext('2d')!.getImageData(0, 0, canvas.width, canvas.height).data : source as ArrayLike<number>;
+  const frameWidth = canvas?.width ?? width, frameHeight = canvas?.height ?? height;
+  if (frameWidth === undefined || frameHeight === undefined) throw new Error('Caption pixel dimensions are required.');
   let red = 0, green = 0;
-  for (let y = Math.floor(height * .55); y < height; y++) for (let x = 0; x < width; x++) {
-    const offset = (y * width + x) * channels, r = bytes[offset], g = bytes[offset + 1], b = bytes[offset + 2];
+  for (let y = Math.floor(frameHeight * .55); y < frameHeight; y++) for (let x = 0; x < frameWidth; x++) {
+    const offset = (y * frameWidth + x) * channels, r = bytes[offset], g = bytes[offset + 1], b = bytes[offset + 2];
     if (r > 60 && r > g * 1.8 && r > b * 1.8) red++;
     if (g > 220 && r < 60 && b < 60) green++;
   }

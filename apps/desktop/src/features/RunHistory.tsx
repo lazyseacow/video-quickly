@@ -1,7 +1,7 @@
 import { lazy, Suspense, useState } from 'react';
 import { ChevronDown, History, RefreshCw, RotateCcw, Square } from 'lucide-react';
 import { recordPageSchema, runStatusSchema, runSummarySchema, type RunSummary } from '@video-quickly/contracts';
-import { Button, Dialog, EmptyState, Field, Notice, Select, Status, statusLabels } from '../components/Primitives';
+import { Button, EmptyState, Field, Notice, Select, Status, statusLabels } from '../components/Primitives';
 import { useRecordPage } from '../lib/use-record-page';
 import type { Action, StepOutputSelection, WorkspaceView } from '../lib/types';
 import './run-history.css';
@@ -39,7 +39,6 @@ export default function RunsPage({ workspace, action, onOpen, onOpenOutput }: { 
     if (!dateRangeError(next)) setAppliedDates(next);
   }
   function clearFilters() { setPurpose(''); setProjectId(''); setStatus(''); setDateRange({ start: '', end: '' }); setAppliedDates({ start: '', end: '' }); }
-  const [replay, setReplay] = useState<unknown | null>(null);
   const [inspectedRunId, setInspectedRunId] = useState<string>();
   const [restartRun, setRestartRun] = useState<RunSummary>();
   return <div className="content-page"><div className="page-heading"><div><h1>制作记录</h1><p>查看每一步的执行结果，或从中断处继续。</p></div><Button aria-label="刷新制作记录" busy={history.busy} onClick={history.refresh}><RefreshCw size={15} />刷新</Button></div>
@@ -55,13 +54,12 @@ export default function RunsPage({ workspace, action, onOpen, onOpenOutput }: { 
           {['failed', 'needs_attention', 'waiting_external', 'waiting_review', 'queued'].includes(run.status) && <Button aria-label="继续执行" variant="primary" onClick={() => void action('run.resume', { runId: run.id }, '已请求继续执行')}><RotateCcw size={15} />继续</Button>}
           {['running', 'queued', 'waiting_external', 'retry_scheduled'].includes(run.status) && <Button onClick={() => void action('run.cancel', { runId: run.id }, '已请求停止')}><Square size={14} />停止</Button>}
           {run.status === 'canceled' && (!run.purpose || run.purpose === 'production') && !run.productionQueueItemId && <Button onClick={() => { if (run.selection) setRestartRun(run); else void action('run.start', { projectId: run.projectId, parentRunId: run.id }, '已请求重新制作'); }}><RotateCcw size={15} />重新制作</Button>}
-          <Button onClick={() => setInspectedRunId(run.id)}>查看步骤</Button><Button onClick={() => void action('run.replay', { runId: run.id }).then(result => { if (result !== null) setReplay(result); })}><History size={15} />重放检查</Button><Button variant="ghost" onClick={() => onOpen(run.projectId)}>打开项目</Button>
+          <Button onClick={() => setInspectedRunId(run.id)}>查看步骤</Button><Button variant="ghost" onClick={() => onOpen(run.projectId)}>打开项目</Button>
         </div>
       </article>;
     })}
     {!runs.length && !history.busy && !history.error && !dateError && <div className="section-card"><EmptyState icon={<History size={25} />} title={hasOtherFilters ? '没有符合筛选条件的制作记录' : projectId ? '这个项目还没有制作记录' : '还没有制作记录'} description={hasFilters ? '调整或清除筛选，查看已有制作。' : '制作后可在此查看步骤产物和恢复任务。'} /></div>}
     {!dateError && history.nextCursor !== null && <Button aria-label="加载更多制作记录" className="button-full" busy={history.loadingMore} disabled={!history.canLoadMore} onClick={() => void history.loadMore()}><ChevronDown size={15} />加载更多</Button>}
-    {replay !== null && <Dialog title="重放检查结果" onClose={() => setReplay(null)} className="dialog--wide"><div className="dialog__body"><Notice>本次只读取历史记录，不提交生成或渲染任务。</Notice><pre className="run-log">{typeof replay === 'string' ? replay : JSON.stringify(replay, null, 2)}</pre></div><div className="dialog__footer"><Button onClick={() => setReplay(null)}>关闭</Button></div></Dialog>}
     {inspectedRunId && <Suspense fallback={<Notice>正在打开步骤详情…</Notice>}><RunInspector onRestart={run => { setInspectedRunId(undefined); setRestartRun(run); }} runId={inspectedRunId} version={workspace.version} onClose={() => setInspectedRunId(undefined)} onChanged={history.refresh} onOpenOutput={selection => { setInspectedRunId(undefined); onOpenOutput(selection); }} /></Suspense>}
     {restartRun?.selection && <Suspense fallback={<Notice>正在打开执行范围…</Notice>}><RunScopeDialog projectId={restartRun.projectId} nodeId={restartRun.selection.nodeId} initialMode={restartRun.selection.mode} parentRunId={restartRun.id} version={workspace.version} onClose={() => setRestartRun(undefined)} onStarted={history.refresh} /></Suspense>}
   </div>;

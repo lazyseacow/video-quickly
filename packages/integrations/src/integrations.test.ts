@@ -4,7 +4,7 @@ import { mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { basename, join, relative } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { createNativeVideoWorkflow, DEFAULT_VIDEO_PROFILE, type ModelProfile, type ProjectDocument } from '@video-quickly/contracts';
+import { createNativeVideoWorkflow, DEFAULT_VIDEO_PROFILE, skillSchema, type ModelProfile, type ProjectDocument } from '@video-quickly/contracts';
 import { createActivityExecutor, validateMediaActivity, type MediaActivityContext, type MediaDiagnosticEvent } from './index';
 
 const temporaryDirectories: string[] = [];
@@ -43,6 +43,20 @@ async function pollingContextFor(baseUrl: string) {
 }
 
 describe('media generation request receipts', () => {
+  it('sends selected Skill instructions and frozen references in the real image request', async () => {
+    let prompt = '';
+    const baseUrl = await listen(async (request, response) => {
+      let text = ''; for await (const chunk of request) text += chunk;
+      prompt = JSON.parse(text).prompt;
+      response.setHeader('Content-Type', 'application/json'); response.end(JSON.stringify({ data: [{ b64_json: 'aW1hZ2UtZml4dHVyZQ==' }] }));
+    });
+    const context = await contextFor(baseUrl);
+    const skill = skillSchema.parse({ id: 'image-method', name: 'image-method', description: '图片规范', source: 'fixture', version: 'frozen-version', enabled: true, instructions: '保持角色固定的蓝色外套。', resources: ['references/palette.md'], referenceContents: { 'references/palette.md': '冷色调与侧逆光。' }, contentHash: 'fixture', importedAt: new Date().toISOString() });
+    context.node.skillIds = [skill.id]; context.skills = [skill];
+    await createActivityExecutor()(context);
+    expect(prompt).toContain('保持角色固定的蓝色外套');
+    expect(prompt).toContain('references/palette.md'); expect(prompt).toContain('冷色调与侧逆光');
+  });
   it.each([
     { width: 1920, height: 1080, expected: '2560x1440' },
     { width: 1080, height: 1920, expected: '1440x2560' },

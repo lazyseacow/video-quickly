@@ -24,7 +24,7 @@ async function openCreation(page: Page, title: string) {
 }
 async function creationControls(dialog: Locator) {
   const ratio = dialog.getByLabel('画面比例', { exact: true });
-  const disclosure = dialog.locator('details.creation-settings');
+  const disclosure = dialog.locator('details.creation-settings').filter({ hasText: /^更多设置/ });
   await expect(disclosure.locator('summary')).toHaveText('更多设置');
   if (!await ratio.isVisible()) await disclosure.getByText('更多设置', { exact: true }).click();
   await expect(ratio).toBeVisible();

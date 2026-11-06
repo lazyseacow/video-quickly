@@ -106,6 +106,73 @@ describe('local preview clock', () => {
     expect(callbacks.size).toBe(0);
   });
 
+  it('plays a bounded preview once and then allows ordinary playback past its endpoint', () => {
+    const clock = new PlaybackClock(10_000_000, { numerator: 30, denominator: 1 });
+    clock.playRange(600_000, 1_600_000);
+    expect(clock.getSnapshot()).toEqual({ timeUs: 600_000, playing: true });
+    advance(500); expect(clock.getSnapshot()).toEqual({ timeUs: 1_100_000, playing: true });
+    advance(700); expect(clock.getSnapshot()).toEqual({ timeUs: 1_600_000, playing: false });
+    expect(callbacks.size).toBe(0);
+    clock.toggle(); advance(500);
+    expect(clock.getSnapshot()).toEqual({ timeUs: 2_100_000, playing: true });
+    clock.dispose();
+  });
+
+  it('keeps a preview range while buffering and acknowledges its final picture before pausing', () => {
+    const clock = new PlaybackClock(10_000_000, { numerator: 30, denominator: 1 });
+    let readyUs = -1;
+    const gate = { constrainTime: (_from: number, requested: number) => requested, isFrameReady: (timeUs: number) => timeUs === readyUs };
+    clock.attachFrameGate(gate); clock.playRange(600_000, 1_600_000); advance(2000);
+    expect(clock.getSnapshot()).toEqual({ timeUs: 600_000, playing: true, buffering: true });
+    readyUs = 600_000; clock.refreshFrameGate(gate); advance(1500); clock.refreshFrameGate(gate);
+    expect(clock.getSnapshot()).toEqual({ timeUs: 1_600_000, playing: true, buffering: true });
+    advance(2000); readyUs = 1_600_000; clock.refreshFrameGate(gate); advance(34);
+    expect(clock.getSnapshot()).toEqual({ timeUs: 1_600_000, playing: false });
+    expect(callbacks.size).toBe(0); clock.dispose();
+  });
+
+  it('presents an unseen transition boundary before completing a stalled preview range', () => {
+    const clock = new PlaybackClock(10_000_000, { numerator: 30, denominator: 1 });
+    clock.attachFrameGate({ constrainTime: (from, requested) => from < 1_000_000 && requested >= 1_000_000 ? 1_000_000 : requested, isFrameReady: () => true });
+    clock.playRange(600_000, 1_600_000); advance(5000);
+    expect(clock.getSnapshot()).toEqual({ timeUs: 1_000_000, playing: true });
+    advance(700); expect(clock.getSnapshot()).toEqual({ timeUs: 1_600_000, playing: false });
+    clock.dispose();
+  });
+
+  it('replaces a playing preview range and ignores its canceled animation callback', () => {
+    const clock = new PlaybackClock(10_000_000, { numerator: 30, denominator: 1 });
+    clock.playRange(600_000, 1_600_000); const canceled = [...callbacks.values()][0];
+    clock.playRange(3_000_000, 3_500_000); canceled(now);
+    expect(clock.getSnapshot()).toEqual({ timeUs: 3_000_000, playing: true });
+    expect(callbacks.size).toBe(1);
+    advance(250); expect(clock.getSnapshot().playing).toBe(true);
+    advance(300); expect(clock.getSnapshot()).toEqual({ timeUs: 3_500_000, playing: false });
+    expect(callbacks.size).toBe(0); clock.dispose();
+  });
+
+  for (const command of ['pause', 'toggle', 'seek', 'configure'] as const) it(`clears the preview endpoint after a user ${command}`, () => {
+    const clock = new PlaybackClock(10_000_000, { numerator: 30, denominator: 1 });
+    clock.playRange(600_000, 1_600_000); advance(200);
+    if (command === 'pause') clock.pause();
+    if (command === 'toggle') clock.toggle();
+    if (command === 'seek') clock.seek(3_000_000);
+    if (command === 'configure') clock.configure(9_000_000, { numerator: 30, denominator: 1 });
+    expect(clock.getSnapshot().playing).toBe(false);
+    clock.toggle(); advance(2000);
+    expect(clock.getSnapshot().playing).toBe(true); expect(clock.getSnapshot().timeUs).toBeGreaterThan(1_600_000);
+    clock.dispose();
+  });
+
+  it('clamps preview ranges to valid project frames and leaves an empty range paused', () => {
+    const clock = new PlaybackClock(2_000_000, { numerator: 30000, denominator: 1001 });
+    clock.playRange(-1_000_000, 10_000_000); advance(3000);
+    expect(clock.getSnapshot()).toEqual({ timeUs: 1_968_633, playing: false });
+    clock.playRange(1_000_000, 500_000);
+    expect(clock.getSnapshot()).toEqual({ timeUs: 1_001_000, playing: false });
+    expect(callbacks.size).toBe(0); clock.dispose();
+  });
+
   it('reconfigures an edited timeline safely and allows unsubscribing', () => {
     const clock = new PlaybackClock(10_000_000, { numerator: 60, denominator: 1 });
     const listener = vi.fn(); const unsubscribe = clock.subscribe(listener);

@@ -11,6 +11,7 @@ import { MediaRequestQueue, mapMediaShots } from './media-concurrency.js';
 import { resolveCharacterReferences, type ResolvedCharacterReferences } from './character-references.js';
 import { resolveReferenceAudio } from './audio-references.js';
 import { resolveImageEdit } from './image-edit.js';
+import { appendSkillContext, type SkillPackage } from '@video-quickly/contracts';
 
 export { createWaveformReader } from './waveform.js';
 export { readResearchSource, searchWikipedia, selectResearchPassages, parseResearchResult } from './research.js';
@@ -37,6 +38,7 @@ export interface MediaDiagnosticEvent {
 }
 
 export interface MediaActivityContext {
+  skills?: SkillPackage[];
   project: ProjectDocument;
   node: WorkflowNode;
   runId: string;
@@ -118,7 +120,7 @@ function fillTemplate(value: JsonValue, values: Record<string, JsonValue>): Json
 }
 
 function visualPrompt(context: MediaActivityContext, shot: Shot, references: ResolvedCharacterReferences): string {
-  return buildMediaPrompt(context.project, context.node, shot, references.characters, context.model, Boolean(currentVideoImage(context, shot)), context.promptUpstream);
+  return appendSkillContext(buildMediaPrompt(context.project, context.node, shot, references.characters, context.model, Boolean(currentVideoImage(context, shot)), context.promptUpstream), context.node, context.skills ?? []);
 }
 
 function comfyPrompt(context: MediaActivityContext, shot: Shot, references: ResolvedCharacterReferences): Record<string, unknown> {

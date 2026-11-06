@@ -6,6 +6,9 @@ export const MAX_REFERENCE_AUDIOS = 10;
 
 export const productionSettingsSchema = z.object({
   mode: z.literal('native-video'),
+  executionMode: z.enum(['workflow', 'agent']).default('workflow'),
+  agentSkillIds: z.array(z.string().min(1)).default([]),
+  agentMcpServerIds: z.array(z.string().min(1)).default([]),
   textModelId: z.string().min(1).optional(), videoModelId: z.string().min(1).optional(), imageModelId: z.string().min(1).optional(),
   referenceMode: z.enum(['none', 'existing', 'generate']).default('none'),
   referenceAudioAssetIds: z.array(z.string().min(1)).max(MAX_REFERENCE_AUDIOS).refine(ids => new Set(ids).size === ids.length, '参考音频不能重复。').optional(),

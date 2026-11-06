@@ -211,6 +211,23 @@ it.skipIf(!available)('keeps silent videos playable and reports the absent origi
   expect((await readAudioLevelWindow({ mix, startUs: 0, durationUs: 500_000 })).samples.every(value => value.peakLeft === 0 && value.peakRight === 0)).toBe(true);
 }, 60_000);
 
+it.skipIf(!available)('locates an unlinked video source without treating the other original audio as missing narration', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'vq-video-audio-unlinked-')); directories.push(directory);
+  const video = await embeddedVideo(directory), shot = shotSchema.parse({ id: 'first', title: '声音片段', narration: '', visualPrompt: '', durationUs: 500_000, videoInUs: 0, videoAssetId: video.id, audioProcessing: { ...DEFAULT_AUDIO_PROCESSING, version: 2, videoAudio: { enabled: true, gainDb: 0 } } });
+  const doc = project([shot, { ...shot, id: 'unlinked', videoAssetId: undefined }, { ...shot, id: 'last' }]);
+  const options = { project: doc, assets: [video], outputDirectory: join(directory, 'cache'), ffmpegPath: ffmpeg, ffprobePath: ffprobe };
+  const mix = await prepareAudioMix(options);
+  expect(mix.warnings).toEqual(['第 2 个镜头未关联视频且未添加独立配音，镜头音轨为静音。']);
+  expect(mix.warningDetails).toEqual([{ shotId: 'unlinked', message: mix.warnings[0] }]);
+  const bytes = await pcm(mix.path, directory, 'unlinked');
+  expect(amplitude(bytes, 440, .1)).toBeGreaterThan(.17);
+  expect(amplitude(bytes, 440, .6)).toBeLessThan(.001);
+  expect(amplitude(bytes, 440, 1.1)).toBeGreaterThan(.17);
+  const restored = await prepareAudioMix({ ...options, project: project([shot, { ...shot, id: 'unlinked' }, { ...shot, id: 'last' }]) });
+  expect(restored.key).not.toBe(mix.key); expect(restored.warnings).toEqual([]);
+  expect(amplitude(await pcm(restored.path, directory, 'restored'), 440, .6)).toBeGreaterThan(.17);
+}, 60_000);
+
 it.skipIf(!available)('mixes original sound separately so it does not trigger voice-only music ducking', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'vq-video-audio-ducking-')); directories.push(directory);
   const video = await embeddedVideo(directory), musicPath = join(directory, 'music.wav');

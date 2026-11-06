@@ -53,9 +53,17 @@ async function open(page: Page, project: ProjectDocument) {
 }
 
 async function seek(page: Page, canvas: Locator, frame: number) {
-  const ruler = page.getByRole('slider', { name: '预览播放位置', exact: true }); await ruler.press('Home');
-  for (let index = 0; index < Math.floor(frame / 10); index++) await ruler.press('Shift+ArrowRight');
-  for (let index = 0; index < frame % 10; index++) await ruler.press('ArrowRight');
+  const ruler = page.getByRole('slider', { name: '预览播放位置', exact: true });
+  let current = Number.NaN;
+  if (frame !== 0 && await page.getByRole('button', { name: '播放预览', exact: true }).isVisible()) {
+    const rendered = await canvas.getAttribute('data-rendered-frame');
+    current = rendered === null ? Number.NaN : Number(rendered);
+  }
+  // Home also cancels an active transition preview, including a same-frame seek.
+  if (!Number.isInteger(current) || current < 0) { await ruler.press('Home'); current = 0; }
+  const delta = frame - current, distance = Math.abs(delta), direction = delta < 0 ? 'ArrowLeft' : 'ArrowRight';
+  for (let index = 0; index < Math.floor(distance / 10); index++) await ruler.press(`Shift+${direction}`);
+  for (let index = 0; index < distance % 10; index++) await ruler.press(direction);
   await expect(canvas).toHaveAttribute('data-rendered-frame', String(frame));
   await expect(page.locator('.preview-frame .scene-preview')).toHaveAttribute('aria-busy', 'false');
 }
@@ -68,8 +76,8 @@ function difference(actual: readonly Rgb[], expected: readonly Rgb[]) {
   return Math.max(...actual.flatMap((pixel, index) => pixel.map((channel, channelIndex) => Math.abs(channel - expected[index][channelIndex]))));
 }
 
-async function exportFrames(request: APIRequestContext, source: Awaited<ReturnType<typeof fixture>>, frames: number[], info: TestInfo) {
-  const { runId } = await rpc<{ runId: string }>(request, 'render.export', { projectId: source.project.id, destination: info.outputPath('actual-export.mp4') });
+async function exportFrames(request: APIRequestContext, source: Awaited<ReturnType<typeof fixture>>, frames: number[], info: TestInfo, name = 'actual-export.mp4') {
+  const { runId } = await rpc<{ runId: string }>(request, 'render.export', { projectId: source.project.id, destination: info.outputPath(name) });
   let run: { status: string; error?: string } = { status: 'queued' };
   await expect.poll(async () => { run = await rpc(request, 'run.get', { runId }); return ['succeeded', 'failed', 'canceled', 'needs_attention'].includes(run.status); }, { timeout: 45_000 }).toBe(true);
   expect(run.status, run.error).toBe('succeeded');
@@ -85,18 +93,110 @@ async function expectFrame(canvas: Locator, frame: number, points: readonly Pixe
 function observe(page: Page) { const errors: string[] = []; page.on('pageerror', error => errors.push(error.message)); page.on('console', message => { if (message.type() === 'error') errors.push(message.text()); }); return errors; }
 async function healthy(page: Page, errors: string[]) { await expect(page.locator('vite-error-overlay')).toHaveCount(0); expect(errors).toEqual([]); }
 
+async function capturePaints(canvas: Locator, points: PixelPoint[]) {
+  return canvas.evaluateHandle((element: HTMLCanvasElement, points) => {
+    const state = { active: true, raf: 0, samples: [] as PaintedFrame[] };
+    function observe() {
+      if (!state.active) return;
+      const frame = Number(element.dataset.renderedFrame);
+      const style = getComputedStyle(element), bounds = element.getBoundingClientRect(), status = element.closest('.scene-preview')?.querySelector<HTMLElement>('[role="status"]'), statusBounds = status?.getBoundingClientRect(), statusStyle = status && getComputedStyle(status);
+      const alpha = statusStyle?.backgroundColor.match(/rgba\([^,]+,[^,]+,[^,]+,\s*([\d.]+)\)/)?.[1];
+      const occluded = Boolean(statusBounds && statusBounds.width >= bounds.width * .95 && statusBounds.height >= bounds.height * .95 && statusStyle?.backgroundColor !== 'transparent' && Number(alpha ?? 1) * Number(statusStyle?.opacity ?? 1) >= .95);
+      const visible = style.visibility !== 'hidden' && style.display !== 'none' && bounds.width > 0 && !occluded, busy = element.closest('.scene-preview')?.getAttribute('aria-busy') === 'true';
+      if (state.samples.at(-1)?.frame !== frame || state.samples.at(-1)?.visible !== visible || state.samples.at(-1)?.busy !== busy) state.samples.push({ frame, timeUs: Number(element.dataset.renderedTimeUs), transition: element.dataset.transition, visible, busy, pixels: points.map(({ x, y }) => [...element.getContext('2d')!.getImageData(x, y, 1, 1).data].slice(0, 3) as Rgb) });
+      state.raf = requestAnimationFrame(observe);
+    }
+    state.raf = requestAnimationFrame(observe); return state;
+  }, points);
+}
+
+for (const scenario of [
+  { width: 1536, video: false, rate: rates[0].value, boundaryUs: 1_000_000, boundaryFrame: 30, startFrame: 18, endFrame: 48, cutEndFrame: 42 },
+  { width: 1024, video: true, rate: rates[2].value, boundaryUs: 1_017_000, boundaryFrame: 31, startFrame: 19, endFrame: 49, cutEndFrame: 43 },
+]) test(`plays the complete selected transition once and pauses at ${scenario.width}px`, async ({ page, request }, info) => {
+  test.setTimeout(90_000);
+  await page.setViewportSize({ width: scenario.width, height: 960 });
+  const errors = observe(page), source = await fixture(request, info, { transition: 'cut', ...scenario });
+  const references = new Map<Transition, Map<number, Uint8Array>>(), points = transitionPoints(source.width, source.height), captured: unknown[] = [];
+  for (const transition of ['fade', 'wipe', 'cut'] as const) {
+    const current = await source.current();
+    await rpc(request, 'project.update', { projectId: current.id, revision: current.revision, patch: { shots: current.shots.map((shot, index) => index === 1 ? { ...shot, animation: { ...shot.animation, transition } } : shot) } });
+    const endFrame = transition === 'cut' ? scenario.cutEndFrame : scenario.endFrame;
+    const frames = Array.from({ length: endFrame - scenario.startFrame + 1 }, (_, index) => scenario.startFrame + index);
+    references.set(transition, await exportFrames(request, source, frames, info, `actual-${transition}.mp4`));
+  }
+  const baseline = await source.current(), canvas = await open(page, baseline);
+  await page.locator('.outline-shot').filter({ hasText: baseline.shots[1].title }).click();
+  await seek(page, canvas, 0);
+  const select = page.getByRole('combobox', { name: '转场', exact: true });
+  for (const [transition, label] of [['fade', '柔和叠化'], ['wipe', '擦除显现'], ['cut', '直接切换']] as const) {
+    const observations = await capturePaints(canvas, points), endFrame = transition === 'cut' ? scenario.cutEndFrame : scenario.endFrame;
+    try {
+      await select.click(); await select.getByRole('option', { name: label, exact: true }).click();
+      await expect(page.getByRole('button', { name: '暂停预览', exact: true })).toBeVisible();
+      await expect(canvas).toHaveAttribute('data-rendered-frame', String(endFrame));
+      await expect(page.getByRole('button', { name: '播放预览', exact: true })).toBeVisible();
+      const samples = await observations.evaluate(value => { value.active = false; cancelAnimationFrame(value.raf); return value.samples; });
+      const visible = samples.filter(sample => sample.visible && !sample.busy && sample.frame >= scenario.startFrame && sample.frame <= endFrame);
+      expect(visible.some(sample => sample.frame < scenario.boundaryFrame)).toBe(true);
+      const effect = visible.filter(sample => sample.frame >= scenario.boundaryFrame && sample.frame < scenario.boundaryFrame + 6);
+      expect(new Set(effect.map(sample => sample.frame)).size).toBeGreaterThanOrEqual(3);
+      expect(effect.some(sample => sample.frame === scenario.boundaryFrame)).toBe(true);
+      for (const sample of effect) {
+        expect(sample.transition).toBe(transition);
+        expect(difference(sample.pixels, transitionPixels(references.get(transition)!.get(sample.frame)!, source.width, points))).toBeLessThanOrEqual(12);
+      }
+      await expectFrame(canvas, endFrame, points, transitionPixels(references.get(transition)!.get(endFrame)!, source.width, points), captured);
+      await expect(select).toBeFocused();
+      await page.waitForTimeout(200); await expect(canvas).toHaveAttribute('data-rendered-frame', String(endFrame));
+      captured.push({ transition, samples });
+      await page.screenshot({ path: info.outputPath(`transition-${transition}-paused-${scenario.width}.png`) });
+    } finally { await observations.evaluate(value => { value.active = false; cancelAnimationFrame(value.raf); }); await observations.dispose(); }
+  }
+  await info.attach('changed-transition-export-comparison', { body: JSON.stringify(captured), contentType: 'application/json' });
+  expect(await source.current()).toEqual(baseline); await healthy(page, errors);
+});
+
+test('restarts the latest effect and lets manual playback and seeking take over', async ({ page, request }, info) => {
+  const errors = observe(page), source = await fixture(request, info, { transition: 'cut' }), canvas = await open(page, source.project);
+  await page.locator('.outline-shot').filter({ hasText: source.project.shots[1].title }).click(); await seek(page, canvas, 0);
+  const select = page.getByRole('combobox', { name: '转场', exact: true }), observations = await capturePaints(canvas, transitionPoints(source.width, source.height));
+  try {
+    await select.click(); await select.getByRole('option', { name: '柔和叠化', exact: true }).click();
+    await expect(page.getByRole('button', { name: '暂停预览', exact: true })).toBeVisible();
+    await select.click(); await select.getByRole('option', { name: '擦除显现', exact: true }).click();
+    await expect.poll(() => observations.evaluate(value => value.samples.some(sample => sample.visible && sample.transition === 'wipe'))).toBe(true);
+    await expect(canvas).toHaveAttribute('data-rendered-frame', '48');
+    await expect(page.getByRole('button', { name: '播放预览', exact: true })).toBeVisible(); await expect(select).toBeFocused();
+    await select.click(); await select.getByRole('option', { name: '直接切换', exact: true }).click();
+    await page.getByRole('button', { name: '暂停预览', exact: true }).click();
+    await expect(page.locator('.preview-frame .timeline-preview')).toHaveAttribute('aria-busy', 'false');
+    const pausedFrame = await canvas.getAttribute('data-rendered-frame');
+    await page.waitForTimeout(250); await expect(canvas).toHaveAttribute('data-rendered-frame', pausedFrame!);
+    await page.getByRole('button', { name: '播放预览', exact: true }).click();
+    await expect.poll(async () => Number(await canvas.getAttribute('data-rendered-frame'))).toBeGreaterThan(42);
+    await expect(page.getByRole('button', { name: '暂停预览', exact: true })).toBeVisible();
+    await page.getByRole('button', { name: '暂停预览', exact: true }).click();
+    await select.click(); await select.getByRole('option', { name: '柔和叠化', exact: true }).click();
+    await expect(page.getByRole('button', { name: '暂停预览', exact: true })).toBeVisible();
+    await seek(page, canvas, 0); await page.waitForTimeout(500); await expect(canvas).toHaveAttribute('data-rendered-frame', '0');
+    await expect(page.getByRole('button', { name: '播放预览', exact: true })).toBeVisible();
+    expect(await source.current()).toEqual(source.project); await healthy(page, errors);
+    await page.screenshot({ path: info.outputPath('transition-manual-seek.png') });
+    await info.attach('transition-comparison-paints', { body: JSON.stringify(await observations.evaluate(value => value.samples)), contentType: 'application/json' });
+  } finally { await observations.evaluate(value => { value.active = false; cancelAnimationFrame(value.raf); }); await observations.dispose(); }
+});
+
 for (const transition of ['fade', 'wipe'] as const) test(`paints only the current caption once over the ${transition} composite`, async ({ page, request }, info) => {
   test.setTimeout(60_000);
   const errors = observe(page), source = await fixture(request, info, { transition, captions: true }), frames = [29, 30, 31, 33, 35, 36, 40];
   const reference = await exportFrames(request, source, frames, info), canvas = await open(page, source.project);
   const captured: unknown[] = [];
   await seek(page, canvas, 40);
-  const baseline = await canvas.evaluate((element: HTMLCanvasElement) => ({ bytes: [...element.getContext('2d')!.getImageData(0, 0, element.width, element.height).data], width: element.width, height: element.height }));
-  const greenBaseline = coloredCaptionPixels(baseline.bytes, baseline.width, baseline.height, 4).green; expect(greenBaseline).toBeGreaterThan(20);
+  const greenBaseline = (await canvas.evaluate(coloredCaptionPixels)).green; expect(greenBaseline).toBeGreaterThan(20);
   for (const frame of frames) {
     await seek(page, canvas, frame);
-    const data = await canvas.evaluate((element: HTMLCanvasElement) => ({ bytes: [...element.getContext('2d')!.getImageData(0, 0, element.width, element.height).data], width: element.width, height: element.height }));
-    const actual = coloredCaptionPixels(data.bytes, data.width, data.height, 4), exported = coloredCaptionPixels(reference.get(frame)!, source.width, source.height, 3);
+    const actual = await canvas.evaluate(coloredCaptionPixels), exported = coloredCaptionPixels(reference.get(frame)!, source.width, source.height, 3);
     if (frame < 30) { expect(actual.red).toBeGreaterThan(20); expect(actual.green).toBe(0); expect(exported.red).toBeGreaterThan(20); }
     else { expect(actual.red).toBe(0); expect(actual.green).toBeGreaterThanOrEqual(greenBaseline * .9); expect(exported.red).toBe(0); expect(exported.green).toBeGreaterThan(20); }
     captured.push({ frame, actual, exported, greenBaseline });
@@ -159,20 +259,7 @@ for (const scenario of [{ label: 'image fade', transition: 'fade', video: false 
   test.setTimeout(60_000);
   const errors = observe(page), source = await fixture(request, info, { transition: scenario.transition, video: scenario.video, animatedVideo: scenario.video }), frames = Array.from({ length: 31 }, (_, index) => 23 + index), reference = await exportFrames(request, source, frames, info), canvas = await open(page, source.project), points = transitionPoints(source.width, source.height);
   await seek(page, canvas, 23); await expect(page.getByRole('button', { name: '播放预览', exact: true })).toBeEnabled();
-  const observations = await canvas.evaluateHandle((element: HTMLCanvasElement, points) => {
-    const state = { active: true, raf: 0, samples: [] as PaintedFrame[] };
-    function observe() {
-      if (!state.active) return;
-      const frame = Number(element.dataset.renderedFrame);
-      const style = getComputedStyle(element), bounds = element.getBoundingClientRect(), status = element.closest('.scene-preview')?.querySelector<HTMLElement>('[role="status"]'), statusBounds = status?.getBoundingClientRect(), statusStyle = status && getComputedStyle(status);
-      const alpha = statusStyle?.backgroundColor.match(/rgba\([^,]+,[^,]+,[^,]+,\s*([\d.]+)\)/)?.[1];
-      const occluded = Boolean(statusBounds && statusBounds.width >= bounds.width * .95 && statusBounds.height >= bounds.height * .95 && statusStyle?.backgroundColor !== 'transparent' && Number(alpha ?? 1) * Number(statusStyle?.opacity ?? 1) >= .95);
-      const visible = style.visibility !== 'hidden' && style.display !== 'none' && bounds.width > 0 && !occluded, busy = element.closest('.scene-preview')?.getAttribute('aria-busy') === 'true';
-      if (state.samples.at(-1)?.frame !== frame || state.samples.at(-1)?.visible !== visible || state.samples.at(-1)?.busy !== busy) state.samples.push({ frame, timeUs: Number(element.dataset.renderedTimeUs), transition: element.dataset.transition, visible, busy, pixels: points.map(({ x, y }) => [...element.getContext('2d')!.getImageData(x, y, 1, 1).data].slice(0, 3) as Rgb) });
-      state.raf = requestAnimationFrame(observe);
-    }
-    state.raf = requestAnimationFrame(observe); return state;
-  }, points);
+  const observations = await capturePaints(canvas, points);
   try {
     await page.getByRole('button', { name: '播放预览', exact: true }).click();
     await expect.poll(() => observations.evaluate(value => value.samples.at(-1)?.frame ?? 0)).toBeGreaterThanOrEqual(45);

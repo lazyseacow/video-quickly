@@ -81,7 +81,8 @@ test('owns queued paging and late refreshes by project and refreshes the loaded 
     await route.continue();
   });
   try {
-    await page.getByRole('button', { name: '刷新制作记录', exact: true }).click(); await held.promise;
+    // A notification can start a held read before a click and disable the refresh button.
+    await rpc(request, 'project.create', { title: `触发门闩读取 ${randomUUID().slice(0, 8)}` }); await held.promise;
     await rpc(request, 'project.create', { title: `门闩期间真实刷新 ${randomUUID().slice(0, 8)}` });
     await replacementHeld.promise;
     await expect(more).toBeEnabled(); await more.click(); await expect(more).toBeDisabled();
@@ -102,11 +103,22 @@ test('owns queued paging and late refreshes by project and refreshes the loaded 
   } finally { release.release(); await page.unrouteAll({ behavior: 'wait' }); }
 });
 
-test('keeps the project control keyboard accessible in dark desktop and light narrow layouts', async ({ page, request }, info) => {
+test('keeps history filters aligned and keyboard accessible in dark desktop and light narrow layouts', async ({ page, request }, info) => {
   const data = await fixture(request, 1), filter = await open(page);
+  async function expectAlignedFilters() {
+    const bounds = await page.locator('.run-history-filters').locator('select, input').evaluateAll(controls => controls.map(control => {
+      const { y, height } = control.getBoundingClientRect(); return { y, height };
+    }));
+    expect(bounds).toEqual(Array.from({ length: 5 }, () => bounds[0]));
+  }
+  await expectAlignedFilters();
+  await page.screenshot({ path: info.outputPath('run-filters-dark-default-1536.png') });
   await filter.selectOption(data.first.id); await expect.poll(() => visibleIds(page)).toEqual(data.firstIds);
+  await expectAlignedFilters();
+  await expect(page.locator('.run-card__actions').getByRole('button')).toHaveText(['查看步骤', '打开项目']);
   await filter.focus(); await expect(filter).toBeFocused();
   const clear = page.getByRole('button', { name: '清除制作记录筛选', exact: true }); await clear.focus(); await clear.press('Enter'); await expect(filter).toHaveValue('');
+  await expectAlignedFilters();
   await filter.selectOption(data.first.id); await expect.poll(() => visibleIds(page)).toEqual(data.firstIds);
   await page.screenshot({ path: info.outputPath('run-project-filter-dark-1536.png') });
   await setWorkspaceTheme(page, 'light'); await page.setViewportSize({ width: 600, height: 900 });

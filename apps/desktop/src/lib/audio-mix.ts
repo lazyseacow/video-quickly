@@ -4,6 +4,17 @@ import { audioMixProjection } from '@video-quickly/video/audio-projection';
 import { rpc } from './client';
 import { useAssetAvailabilityKey } from './asset-availability';
 
+export function audioMixWarningsAtTime(mix: PreparedAudioMix, timeUs: number): string[] {
+  if (!mix.warningDetails) return mix.warnings;
+  const positionUs = Math.max(0, Math.min(mix.durationUs - 1, timeUs));
+  let endUs = 0, shotId: string | undefined;
+  for (const shot of mix.shotDurations ?? []) {
+    endUs += shot.durationUs;
+    if (positionUs < endUs) { shotId = shot.shotId; break; }
+  }
+  return mix.warningDetails.filter(warning => !warning.shotId || warning.shotId === shotId).map(warning => warning.message);
+}
+
 export class AudioMixRevisionChangedError extends Error {
   readonly expectedRevision: number;
   constructor(expectedRevision: number) {

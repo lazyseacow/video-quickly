@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { createSceneTemplate, creativeCharacterBindings, creativeContextSchema, creativeEntitySchema, creativeEntityKeysSchema, LockedShotChangeError, resolvePromptBindings, shotSchema, validateCreativeReferences, type CharacterProfile, type JsonValue, type ProjectDocument, type SkillPackage, type WorkflowNode } from '@video-quickly/contracts';
 import { ModelResponseValidationError, responseIssues } from './model-responses.js';
+import { skillPromptContext } from '@video-quickly/contracts';
 
 export interface WorkflowUpstreamResult {
   nodeId: string;
@@ -24,7 +25,6 @@ function promptUpstreamResult(result: WorkflowUpstreamResult): WorkflowUpstreamR
 }
 
 export function buildWorkflowPrompt(project: ProjectDocument, node: WorkflowNode, skills: SkillPackage[], singleShot = false, characters: CharacterProfile[] = [], upstreamResults: WorkflowUpstreamResult[] = []): string {
-  const selected = skills.filter(skill => skill.enabled && node.skillIds.includes(skill.id));
   const bindings = creativeCharacterBindings(project, characters);
   const shots = project.shots.map(({ id, title, narration, visualPrompt, soundPrompt, durationUs, locked, characterIds, creativeEntityKeys }) => ({ id, title, narration, visualPrompt, soundPrompt, durationUs, locked, characterIds, creativeEntityKeys }));
   const contract = node.kind === 'brief'
@@ -59,7 +59,7 @@ export function buildWorkflowPrompt(project: ProjectDocument, node: WorkflowNode
     ...(bindings.length ? [`角色白名单文字设定（仅文字，没有发送参考图；只通过 key 引用）：\n${JSON.stringify(bindings.map(({ key, profile }) => ({ key, name: profile.name, description: profile.description })))}`] : []),
     ...(project.creativeContext ? [`项目文字设定与连续性要求：\n${JSON.stringify({ entities: project.creativeContext.entities.map(({ key, kind, name, description }) => ({ key, kind, name, description })), continuity: project.creativeContext.continuity })}`] : []),
     ...(upstreamResults.length ? [`上游已完成步骤的实际产物：\n${JSON.stringify(upstreamResults.map(promptUpstreamResult))}`] : []),
-    ...selected.map(skill => `Skill ${skill.name}:\n${skill.instructions}`),
+    skillPromptContext(node, skills),
     resolvePromptBindings(node, project, project.shots.length === 1 ? project.shots[0] : undefined, Object.fromEntries(upstreamResults.map(result => [result.nodeId, result.output]))).prompt,
     contract,
     ...(node.kind === 'script' ? ['最终回复再次核对：以 {"shots":[ 开始，将所有镜头放入同一个 shots 数组，顶层另含 entities 数组。不要把镜头字段直接放在最外层，不要只输出 JSON Schema。'] : []),

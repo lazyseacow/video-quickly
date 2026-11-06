@@ -1,0 +1,95 @@
+import { expect } from '@playwright/test';
+import { test } from './isolated-workspace';
+import { openProduction, productionFixture, productionStep, saveProduction } from './production-settings';
+
+// Browser plugin not available: exercise production components in the isolated Playwright preview.
+for (const viewport of [{ width: 1536, height: 960, theme: 'dark' }, { width: 1024, height: 720, theme: 'light' }, { width: 390, height: 844, theme: 'light' }] as const) {
+  test(`guides optional creative settings and reveals nested validation at ${viewport.width}px`, async ({ page, request }, info) => {
+    const errors: string[] = [], writes: string[] = [];
+    page.on('pageerror', error => errors.push(error.message));
+    page.on('console', message => { if (['error', 'warning'].includes(message.type())) errors.push(message.text()); });
+    await page.setViewportSize(viewport); await page.addInitScript(theme => localStorage.setItem('vq-theme', theme), viewport.theme);
+    const source = await productionFixture(request), dialog = await openProduction(page, source.project);
+    page.on('request', request => {
+      if (!request.url().endsWith('/__desktop_rpc') || request.method() !== 'POST') return;
+      const method = request.postDataJSON().method;
+      if (['project.update', 'run.start'].includes(method)) writes.push(method);
+    });
+    await expect(page).toHaveTitle(/Video Quickly/); expect(new URL(page.url()).pathname).toBe('/');
+    await expect(dialog.getByLabel('创作要求', { exact: true })).toBeFocused();
+    const roles = dialog.locator('.creative-context-editor__roles'), entities = dialog.locator('.creative-context-editor__entities');
+    await expect(roles).not.toHaveAttribute('open'); await expect(entities).not.toHaveAttribute('open');
+    await expect(dialog.getByRole('button', { name: '下一步', exact: true })).toBeInViewport({ ratio: 1 });
+    await expect(dialog.locator('.dialog__surface')).toHaveCSS('opacity', '1');
+    await page.screenshot({ path: info.outputPath(`creative-flow-start-${viewport.width}.png`) });
+    await dialog.getByLabel('创作要求', { exact: true }).fill('用两个场景介绍 AI 如何帮助职场新人，时长 45 秒。');
+    await dialog.getByLabel('视觉风格', { exact: true }).fill('简洁插画，蓝灰色调');
+    await roles.locator(':scope > summary').focus(); await page.keyboard.press('Enter');
+    await dialog.getByLabel('连续性要求', { exact: true }).fill('同一间办公室，保持傍晚光线');
+    await roles.locator(':scope > summary').click(); await expect(roles.locator(':scope > summary')).toContainText('已填写连续性要求');
+    const entitySummary = entities.locator(':scope > summary');
+    await entitySummary.hover();
+    const corner = await entitySummary.evaluate(element => {
+      const outer = getComputedStyle(element.parentElement!), inner = getComputedStyle(element);
+      return { outer: parseFloat(outer.borderTopLeftRadius), border: parseFloat(outer.borderLeftWidth), inner: parseFloat(inner.borderTopLeftRadius) };
+    });
+    expect(corner.inner).toBeGreaterThan(0); expect(corner.inner).toBeCloseTo(corner.outer - corner.border);
+    await entitySummary.focus(); await entitySummary.press('Tab'); await page.keyboard.press('Shift+Tab');
+    await expect(entitySummary).toBeFocused(); await expect(entitySummary).toHaveCSS('outline-style', 'solid');
+    await expect(entitySummary).toHaveCSS('border-top-left-radius', `${corner.inner}px`);
+    await page.screenshot({ path: info.outputPath(`creative-flow-focus-${viewport.width}.png`) });
+    await entitySummary.press('Space'); await expect(entitySummary).toHaveCSS('border-bottom-left-radius', '0px');
+    await dialog.getByRole('button', { name: '添加场景设定', exact: true }).click();
+    const scene = dialog.getByRole('region', { name: '场景设定 1', exact: true });
+    await expect(scene.locator(':scope > details > summary')).toHaveCSS('border-top-left-radius', '7px');
+    await expect(scene.getByLabel('设定名称', { exact: true })).toBeFocused();
+    await scene.getByLabel('设定名称', { exact: true }).fill('靠窗的办公室');
+    await scene.getByLabel('固定特征', { exact: true }).fill('左侧落地窗，桌上有绿植');
+    await dialog.getByRole('button', { name: '添加道具设定', exact: true }).click();
+    const prop = dialog.getByRole('region', { name: '道具设定 2', exact: true });
+    await expect(prop.getByLabel('设定名称', { exact: true })).toBeFocused();
+    if (viewport.width === 390) await prop.getByLabel('设定名称', { exact: true }).fill('   ');
+    await expect(scene.locator(':scope > details')).not.toHaveAttribute('open');
+    await expect(scene.locator(':scope > details > summary')).toContainText('靠窗的办公室');
+    // Validate from the final review while both the invalid entry and its parent are collapsed.
+    await prop.locator(':scope > details > summary').click(); await entities.locator(':scope > summary').click();
+    await saveProduction(dialog);
+    await expect(dialog.getByRole('button', { name: '创作要求', exact: true })).toHaveAttribute('aria-current', 'step');
+    await expect(entities).toHaveAttribute('open', ''); await expect(prop.locator(':scope > details')).toHaveAttribute('open', '');
+    await expect(prop.getByLabel('设定名称', { exact: true })).toBeFocused();
+    await expect(prop.getByLabel('设定名称', { exact: true })).toBeInViewport({ ratio: 1 });
+    expect(writes).toEqual([]); expect((await source.saved()).revision).toBe(source.project.revision);
+    await prop.getByLabel('设定名称', { exact: true }).fill('银色笔记本电脑');
+    await prop.getByLabel('固定特征', { exact: true }).fill('银色外壳，屏幕朝向主角');
+    await dialog.getByRole('button', { name: '下一步', exact: true }).click();
+    await expect(dialog.getByRole('combobox', { name: '制作方式', exact: true })).toBeFocused();
+    await dialog.getByRole('button', { name: '上一步', exact: true }).click();
+    await expect(dialog.getByLabel('创作要求', { exact: true })).toBeFocused();
+    await expect(prop.getByLabel('固定特征', { exact: true })).toHaveValue('银色外壳，屏幕朝向主角');
+    await scene.locator(':scope > details > summary').click();
+    await expect(scene.getByLabel('固定特征', { exact: true })).toHaveValue('左侧落地窗，桌上有绿植');
+    await expect(prop.locator(':scope > details')).not.toHaveAttribute('open');
+    await entities.locator(':scope > summary').scrollIntoViewIfNeeded();
+    await expect.poll(() => dialog.evaluate(element => element.scrollWidth <= element.clientWidth + 2)).toBe(true);
+    await expect(dialog.getByRole('button', { name: '下一步', exact: true })).toBeInViewport({ ratio: 1 });
+    await page.screenshot({ path: info.outputPath(`creative-flow-entities-${viewport.width}.png`) });
+    await productionStep(dialog, '确认保存');
+    await expect(dialog.getByRole('region', { name: '确认保存', exact: true })).toContainText('靠窗的办公室、银色笔记本电脑');
+    await dialog.getByRole('button', { name: '修改创作要求', exact: true }).click();
+    await expect(dialog.getByLabel('创作要求', { exact: true })).toBeFocused();
+    await expect(dialog.getByLabel('创作要求', { exact: true })).toHaveValue('用两个场景介绍 AI 如何帮助职场新人，时长 45 秒。');
+    await saveProduction(dialog); await expect(dialog).toHaveCount(0);
+    const saved = await source.saved();
+    expect(saved.creativeContext).toMatchObject({ continuity: '同一间办公室，保持傍晚光线', entities: [{ kind: 'scene', name: '靠窗的办公室', description: '左侧落地窗，桌上有绿植' }, { kind: 'prop', name: '银色笔记本电脑', description: '银色外壳，屏幕朝向主角' }] });
+    expect(writes).toEqual(['project.update']);
+    await page.getByRole('button', { name: '制作设置', exact: true }).click(); await productionStep(dialog, '创作要求');
+    await expect(roles.locator(':scope > summary')).toContainText('已填写连续性要求');
+    await expect(entities.locator(':scope > summary')).toContainText('靠窗的办公室、银色笔记本电脑');
+    await entities.locator(':scope > summary').click(); await scene.locator(':scope > details > summary').click();
+    await scene.getByRole('button', { name: '移除场景设定 1', exact: true }).click();
+    await expect(dialog.getByRole('button', { name: '添加人物设定', exact: true })).toBeFocused();
+    await dialog.getByRole('button', { name: '取消', exact: true }).click(); await expect(dialog).toHaveCount(0);
+    expect((await source.saved()).creativeContext?.entities).toHaveLength(2);
+    await expect(page.locator('vite-error-overlay')).toHaveCount(0); expect(errors).toEqual([]);
+  });
+}

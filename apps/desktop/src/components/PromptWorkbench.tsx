@@ -2,9 +2,10 @@ import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react'
 import { Plus, Trash2 } from 'lucide-react';
 import {
   costSummarySchema, jsonValueSchema, projectDetailSchema, promptBindingsSchema, promptPreviewSchema, promptSessionSchema, recordPageSchema, runSummarySchema, shotCandidateSchema,
-  type CostSummary, type CostTaskDetail, type JsonValue, type ModelProfile, type PromptBindings, type PromptDraft, type PromptPreview, type PromptSession, type ProjectDocument, type RunSummary, type SkillPackage, type WorkflowNode,
+  type CostSummary, type CostTaskDetail, type JsonValue, type ModelProfile, type PromptBindings, type PromptDraft, type PromptPreview, type PromptSession, type ProjectDocument, type RunSummary, type SkillGroup, type SkillPackage, type WorkflowNode,
 } from '@video-quickly/contracts';
 import { rpc } from '../lib/client';
+import SkillPicker from './SkillPicker';
 import type { StepOutputSelection } from '../lib/types';
 import { matchingStepModels } from '../lib/workflow-guidance';
 import { Button, Dialog, Field, Notice, Select, Status } from './Primitives';
@@ -31,8 +32,8 @@ function readBindings(rows: Variable[]): PromptBindings | undefined {
   return promptBindingsSchema.parse(Object.fromEntries(rows.map(row => [row.name, row.source === 'text' ? { literal: row.value } : row.source === 'json' ? { literal: JSON.parse(row.value) } : row.source === 'project' ? { projectPath: row.value.split('.') } : row.source === 'shot' ? { shotPath: row.value.split('.') } : { nodeId: row.nodeId, path: row.value ? row.value.split('.') : [] }])));
 }
 
-export default function PromptWorkbench({ projectId, projectRevision, node: initialNode, context: initialContext, models, skills, version, onClose, onApplyPrompt, onOpenOutput, onOpenCandidate }: {
-  projectId: string; projectRevision: number; node: WorkflowNode; context?: Context; models: ModelProfile[]; skills: SkillPackage[]; version: number;
+export default function PromptWorkbench({ projectId, projectRevision, node: initialNode, context: initialContext, models, skills, groups, version, onClose, onApplyPrompt, onOpenOutput, onOpenCandidate }: {
+  projectId: string; projectRevision: number; node: WorkflowNode; context?: Context; models: ModelProfile[]; skills: SkillPackage[]; groups?: SkillGroup[]; version: number;
   onClose(): void; onApplyPrompt(node: WorkflowNode): Promise<void> | void; onOpenOutput(selection: StepOutputSelection): void; onOpenCandidate?(shotId: string): void;
 }) {
   const [node, setNode] = useState(initialNode), [variables, setVariables] = useState(() => variableRows(initialNode.promptBindings));
@@ -136,7 +137,7 @@ export default function PromptWorkbench({ projectId, projectRevision, node: init
               <Field label={`变量 ${index + 1} ${['text', 'json'].includes(variable.source) ? '值' : '字段路径'}`}><input value={variable.value} placeholder={variable.source === 'project' ? 'brief 或 profile.width' : variable.source === 'shot' ? 'narration' : variable.source === 'upstream' ? 'text' : ''} onChange={event => { setVariables(rows => rows.map(row => row.id === variable.id ? { ...row, value: event.target.value } : row)); invalidate(); }} /></Field>
               <Button aria-label={`移除变量 ${index + 1}`} onClick={() => { setVariables(rows => rows.filter(row => row.id !== variable.id)); invalidate(); }}><Trash2 size={14} /></Button>
             </div>)}<Button onClick={() => { setVariables(rows => [...rows, { id: crypto.randomUUID(), name: '', source: 'text', value: '', nodeId: '' }]); invalidate(); }}><Plus size={14} />添加变量</Button>
-            <div className="prompt-workbench__skills">{skills.filter(skill => skill.enabled).map(skill => <label key={skill.id}><input type="checkbox" checked={node.skillIds.includes(skill.id)} onChange={event => { setNode(value => ({ ...value, skillIds: event.target.checked ? [...value.skillIds, skill.id] : value.skillIds.filter(id => id !== skill.id) })); invalidate(); }} />{skill.name} <small>{skill.version.slice(0, 12)}</small></label>)}</div>
+            <SkillPicker skills={skills} groups={groups} value={node.skillIds} onChange={skillIds => { setNode(value => ({ ...value, skillIds })); invalidate(); }} />
           </details>
           <div className="prompt-workbench__actions"><Button variant="primary" busy={busy} onClick={() => void perform(async () => { const value = promptPreviewSchema.parse(await rpc('prompt.preview', draft())); if (alive.current) setPreview(value); })}>离线预览</Button><Button disabled={!preview} onClick={() => void perform(saveSession)}>保存实验草稿</Button></div>
           {project && revision !== project.revision && <Button onClick={() => { setRevision(project.revision); invalidate(); }}>使用当前项目修订 {project.revision}</Button>}

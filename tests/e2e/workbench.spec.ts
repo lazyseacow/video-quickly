@@ -469,7 +469,7 @@ test('imports and versions a real Skill, and registers tools in disabled state',
   await page.getByRole('button', { name: 'Skill 工作室', exact: true }).click();
   await page.getByRole('button', { name: '导入 Skill', exact: true }).first().click();
   const dialog = page.getByRole('dialog', { name: '导入 Skill' });
-  await dialog.getByRole('textbox').fill(resolve('.agents/skills/make-interfaces-feel-better'));
+  await dialog.getByRole('textbox', { name: '目录路径或 GitHub 链接', exact: true }).fill(resolve('.agents/skills/make-interfaces-feel-better'));
   await dialog.getByRole('button', { name: '导入', exact: true }).click();
   await expect(dialog).toHaveCount(0);
   await expect(page.getByRole('heading', { name: 'make-interfaces-feel-better', exact: true })).toBeVisible();

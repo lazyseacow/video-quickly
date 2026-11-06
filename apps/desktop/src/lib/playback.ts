@@ -15,6 +15,7 @@ export class PlaybackClock {
   private request: number | undefined;
   private startedAt = 0;
   private startedUs = 0;
+  private rangeEndUs: number | undefined;
   private transportVersion = 0;
   private frameGate: PlaybackFrameGate | undefined;
   constructor(private durationUs: number, private rate: FrameRate) {}
@@ -61,6 +62,7 @@ export class PlaybackClock {
     if (this.transportVersion === revision) this.applySeek(timeUs);
   };
   private applySeek(timeUs: number) {
+    this.rangeEndUs = undefined;
     this.stopRequest();
     const aligned = timeAtFrame(Math.max(0, frameAtTime(timeUs, this.rate)), this.rate);
     this.publish(Math.min(this.lastTimeUs, aligned), false);
@@ -68,15 +70,27 @@ export class PlaybackClock {
   step = (frames: number) => this.seek(timeAtFrame(frameAtTime(this.snapshot.timeUs, this.rate) + frames, this.rate));
   toggle = () => {
     this.transportVersion++;
+    this.rangeEndUs = undefined;
     if (this.snapshot.playing) { this.pause(); return; }
     if (!this.durationUs) return;
     const timeUs = this.snapshot.timeUs >= this.lastTimeUs ? 0 : this.snapshot.timeUs;
+    this.start(timeUs);
+  };
+  playRange = (startUs: number, endUs: number) => {
+    this.transportVersion++;
+    this.applySeek(startUs);
+    const end = Math.min(this.lastTimeUs, timeAtFrame(frameAtTime(endUs, this.rate), this.rate));
+    if (!this.durationUs || end <= this.snapshot.timeUs) return;
+    this.rangeEndUs = end;
+    this.start(this.snapshot.timeUs);
+  };
+  private start(timeUs: number) {
     this.anchor(timeUs);
     this.publish(timeUs, true);
     if (this.frameGate) this.refreshFrameGate(this.frameGate);
     this.schedule();
-  };
-  pause = () => { this.stopRequest(); this.publish(this.snapshot.timeUs, false); };
+  }
+  pause = () => { this.rangeEndUs = undefined; this.stopRequest(); this.publish(this.snapshot.timeUs, false); };
   dispose = () => { this.frameGate = undefined; this.pause(); };
   private anchor(timeUs: number) { this.startedUs = timeUs; this.startedAt = performance.now(); }
   private schedule() {
@@ -100,10 +114,13 @@ export class PlaybackClock {
     // work can delay this callback while audio advances, so use execution time.
     const elapsedUs = this.startedUs + (performance.now() - this.startedAt) * 1000;
     const frame = Math.floor(elapsedUs * this.rate.numerator / (1_000_000 * this.rate.denominator));
-    const requestedUs = Math.min(this.lastTimeUs, timeAtFrame(frame, this.rate));
+    const endUs = this.rangeEndUs ?? this.lastTimeUs;
+    const requestedUs = Math.min(endUs, timeAtFrame(frame, this.rate));
     const nextUs = this.frameGate?.constrainTime(this.snapshot.timeUs, requestedUs) ?? requestedUs;
     if (nextUs < requestedUs) this.anchor(nextUs);
-    else if (elapsedUs >= this.durationUs && (!this.frameGate || this.frameGate.isFrameReady(nextUs))) { this.publish(this.lastTimeUs, false); return; }
+    else if ((this.rangeEndUs !== undefined ? nextUs >= this.rangeEndUs : elapsedUs >= this.durationUs) && (!this.frameGate || this.frameGate.isFrameReady(nextUs))) {
+      this.rangeEndUs = undefined; this.publish(endUs, false); return;
+    }
     this.publish(nextUs, true);
     this.schedule();
   };

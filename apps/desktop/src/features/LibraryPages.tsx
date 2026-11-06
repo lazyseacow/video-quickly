@@ -2,7 +2,7 @@ import { pathExample } from '../lib/desktop';
 import { lazy, Suspense, useEffect, useId, useRef, useState } from 'react';
 import { BookOpen, Code2, Eye, EyeOff, File, FileImage, FolderOpen, Image, Link, LoaderCircle, Mic, Pencil, Power, RefreshCw, Search, Server, ShieldCheck, Trash2, Video, Upload, Plus, RotateCcw, Download, Check } from 'lucide-react';
 import { modelConnectionTypes, getModelConnectionType, validateModelConnection, platformForConnection, modelDiscoverySchema, type ModelDiscovery, type ModelConnectionType, getModelParameterFields, getMediaAdapters, mediaAdapters, textProtocols, textProtocolSchema, type TextProtocol } from '@video-quickly/contracts';
-import { assetListItemSchema, projectDetailSchema, recordPageSchema, jsonValueSchema, modelPlatforms, getModelPlatform, modelPlatformSchema, validateModelParameters, type ModelPlatform, type AssetRecord, type AssetListItem, type ProjectSummary, type JsonValue, type ModelCapability, type ModelProfile, type ProjectDocument, type SkillPackage } from '@video-quickly/contracts';
+import { assetListItemSchema, projectDetailSchema, recordPageSchema, jsonValueSchema, modelPlatforms, getModelPlatform, modelPlatformSchema, validateModelParameters, type ModelPlatform, type AssetRecord, type AssetListItem, type ProjectSummary, type JsonValue, type ModelCapability, type ModelProfile, type ProjectDocument } from '@video-quickly/contracts';
 import { Button, Combobox, Dialog, EmptyState, Field, IconButton, Notice, Status, Select } from '../components/Primitives';
 import { ScenePreview } from '../components/ScenePreview';
 import type { Action, WorkspaceView, StepOutputSelection } from '../lib/types';
@@ -13,7 +13,6 @@ export { default as RunsPage } from './RunHistory';
 const assetsPageSchema = recordPageSchema(assetListItemSchema);
 import { getAssetUrl, rpc } from '../lib/client';
 import { assetAvailabilityUrl, useAssetAvailability } from '../lib/asset-availability';
-import ToolConnections from './ToolConnections';
 import PathPicker, { nativeDesktop, revealFile } from '../components/PathPicker';
 import ModelParameters, { modelParameterSections } from '../components/ModelParameters';
 import SettingsSections from '../components/SettingsSections';
@@ -21,7 +20,6 @@ import PlatformIcon from '../components/PlatformIcon';
 import './model-connections.css';
 const WorksPanel = lazy(() => import('./WorksPanel'));
 const ImageGridDialog = lazy(() => import('../components/ImageGridDialog'));
-const PromptStudioLauncher = lazy(() => import('../components/PromptStudioLauncher'));
 const AssetRecoveryDialog = lazy(() => import('../components/AssetRecoveryDialog'));
 
 type PageProps = { workspace: WorkspaceView; action: Action };
@@ -234,15 +232,7 @@ function ModelDialog({ model, connectionType: addingType = 'text', action, onClo
   </form></Dialog>;
 }
 
-export function SkillsPage({ workspace, action, onOpenOutput }: PageProps & { onOpenOutput(selection: StepOutputSelection): void }) {
-  const [promptStudio, setPromptStudio] = useState(false);
-  const [importing, setImporting] = useState(false);
-  const [source, setSource] = useState('');
-  const [busy, setBusy] = useState(false);
-  const [selected, setSelected] = useState<SkillPackage | null>(null);
-  const [instructions, setInstructions] = useState('');
-  return <div className="content-page"><div className="page-heading"><div><h1>Skill 工作室</h1></div><Button variant="primary" onClick={() => setImporting(true)}><Plus size={16} />导入 Skill</Button></div>{promptStudio && <Suspense fallback={null}><PromptStudioLauncher workspace={workspace} onClose={() => setPromptStudio(false)} onOpenOutput={onOpenOutput} /></Suspense>}<div className="page-toolbar"><Button onClick={() => setPromptStudio(true)}>提示词实验与模板</Button></div><div className="settings-grid"><div>{workspace.skills.length ? workspace.skills.map(skill => <article className="list-card" key={skill.id}><div className="list-card__icon"><BookOpen size={20} /></div><div className="list-card__body"><h3>{skill.name}</h3><p>{skill.description}</p><div className="pill-row"><span className="pill">{skill.version.slice(0, 12)}</span><span className="pill">{skill.resources.length} 个资源</span>{skill.tools.length > 0 && <span className="pill">{skill.tools.length} 个工具</span>}</div></div><div className="list-card__actions"><IconButton label={`查看“${skill.name}”`} onClick={() => { setSelected(skill); setInstructions(skill.instructions); }}><Pencil size={16} /></IconButton><IconButton label={skill.enabled ? `停用“${skill.name}”` : `启用“${skill.name}”`} aria-pressed={skill.enabled} onClick={() => void action('skill.toggle', { skillId: skill.id, enabled: !skill.enabled }, skill.enabled ? 'Skill 已停用' : 'Skill 已启用')}><Power size={16} /></IconButton></div></article>) : <div className="section-card"><EmptyState icon={<BookOpen size={25} />} title="把你的方法加入创作" description="导入含 SKILL.md 的目录或 GitHub 链接，再绑定到步骤。"><Button variant="primary" onClick={() => setImporting(true)}><Plus size={15} />导入 Skill</Button></EmptyState></div>}</div><aside><div className="section-card"><div className="list-help"><p>Skill 可包含写作规范、风格、模板和工具说明，资源按需加载。</p><p>任务使用固定的 Skill 版本，后续修改不影响当前任务。</p><p>工具需要单独启用，并遵循该步骤的执行与恢复规则。</p></div></div></aside></div><ToolConnections action={action} />{importing && <Dialog title="导入 Skill" onClose={() => setImporting(false)}><form onSubmit={event => { event.preventDefault(); setBusy(true); void action('skill.import', /^https?:\/\//i.test(source) ? { url: source } : { path: source }, 'Skill 已导入').then(result => { setBusy(false); if (result !== null) { setImporting(false); setSource(''); } }); }}><div className="dialog__body"><Field label="目录路径或 GitHub 链接" hint="目录需包含 SKILL.md 及引用资源。"><PathPicker label="目录路径或 GitHub 链接" mode="directory" autoFocus required value={source} onChange={setSource} placeholder={pathExample('skill')} /></Field></div><div className="dialog__footer"><Button onClick={() => setImporting(false)}>取消</Button><Button variant="primary" type="submit" busy={busy}><Download size={15} />导入</Button></div></form></Dialog>}{selected && <Dialog title={selected.name} onClose={() => setSelected(null)} className="dialog--wide"><div className="dialog__body"><p>{selected.description}</p><Field label="Skill 指令"><textarea className="skill-editor" value={instructions} onChange={event => setInstructions(event.target.value)} spellCheck={false} /></Field><p className="tiny-meta">来源：{selected.source}</p>{selected.tools.length > 0 && <div className="skill-tools"><h3>工具权限</h3>{selected.tools.map(tool => <label key={tool.id} className="field-inline"><input type="checkbox" checked={tool.enabled} onChange={event => { const enabled = event.target.checked; void action<SkillPackage>('skill.tool.toggle', { skillId: selected.id, toolId: tool.id, enabled }, '工具权限已更新').then(value => { if (value) setSelected(value); }); }} />{tool.label} <span className="tiny-meta">{tool.permissions.join('、')}</span></label>)}</div>}</div><div className="dialog__footer"><Button onClick={() => setSelected(null)}>关闭</Button><Button aria-label="保存新版本" variant="primary" onClick={() => void action('skill.update', { skillId: selected.id, instructions }, 'Skill 已保存为新版本').then(result => { if (result !== null) setSelected(null); })}><Check size={15} />保存</Button></div></Dialog>}</div>;
-}
+export { default as SkillsPage } from './SkillStudio';
 
 export function AssetsPage({ workspace, action, project }: PageProps & { project?: ProjectDocument }) {
   const [importing, setImporting] = useState(false);

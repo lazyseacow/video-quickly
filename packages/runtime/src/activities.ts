@@ -37,6 +37,13 @@ export class ActivityInputChangedError extends Error {
 
 export class SimulatedProcessExit extends Error {}
 
+export class AgentCompletionError extends Error {
+  constructor(message = '视频 Agent 尚未完成与当前项目一致的有效成片导出，请查看制作记录中的工具结果后重试。') {
+    super(message);
+    this.name = 'AgentCompletionError';
+  }
+}
+
 export interface ActivityContext {
   operationId: string;
   remoteId?: string;
@@ -121,7 +128,7 @@ export class ActivityJournal {
       return result;
     } catch (error) {
       if (error instanceof SimulatedProcessExit) throw error;
-      const knownResponse = error instanceof ModelResponseValidationError || error instanceof TextRequestRejectedError || error instanceof MediaRequestRejectedError;
+      const knownResponse = error instanceof ModelResponseValidationError || error instanceof TextRequestRejectedError || error instanceof MediaRequestRejectedError || error instanceof AgentCompletionError;
       const status = safety === 'external' && !knownResponse ? 'unknown' : 'failed';
       const message = knownResponse || error instanceof LockedShotChangeError || error instanceof VideoGenerationError ? error.message : safety === 'external' ? '外部调用未完成，结果需要核对。' : error instanceof Error ? error.message : '活动执行失败';
       this.database.prepare('UPDATE activities SET status = ?, error = ? WHERE run_id = ? AND activity_id = ?').run(status, message, runId, activityId);

@@ -3,12 +3,25 @@ import { lstat, mkdir, readdir, readFile, copyFile, rename, rm, writeFile } from
 import { join, resolve, relative } from 'node:path';
 import { parse } from 'yaml';
 import { unzipSync } from 'fflate';
-import { skillSchema, type SkillPackage } from '@video-quickly/contracts';
+import { skillSchema, type SkillImportSource, type SkillPackage } from '@video-quickly/contracts';
 
-export async function importSkill(source: { path?: string; url?: string }, dataDirectory: string): Promise<SkillPackage> {
-  if (source.path && !source.path.toLowerCase().endsWith('.zip')) return importSkillDirectory(source.path, dataDirectory);
+export async function importSkills(source: SkillImportSource, dataDirectory: string, options: { signal?: AbortSignal; onProgress?(completed: number, total: number): void } = {}): Promise<SkillPackage[]> {
+  options.signal?.throwIfAborted();
+  if (source.path && !source.path.toLowerCase().endsWith('.zip')) {
+    const directories = await discoverSkillDirectories(resolve(source.path));
+    if (!directories.length) throw new Error('目录中没有找到 SKILL.md。');
+    const result: SkillPackage[] = [];
+    options.onProgress?.(0, directories.length);
+    for (const directory of directories) {
+      options.signal?.throwIfAborted();
+      result.push(await importSkillDirectory(directory, dataDirectory));
+      options.onProgress?.(result.length, directories.length);
+    }
+    return result;
+  }
   let bytes: Uint8Array;
   let sourceLabel: string;
+  let repositorySource: string | undefined;
   let requestedPath = '';
   if (source.url) {
     const url = new URL(source.url);
@@ -18,15 +31,15 @@ export async function importSkill(source: { path?: string; url?: string }, dataD
     if (!owner || !repository || !/^[a-z\d_.-]+$/i.test(owner) || !/^[a-z\d_.-]+$/i.test(repository)) throw new Error('GitHub 仓库链接无效。');
     let branch = parts[2] === 'tree' ? parts[3] : undefined;
     if (parts.length > 2 && parts[2] !== 'tree') throw new Error('请提供仓库或 Skill 目录链接。');
-    requestedPath = parts[2] === 'tree' ? parts.slice(4).join('/') : '';
+    requestedPath = parts[2] === 'tree' ? parts.slice(4).map(decodeURIComponent).join('/') : '';
     if (!branch) {
-      const metadata = await fetch(`https://api.github.com/repos/${owner}/${repository}`, { signal: AbortSignal.timeout(20_000), headers: { Accept: 'application/vnd.github+json' } });
+      const metadata = await fetch(`https://api.github.com/repos/${owner}/${repository}`, { signal: AbortSignal.any([AbortSignal.timeout(20_000), ...options.signal ? [options.signal] : []]), headers: { Accept: 'application/vnd.github+json' } });
       if (!metadata.ok) throw new Error(`无法读取 GitHub 仓库（HTTP ${metadata.status}）。`);
       const info: unknown = await metadata.json();
       branch = info && typeof info === 'object' && 'default_branch' in info && typeof info.default_branch === 'string' ? info.default_branch : undefined;
     }
     if (!branch) throw new Error('未找到仓库默认分支。');
-    const response = await fetch(`https://codeload.github.com/${owner}/${repository}/zip/refs/heads/${encodeURIComponent(branch)}`, { signal: AbortSignal.timeout(60_000) });
+    const response = await fetch(`https://codeload.github.com/${owner}/${repository}/zip/refs/heads/${encodeURIComponent(branch)}`, { signal: AbortSignal.any([AbortSignal.timeout(60_000), ...options.signal ? [options.signal] : []]) });
     if (!response.ok) throw new Error(`下载 Skill 仓库失败（HTTP ${response.status}）。`);
     if (Number(response.headers.get('content-length')) > 50_000_000) throw new Error('Skill 压缩包超过 50 MB。');
     const chunks: Uint8Array[] = []; let size = 0;
@@ -42,34 +55,74 @@ export async function importSkill(source: { path?: string; url?: string }, dataD
     } finally { reader.releaseLock(); }
     bytes = new Uint8Array(size); let offset = 0; for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.length; }
     sourceLabel = source.url;
+    repositorySource = `https://github.com/${owner}/${repository}/tree/${encodeURIComponent(branch)}`;
   } else if (source.path) {
     const info = await lstat(source.path); if (!info.isFile() || info.size > 50_000_000) throw new Error('请选择不超过 50 MB 的 ZIP 文件。');
     bytes = new Uint8Array(await readFile(source.path)); sourceLabel = resolve(source.path);
   } else throw new Error('请选择 Skill 目录、ZIP 文件或 GitHub 链接。');
-  let total = 0;
-  const entries = unzipSync(bytes, { filter(file) { total += file.originalSize; if (total > 50_000_000) throw new Error('Skill 解压后超过 50 MB。'); return !file.name.endsWith('/'); } });
-  const names = Object.keys(entries);
-  if (names.length > 500) throw new Error('Skill 文件数超过 500。');
+  const names: string[] = [];
+  // Index first: repository examples and other Skills do not count toward one Skill's limits.
+  unzipSync(bytes, { filter(file) { if (!file.name.endsWith('/')) names.push(file.name); return false; } });
   for (const name of names) if (name.startsWith('/') || name.includes('\\') || name.split('/').some(part => part === '..' || part.includes(':'))) throw new Error('Skill ZIP 包含不安全路径。');
   const candidates = names.filter(name => name === 'SKILL.md' || name.endsWith('/SKILL.md'));
-  const selected = requestedPath ? candidates.find(name => name.endsWith(`/${requestedPath}/SKILL.md`)) : candidates.find(name => name === 'SKILL.md') ?? candidates.find(name => name.split('/').length === 2) ?? (candidates.length === 1 ? candidates[0] : undefined);
-  if (!selected) throw new Error(candidates.length > 1 ? '仓库包含多个 Skill，请提供具体 Skill 目录的 GitHub 链接。' : 'ZIP 或仓库中没有找到 SKILL.md。');
-  const prefix = selected.slice(0, -'SKILL.md'.length);
-  const importsRoot = resolve(dataDirectory, 'imports');
-  const temporary = resolve(importsRoot, randomUUID());
-  if (relative(importsRoot, temporary).startsWith('..')) throw new Error('导入目录无效。');
-  await mkdir(temporary, { recursive: true });
-  try {
-    for (const [name, content] of Object.entries(entries)) {
-      if (!name.startsWith(prefix)) continue;
-      const destination = resolve(temporary, name.slice(prefix.length));
-      if (relative(temporary, destination).startsWith('..')) throw new Error('Skill 文件路径越界。');
-      await mkdir(resolve(destination, '..'), { recursive: true });
-      await writeFile(destination, content);
-    }
-    const value = await importSkillDirectory(temporary, dataDirectory);
-    return { ...value, source: sourceLabel };
-  } finally { await rm(temporary, { recursive: true, force: true }); }
+  const firstDirectory = names[0]?.split('/')[0];
+  const archivePrefix = firstDirectory && names.every(name => name.startsWith(`${firstDirectory}/`)) ? `${firstDirectory}/` : '';
+  const selectedPath = source.skillPath ?? requestedPath;
+  const selected = selectedPath
+    ? candidates.filter(name => name === `${archivePrefix}${selectedPath}/SKILL.md`)
+    : candidates.sort();
+  if (!selected.length) {
+    if (selectedPath) throw new Error('所选 Skill 目录中没有找到 SKILL.md，请重新选择。');
+    throw new Error('ZIP 或仓库中没有找到 SKILL.md。');
+  }
+  const result: SkillPackage[] = [];
+  options.onProgress?.(0, selected.length);
+  for (const selectedSkill of selected) {
+    options.signal?.throwIfAborted();
+    const prefix = selectedSkill.slice(0, -'SKILL.md'.length);
+    let total = 0;
+    let fileCount = 0;
+    const entries = unzipSync(bytes, { filter(file) {
+      if (!file.name.startsWith(prefix) || file.name.endsWith('/')) return false;
+      if (++fileCount > 500) throw new Error('Skill 文件数超过 500。');
+      total += file.originalSize;
+      if (total > 50_000_000) throw new Error('Skill 解压后超过 50 MB。');
+      return true;
+    } });
+    const importsRoot = resolve(dataDirectory, 'imports');
+    const temporary = resolve(importsRoot, randomUUID());
+    if (relative(importsRoot, temporary).startsWith('..')) throw new Error('导入目录无效。');
+    await mkdir(temporary, { recursive: true });
+    try {
+      for (const [name, content] of Object.entries(entries)) {
+        if (!name.startsWith(prefix)) continue;
+        const destination = resolve(temporary, name.slice(prefix.length));
+        if (relative(temporary, destination).startsWith('..')) throw new Error('Skill 文件路径越界。');
+        await mkdir(resolve(destination, '..'), { recursive: true });
+        await writeFile(destination, content);
+      }
+      const value = await importSkillDirectory(temporary, dataDirectory);
+      const path = prefix.slice(archivePrefix.length).replace(/\/$/, '');
+      result.push({ ...value, source: repositorySource ? `${repositorySource}${path ? `/${path}` : ''}` : `${sourceLabel}${path ? `#${path}` : ''}` });
+      options.onProgress?.(result.length, selected.length);
+    } finally { await rm(temporary, { recursive: true, force: true }); }
+  }
+  return result;
+}
+
+async function discoverSkillDirectories(root: string, depth = 0): Promise<string[]> {
+  const info = await lstat(root);
+  if (!info.isDirectory() || info.isSymbolicLink()) throw new Error('请选择包含 Skill 的本地目录。');
+  const entries = await readdir(root, { withFileTypes: true });
+  if (entries.some(entry => entry.name === 'SKILL.md' && entry.isFile())) return [root];
+  if (depth >= 5) return [];
+  const result: string[] = [];
+  for (const entry of entries.sort((a, b) => a.name.localeCompare(b.name))) {
+    if (['.git', 'node_modules'].includes(entry.name) || entry.name.startsWith('.env')) continue;
+    if (entry.isSymbolicLink()) throw new Error('Skill 目录包含符号链接，请移除后再导入。');
+    if (entry.isDirectory()) result.push(...await discoverSkillDirectories(join(root, entry.name), depth + 1));
+  }
+  return result;
 }
 
 export async function importSkillDirectory(source: string, dataDirectory: string): Promise<SkillPackage> {

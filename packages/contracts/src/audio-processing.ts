@@ -39,6 +39,7 @@ export const audioMixAnalysisSchema = z.object({
 export const preparedAudioMixSchema = z.object({
   version: z.literal(1), key: z.string().regex(/^[a-f0-9]{64}$/), path: z.string().min(1), sha256: z.string().regex(/^[a-f0-9]{64}$/),
   durationUs: z.number().int().positive(), analysis: audioMixAnalysisSchema, warnings: z.array(z.string()),
+  warningDetails: z.array(z.object({ message: z.string(), shotId: z.string().min(1).optional() })).optional(),
   shotDurations: z.array(z.object({ shotId: z.string().min(1), durationUs: z.number().int().positive() })).optional(),
 });
 export type PreparedAudioMix = z.infer<typeof preparedAudioMixSchema>;

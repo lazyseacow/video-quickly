@@ -160,6 +160,32 @@ for (const transition of ['fade', 'wipe'] as const) test(`prepares the independe
   expect(await source.current()).toEqual(source.project);
 });
 
+test('completes an automatic transition preview after cold media arrives and pauses its mixed audio', async ({ page, request }, info) => {
+  test.setTimeout(60_000);
+  const source = await fixture(request, info), reference = await oracle(request, source, info), points = coldPoints;
+  const baseline = await rpc<ProjectDocument>(request, 'project.update', { projectId: source.project.id, revision: source.project.revision, patch: { shots: source.project.shots.map((shot, index) => index ? { ...shot, animation: { ...shot.animation, transition: 'cut' } } : shot) } });
+  const gate = await mediaGate(page, [source.videos[1].path]); let handle: Awaited<ReturnType<typeof capture>> | undefined;
+  try {
+    const canvas = await open(page, baseline); handle = await capture(canvas, points);
+    await page.locator('.outline-shot').filter({ hasText: baseline.shots[1].title }).click();
+    const select = page.getByRole('combobox', { name: '转场', exact: true });
+    await select.click(); await select.getByRole('option', { name: '柔和叠化', exact: true }).click();
+    await expect(page.getByRole('button', { name: '暂停预览', exact: true })).toBeVisible();
+    await page.waitForTimeout(1000);
+    const waiting = await handle.evaluate(state => state.samples.at(-1)!);
+    expect(waiting.visible).toBe(true); expect(waiting.uiMs).toBeGreaterThanOrEqual(1100); expect(waiting.uiMs).toBeLessThanOrEqual(1534);
+    expect(waiting.audioPaused).toBe(true); expect(Math.abs(waiting.audioMs - waiting.uiMs)).toBeLessThan(80);
+    gate.release(); await expect(canvas).toHaveAttribute('data-rendered-frame', '63');
+    await expect(page.getByRole('button', { name: '播放预览', exact: true })).toBeVisible();
+    await expect.poll(() => handle!.evaluate(state => state.samples.at(-1)!.audioPaused)).toBe(true);
+    const samples = await stopCapture(handle, info, gate.requests); handle = undefined;
+    assertTransition(samples, reference, points);
+    expect(samples.at(-1)!.uiMs).toBe(2100); expect(Math.abs(samples.at(-1)!.audioMs - 2100)).toBeLessThan(80);
+    await page.screenshot({ path: info.outputPath('automatic-transition-audio-paused.png') });
+  } finally { gate.release(); if (handle) await stopCapture(handle, info, gate.requests); }
+  expect(await source.current()).toEqual(baseline);
+});
+
 test('keeps the last presented picture while seeking directly into a cold transition and paints the requested frame after loading', async ({ page, request }, info) => {
   test.setTimeout(60_000);
   const source = await fixture(request, info), reference = await oracle(request, source, info), points = coldPoints, gate = await mediaGate(page, [source.videos[1].path]);

@@ -118,7 +118,9 @@ export function createPreviewVideoController(element: HTMLVideoElement, events: 
     if (range && boundaryBlocked && !forceSeek) { element.pause(); stopFrames(); return; }
     if (element.readyState >= 1 && !element.seeking) {
       const controlled = Boolean(range && !supportsFrames);
-      const tolerance = forceSeek ? range ? .0000005 : .001 : shouldPlay && !controlled ? Math.max(.12, frameDuration * 2) : Math.min(.005, frameDuration / 3);
+      // A forced pause can land just before a frame boundary. Millisecond drift
+      // would keep the preceding picture when the compositor freezes that frame.
+      const tolerance = forceSeek ? .0000005 : shouldPlay && !controlled ? Math.max(.12, frameDuration * 2) : Math.min(.005, frameDuration / 3);
       if (Math.abs(element.currentTime - position) > tolerance) {
         stopFrames(); seekGeneration++; element.currentTime = position; watchFrames();
       }

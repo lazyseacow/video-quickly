@@ -22,7 +22,7 @@ test('keeps one page heading and functional guidance after removing repeated des
     await page.getByRole('button', { name, exact: true }).click(); await expect(page.getByRole('heading', { level: 1, name, exact: true })).toBeVisible(); await expect(page.getByRole('heading', { level: 1 })).toHaveCount(1); await expectCleanChrome(page);
     for (const text of removed) await expect(page.getByText(text, { exact: true })).toHaveCount(0);
     if (name === 'Skill 工作室') {
-      await expect(page.getByRole('heading', { name: '一个 Skill，一套创作方法', exact: true })).toHaveCount(0); await expect(page.getByRole('heading', { level: 2, name: '工具连接', exact: true })).toBeVisible(); await expect(page.getByText(/任务使用固定的 Skill 版本/)).toBeVisible(); await expect(page.getByText(/工具需要单独启用/)).toBeVisible();
+      await expect(page.getByRole('heading', { name: '一个 Skill，一套创作方法', exact: true })).toHaveCount(0); await expect(page.getByRole('heading', { level: 2, name: '工具连接', exact: true })).toBeVisible(); await expect(page.getByText(/任务固定所选指令和已展开的引用资源/)).toBeVisible(); await expect(page.getByText(/工具需要单独启用/)).toBeVisible();
     }
     if (name === '模型连接') {
       await expect(page.getByText('配置文本、图片和视频模型。', { exact: true })).toBeVisible();

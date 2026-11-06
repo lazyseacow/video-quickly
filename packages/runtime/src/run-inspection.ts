@@ -92,6 +92,7 @@ export function createRunInspector(options: {
     const keys = ids.map(id => `${runId}:${id}`);
     const documents = database.prepare("SELECT kind, id FROM documents WHERE kind IN ('node-project', 'node-result', 'model-response-head') AND id IN (SELECT value FROM json_each(?))").all(JSON.stringify(keys)) as { kind: string; id: string }[];
     const has = (kind: string, id: string) => documents.some(row => row.kind === kind && row.id === `${runId}:${id}`);
+    const directActivities = new Map((database.prepare('SELECT activity_id, status FROM activities WHERE run_id = ? AND activity_id IN (SELECT value FROM json_each(?))').all(runId, JSON.stringify(ids)) as { activity_id: string; status: string }[]).map(row => [row.activity_id, row.status]));
     const unknown = run.status !== 'running' && rows.some(row => row.unknown_count > 0);
     const resume = ['failed', 'needs_attention', 'waiting_external', 'retry_scheduled', 'queued', 'waiting_review'].includes(run.status) && !unknown;
     const steps: RunStepSummary[] = nodes.map(node => {
@@ -105,6 +106,13 @@ export function createRunInspector(options: {
         ancestorThread = parentThread;
       }
       let status: RunStepSummary['status'] = nodeState.values.completed.includes(node.id) ? 'succeeded' : nodeState.values.skipped.includes(node.id) ? 'skipped' : 'pending';
+      // Agent business tasks are durable activities inside the controller's
+      // graph node, rather than separately dispatched graph nodes.
+      const activity = directActivities.get(node.id);
+      if (node.config.agentTask && activity === 'completed' && has('node-result', node.id)) status = 'succeeded';
+      else if (node.config.agentTask && activity === 'failed') status = 'failed';
+      else if (node.config.agentTask && activity && status === 'pending') status = run.status === 'running' ? 'running' : run.status === 'canceled' ? 'canceled' : 'needs_attention';
+      else if (node.config.videoAgent && activity && run.status === 'running' && status === 'pending') status = 'running';
       if (inheritedSkip) status = 'skipped';
       else if (!nodeState.available && nodeThread !== runId && run.status === 'canceled') status = 'canceled';
       else if (current && !['succeeded', 'skipped'].includes(status)) status = run.status === 'succeeded' ? 'not_recorded' : run.status === 'queued' ? 'pending' : run.status;

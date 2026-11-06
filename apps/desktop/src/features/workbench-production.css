@@ -2,6 +2,8 @@
 .workbench-production__progress { display: flex; align-items: center; gap: var(--space-2); min-width: 0; }
 .workbench-production__progress > ol { flex: 1; min-width: 0; }
 .workbench-production__progress > .icon-button { flex-shrink: 0; }
+.workbench-production__agent { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: var(--space-2); margin-bottom: var(--space-2); color: var(--text-secondary); font-size: var(--text-size-label); }
+.workbench-production__agent .button { min-height: var(--control-hit-size); }
 .workbench-production__actions, .workbench-production__buttons { display: flex; align-items: center; gap: var(--space-3); min-width: 0; }
 .workbench-production .button { min-height: var(--control-hit-size); }
 .production-toggle__label { min-inline-size: 4em; text-align: center; }

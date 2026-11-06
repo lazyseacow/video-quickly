@@ -11,6 +11,7 @@ async function fixture() {
   const directory = await mkdtemp(join(tmpdir(), 'vq-sidecar-')); directories.push(directory);
   await mkdir(join(directory, 'scripts'));
   for (const name of ['prepare-sidecar.mjs', 'media-manifest.json', 'node-portability.mjs', 'portable-node.mjs', 'verified-download.mjs', 'macos-media-manifest.json', 'node-manifest.json']) await copyFile(resolve('scripts', name), join(directory, 'scripts', name));
+  await copyFile(resolve('THIRD_PARTY_NOTICES.md'), join(directory, 'THIRD_PARTY_NOTICES.md'));
   for (const name of ['apps', 'packages', 'node_modules']) await symlink(resolve(name), join(directory, name), 'dir');
   const env = { ...process.env }; delete env.VIDEO_QUICKLY_MEDIA_DIR;
   return { directory, env, command: join(directory, 'scripts', 'prepare-sidecar.mjs') };

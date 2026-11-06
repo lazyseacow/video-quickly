@@ -1,5 +1,5 @@
 import { expect, it } from 'vitest';
-import { createNativeVideoWorkflow, DEFAULT_VIDEO_PROFILE, projectSchema, shotSchema, type SkillPackage } from '@video-quickly/contracts';
+import { createNativeVideoWorkflow, DEFAULT_VIDEO_PROFILE, projectSchema, shotSchema, skillSchema } from '@video-quickly/contracts';
 import { buildWorkflowPrompt, parseWorkflowShots } from '../packages/runtime/src/workflow-prompts';
 
 const project = () => projectSchema.parse({ id: 'prompt-project', title: '自动制作主题', brief: '上一步已生成的创意简报', style: '上一步已生成的视觉风格', revision: 1, profile: DEFAULT_VIDEO_PROFILE, workflow: createNativeVideoWorkflow(), shots: [], createdAt: '', updatedAt: '' });
@@ -13,7 +13,7 @@ it('builds downstream generation input from current project, actual upstream res
     { id: 'selected', name: '叙事节奏', enabled: true, instructions: '按起承转合组织故事' },
     { id: 'disabled', name: '已停用', enabled: false, instructions: '不可执行的停用内容' },
     { id: 'unselected', name: '未选择', enabled: true, instructions: '不可执行的未选择内容' },
-  ] as SkillPackage[];
+  ].map(skill => skillSchema.parse({ description: '测试方法', source: 'fixture', version: 'version-1', contentHash: 'fixture', importedAt: '', ...skill }));
   const prompt = buildWorkflowPrompt(current, node, skills, false, [], [{ nodeId: 'custom-plan', label: '上游规划', kind: 'agent', output: { text: '上一步的实际计划', sceneCount: 3 } }]);
   for (const value of [current.title, current.brief, current.style, '上一步的实际计划', '"sceneCount":3', skills[0].instructions, node.prompt]) expect(prompt).toContain(value);
   for (const skill of skills.slice(1)) expect(prompt).not.toContain(skill.instructions);
