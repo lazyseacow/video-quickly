@@ -105,6 +105,28 @@ test('fills steps without saving and commits all configuration once from the fin
   await expect(dialog.getByRole('button', { name: '确认保存', exact: true })).toHaveAttribute('aria-current', 'step');
 });
 
+test('keeps model search focused across the first frame after changing configuration steps', async ({ page, request }) => {
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  const source = await productionFixture(request), dialog = await openProduction(page, source.project);
+  const brief = dialog.getByLabel('创作要求', { exact: true }), mode = dialog.getByRole('combobox', { name: '制作方式', exact: true });
+  const next = dialog.getByRole('button', { name: '下一步', exact: true });
+  await expect(brief).toBeFocused();
+  await page.clock.install({ time: new Date('2026-06-15T12:00:00Z') }); await page.clock.pauseAt(new Date('2026-06-15T12:00:01Z'));
+  await next.focus(); await next.press('Enter'); await page.clock.runFor(32); await expect(mode).toBeFocused();
+  const previous = dialog.getByRole('button', { name: '上一步', exact: true });
+  await previous.focus(); await previous.press('Enter'); await page.clock.runFor(32); await expect(brief).toBeFocused();
+  await next.focus(); await next.press('Enter');
+  const model = dialog.getByRole('combobox', { name: '文本模型', exact: true });
+  await model.fill(source.text.name); await expect(dialog.getByRole('option', { name: source.text.name, exact: true })).toBeVisible();
+  // Hold the first RAF until typing has begun, reproducing a delayed step focus
+  // without delaying the renderer or changing the Combobox's own behavior.
+  await page.clock.runFor(32); await expect(model).toBeFocused(); await expect(model).toHaveAttribute('aria-expanded', 'true');
+  await page.clock.resume(); await dialog.getByRole('option', { name: source.text.name, exact: true }).click();
+  await expect(model).toHaveValue(source.text.name); await expect(model).toBeFocused();
+  expect((await source.saved()).revision).toBe(source.project.revision);
+  await page.keyboard.press('Escape'); await expect(dialog).toHaveCount(0); await expect(page.getByRole('button', { name: '制作设置', exact: true })).toBeFocused();
+});
+
 test('retains every step after a failed save and retries only through the final review', async ({ page, request }) => {
   const source = await productionFixture(request), dialog = await openProduction(page, source.project);
   await dialog.getByLabel('创作要求', { exact: true }).fill('保存失败也要保留的创作要求');

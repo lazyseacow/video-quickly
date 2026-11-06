@@ -12,6 +12,8 @@ async function rpc<T>(request: APIRequestContext, method: string, params: unknow
 
 for (const viewport of [{ width: 1536, height: 960, theme: 'dark' }, { width: 390, height: 844, theme: 'light' }]) {
   test(`retains export settings across sections and produces the selected MP4 and downloads at ${viewport.width}px`, async ({ page, request }, info) => {
+    // Form setup and downloads precede the separate 30-second native render wait.
+    test.setTimeout(60_000);
     const created = await rpc<ProjectDocument>(request, 'project.create', { title: `分区导出验收 ${viewport.width}`, profile: { width: 320, height: 180, frameRate: { numerator: 30000, denominator: 1001 }, fitMode: 'contain', previewScale: 1 } });
     const project = await rpc<ProjectDocument>(request, 'project.update', { projectId: created.id, revision: created.revision, patch: { shots: [{ id: 'export-scene', title: '导出首镜头', narration: '分区导出测试字幕', visualPrompt: '', durationUs: 700_000 }] } });
     const errors: string[] = []; page.on('pageerror', error => errors.push(error.message));

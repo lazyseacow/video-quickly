@@ -1,4 +1,4 @@
-import { lazy, Suspense, useCallback, useEffect, useId, useRef, useState } from 'react';
+import { lazy, Suspense, useCallback, useEffect, useId, useLayoutEffect, useRef, useState } from 'react';
 import { ChevronLeft, ChevronRight } from 'lucide-react';
 import { applyWorkflowProposal, productionSettingsSchema, resolveProductionWorkflow, supportsPromptExperiment, videoProfileSchema, type AssetRecord, type ProductionSettings, type ProjectDocument, type RunSummary, type WorkflowDefinition, type WorkflowNode } from '@video-quickly/contracts';
 import type { WorkspaceView, StepOutputSelection } from '../lib/types';
@@ -69,6 +69,17 @@ export default function ProductionSettingsDialog({ project, projectId, projectRe
   }, [notice]);
   const inFlight = useRef(false), closed = useRef(false);
   const id = useId(), form = useRef<HTMLFormElement>(null), content = useRef<HTMLDivElement>(null);
+  const focusTarget = useRef<ConfigurationStep | undefined>(undefined);
+  const focusStep = useCallback((value: ConfigurationStep) => {
+    const section = content.current?.querySelector<HTMLElement>(`[data-production-step="${value}"]`);
+    const field = [...section?.querySelectorAll<HTMLElement>('input:not([disabled]), textarea:not([disabled]), select:not([disabled])') ?? []].find(element => element.checkVisibility());
+    (field ?? section)?.focus({ preventScroll: true });
+  }, []);
+  useLayoutEffect(() => {
+    if (focusTarget.current !== step) return;
+    focusTarget.current = undefined;
+    focusStep(step);
+  }, [step, focusStep]);
   const records = initialTab === 'run';
   const flat = flatRecords ?? workflow.id === 'native-video';
   const active = Boolean(run && ['queued', 'running', 'waiting_review', 'waiting_external', 'retry_scheduled'].includes(run.status));
@@ -84,14 +95,13 @@ export default function ProductionSettingsDialog({ project, projectId, projectRe
   function updateSettings(patch: Partial<ProductionSettings>) { setSettings(value => ({ ...value, ...patch })); setError(''); }
   function updateNode(node: WorkflowNode, patch: Partial<WorkflowNode>) { setNodes(current => current.map(item => item.id === node.id ? { ...item, ...patch } : item)); setError(''); }
   function selectStep(value: ConfigurationStep, focus = false) {
+    focusTarget.current = focus ? value : undefined;
     setStep(value); onSectionChange?.(value); setError('');
     if (value !== 'review') setRequestedTool(undefined);
     if (content.current) content.current.scrollTop = 0;
-    if (focus) requestAnimationFrame(() => {
-      const section = content.current?.querySelector<HTMLElement>(`[data-production-step="${value}"]`);
-      const field = [...section?.querySelectorAll<HTMLElement>('input:not([disabled]), textarea:not([disabled]), select:not([disabled])') ?? []].find(element => element.checkVisibility());
-      (field ?? section)?.focus({ preventScroll: true });
-    });
+    // Focus the committed step before another interaction can begin. A delayed
+    // RAF could otherwise blur an already opened model search and close it.
+    if (focus && value === step) { focusTarget.current = undefined; focusStep(value); }
   }
   function requestTool(tool: ProjectSettingsAction | 'workflow') { setRequestedTool(tool); selectStep('review', true); }
   function openAdvanced() {

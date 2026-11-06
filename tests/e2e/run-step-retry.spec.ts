@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { expect, test, type APIRequestContext } from '@playwright/test';
 import type { ProjectDocument, RunInspection, RunSummary } from '@video-quickly/contracts';
 import { openProjectFromList } from './workspace-navigation';
+import { test as isolatedTest } from './isolated-workspace';
 
 async function rpc<T>(request: APIRequestContext, method: string, params: unknown = {}): Promise<T> {
   const response = await request.post('/__desktop_rpc', { data: { method, params } });
@@ -129,7 +130,7 @@ for (const failure of ['download', 'rejection'] as const) for (const surface of 
   });
 }
 
-for (const viewport of [{ width: 1536, height: 960, theme: 'dark' }, { width: 390, height: 844, theme: 'light' }]) test(`shows workspace failure and recovery as transient notices at ${viewport.width}px`, async ({ page, request }, info) => {
+for (const viewport of [{ width: 1536, height: 960, theme: 'dark' }, { width: 390, height: 844, theme: 'light' }]) isolatedTest(`shows workspace failure and recovery as transient notices at ${viewport.width}px`, async ({ page, request }, info) => {
   const source = await fixture(request, true, 'rejection');
   try {
     await page.setViewportSize(viewport); await page.emulateMedia({ reducedMotion: 'reduce' }); await page.addInitScript(theme => localStorage.setItem('vq-theme', theme), viewport.theme);
@@ -153,7 +154,9 @@ for (const viewport of [{ width: 1536, height: 960, theme: 'dark' }, { width: 39
   } finally { await source.close(); }
 });
 
-test('keeps a compact progress retry after the workspace read-error toast disappears', async ({ page, request }, info) => {
+// Geometry belongs to this workspace; another test's Skill-import banners can
+// legitimately change the shared workspace header while this toast expires.
+isolatedTest('keeps a compact progress retry after the workspace read-error toast disappears', async ({ page, request }, info) => {
   const source = await fixture(request, true, 'rejection'); let rejectRead = true;
   try {
     await page.emulateMedia({ reducedMotion: 'reduce' });

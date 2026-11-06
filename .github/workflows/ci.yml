@@ -15,13 +15,13 @@ concurrency:
 
 jobs:
   browser-windows:
-    name: Windows browser ${{ matrix.shard }}/2
+    name: Windows browser ${{ matrix.shard }}/4
     runs-on: windows-2025
     timeout-minutes: 45
     strategy:
       fail-fast: false
       matrix:
-        shard: [1, 2]
+        shard: [1, 2, 3, 4]
     env:
       PLAYWRIGHT_BLOB_OUTPUT_DIR: ${{ github.workspace }}\.generated\browser-shard\blob
       PLAYWRIGHT_ARTIFACT_DIR: ${{ github.workspace }}\.generated\browser-shard\artifacts
@@ -40,11 +40,13 @@ jobs:
       - name: Prepare verified media components
         run: pnpm prepare:media
       - name: Install test browser
+        env:
+          PLAYWRIGHT_DOWNLOAD_CONNECTION_TIMEOUT: '120000'
         run: pnpm exec playwright install chromium
       - name: Record browser shard identity
-        run: pnpm exec tsx scripts/browser-reports.ts record ${{ matrix.shard }} 2
+        run: pnpm exec tsx scripts/browser-reports.ts record ${{ matrix.shard }} 4
       - name: Test workbench shard
-        run: pnpm test:e2e --shard=${{ matrix.shard }}/2 --reporter=line,blob
+        run: pnpm test:e2e --shard=${{ matrix.shard }}/4 --workers=1 --reporter=line,blob
       - name: Upload browser shard and evidence
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
@@ -66,13 +68,23 @@ jobs:
           - runner: macos-15
             arch: arm64
             shard: 1
-            shards: 2
-            workers: 2
+            shards: 4
+            workers: 1
           - runner: macos-15
             arch: arm64
             shard: 2
-            shards: 2
-            workers: 2
+            shards: 4
+            workers: 1
+          - runner: macos-15
+            arch: arm64
+            shard: 3
+            shards: 4
+            workers: 1
+          - runner: macos-15
+            arch: arm64
+            shard: 4
+            shards: 4
+            workers: 1
           - runner: macos-15-intel
             arch: x64
             shard: 1
@@ -116,6 +128,8 @@ jobs:
       - name: Prepare verified static macOS media and source notices
         run: pnpm prepare:media
       - name: Install test browser
+        env:
+          PLAYWRIGHT_DOWNLOAD_CONNECTION_TIMEOUT: '120000'
         run: pnpm exec playwright install chromium
       - name: Record browser shard identity
         run: pnpm exec tsx scripts/browser-reports.ts record ${{ matrix.shard }} ${{ matrix.shards }}
@@ -164,8 +178,18 @@ jobs:
         with:
           name: video-quickly-browser-windows-x64-${{ github.sha }}-shard-2
           path: .generated/browser-artifacts/shard-2
+      - name: Download Windows browser shard 3
+        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
+        with:
+          name: video-quickly-browser-windows-x64-${{ github.sha }}-shard-3
+          path: .generated/browser-artifacts/shard-3
+      - name: Download Windows browser shard 4
+        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
+        with:
+          name: video-quickly-browser-windows-x64-${{ github.sha }}-shard-4
+          path: .generated/browser-artifacts/shard-4
       - name: Merge browser reports and verify complete coverage
-        run: pnpm exec tsx scripts/browser-reports.ts merge 2
+        run: pnpm exec tsx scripts/browser-reports.ts merge 4
       - name: Check types
         run: pnpm typecheck
       - name: Test runtime and contracts
@@ -226,10 +250,8 @@ jobs:
         include:
           - runner: macos-15
             arch: arm64
-            shards: 2
           - runner: macos-15-intel
             arch: x64
-            shards: 4
     env:
       PLAYWRIGHT_JSON_OUTPUT_NAME: ${{ github.workspace }}/.generated/browser-results.json
       PLAYWRIGHT_ARTIFACT_DIR: ${{ github.workspace }}/.generated/browser-artifacts
@@ -263,19 +285,17 @@ jobs:
           name: video-quickly-browser-macos-${{ matrix.arch }}-${{ github.sha }}-shard-2
           path: .generated/browser-artifacts/shard-2
       - name: Download macOS browser shard 3
-        if: matrix.arch == 'x64'
         uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
         with:
           name: video-quickly-browser-macos-${{ matrix.arch }}-${{ github.sha }}-shard-3
           path: .generated/browser-artifacts/shard-3
       - name: Download macOS browser shard 4
-        if: matrix.arch == 'x64'
         uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
         with:
           name: video-quickly-browser-macos-${{ matrix.arch }}-${{ github.sha }}-shard-4
           path: .generated/browser-artifacts/shard-4
       - name: Merge browser reports and verify complete coverage
-        run: pnpm exec tsx scripts/browser-reports.ts merge ${{ matrix.shards }}
+        run: pnpm exec tsx scripts/browser-reports.ts merge 4
       - name: Check types
         run: pnpm typecheck
       - name: Test runtime and contracts

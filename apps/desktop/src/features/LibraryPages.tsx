@@ -1,5 +1,5 @@
 import { pathExample } from '../lib/desktop';
-import { lazy, Suspense, useEffect, useId, useRef, useState } from 'react';
+import { lazy, Suspense, useEffect, useId, useLayoutEffect, useRef, useState } from 'react';
 import { BookOpen, Code2, Eye, EyeOff, File, FileImage, FolderOpen, Image, Link, LoaderCircle, Mic, Pencil, Power, RefreshCw, Search, Server, ShieldCheck, Trash2, Video, Upload, Plus, RotateCcw, Download, Check } from 'lucide-react';
 import { modelConnectionTypes, getModelConnectionType, validateModelConnection, platformForConnection, modelDiscoverySchema, type ModelDiscovery, type ModelConnectionType, getModelParameterFields, getMediaAdapters, mediaAdapters, textProtocols, textProtocolSchema, type TextProtocol } from '@video-quickly/contracts';
 import { assetListItemSchema, projectDetailSchema, recordPageSchema, jsonValueSchema, modelPlatforms, getModelPlatform, modelPlatformSchema, validateModelParameters, type ModelPlatform, type AssetRecord, type AssetListItem, type ProjectSummary, type JsonValue, type ModelCapability, type ModelProfile, type ProjectDocument } from '@video-quickly/contracts';
@@ -115,6 +115,12 @@ function ModelDialog({ model, connectionType: addingType = 'text', action, onClo
   const addressErrorId = useId();
   const baseUrlInput = useRef<HTMLInputElement>(null), secretInput = useRef<HTMLInputElement>(null);
   const [section, setSection] = useState('connection');
+  const discoveryFocus = useRef<'address' | 'secret' | undefined>(undefined);
+  useLayoutEffect(() => {
+    if (section !== 'connection' || !discoveryFocus.current) return;
+    const field = discoveryFocus.current; discoveryFocus.current = undefined;
+    (field === 'address' ? baseUrlInput : secretInput).current?.focus();
+  }, [section]);
   const [capabilities, setCapabilities] = useState<ModelCapability[]>([...definition.capabilities]);
   const [busy, setBusy] = useState(false);
   const [parametersText, setParametersText] = useState(JSON.stringify(model?.parameters ?? {}, null, 2));
@@ -146,8 +152,8 @@ function ModelDialog({ model, connectionType: addingType = 'text', action, onClo
       : !keyOptional && !secretValue && !hasSavedSecret ? { field: 'secret' as const, message: '请填写 API Key 后获取模型列表。' } : undefined;
     setDiscoveryError(error);
     if (!error) return true;
-    setSection('connection');
-    requestAnimationFrame(() => (error.field === 'address' ? baseUrlInput : secretInput).current?.focus());
+    if (section === 'connection') (error.field === 'address' ? baseUrlInput : secretInput).current?.focus();
+    else { discoveryFocus.current = error.field; setSection('connection'); }
     return false;
   }
   async function discover() {

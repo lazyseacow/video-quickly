@@ -17,9 +17,11 @@ export async function productionFixture(request: APIRequestContext) {
 }
 
 export async function pickProductionModel(dialog: Locator, label: string, model: ModelProfile) {
-  if (!await dialog.getByRole('combobox', { name: label, exact: true }).isVisible() && ['文本模型', '视频模型', '图片模型'].includes(label)) await productionStep(dialog, '模型与素材');
-  await dialog.getByRole('combobox', { name: label, exact: true }).fill(model.name);
+  const control = dialog.getByRole('combobox', { name: label, exact: true });
+  if (!await control.isVisible() && ['文本模型', '视频模型', '图片模型'].includes(label)) await productionStep(dialog, '模型与素材');
+  await control.fill(model.name);
   await dialog.getByRole('option', { name: model.name, exact: true }).click();
+  await expect(control).toHaveValue(model.name);
 }
 export async function productionStep(dialog: Locator, label: '创作要求' | '模型与素材' | '声音与成片' | '确认保存') {
   await dialog.getByRole('navigation', { name: '制作设置步骤', exact: true }).getByRole('button', { name: label, exact: true }).click();

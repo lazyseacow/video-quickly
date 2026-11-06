@@ -158,6 +158,26 @@ for (const viewport of [{ width: 1536, height: 960, theme: 'dark' }, { width: 39
   });
 }
 
+test('keeps address editing focused across the first frame after a validation error', async ({ page }) => {
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  await page.goto('/'); await page.getByRole('button', { name: '模型连接', exact: true }).click();
+  const dialog = await addModelConnection(page, '图片模型');
+  const address = await settingField(dialog, '服务地址'), key = await settingField(dialog, 'API Key');
+  const download = dialog.getByRole('button', { name: '获取模型列表', exact: true });
+  await expect(dialog.locator('.dialog__surface')).toHaveCSS('opacity', '1');
+  await page.clock.install({ time: new Date('2026-06-15T12:00:00Z') }); await page.clock.pauseAt(new Date('2026-06-15T12:00:01Z'));
+  await download.focus(); await download.press('Enter');
+  await expect(dialog.getByRole('alert')).toHaveText('请填写 API Key 后获取模型列表。');
+  await address.fill('https://models.invalid/v1');
+  // Let a pending validation frame run after editing has moved to another field.
+  await page.clock.runFor(32); await page.keyboard.press('End'); await page.keyboard.type('/edited');
+  await expect(address).toHaveValue('https://models.invalid/v1/edited');
+  await expect(key).toHaveValue(''); await expect(address).toBeFocused();
+  await page.clock.resume();
+  await address.fill(''); await expect(address).toHaveValue(''); await download.click();
+  await expect(dialog.getByRole('alert')).toHaveText('请填写服务地址。'); await expect(address).toBeFocused();
+});
+
 test('keeps an empty model catalogue read-only until the service returns a selectable model', async ({ page }) => {
   let available = false;
   server = createServer((_request, response) => response.end(JSON.stringify({ data: available ? [{ id: 'remote-model' }] : [] })));

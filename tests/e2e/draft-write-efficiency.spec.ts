@@ -106,6 +106,17 @@ async function clean(page: Page) {
   await expect(page.getByRole('button', { name: '保存修改', exact: true })).toBeDisabled();
   await settleWrites(page);
 }
+async function openProjectAwaitingDraft(page: Page, project: ProjectDocument) {
+  const read = page.waitForResponse(response => {
+    if (!response.url().endsWith('/__desktop_rpc')) return false;
+    const input = response.request().postDataJSON();
+    return input.method === 'project.get' && input.params?.projectId === project.id;
+  });
+  await openProjectFromList(page, project.title, { waitForReady: false });
+  const response = await read;
+  expect(response.ok()).toBe(true); await response.finished();
+  await expect(page.getByText('正在读取项目与本地草稿…', { exact: true })).toBeVisible();
+}
 test.beforeEach(async ({ page }) => { await page.emulateMedia({ reducedMotion: 'reduce' }); await installProbe(page); });
 test.afterEach(async ({ page }) => { await page.evaluate(async () => { await window.__vqDraftWriteGate?.release(); window.__vqDraftWrites?.restore(); }); });
 
@@ -160,10 +171,8 @@ test('keeps pending writes owned by their project through A to B to A remounts',
     await holdWrites(page); await page.locator('.outline-shot').nth(1).click();
     await expect(page.getByLabel('镜头标题', { exact: true })).toHaveValue('原始镜头 1');
     await expect.poll(async () => (await records(page)).length).toBeGreaterThan(0);
-    await openProjectFromList(page, second.title, { waitForReady: false });
-    await expect(page.getByText('正在读取项目与本地草稿…', { exact: true })).toBeVisible();
-    await openProjectFromList(page, first.title, { waitForReady: false });
-    await expect(page.getByText('正在读取项目与本地草稿…', { exact: true })).toBeVisible();
+    await openProjectAwaitingDraft(page, second);
+    await openProjectAwaitingDraft(page, first);
     await page.evaluate(() => window.__vqDraftWriteGate!.release());
     await expect(page.getByLabel('镜头标题', { exact: true })).toHaveValue('原始镜头 1'); await clean(page);
     await openProjectFromList(page, second.title);
