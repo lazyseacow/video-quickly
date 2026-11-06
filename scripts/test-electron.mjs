@@ -122,6 +122,7 @@ async function launch() {
   return page;
 }
 async function verifyGenericWorkflow() {
+  const character = await rpc('character.save', { character: { name: '原生制作角色', description: '固定外形与服装', referenceAssetIds: [] } });
   const snapshot = await rpc('workspace.snapshot');
   const project = snapshot.projects.find(item => item.id === 'example-history');
   assert.ok(project);
@@ -155,7 +156,9 @@ async function verifyGenericWorkflow() {
   await expect(dialog.getByRole('region', { name: '步骤指引', exact: true })).toHaveCount(0);
   await expect(dialog.getByRole('checkbox', { name: /人工审阅|人工审核/ })).toHaveCount(0);
   await dialog.getByLabel('创作要求', { exact: true }).fill('未提交的项目配置');
+  await dialog.locator('.creative-context-editor__roles > summary').click();
   await expect(dialog.getByRole('group', { name: '项目角色池', exact: true })).toBeVisible();
+  await expect(dialog.getByRole('group', { name: '项目角色池', exact: true }).getByRole('checkbox', { name: character.name, exact: true })).not.toBeChecked();
   await dialog.getByRole('textbox', { name: '连续性要求', exact: true }).fill('同一场景与固定服装');
   await dialog.locator('summary:visible').filter({ hasText: '高级设置' }).click();
   const contactsBeforePreview = credentialContacts;

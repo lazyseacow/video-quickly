@@ -68,22 +68,12 @@ jobs:
           - runner: macos-15
             arch: arm64
             shard: 1
-            shards: 4
+            shards: 2
             workers: 1
           - runner: macos-15
             arch: arm64
             shard: 2
-            shards: 4
-            workers: 1
-          - runner: macos-15
-            arch: arm64
-            shard: 3
-            shards: 4
-            workers: 1
-          - runner: macos-15
-            arch: arm64
-            shard: 4
-            shards: 4
+            shards: 2
             workers: 1
           - runner: macos-15-intel
             arch: x64
@@ -250,8 +240,10 @@ jobs:
         include:
           - runner: macos-15
             arch: arm64
+            shards: 2
           - runner: macos-15-intel
             arch: x64
+            shards: 4
     env:
       PLAYWRIGHT_JSON_OUTPUT_NAME: ${{ github.workspace }}/.generated/browser-results.json
       PLAYWRIGHT_ARTIFACT_DIR: ${{ github.workspace }}/.generated/browser-artifacts
@@ -285,17 +277,19 @@ jobs:
           name: video-quickly-browser-macos-${{ matrix.arch }}-${{ github.sha }}-shard-2
           path: .generated/browser-artifacts/shard-2
       - name: Download macOS browser shard 3
+        if: matrix.arch == 'x64'
         uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
         with:
           name: video-quickly-browser-macos-${{ matrix.arch }}-${{ github.sha }}-shard-3
           path: .generated/browser-artifacts/shard-3
       - name: Download macOS browser shard 4
+        if: matrix.arch == 'x64'
         uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
         with:
           name: video-quickly-browser-macos-${{ matrix.arch }}-${{ github.sha }}-shard-4
           path: .generated/browser-artifacts/shard-4
       - name: Merge browser reports and verify complete coverage
-        run: pnpm exec tsx scripts/browser-reports.ts merge 4
+        run: pnpm exec tsx scripts/browser-reports.ts merge ${{ matrix.shards }}
       - name: Check types
         run: pnpm typecheck
       - name: Test runtime and contracts
