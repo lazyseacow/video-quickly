@@ -183,7 +183,7 @@ for (const dismissal of ['skip', 'close', 'overlay'] as const) {
   });
 }
 
-test('shows the tour to an independent new profile after another profile has dismissed it', async ({ page, browser, baseURL }) => {
+isolatedTest('shows the tour to an independent new profile after another profile has dismissed it', async ({ page, browser, baseURL }) => {
   if (!baseURL) throw new Error('A local application origin is required');
   const original = observe(page); await dismissFirst(page); await remembered(page);
   const context = await browser.newContext({ baseURL, storageState: freshProfile(baseURL, 'light'), reducedMotion: 'reduce' });

@@ -6,6 +6,8 @@ import { openProjectFromList } from './workspace-navigation';
 function gate() { let release!: () => void; const pending = new Promise<void>(resolve => { release = resolve; }); return { pending, release }; }
 for (const kind of ['image', 'video'] as const) for (const viewport of [{ width: 1536, height: 960, theme: 'dark', reducedMotion: 'no-preference' }, { width: 390, height: 844, theme: 'light', reducedMotion: 'reduce' }] as const) {
   test(`shows real partial ${kind} progress and keeps the selected shot at ${viewport.width}px`, async ({ page, request }, info) => {
+    // Nine real model requests, partial-result interaction and video export share this budget.
+    test.setTimeout(60_000);
     const held = gate(), blocked = gate(); let submissions = 0;
     const source = await fixture(request, info, false, 3, { beforeReply: async (_body, path) => {
       if ((kind === 'image' ? path.endsWith('/images/generations') : path.includes('contents/generations/tasks')) && ++submissions === 2) { blocked.release(); await held.pending; }
