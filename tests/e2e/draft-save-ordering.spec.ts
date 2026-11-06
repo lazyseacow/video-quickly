@@ -166,9 +166,9 @@ test('reads queued selection writes before remounting the same project without c
     await page.locator('.outline-shot').filter({ hasText: '排写期间的第二镜头' }).click();
     await expect(page.getByLabel('镜头标题', { exact: true })).toHaveValue('排写期间的第二镜头');
     await expect.poll(() => page.evaluate(() => window.__vqDraftOrder!.queued)).toBeGreaterThan(0);
-    await openProjectFromList(page, second.title);
+    await openProjectFromList(page, second.title, { waitForReady: false });
     await expect(page.getByText('正在读取项目与本地草稿…', { exact: true })).toBeVisible();
-    await openProjectFromList(page, first.title);
+    await openProjectFromList(page, first.title, { waitForReady: false });
     await expect(page.getByText('正在读取项目与本地草稿…', { exact: true })).toBeVisible();
     await page.evaluate(() => window.__vqDraftOrder!.restore());
     await expect(page.getByLabel('镜头标题', { exact: true })).toHaveValue('排写期间的第二镜头');

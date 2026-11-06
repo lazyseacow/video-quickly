@@ -26,7 +26,8 @@ async function open(page: Page, project: ProjectDocument) {
   await expect(page.getByLabel('项目名称', { exact: true })).toHaveValue(project.title);
   await openAdvancedWorkflow(page);
   await expect(page.locator('.react-flow')).toBeVisible();
-  const start = page.locator('.react-flow__node[data-id="start"]'); await start.focus(); await start.press('Enter');
+  const start = page.locator('.react-flow__node[data-id="start"]'); await expect(start).toBeVisible(); await start.focus(); await start.press('Enter');
+  await expect(start).toHaveClass(/selected/);
   await expect(page.getByRole('button', { name: '配置所属阶段', exact: true })).toHaveCount(0);
   await page.getByRole('button', { name: '配置与执行步骤', exact: true }).click();
   return page.getByRole('dialog', { name: '条件起点', exact: true });

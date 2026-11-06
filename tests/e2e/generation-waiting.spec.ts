@@ -6,9 +6,9 @@ import { openProjectFromList } from './workspace-navigation';
 function gate() { let release!: () => void; const pending = new Promise<void>(resolve => { release = resolve; }); return { pending, release }; }
 for (const kind of ['image', 'video'] as const) for (const viewport of [{ width: 1536, height: 960, theme: 'dark', reducedMotion: 'no-preference' }, { width: 390, height: 844, theme: 'light', reducedMotion: 'reduce' }] as const) {
   test(`shows real partial ${kind} progress and keeps the selected shot at ${viewport.width}px`, async ({ page, request }, info) => {
-    const held = gate(); let submissions = 0;
+    const held = gate(), blocked = gate(); let submissions = 0;
     const source = await fixture(request, info, false, 3, { beforeReply: async (_body, path) => {
-      if ((kind === 'image' ? path.endsWith('/images/generations') : path.includes('contents/generations/tasks')) && ++submissions === 2) await held.pending;
+      if ((kind === 'image' ? path.endsWith('/images/generations') : path.includes('contents/generations/tasks')) && ++submissions === 2) { blocked.release(); await held.pending; }
     } });
     const errors: string[] = []; page.on('pageerror', error => errors.push(error.message));
     try {
@@ -18,6 +18,7 @@ for (const kind of ['image', 'video'] as const) for (const viewport of [{ width:
       await rpc(request, 'workflow.save', { projectId: source.project.id, workflow: { ...source.project.workflow, production: { ...source.project.workflow.production, textModelId: source.models[0].id, videoModelId: source.video.id, imageModelId: image.id, referenceMode: 'generate' } } });
       const run = await rpc<RunSummary>(request, 'run.start', { projectId: source.project.id });
       const nodeId = kind === 'image' ? 'assets' : 'video', label = kind === 'image' ? '参考图生成' : '镜头视频生成';
+      await blocked.pending;
       await expect.poll(async () => runInspectionSchema.parse(await rpc(request, 'run.inspect', { runId: run.id })).steps.find(step => step.id === nodeId)?.progress?.completed).toBe(1);
       await page.goto('/'); await openProjectFromList(page, source.project.title);
       const trigger = page.getByRole('button', { name: `打开步骤：${label}`, exact: true });

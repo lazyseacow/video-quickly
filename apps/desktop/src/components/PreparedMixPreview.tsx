@@ -49,7 +49,9 @@ export default function PreparedMixPreview({ mix, onLevels, playing, timeUs, mut
       const state = latest.current; element.muted = state.muted; element.volume = state.volume;
       if (element.readyState < 1 || !Number.isFinite(element.duration)) return;
       const target = Math.min(Math.max(0, state.timeUs / 1e6), Math.max(0, element.duration - .001));
-      if (Math.abs(element.currentTime - target) > (state.controlled && state.playing ? .15 : .001)) element.currentTime = target;
+      // Leave room for normal frame quantization, but correct renderer stalls
+      // before the independently advancing audio is noticeably out of sync.
+      if (Math.abs(element.currentTime - target) > (state.controlled && state.playing ? .08 : .001)) element.currentTime = target;
       if (!state.controlled) return;
       if (!state.playing) { element.pause(); return; }
       if (element.paused && !pendingPlay) {

@@ -5,7 +5,7 @@ import { coloredCaptionPixels, decodeTransitionFrames, transitionPixels, transit
 import { openProjectFromList } from './workspace-navigation';
 
 type Transition = 'cut' | 'fade' | 'wipe';
-type PaintedFrame = { frame: number; timeUs: number; pixels: Rgb[]; transition: string | undefined; visible?: boolean; busy?: boolean };
+type PaintedFrame = { source?: 'raf'; readbackMs?: number; frame: number; timeUs: number; pixels: Rgb[]; transition: string | undefined; visible?: boolean; busy?: boolean };
 const rates = [{ label: '30', value: { numerator: 30, denominator: 1 }, boundaryUs: 1_000_000 }, { label: '60', value: { numerator: 60, denominator: 1 }, boundaryUs: 1_000_000 }, { label: '30000-1001', value: { numerator: 30000, denominator: 1001 }, boundaryUs: 1_017_000 }];
 const stillAnimation = { zoom: 1, panX: 0, panY: 0, transition: 'cut' as const };
 const silentVideo = { ...DEFAULT_AUDIO_PROCESSING, version: 2 as const, videoAudio: { enabled: false, gainDb: 0 } };
@@ -15,7 +15,7 @@ async function rpc<T>(request: APIRequestContext, method: string, params: unknow
   expect(response.ok(), JSON.stringify(payload.error)).toBe(true); expect(payload.error).toBeUndefined(); return payload.result;
 }
 
-async function fixture(request: APIRequestContext, info: TestInfo, options: { transition?: Transition; rate?: FrameRate; boundaryUs?: number; captions?: boolean; video?: boolean; animatedVideo?: boolean; mixed?: boolean } = {}) {
+async function fixture(request: APIRequestContext, info: TestInfo, options: { transition?: Transition; rate?: FrameRate; boundaryUs?: number; tailUs?: number; captions?: boolean; video?: boolean; animatedVideo?: boolean; mixed?: boolean } = {}) {
   const width = options.captions || options.mixed ? 640 : 320, height = width * 9 / 16;
   const rate = options.rate ?? rates[0].value, durationUs = options.boundaryUs ?? 1_000_000;
   const created = await rpc<ProjectDocument>(request, 'project.create', { title: `转场预览 ${randomUUID().slice(0, 8)}` });
@@ -30,7 +30,7 @@ async function fixture(request: APIRequestContext, info: TestInfo, options: { tr
     video = await rpc<AssetRecord>(request, 'asset.import', { projectId: created.id, path, kind: 'video' });
   }
   const shot = (index: number, transition: Transition): Partial<Shot> & { id: string; title: string; durationUs: number } => ({
-    id: `transition-${index}`, title: `转场镜头 ${index}`, narration: '', visualPrompt: '', durationUs: index === 1 ? durationUs : 1_000_000,
+    id: `transition-${index}`, title: `转场镜头 ${index}`, narration: '', visualPrompt: '', durationUs: index === 1 ? durationUs : options.tailUs ?? 1_000_000,
     assetId: images[index === 1 ? 0 : 1].id, animation: { ...stillAnimation, transition },
     ...(options.captions ? { captionStyle: { ...DEFAULT_CAPTION_STYLE, textColor: index === 1 ? '#ff0000' : '#00ff00', backgroundOpacity: 0, fontSizeRatio: .09, fontWeight: 700 }, captionTrack: { timeBase: 'clip' as const, alignment: 'manual' as const, cues: [{ id: `cue-${index}`, text: index === 1 ? 'OUTGOING' : 'INCOMING', startUs: 0, endUs: index === 1 ? durationUs : 1_000_000 }] } } : {}),
   });
@@ -95,7 +95,7 @@ async function healthy(page: Page, errors: string[]) { await expect(page.locator
 
 async function capturePaints(canvas: Locator, points: PixelPoint[]) {
   return canvas.evaluateHandle((element: HTMLCanvasElement, points) => {
-    const state = { active: true, raf: 0, samples: [] as PaintedFrame[] };
+    const state = { active: true, raf: 0, observer: null as MutationObserver | null, samples: [] as PaintedFrame[], commits: [] as { source: 'commit'; frame: number; wallMs: number }[] };
     function observe() {
       if (!state.active) return;
       const frame = Number(element.dataset.renderedFrame);
@@ -103,10 +103,20 @@ async function capturePaints(canvas: Locator, points: PixelPoint[]) {
       const alpha = statusStyle?.backgroundColor.match(/rgba\([^,]+,[^,]+,[^,]+,\s*([\d.]+)\)/)?.[1];
       const occluded = Boolean(statusBounds && statusBounds.width >= bounds.width * .95 && statusBounds.height >= bounds.height * .95 && statusStyle?.backgroundColor !== 'transparent' && Number(alpha ?? 1) * Number(statusStyle?.opacity ?? 1) >= .95);
       const visible = style.visibility !== 'hidden' && style.display !== 'none' && bounds.width > 0 && !occluded, busy = element.closest('.scene-preview')?.getAttribute('aria-busy') === 'true';
-      if (state.samples.at(-1)?.frame !== frame || state.samples.at(-1)?.visible !== visible || state.samples.at(-1)?.busy !== busy) state.samples.push({ frame, timeUs: Number(element.dataset.renderedTimeUs), transition: element.dataset.transition, visible, busy, pixels: points.map(({ x, y }) => [...element.getContext('2d')!.getImageData(x, y, 1, 1).data].slice(0, 3) as Rgb) });
-      state.raf = requestAnimationFrame(observe);
+      if (state.samples.at(-1)?.frame !== frame || state.samples.at(-1)?.visible !== visible || state.samples.at(-1)?.busy !== busy) {
+        // One readback observes the same eight pixels without eight GPU syncs.
+        const left = Math.min(...points.map(point => point.x)), top = Math.min(...points.map(point => point.y));
+        const width = Math.max(...points.map(point => point.x)) - left + 1, height = Math.max(...points.map(point => point.y)) - top + 1;
+        const start = performance.now(), pixels = element.getContext('2d')!.getImageData(left, top, width, height).data;
+        state.samples.push({ source: 'raf', readbackMs: performance.now() - start, frame, timeUs: Number(element.dataset.renderedTimeUs), transition: element.dataset.transition, visible, busy, pixels: points.map(({ x, y }) => { const offset = ((y - top) * width + x - left) * 4; return [pixels[offset], pixels[offset + 1], pixels[offset + 2]] as Rgb; }) });
+      }
     }
-    state.raf = requestAnimationFrame(observe); return state;
+    // Diagnose commits between RAF observations without counting them as
+    // additional visibly presented frames or adding another GPU readback.
+    state.observer = new MutationObserver(() => { if (state.active) state.commits.push({ source: 'commit', frame: Number(element.dataset.renderedFrame), wallMs: performance.now() }); });
+    state.observer.observe(element, { attributes: true, attributeFilter: ['data-rendered-frame'] });
+    function tick() { observe(); if (state.active) state.raf = requestAnimationFrame(tick); }
+    state.raf = requestAnimationFrame(tick); return state;
   }, points);
 }
 
@@ -136,7 +146,7 @@ for (const scenario of [
       await expect(page.getByRole('button', { name: '暂停预览', exact: true })).toBeVisible();
       await expect(canvas).toHaveAttribute('data-rendered-frame', String(endFrame));
       await expect(page.getByRole('button', { name: '播放预览', exact: true })).toBeVisible();
-      const samples = await observations.evaluate(value => { value.active = false; cancelAnimationFrame(value.raf); return value.samples; });
+      const samples = await observations.evaluate(value => { value.active = false; cancelAnimationFrame(value.raf); value.observer?.disconnect(); return value.samples; });
       const visible = samples.filter(sample => sample.visible && !sample.busy && sample.frame >= scenario.startFrame && sample.frame <= endFrame);
       expect(visible.some(sample => sample.frame < scenario.boundaryFrame)).toBe(true);
       const effect = visible.filter(sample => sample.frame >= scenario.boundaryFrame && sample.frame < scenario.boundaryFrame + 6);
@@ -151,14 +161,18 @@ for (const scenario of [
       await page.waitForTimeout(200); await expect(canvas).toHaveAttribute('data-rendered-frame', String(endFrame));
       captured.push({ transition, samples });
       await page.screenshot({ path: info.outputPath(`transition-${transition}-paused-${scenario.width}.png`) });
-    } finally { await observations.evaluate(value => { value.active = false; cancelAnimationFrame(value.raf); }); await observations.dispose(); }
+    } finally {
+      const evidence = await observations.evaluate(value => { value.active = false; cancelAnimationFrame(value.raf); value.observer?.disconnect(); return { samples: value.samples, commits: value.commits }; });
+      await info.attach(`selected-${transition}-paint-observations`, { body: JSON.stringify(evidence), contentType: 'application/json' }); await observations.dispose();
+    }
   }
   await info.attach('changed-transition-export-comparison', { body: JSON.stringify(captured), contentType: 'application/json' });
   expect(await source.current()).toEqual(baseline); await healthy(page, errors);
 });
 
 test('restarts the latest effect and lets manual playback and seeking take over', async ({ page, request }, info) => {
-  const errors = observe(page), source = await fixture(request, info, { transition: 'cut' }), canvas = await open(page, source.project);
+  // Leave time for real pause controls after automatic range playback ends.
+  const errors = observe(page), source = await fixture(request, info, { transition: 'cut', tailUs: 4_000_000 }), canvas = await open(page, source.project);
   await page.locator('.outline-shot').filter({ hasText: source.project.shots[1].title }).click(); await seek(page, canvas, 0);
   const select = page.getByRole('combobox', { name: '转场', exact: true }), observations = await capturePaints(canvas, transitionPoints(source.width, source.height));
   try {
@@ -184,7 +198,7 @@ test('restarts the latest effect and lets manual playback and seeking take over'
     expect(await source.current()).toEqual(source.project); await healthy(page, errors);
     await page.screenshot({ path: info.outputPath('transition-manual-seek.png') });
     await info.attach('transition-comparison-paints', { body: JSON.stringify(await observations.evaluate(value => value.samples)), contentType: 'application/json' });
-  } finally { await observations.evaluate(value => { value.active = false; cancelAnimationFrame(value.raf); }); await observations.dispose(); }
+  } finally { await observations.evaluate(value => { value.active = false; cancelAnimationFrame(value.raf); value.observer?.disconnect(); }); await observations.dispose(); }
 });
 
 for (const transition of ['fade', 'wipe'] as const) test(`paints only the current caption once over the ${transition} composite`, async ({ page, request }, info) => {
@@ -264,13 +278,13 @@ for (const scenario of [{ label: 'image fade', transition: 'fade', video: false 
     await page.getByRole('button', { name: '播放预览', exact: true }).click();
     await expect.poll(() => observations.evaluate(value => value.samples.at(-1)?.frame ?? 0)).toBeGreaterThanOrEqual(45);
     await page.getByRole('button', { name: '暂停预览', exact: true }).click();
-    const samples = await observations.evaluate(value => { value.active = false; cancelAnimationFrame(value.raf); return value.samples; });
+    const samples = await observations.evaluate(value => { value.active = false; cancelAnimationFrame(value.raf); value.observer?.disconnect(); return value.samples; });
     const visibleTransitionFrames = new Set(samples.filter(sample => sample.frame >= 30 && sample.frame < 36 && sample.visible).map(sample => sample.frame));
     expect(visibleTransitionFrames.size, 'The transition must actually be visible, rather than read back from a hidden canvas.').toBeGreaterThanOrEqual(2);
     expect(samples.filter(sample => sample.frame >= 29 && sample.frame <= 36 && !sample.visible), 'Do not replace an already displayed picture with a full loading screen.').toEqual([]);
     const transitionSamples = samples.filter(sample => sample.frame >= 30 && sample.frame <= 36);
     for (const sample of samples.filter(sample => reference.has(sample.frame) && (!scenario.video || transitionSamples.includes(sample)))) expect(difference(sample.pixels, transitionPixels(reference.get(sample.frame)!, source.width, points)), `Playing frame ${sample.frame}`).toBeLessThanOrEqual(12);
     await info.attach('continuous-transition-paints', { body: JSON.stringify({ samples, points }), contentType: 'application/json' });
-  } finally { await observations.evaluate(value => { value.active = false; cancelAnimationFrame(value.raf); }); await observations.dispose(); }
+  } finally { await observations.evaluate(value => { value.active = false; cancelAnimationFrame(value.raf); value.observer?.disconnect(); }); await observations.dispose(); }
   expect(await source.current()).toEqual(source.project); await healthy(page, errors);
 });

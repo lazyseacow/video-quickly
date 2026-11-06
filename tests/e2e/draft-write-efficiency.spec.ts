@@ -153,9 +153,9 @@ test('keeps pending writes owned by their project through A to B to A remounts',
     await holdWrites(page); await page.locator('.outline-shot').nth(1).click();
     await expect(page.getByLabel('镜头标题', { exact: true })).toHaveValue('原始镜头 1');
     await expect.poll(async () => (await records(page)).length).toBeGreaterThan(0);
-    await openProjectFromList(page, second.title);
+    await openProjectFromList(page, second.title, { waitForReady: false });
     await expect(page.getByText('正在读取项目与本地草稿…', { exact: true })).toBeVisible();
-    await openProjectFromList(page, first.title);
+    await openProjectFromList(page, first.title, { waitForReady: false });
     await expect(page.getByText('正在读取项目与本地草稿…', { exact: true })).toBeVisible();
     await page.evaluate(() => window.__vqDraftWriteGate!.release());
     await expect(page.getByLabel('镜头标题', { exact: true })).toHaveValue('原始镜头 1'); await clean(page);

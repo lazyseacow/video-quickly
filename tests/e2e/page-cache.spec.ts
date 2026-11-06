@@ -43,6 +43,7 @@ test('keeps the current page visible while a lazy page loads and honors the late
   await page.route(/\/(?:src\/features\/SeriesTemplatesPage\.tsx|assets\/SeriesTemplatesPage-[^/?]+\.js)(?:\?|$)/, async route => { intercepted++; await pending; await route.continue(); });
   try {
     await page.goto('/'); await page.getByRole('button', { name: '模型连接', exact: true }).click();
+    await expect(page.getByRole('heading', { name: '模型连接', exact: true })).toBeVisible();
     await page.getByRole('button', { name: '系列模板', exact: true }).click();
     await expect.poll(() => intercepted).toBeGreaterThan(0);
     await expect(page.getByRole('heading', { name: '模型连接', exact: true })).toBeVisible();

@@ -67,7 +67,7 @@ async function seek(page: Page, frame: number) {
 for (const scenario of [{ transition: 'fade', cold: false }, { transition: 'wipe', cold: false }, { transition: 'fade', cold: true }] as const) test(`${scenario.cold ? 'cold' : 'warm'} 1080p24 long-GOP to 60fps ${scenario.transition} avoids repeated badge, audio and decoder restarts`, async ({ page, request }, info) => {
   test.setTimeout(180_000);
   const source = await fixture(request, info, scenario.transition), errors: string[] = []; page.on('pageerror', error => errors.push(error.message)); page.on('console', message => { if (message.type() === 'error') errors.push(message.text()); });
-  const frames = [149, 150, 151, 153, 156, 159, 161, 162, 164], { runId } = await rpc<{ runId: string }>(request, 'render.export', { projectId: source.project.id, destination: info.outputPath('actual-1080p60-export.mp4') });
+  const frames = Array.from({ length: 16 }, (_, index) => 149 + index), { runId } = await rpc<{ runId: string }>(request, 'render.export', { projectId: source.project.id, destination: info.outputPath('actual-1080p60-export.mp4') });
   await expect.poll(async () => (await rpc<{ status: string }>(request, 'run.get', { runId })).status, { timeout: 90_000 }).toBe('succeeded');
   const output = await rpc<{ videoPath: string }>(request, 'node.result', { runId, nodeId: 'export' }); await probeVideo(output.videoPath, info, 'actual-export'); const reference = await decodeTransitionFrames(output.videoPath, frames, 1920, 1080);
   let release!: () => void; const gate = new Promise<void>(resolve => { release = resolve; });

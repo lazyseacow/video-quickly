@@ -92,11 +92,13 @@ for (const viewport of [{ width: 1536, height: 960, theme: 'dark' }, { width: 39
   try {
     await page.setViewportSize(viewport); await page.addInitScript(theme => localStorage.setItem('vq-theme', theme), viewport.theme);
     await open(page, source.project); const control = productionControl(page);
+    await page.addStyleTag({ content: '.production-toggle__label { letter-spacing: .04em; }' });
     await expect(control).toHaveAccessibleName('开始制作'); await expect(control).toBeEnabled();
     const originalControl = await control.elementHandle(), startBounds = await control.boundingBox(); expect(startBounds).not.toBeNull();
     await control.click(); await source.entered; await expect(control).toBeFocused();
     const panel = production(page); await expect(control).toHaveAccessibleName('停止制作'); await expect(control).toHaveText('停止'); await expect(control).toBeEnabled();
     await expect(page.getByRole('button', { name: '停止制作', exact: true })).toHaveCount(1); await expect(panel.getByRole('button', { name: '停止制作', exact: true })).toHaveCount(0);
+    await expect(control).toHaveCSS('scale', 'none');
     expect(await control.evaluate((button, original) => button === original, originalControl)).toBe(true); const stopBounds = await control.boundingBox(); expect(stopBounds).not.toBeNull(); expect(Math.abs(stopBounds!.width - startBounds!.width)).toBeLessThan(1);
     await panel.locator('.workbench-guide__step[aria-current="step"]').click();
     const detail = page.getByRole('dialog', { name: '本次制作', exact: true }); await expect(detail).toContainText('风格确认'); await expect(detail.getByRole('navigation', { name: '本阶段制作步骤', exact: true })).toContainText('风格确认'); await detail.getByRole('button', { name: '关闭对话框', exact: true }).click(); await expect(detail).toHaveCount(0);

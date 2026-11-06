@@ -7,7 +7,7 @@ import { openProjectFromList } from './workspace-navigation';
 // Compare the changing colour interiors; the moving test pattern remains visible
 // between these rows, where another H.264 encode can alter its hard pixel edges.
 const coldPoints = [36, 144].flatMap(y => [38, 115, 204, 281].map(x => ({ x, y })));
-type Sample = { wallMs: number; frame: number; uiMs: number; audioMs: number; audioPaused: boolean; width: number; height: number; buffered: boolean; cachePixels: number; visible: boolean; busy: boolean; status: string; pixels: Rgb[] };
+type Sample = { source: 'raf'; wallMs: number; readbackMs: number; frame: number; uiMs: number; audioMs: number; audioPaused: boolean; width: number; height: number; buffered: boolean; cachePixels: number; visible: boolean; busy: boolean; status: string; pixels: Rgb[] };
 const pageErrors = new WeakMap<Page, string[]>();
 test.beforeEach(async ({ page }) => {
   const errors: string[] = []; pageErrors.set(page, errors);
@@ -67,17 +67,31 @@ async function seek(page: Page, frame: number) {
 
 async function capture(canvas: Locator, points: PixelPoint[]) {
   return canvas.evaluateHandle((element: HTMLCanvasElement, points) => {
-    const state = { active: true, request: 0, samples: [] as Sample[], start: performance.now() };
+    const state = { active: true, request: 0, observer: null as MutationObserver | null, samples: [] as Sample[], commits: [] as { source: 'commit'; frame: number; wallMs: number }[], audioEvents: [] as { kind: string; wallMs: number; uiMs: number; audioMs: number }[], start: performance.now() };
+    const audio = document.querySelector<HTMLAudioElement>('.preview-panel audio[data-audio-role="处理后混音"]');
+    const eventTypes = ['play', 'pause', 'seeking', 'seeked', 'waiting'];
+    const recordAudio = (event: Event) => { if (state.active) state.audioEvents.push({ kind: event.type, wallMs: performance.now() - state.start, uiMs: Number(document.querySelector('[role="slider"][aria-label="预览播放位置"]')?.getAttribute('aria-valuenow')), audioMs: (audio?.currentTime ?? 0) * 1000 }); };
+    for (const event of eventTypes) audio?.addEventListener(event, recordAudio);
+    function stop() { state.active = false; cancelAnimationFrame(state.request); state.observer?.disconnect(); for (const event of eventTypes) audio?.removeEventListener(event, recordAudio); }
     function sample() {
       if (!state.active) return;
       const style = getComputedStyle(element), audio = document.querySelector<HTMLAudioElement>('.preview-panel audio[data-audio-role="处理后混音"]'), parent = element.closest('.scene-preview');
       const bounds = element.getBoundingClientRect(), status = parent?.querySelector<HTMLElement>('[role="status"]'), statusBounds = status?.getBoundingClientRect(), statusStyle = status && getComputedStyle(status);
       const alpha = statusStyle?.backgroundColor.match(/rgba\([^,]+,[^,]+,[^,]+,\s*([\d.]+)\)/)?.[1];
       const occluded = Boolean(statusBounds && statusBounds.width >= bounds.width * .95 && statusBounds.height >= bounds.height * .95 && statusStyle?.backgroundColor !== 'transparent' && Number(alpha ?? 1) * Number(statusStyle?.opacity ?? 1) >= .95);
-      state.samples.push({ wallMs: performance.now() - state.start, frame: Number(element.dataset.renderedFrame ?? -1), uiMs: Number(document.querySelector('[role="slider"][aria-label="预览播放位置"]')?.getAttribute('aria-valuenow')), audioMs: (audio?.currentTime ?? 0) * 1000, audioPaused: audio?.paused ?? true, width: element.width, height: element.height, buffered: element.dataset.transitionBuffered === 'true', cachePixels: Number(element.dataset.transitionCachePixels ?? 0), visible: style.visibility !== 'hidden' && style.display !== 'none' && bounds.width > 0 && !occluded, busy: parent?.getAttribute('aria-busy') === 'true', status: status?.textContent ?? '', pixels: points.map(({ x, y }) => [...element.getContext('2d')!.getImageData(Math.floor(x * element.width / 320), Math.floor(y * element.height / 180), 1, 1).data].slice(0, 3) as Rgb) });
-      state.request = requestAnimationFrame(sample);
+      const coordinates = points.map(({ x, y }) => ({ x: Math.floor(x * element.width / 320), y: Math.floor(y * element.height / 180) }));
+      const left = Math.min(...coordinates.map(point => point.x)), top = Math.min(...coordinates.map(point => point.y));
+      const width = Math.max(...coordinates.map(point => point.x)) - left + 1, height = Math.max(...coordinates.map(point => point.y)) - top + 1;
+      const start = performance.now(), pixels = element.getContext('2d')!.getImageData(left, top, width, height).data;
+      const sampled = coordinates.map(({ x, y }) => { const offset = ((y - top) * width + x - left) * 4; return [pixels[offset], pixels[offset + 1], pixels[offset + 2]] as Rgb; });
+      state.samples.push({ source: 'raf', wallMs: performance.now() - state.start, readbackMs: performance.now() - start, frame: Number(element.dataset.renderedFrame ?? -1), uiMs: Number(document.querySelector('[role="slider"][aria-label="预览播放位置"]')?.getAttribute('aria-valuenow')), audioMs: (audio?.currentTime ?? 0) * 1000, audioPaused: audio?.paused ?? true, width: element.width, height: element.height, buffered: element.dataset.transitionBuffered === 'true', cachePixels: Number(element.dataset.transitionCachePixels ?? 0), visible: style.visibility !== 'hidden' && style.display !== 'none' && bounds.width > 0 && !occluded, busy: parent?.getAttribute('aria-busy') === 'true', status: status?.textContent ?? '', pixels: sampled });
     }
-    state.request = requestAnimationFrame(sample); return state;
+    // A producer can paint between our RAF callbacks on a loaded renderer.
+    // Keep its commit trajectory separate from RAF-visible pixel observations.
+    state.observer = new MutationObserver(() => { if (state.active) state.commits.push({ source: 'commit', frame: Number(element.dataset.renderedFrame ?? -1), wallMs: performance.now() - state.start }); });
+    state.observer.observe(element, { attributes: true, attributeFilter: ['data-rendered-frame'] });
+    function tick() { sample(); if (state.active) state.request = requestAnimationFrame(tick); }
+    state.request = requestAnimationFrame(tick); return Object.assign(state, { stop });
   }, points);
 }
 
@@ -90,8 +104,8 @@ async function oracle(request: APIRequestContext, source: Awaited<ReturnType<typ
 
 function difference(actual: Rgb[], expected: Rgb[]) { return Math.max(...actual.flatMap((pixel, index) => pixel.map((value, channel) => Math.abs(value - expected[index][channel])))); }
 async function stopCapture(handle: Awaited<ReturnType<typeof capture>>, info: TestInfo, requests: unknown[]) {
-  const samples = await handle.evaluate(state => { state.active = false; cancelAnimationFrame(state.request); return state.samples; });
-  await info.attach('visible-canvas-clock-audio-loading-observations', { body: JSON.stringify({ requests, samples }), contentType: 'application/json' }); await handle.dispose(); return samples;
+  const { samples, commits, audioEvents } = await handle.evaluate(state => { state.stop(); return { samples: state.samples, commits: state.commits, audioEvents: state.audioEvents }; });
+  await info.attach('visible-canvas-clock-audio-loading-observations', { body: JSON.stringify({ requests, samples, commits, audioEvents }), contentType: 'application/json' }); await handle.dispose(); return samples;
 }
 
 async function liveVideos(page: Page, paths: string[]) {
@@ -104,10 +118,17 @@ async function liveVideos(page: Page, paths: string[]) {
   } finally { await session.send('Runtime.releaseObjectGroup', { objectGroup: group }); await session.detach(); }
 }
 
-function assertTransition(samples: Sample[], reference: Awaited<ReturnType<typeof oracle>>, points: PixelPoint[]) {
+async function assertTransition(page: Page, canvas: Locator, samples: Sample[], reference: Awaited<ReturnType<typeof oracle>>, points: PixelPoint[], info: TestInfo) {
   const visible = samples.filter(sample => sample.visible && sample.frame >= 45 && sample.frame <= 51), frames = new Set(visible.map(sample => sample.frame));
-  expect(frames.has(45), 'Recovery must start with the beginning of the transition.').toBe(true); expect(frames.size).toBeGreaterThanOrEqual(3); expect(frames.has(51)).toBe(true);
+  expect(frames.has(45), 'Recovery must start with the beginning of the transition.').toBe(true); expect(frames.size).toBeGreaterThanOrEqual(3);
   for (const sample of visible) expect(difference(sample.pixels, transitionPixels(reference.get(sample.frame)!, 320, points)), `Visible frame ${sample.frame}`).toBeLessThanOrEqual(12);
+  // Real-time playback can skip the final frame when a runner stalls. Verify
+  // that exact frame separately without slowing the live clock to show it.
+  await seek(page, 51); await expect(canvas).toHaveAttribute('data-rendered-frame', '51'); await expect(canvas).toBeVisible();
+  const expected = transitionPixels(reference.get(51)!, 320, points);
+  const read = () => canvas.evaluate((element: HTMLCanvasElement, points) => points.map(({ x, y }) => [...element.getContext('2d')!.getImageData(Math.floor(x * element.width / 320), Math.floor(y * element.height / 180), 1, 1).data].slice(0, 3) as Rgb), points);
+  await expect.poll(async () => difference(await read(), expected), { message: 'The exact transition ending must match its exported frame.' }).toBeLessThanOrEqual(12);
+  await info.attach('paused-transition-ending', { body: JSON.stringify({ frame: 51, pixels: await read(), expected, playbackFrames: [...frames] }), contentType: 'application/json' });
 }
 
 for (const transition of ['fade', 'wipe'] as const) test(`holds the visible picture and audio clock for a cold ${transition}, then presents its complete transition`, async ({ page, request }, info) => {
@@ -131,7 +152,7 @@ for (const transition of ['fade', 'wipe'] as const) test(`holds the visible pict
     gate.release();
     await expect.poll(() => handle!.evaluate(state => state.samples.some(sample => sample.visible && sample.frame >= 52))).toBe(true);
     await page.getByRole('button', { name: '暂停预览', exact: true }).click(); samples = await stopCapture(handle, info, gate.requests); handle = undefined;
-    assertTransition(samples, reference, points);
+    await assertTransition(page, canvas, samples, reference, points, info);
     expect(samples.filter(sample => sample.frame >= 40 && !sample.visible), 'The previous visible picture must survive the wait.').toEqual([]);
     await page.screenshot({ path: info.outputPath(`cold-${transition}-recovered.png`) });
     const readyVideos = await liveVideos(page, paths); expect(readyVideos.length).toBeLessThanOrEqual(4);
@@ -155,7 +176,7 @@ for (const transition of ['fade', 'wipe'] as const) test(`prepares the independe
     await expect.poll(() => handle!.evaluate(state => state.samples.some(sample => sample.visible && sample.frame >= 52))).toBe(true);
     await page.getByRole('button', { name: '暂停预览', exact: true }).click();
     const samples = await stopCapture(handle, info, gate.requests); handle = undefined;
-    expect(samples.filter(sample => sample.uiMs >= 200 && !sample.visible), 'Prefetch must avoid replacing any already displayed picture.').toEqual([]); assertTransition(samples, reference, points);
+    expect(samples.filter(sample => sample.uiMs >= 200 && !sample.visible), 'Prefetch must avoid replacing any already displayed picture.').toEqual([]); await assertTransition(page, canvas, samples, reference, points, info);
   } finally { gate.release(); if (handle) await stopCapture(handle, info, gate.requests); }
   expect(await source.current()).toEqual(source.project);
 });
@@ -179,9 +200,9 @@ test('completes an automatic transition preview after cold media arrives and pau
     await expect(page.getByRole('button', { name: '播放预览', exact: true })).toBeVisible();
     await expect.poll(() => handle!.evaluate(state => state.samples.at(-1)!.audioPaused)).toBe(true);
     const samples = await stopCapture(handle, info, gate.requests); handle = undefined;
-    assertTransition(samples, reference, points);
     expect(samples.at(-1)!.uiMs).toBe(2100); expect(Math.abs(samples.at(-1)!.audioMs - 2100)).toBeLessThan(80);
     await page.screenshot({ path: info.outputPath('automatic-transition-audio-paused.png') });
+    await assertTransition(page, canvas, samples, reference, points, info);
   } finally { gate.release(); if (handle) await stopCapture(handle, info, gate.requests); }
   expect(await source.current()).toEqual(baseline);
 });
@@ -245,7 +266,7 @@ test('advances the warm ordinary video and mixed audio by one real second withou
     const window = await handle.evaluate(state => {
       const start = state.samples.find(sample => !sample.audioPaused && sample.uiMs > 0)!;
       const end = state.samples.find(sample => sample.wallMs >= start.wallMs + 1000)!;
-      return { start, end, samples: state.samples.filter(sample => sample.wallMs >= start.wallMs && sample.wallMs <= end.wallMs) };
+      return { start, end, samples: state.samples.filter(sample => sample.wallMs >= start.wallMs && sample.wallMs <= end.wallMs), audioEvents: state.audioEvents.filter(event => event.wallMs >= start.wallMs && event.wallMs <= end.wallMs) };
     });
     const wallDeltaMs = window.end.wallMs - window.start.wallMs, programDeltaMs = window.end.uiMs - window.start.uiMs, audioDeltaMs = window.end.audioMs - window.start.audioMs;
     await info.attach('warm-ordinary-video-cadence', { body: JSON.stringify({ wallDeltaMs, programDeltaMs, audioDeltaMs, toleranceMs: 200, window }), contentType: 'application/json' });
@@ -268,7 +289,7 @@ test('rebuilds the waiting transition at the latest preview quality without appl
     expect((await handle.evaluate(state => state.samples.at(-1)!)).visible).toBe(true); gate.release();
     await expect.poll(() => handle!.evaluate(state => state.samples.some(sample => sample.frame >= 52 && sample.visible))).toBe(true);
     await page.getByRole('button', { name: '暂停预览', exact: true }).click(); const samples = await stopCapture(handle, info, gate.requests); handle = undefined;
-    assertTransition(samples, reference, coldPoints);
+    await assertTransition(page, canvas, samples, reference, coldPoints, info);
     const transition = samples.filter(sample => sample.frame >= 45 && sample.frame < 51);
     expect(transition.length).toBeGreaterThan(0); expect(transition.every(sample => sample.visible && sample.buffered && sample.width === 160 && sample.height === 90 && sample.cachePixels > 0 && sample.cachePixels <= 6 * 160 * 90)).toBe(true);
     await expect(canvas).toHaveJSProperty('width', 160); await expect(canvas).toHaveJSProperty('height', 90); await expect(quality).toHaveValue('0.5');

@@ -45,6 +45,8 @@ for (const viewport of [{ width: 1536, height: 960, theme: 'dark' }, { width: 60
 });
 
 test('persists pending concurrency across reload while the active production keeps its frozen configuration', async ({ page, request }, info) => {
+  // Both the active snapshot and the reloaded settings complete a real video export.
+  test.setTimeout(60_000);
   const source = await fixture(request, info, true);
   try {
     let project = await rpc<ProjectDocument>(request, 'workflow.save', { projectId: source.project.id, workflow: { ...source.project.workflow, production: { ...source.project.workflow.production, textModelId: source.models[0].id, videoModelId: source.video.id } } });
