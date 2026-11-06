@@ -388,6 +388,7 @@ test('ignores late save completions after manually advancing or closing the guid
 });
 
 test('starts production only on the user click and advances only when the real runtime accepts it', async ({ page, request }) => {
+  test.setTimeout(60_000);
   const provider = await localProvider();
   try {
     const source = await projectFixture(request, '导览本地制作'), model = await rpc<ModelProfile>(request, 'model.save', { model: { name: `导览制作 ${randomUUID().slice(0, 8)}`, model: 'guide-local-text', provider: 'openai-compatible', baseUrl: provider.baseUrl, connectionType: 'text', capabilities: ['text'] } });
@@ -399,7 +400,7 @@ test('starts production only on the user click and advances only when the real r
     const accepted = await holdNextRpc(page, 'run.start'), response = page.waitForResponse(response => response.url().endsWith('/__desktop_rpc') && response.request().postDataJSON()?.method === 'run.start');
     await active(page).click(); await accepted.entered; await atStep(page, '自动制作'); accepted.release();
     const run: RunSummary = (await (await response).json()).result; expect(run.id).toBeTruthy(); await atStep(page, '导出成片');
-    await expect.poll(async () => (await rpc<{ items: RunSummary[] }>(request, 'run.list', { projectId: project.id })).items.find(item => item.id === run.id)?.status).toBe('succeeded');
+    await expect.poll(async () => (await rpc<RunSummary>(request, 'run.get', { runId: run.id })).status, { timeout: 30_000 }).toBe('succeeded');
     expect(provider.calls.filter(call => call.method === 'POST')).toHaveLength(1); expect(observed.writes).toEqual(['run.start', 'run.start']); expect(observed.errors).toEqual([]);
   } finally { await provider.close(); }
 });

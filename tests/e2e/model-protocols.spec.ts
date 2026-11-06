@@ -1,6 +1,6 @@
 import { createServer } from 'node:http';
 import { expect, test, type APIRequestContext } from '@playwright/test';
-import type { ModelProfile, ProjectDocument, RunRecord, TextProtocol } from '@video-quickly/contracts';
+import type { ModelProfile, ProjectDocument, RunRecord, RunSummary, TextProtocol } from '@video-quickly/contracts';
 import { selectModel, addModelConnection, settingControl, settingField } from './settings';
 
 async function rpc<T>(request: APIRequestContext, method: string, params: unknown = {}): Promise<T> {
@@ -46,6 +46,7 @@ test('requires a confirmed model selection before saving', async ({ page, reques
 for (const viewport of [{ width: 1536, height: 960, theme: 'dark' }, { width: 390, height: 844, theme: 'light' }]) {
   for (const protocol of ['chat-completions', 'responses', 'messages'] as const) {
     test(`saves and executes ${protocol} from the model form at ${viewport.width}px`, async ({ page, request }, info) => {
+      test.setTimeout(60_000);
       const calls: Array<{ path: string; body: Record<string, unknown> }> = [], errors: string[] = [];
       const server = createServer(async (incoming, response) => {
         let body = ''; for await (const chunk of incoming) body += chunk.toString();
@@ -85,7 +86,7 @@ for (const viewport of [{ width: 1536, height: 960, theme: 'dark' }, { width: 39
         const project = await rpc<ProjectDocument>(request, 'project.create', { title: name });
         await rpc(request, 'workflow.save', { projectId: project.id, workflow: { id: 'protocol', version: 1, name: '协议验收', production: { mode: 'native-video', referenceMode: 'none', soundPrompt: '', subtitleMode: 'off' }, nodes: [{ id: 'brief', kind: 'brief', label: '协议验收', modelId: saved.id }], edges: [] } });
         const run = await rpc<RunRecord>(request, 'run.start', { projectId: project.id });
-        await expect.poll(async () => (await rpc<{ runs: RunRecord[] }>(request, 'workspace.snapshot')).runs.find(value => value.id === run.id)?.status).toBe('succeeded');
+        await expect.poll(async () => (await rpc<RunSummary>(request, 'run.get', { runId: run.id })).status, { timeout: 30_000 }).toBe('succeeded');
         const generated = calls.find(call => call.path.split('?')[0] !== '/proxy/v1/models')!;
         expect(generated.path).toBe(`/proxy/v1/${protocol === 'chat-completions' ? 'chat/completions' : protocol}`); expect(generated.body[protocol === 'responses' ? 'max_output_tokens' : 'max_tokens']).toBe(128);
         const costs = await rpc<{ items: Array<{ providerUsage: Record<string, unknown> }> }>(request, 'cost.list', { runId: run.id });

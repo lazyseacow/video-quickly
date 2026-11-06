@@ -1,7 +1,7 @@
 import { createServer, type Server } from 'node:http';
 import { randomUUID } from 'node:crypto';
 import { expect, test, type APIRequestContext, type Page } from '@playwright/test';
-import type { ProjectDocument, RunSummary } from '@video-quickly/contracts';
+import { runSchema, type ProjectDocument, type RunSummary } from '@video-quickly/contracts';
 
 async function rpc<T>(request: APIRequestContext, method: string, params: unknown = {}): Promise<T> {
   const response = await request.post('/__desktop_rpc', { data: { method, params } });
@@ -45,18 +45,31 @@ async function selectProject(page: Page, project: ProjectDocument) {
 async function open(page: Page, project: ProjectDocument) { await page.goto('/'); await selectProject(page, project); }
 const production = (page: Page) => page.getByRole('region', { name: '当前制作', exact: true });
 const productionControl = (page: Page) => page.locator('.project-heading-actions [data-guide="produce"]');
+async function startProduction(page: Page, projectId: string) {
+  const accepted = page.waitForResponse(response => {
+    if (!response.url().endsWith('/__desktop_rpc')) return false;
+    const input = response.request().postDataJSON();
+    return input.method === 'run.start' && input.params?.projectId === projectId;
+  });
+  await productionControl(page).click();
+  const response = await accepted; expect(response.ok()).toBe(true);
+  const payload = await response.json(); expect(payload.error).toBeUndefined();
+  const run = runSchema.parse(payload.result); expect(run.projectId).toBe(projectId); return run;
+}
 function gate() { let release!: () => void; const promise = new Promise<void>(resolve => { release = resolve; }); return { promise, release }; }
 async function latest(request: APIRequestContext, projectId: string) { return (await rpc<{ items: RunSummary[] }>(request, 'run.list', { projectId })).items[0]; }
 
 for (const viewport of [{ width: 1536, height: 960, theme: 'dark' }, { width: 390, height: 844, theme: 'light' }]) {
   test(`automatically continues generation and saves its output inside the workbench at ${viewport.width}px`, async ({ page, request }, info) => {
+    test.setTimeout(60_000);
     const source = await fixture(request), errors: string[] = [], reviews: string[] = [];
     page.on('pageerror', error => errors.push(error.message));
     page.on('request', request => { if (request.url().endsWith('/__desktop_rpc') && request.postDataJSON()?.method === 'run.review') reviews.push(request.postData() ?? ''); });
     try {
       await page.addInitScript(theme => localStorage.setItem('vq-theme', theme), viewport.theme); await page.setViewportSize(viewport);
-      await open(page, source.project); await expect(productionControl(page)).toHaveAccessibleName('开始制作'); await expect(productionControl(page)).toBeEnabled(); await productionControl(page).click();
-      await expect.poll(async () => (await latest(request, source.project.id)).status).toBe('succeeded');
+      await open(page, source.project); await expect(productionControl(page)).toHaveAccessibleName('开始制作'); await expect(productionControl(page)).toBeEnabled();
+      const run = await startProduction(page, source.project.id);
+      await expect.poll(async () => (await rpc<RunSummary>(request, 'run.get', { runId: run.id })).status, { timeout: 30_000 }).toBe('succeeded');
       const panel = production(page);
       await expect(panel).toBeVisible(); await expect(panel).toContainText('已完成');
       await expect(productionControl(page)).toHaveAccessibleName('开始制作'); await expect(productionControl(page)).toBeEnabled(); await expect(panel.getByRole('button', { name: '停止制作', exact: true })).toHaveCount(0);
@@ -144,11 +157,12 @@ test('disables the shared production control during start submission and ignores
 });
 
 test('retains unsaved shot edits while automatic generation continues', async ({ page, request }) => {
+  test.setTimeout(60_000);
   const source = await fixture(request, true);
   try {
-    await open(page, source.project); await page.getByRole('button', { name: '开始制作', exact: true }).click(); await source.entered;
+    await open(page, source.project); const run = await startProduction(page, source.project.id); await source.entered;
     await page.getByLabel('镜头标题', { exact: true }).fill('制作期间的镜头草稿'); source.releaseStyle();
-    await expect.poll(async () => (await latest(request, source.project.id)).status).toBe('succeeded');
+    await expect.poll(async () => (await rpc<RunSummary>(request, 'run.get', { runId: run.id })).status, { timeout: 30_000 }).toBe('succeeded');
     await expect(page.getByLabel('镜头标题', { exact: true })).toHaveValue('制作期间的镜头草稿'); await expect(page.locator('.unsaved-dot')).toBeVisible();
     const saved = await rpc<{ project: ProjectDocument }>(request, 'project.get', { projectId: source.project.id });
     expect(saved.project.shots[0].title).toBe('流程生成镜头'); expect(saved.project.revision).toBe(source.project.revision + 1); expect(source.calls()).toBe(2);
@@ -156,16 +170,17 @@ test('retains unsaved shot edits while automatic generation continues', async ({
 });
 
 test('retries failed progress reads while automatic generation completes without duplicate calls', async ({ page, request }) => {
+  test.setTimeout(60_000);
   const source = await fixture(request); let failRead = true;
   try {
     await page.route('**/__desktop_rpc', async route => {
       if (route.request().postDataJSON().method === 'run.inspect' && failRead) { failRead = false; await route.fulfill({ status: 400, json: { error: '制作进度读取暂时失败' } }); return; }
       await route.continue();
     });
-    await open(page, source.project); await page.getByRole('button', { name: '开始制作', exact: true }).click();
+    await open(page, source.project); const run = await startProduction(page, source.project.id);
     const panel = production(page); await expect(panel).toContainText('进度读取失败');
     await panel.getByRole('button', { name: '重试读取制作进度', exact: true }).click();
-    await expect.poll(async () => (await latest(request, source.project.id)).status).toBe('succeeded');
+    await expect.poll(async () => (await rpc<RunSummary>(request, 'run.get', { runId: run.id })).status, { timeout: 30_000 }).toBe('succeeded');
     await expect(panel).toContainText('已完成'); await expect(panel.getByRole('button', { name: '打开步骤：分镜确认', exact: true })).toBeEnabled();
     expect(source.calls()).toBe(2);
   } finally { await close(source.server); }

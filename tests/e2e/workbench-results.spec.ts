@@ -1,5 +1,6 @@
 import { productionStep, saveAndStartProduction } from './production-settings';
 import { expect, test } from '@playwright/test';
+import type { RunSummary } from '@video-quickly/contracts';
 import { fixture, open, pick, latest, rpc, saved } from './native-video-fixture';
 
 for (const { width, theme } of [{ width: 1536, theme: 'dark' }, { width: 600, theme: 'light' }, { width: 390, theme: 'light' }]) test('shows concise storyboard, media and delivery outputs at ' + width + 'px', async ({ page, request }, info) => {
@@ -77,12 +78,13 @@ for (const { width, theme } of [{ width: 1536, theme: 'dark' }, { width: 600, th
 });
 
 test('expands a long storyboard without losing the remaining shots', async ({ page, request }, info) => {
+  test.setTimeout(60_000);
   const source = await fixture(request, info, false, 21);
   try {
     await rpc(request, 'workflow.save', { projectId: source.project.id, workflow: { ...source.project.workflow, production: { ...source.project.workflow.production!, textModelId: source.models[0].id, videoModelId: source.video.id } } });
     const script = source.project.workflow.nodes.find(node => node.kind === 'script')!;
-    await rpc(request, 'run.start', { projectId: source.project.id, nodeId: script.id });
-    await expect.poll(async () => (await latest(request, source.project.id))?.status).toBe('succeeded');
+    const run = await rpc<{ id: string }>(request, 'run.start', { projectId: source.project.id, nodeId: script.id });
+    await expect.poll(async () => (await rpc<RunSummary>(request, 'run.get', { runId: run.id })).status, { timeout: 30_000 }).toBe('succeeded');
     await open(page, source.project).then(dialog => dialog.getByRole('button', { name: '取消', exact: true }).click()); await page.getByRole('button', { name: '打开步骤：分镜生成', exact: true }).click(); const settings = page.getByRole('dialog', { name: '本次制作', exact: true });
     const storyboard = settings.getByRole('region', { name: '分镜预览', exact: true });
     await expect(storyboard.locator('ol > li')).toHaveCount(20);

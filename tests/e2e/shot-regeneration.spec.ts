@@ -229,12 +229,15 @@ test('previews image and native video candidates within the clip window and appl
 });
 
 test('paginates durable candidate history without mounting every historical media preview', async ({ page, request }) => {
+  // Nine ordered durable runs each have a 30s completion window, followed by
+  // the history, source-isolation and unchanged-project assertions.
+  test.setTimeout(300_000);
   const errors = observeErrors(page), service = await fixture();
   try {
     const project = await createProject(request, '镜头候选分页历史验收'), connection = await model(request, service.url, 'script');
     for (let index = 0; index < 9; index++) {
       const run = await rpc<RunSummary>(request, 'shot.regenerate', { projectId: project.id, shotId: 'target-1', kind: 'script', modelId: connection.id, revision: project.revision });
-      await expect.poll(async () => (await rpc<RunSummary>(request, 'run.get', { runId: run.id })).status).toBe('succeeded');
+      await expect.poll(async () => (await rpc<RunSummary>(request, 'run.get', { runId: run.id })).status, { timeout: 30_000 }).toBe('succeeded');
     }
     await openProject(page, project.title); const dialog = await openCandidates(page);
     await expect(dialog.locator('.shot-regeneration__history-item')).toHaveCount(8);

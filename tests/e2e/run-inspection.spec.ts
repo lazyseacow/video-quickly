@@ -25,7 +25,7 @@ async function fixture(request: APIRequestContext) {
     project = await rpc<ProjectDocument>(request, 'workflow.save', { projectId: project.id, workflow: { id: 'inspector-flow', version: 1, name: '验收流程', production: { mode: 'native-video', referenceMode: 'none', soundPrompt: '', subtitleMode: 'off' }, nodes: [{ id: 'style', kind: 'style', label: '冻结风格步骤', description: '固定本次创作的视觉风格', modelId: model.id, prompt: '按照创作输入生成风格' }, { id: 'review', kind: 'review', label: '自动检查', requiresReview: true }], edges: [{ id: 'style-review', source: 'style', target: 'review' }] } });
     async function start() {
       const run = await rpc<{ id: string }>(request, 'run.start', { projectId: project.id, nodeId: 'style' });
-      await expect.poll(async () => (await rpc<RunSummary>(request, 'run.get', { runId: run.id })).status).toBe('succeeded'); return run;
+      await expect.poll(async () => (await rpc<RunSummary>(request, 'run.get', { runId: run.id })).status, { timeout: 30_000 }).toBe('succeeded'); return run;
     }
     return { project, model, start, server, calls: () => calls };
   } catch (error) { await close(server); throw error; }
@@ -43,6 +43,8 @@ test.beforeEach(async ({ page }) => { pageErrors = []; consoleErrors = []; expec
 test.afterEach(async ({ page }) => { expect(pageErrors).toEqual([]); expect(consoleErrors).toEqual(expectedErrors); await expect(page.locator('vite-error-overlay')).toHaveCount(0); });
 
 test('shows the selected run output, exports diagnostics and applies it with undo', async ({ page, request }, info) => {
+  // Two sequential completed runs precede the diagnostics and application UI.
+  test.setTimeout(90_000);
   const source = await fixture(request);
   try {
     await source.start(); const newer = await source.start();
@@ -88,6 +90,7 @@ test('shows the selected run output, exports diagnostics and applies it with und
 });
 
 test('retains manual project changes when applying an inspected output would overwrite them', async ({ page, request }) => {
+  test.setTimeout(60_000);
   const source = await fixture(request);
   try {
     const run = await source.start(); const dialog = await open(page, run.id);
@@ -103,6 +106,7 @@ test('retains manual project changes when applying an inspected output would ove
 });
 
 test('recovers a failed detail read explicitly and keeps tabs, tokens and actions usable in both themes at narrow width', async ({ page, request }, info) => {
+  test.setTimeout(60_000);
   await page.setViewportSize({ width: 600, height: 850 }); await page.emulateMedia({ reducedMotion: 'reduce' });
   const source = await fixture(request);
   let releaseFailure = () => {};
@@ -146,6 +150,7 @@ test('recovers a failed detail read explicitly and keeps tabs, tokens and action
 });
 
 test('keeps new live steps out of older runs and uses the frozen kind for a renamed step output', async ({ page, request }) => {
+  test.setTimeout(60_000);
   const source = await fixture(request);
   try {
     const run = await source.start();

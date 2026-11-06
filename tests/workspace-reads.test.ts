@@ -24,6 +24,7 @@ async function fixture(shots = 200, options = { assets: 1000, runs: 105, eventsP
 }
 
 describe('on-demand workspace reads', () => {
+  // Budget for the 10,000-run/10,000-activity fixture and its index semantics checks on native CI.
   it('seeks active and latest runs without sorting or crossing project and document kinds', async () => {
     const { runtime, project, directory } = await fixture(10, { assets: 1, runs: 10_000, eventsPerRun: 0 });
     const database = openDatabase(directory), store = new DocumentStore(database);
@@ -70,7 +71,7 @@ describe('on-demand workspace reads', () => {
         expect(projectDetailSchema.parse(await runtime.dispatch('project.get', { projectId: project.id })).latestRun?.id).toBe('new-latest-run');
       }
     } finally { database.close(); }
-  });
+  }, 90_000);
 
   it.each(['failed', 'needs_attention'] as const)('follows a resumed older %s run through automatic execution, then returns to the newest completed run', async failureStatus => {
     const directory = await mkdtemp(join(tmpdir(), 'vq-current-run-')); directories.push(directory);

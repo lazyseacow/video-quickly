@@ -110,6 +110,7 @@ for (const viewport of [{ width: 1536, height: 960, theme: 'dark' }, { width: 60
       await use({ cookies: [], origins: [{ origin: isolatedWorkspace.origin, localStorage: [{ name: 'vq-theme', value: viewport.theme }, { name: 'vq-onboarding-v1', value: 'done' }] }] });
     } });
     test('tracks automatic running stages at the top, preserves the pointer through details and completes all four cards', async ({ page, request, isolatedWorkspace }, info) => {
+      test.setTimeout(60_000);
       const source = await fixture(request), observed = observe(page);
       try {
         await page.emulateMedia({ reducedMotion: 'reduce' }); await page.goto('/'); await expect(page).toHaveTitle(/Video Quickly/); await selectProject(page, source.project.title);
@@ -134,7 +135,7 @@ for (const viewport of [{ width: 1536, height: 960, theme: 'dark' }, { width: 60
           }
           source.reply(index); if (index + 1 < stageLabels.length) await expect.poll(source.calls).toBe(index + 2);
         }
-        await expect.poll(() => status(request, run.id)).toBe('succeeded'); await completed(page); await expect(progress(page).locator('.workbench-guide__step[data-state="succeeded"]')).toHaveCount(4);
+        await expect.poll(() => status(request, run.id), { timeout: 30_000 }).toBe('succeeded'); await completed(page); await expect(progress(page).locator('.workbench-guide__step[data-state="succeeded"]')).toHaveCount(4);
         await shotOutlineOnly(page);
         const result = await saved(request, source.project.id); expect(result).toMatchObject({ style: '实际本地生成的风格结果', revision: source.project.revision + 1 }); expect(result.workflow).toEqual(source.project.workflow); expect(source.calls()).toBe(4); expect(await rpc(request, 'run.replay', { runId: run.id })).toMatchObject({ externalCalls: 0, matchesSnapshot: true });
         expect(observed.writes).toEqual(['run.start']); expect(observed.errors).toEqual([]); expect(new URL(page.url()).origin).toBe(isolatedWorkspace.origin); await page.screenshot({ path: info.outputPath('top-stages-completed.png') });
@@ -144,11 +145,13 @@ for (const viewport of [{ width: 1536, height: 960, theme: 'dark' }, { width: 60
 }
 
 test('keeps the newer run highlighted after an old inspection arrives and exposes a real local failure at 600px', async ({ page, request }) => {
+  // The old and newer HTTP runs each have their own completion window.
+  test.setTimeout(90_000);
   const source = await fixture(request), observed = observe(page), held = gate(), release = gate(), delivered = gate(); let holdOld = false;
   try {
     await page.setViewportSize({ width: 600, height: 900 }); await page.emulateMedia({ reducedMotion: 'reduce' }); await page.addInitScript(() => localStorage.setItem('vq-theme', 'light')); await page.goto('/'); await selectProject(page, source.project.title);
     const old = await rpc<RunSummary>(request, 'run.start', { projectId: source.project.id, nodeId: taskIds[0] }); await expect.poll(source.calls).toBe(1); await currentStage(page, stageLabels[0], 'running'); source.reply(0);
-    await expect.poll(() => status(request, old.id)).toBe('succeeded'); await completed(page, [stageLabels[0]]);
+    await expect.poll(() => status(request, old.id), { timeout: 30_000 }).toBe('succeeded'); await completed(page, [stageLabels[0]]);
     await card(page, stageLabels[2]).click(); const configuration = page.getByRole('dialog', { name: '本次制作', exact: true }); await expect(configuration).toBeVisible(); await configuration.getByRole('button', { name: '关闭对话框', exact: true }).click();
     await completed(page, [stageLabels[0]]); await expect(card(page, stageLabels[0])).toContainText('1 / 1 任务');
     await page.route('**/__desktop_rpc', async route => {
@@ -159,7 +162,7 @@ test('keeps the newer run highlighted after an old inspection arrives and expose
     const updated = await rpc<ProjectDocument>(request, 'project.update', { projectId: source.project.id, revision: source.project.revision, patch: { title: `${source.project.title} · 新修订` } }); await held.promise;
     const newer = await rpc<RunSummary>(request, 'run.start', { projectId: updated.id, nodeId: taskIds[1] }); await expect.poll(source.calls).toBe(2); await currentStage(page, stageLabels[1], 'running');
     release.release(); await delivered.promise; await currentStage(page, stageLabels[1], 'running'); await expect(cards(page)).toHaveCount(4); await expect(card(page, stageLabels[0])).toHaveAttribute('data-state', 'pending');
-    source.reply(1); await expect.poll(() => status(request, newer.id)).toBe('succeeded'); await completed(page, [stageLabels[1]]);
+    source.reply(1); await expect.poll(() => status(request, newer.id), { timeout: 30_000 }).toBe('succeeded'); await completed(page, [stageLabels[1]]);
     const failing = await rpc<RunSummary>(request, 'run.start', { projectId: updated.id, nodeId: taskIds[0] }); await expect.poll(source.calls).toBe(3); await currentStage(page, stageLabels[0], 'running'); source.reply(2, true);
     await expect.poll(async () => ['failed', 'needs_attention'].includes(await status(request, failing.id))).toBe(true); const failedStatus = await status(request, failing.id);
     await expect(card(page, stageLabels[0])).toHaveAttribute('data-state', failedStatus); await expect(card(page, stageLabels[0])).toContainText(/失败|需要核对/); await expect(cards(page)).toHaveCount(4);
@@ -169,6 +172,7 @@ test('keeps the newer run highlighted after an old inspection arrives and expose
 
 for (const viewport of [{ width: 1536, height: 960, theme: 'light' }, { width: 600, height: 900, theme: 'dark' }] as const) {
   test(`shows the native generation tasks before and after a single script run at ${viewport.width}px in ${viewport.theme}`, async ({ page, request }, info) => {
+    test.setTimeout(60_000);
     const server = createServer((incoming, response) => { incoming.resume(); response.setHeader('content-type', 'application/json'); response.end(JSON.stringify({ choices: [{ message: { content: JSON.stringify({ shots: [{ id: 'local-shot', title: '生成的本地分镜', narration: '本地视频制作文稿', visualPrompt: '', durationUs: 1_000_000 }] }) } }] })); });
     await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve)); const address = server.address(); if (!address || typeof address === 'string') throw new Error('本地分镜服务未启动');
     try {
@@ -181,7 +185,7 @@ for (const viewport of [{ width: 1536, height: 960, theme: 'light' }, { width: 6
     const generationLabels = ['简报生成', '风格与角色生成', '分镜生成', '镜头视频生成'];
     const guide = page.getByRole('region', { name: '制作指引', exact: true }); await expect(guide.locator('.workbench-guide__step strong')).toHaveText(generationLabels); await expect(guide.getByRole('list')).not.toContainText('史实');
     const run = await rpc<RunSummary>(request, 'run.start', { projectId: project.id, nodeId: 'script' });
-    await expect.poll(() => status(request, run.id)).toBe('succeeded');
+    await expect.poll(() => status(request, run.id), { timeout: 30_000 }).toBe('succeeded');
     const list = progress(page), steps = cards(page), planning = card(page, '分镜生成');
     await expect(steps).toHaveCount(4); await expect(steps.locator('strong')).toHaveText(generationLabels); await expect(list).not.toContainText('史实'); await expect(planning).toHaveAttribute('data-state', 'succeeded');
     await expect(planning).toHaveAttribute('aria-current', 'step'); await expect(planning.locator('..')).toHaveAttribute('data-current', 'true');

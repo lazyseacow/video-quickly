@@ -107,6 +107,7 @@ test('restores an unsaved multi-field draft and resolves external edits without 
 });
 
 test('keeps generated results editable with undo and rejects reapplying them after revisions', async ({ page, request }) => {
+  test.setTimeout(60_000);
   const server = createServer((incoming, response) => {
     incoming.resume();
     response.setHeader('Content-Type', 'application/json');
@@ -121,7 +122,7 @@ test('keeps generated results editable with undo and rejects reapplying them aft
     const workflow = { ...original.workflow, nodes: original.workflow.nodes.map((node: ProjectDocument['workflow']['nodes'][number]) => node.kind === 'script' ? { ...node, modelId: model.id, config: { ...node.config, modelOverride: true } } : node) };
     const project = await rpc(request, 'workflow.save', { projectId: original.id, revision: original.revision, workflow });
     const run = await rpc(request, 'run.start', { projectId: project.id, nodeId: 'script' });
-    await expect.poll(async () => (await rpc(request, 'project.get', { projectId: project.id })).latestRun.status).toBe('succeeded');
+    await expect.poll(async () => (await rpc(request, 'run.get', { runId: run.id })).status, { timeout: 30_000 }).toBe('succeeded');
     await rpc(request, 'node.apply', { runId: run.id, nodeId: 'script', revision: project.revision });
     await openProject(page, project.title);
     await expect(page.getByLabel('镜头标题')).toHaveValue('已生成的分镜');

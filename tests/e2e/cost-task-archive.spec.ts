@@ -20,6 +20,8 @@ async function fixture(request: APIRequestContext, title: string, usage: Record<
     response.once('close', () => { if (!response.writableFinished) { counts.closed++; if (receipt) receipt.closed++; } });
     response.setHeader('content-type', 'application/json'); response.end(JSON.stringify({ choices: [{ message: { content: '归档测试结果' } }], usage }));
   });
+  // Disable idle connection closes; explicit teardown owns this local provider's lifetime.
+  server.keepAliveTimeout = 0;
   await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
   const address = server.address(); if (!address || typeof address === 'string') throw new Error('夹具服务启动失败');
   const project = await rpc<ProjectDocument>(request, 'project.create', { title });

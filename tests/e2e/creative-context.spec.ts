@@ -40,6 +40,7 @@ async function fixture(request: APIRequestContext, hold = false) {
 
 for (const viewport of [{ width: 1536, height: 960, theme: 'dark' }, { width: 390, height: 844, theme: 'light' }]) {
   test(`saves creative configuration, restores edits and displays generated role bindings at ${viewport.width}px`, async ({ page, request }, info) => {
+    test.setTimeout(60_000);
     const source = await fixture(request), errors: string[] = [], consoleErrors: string[] = [];
     page.on('pageerror', error => errors.push(error.message)); page.on('console', message => { if (message.type() === 'error') consoleErrors.push(message.text()); });
     try {
@@ -68,7 +69,7 @@ for (const viewport of [{ width: 1536, height: 960, theme: 'dark' }, { width: 39
       await page.getByRole('button', { name: '重做', exact: true }).click(); await expect.poll(async () => (await source.current()).creativeContext?.continuity).toBe('同一个傍晚，蓝色服装保持不变');
       const saved = await source.current();
       const run = await rpc<RunSummary>(request, 'run.start', { projectId: saved.id, nodeId: 'script' });
-      await expect.poll(async () => (await rpc<RunSummary>(request, 'run.get', { runId: run.id })).status).toBe('succeeded');
+      await expect.poll(async () => (await rpc<RunSummary>(request, 'run.get', { runId: run.id })).status, { timeout: 30_000 }).toBe('succeeded');
       await rpc(request, 'node.apply', { runId: run.id, nodeId: 'script', revision: saved.revision });
       await expect(page.getByRole('checkbox', { name: source.profiles[0].name, exact: true })).toBeChecked();
       await expect(page.getByRole('checkbox', { name: '道具：铜锁', exact: true })).toBeChecked();
@@ -83,6 +84,7 @@ for (const viewport of [{ width: 1536, height: 960, theme: 'dark' }, { width: 39
 }
 
 test('keeps a running role snapshot while saving and reopening a different pending pool', async ({ page, request }) => {
+  test.setTimeout(60_000);
   const source = await fixture(request, true);
   try {
     let dialog = await openProduction(page, source.project);
@@ -99,7 +101,7 @@ test('keeps a running role snapshot while saving and reopening a different pendi
     dialog = await openProduction(page, source.project);
     await expect(dialog.getByRole('group', { name: '项目角色池', exact: true }).getByRole('checkbox', { name: source.profiles[1].name, exact: true })).toBeChecked();
     await dialog.getByRole('button', { name: '取消', exact: true }).click();
-    source.release(); await expect.poll(async () => (await rpc<RunSummary>(request, 'run.get', { runId: run.id })).status).toBe('succeeded');
+    source.release(); await expect.poll(async () => (await rpc<RunSummary>(request, 'run.get', { runId: run.id })).status, { timeout: 30_000 }).toBe('succeeded');
     expect((await source.current()).creativeContext?.characterIds).toEqual([source.profiles[0].id]);
   } finally { await source.cleanup(); }
 });

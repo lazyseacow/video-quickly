@@ -131,12 +131,22 @@ async function verifyGenericWorkflow() {
   assert.equal(project.workflow.nodes.length, 7);
   assert.equal(project.workflow.stages.length, 4);
   const guidance = page.getByRole('region', { name: '制作指引', exact: true });
-  await expect(guidance.getByRole('button', { name: /^打开阶段：/ })).toHaveCount(4);
-  await guidance.getByRole('button', { name: '打开阶段：策划与分镜', exact: true }).click();
-  const records = page.getByRole('dialog', { name: '本次制作', exact: true });
-  await expect(records).toContainText('本阶段尚未开始制作');
-  await expect(records.getByRole('button', { name: '制作设置', exact: true })).toHaveCount(0);
-  await records.getByRole('button', { name: '关闭', exact: true }).click();
+  const generationLabels = ['简报生成', '风格与角色生成', '分镜生成', '镜头视频生成'];
+  const progress = guidance.getByRole('list', { name: '模型生成进度', exact: true });
+  await expect(progress.getByRole('button', { name: /^打开步骤：/ })).toHaveCount(4);
+  await expect(progress.locator('.workbench-guide__step-copy > strong')).toHaveText(generationLabels);
+  for (const label of generationLabels) {
+    const trigger = progress.getByRole('button', { name: `打开步骤：${label}`, exact: true });
+    await expect(trigger).toHaveAttribute('data-state', 'pending');
+    await expect(trigger).toContainText('尚未生成');
+    await trigger.focus(); await trigger.press('Enter');
+    const records = page.getByRole('dialog', { name: '本次制作', exact: true });
+    await expect(records).toBeVisible();
+    await expect(records).toContainText('尚未开始制作');
+    await expect(records.getByRole('button', { name: '制作设置', exact: true })).toHaveCount(0);
+    await page.keyboard.press('Escape');
+    await expect(records).toHaveCount(0); await expect(trigger).toBeFocused();
+  }
   const settingsButton = page.getByRole('button', { name: '制作设置', exact: true });
   await expect(settingsButton).toHaveCount(1); await settingsButton.click();
   const dialog = page.getByRole('dialog', { name: '制作设置', exact: true });
