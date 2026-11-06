@@ -121,12 +121,26 @@ test('copies appearance from another shot while retaining each target topic, evi
 });
 
 test('moves, duplicates, removes and drags whole selections with cancelable pointer capture', async ({ page, request }) => {
+  // Eight sequential edits wait for their real persistence receipts.
+  test.setTimeout(120_000);
   const errors = observe(page), project = await fixture(request, '镜头组排序与取消验收'); await openProject(page, project.title); await select(page, [1, 3]); const track = page.locator('.track--video .track-clips'), bounds = await track.boundingBox(); if (!bounds) throw new Error('时间轴不可见'); let clip = videoClip(page, 1);
+  async function persist(action: () => Promise<void>) {
+    const [response] = await Promise.all([
+      page.waitForResponse(response => {
+        if (!response.url().endsWith('/__desktop_rpc') || response.request().method() !== 'POST') return false;
+        const body = response.request().postDataJSON();
+        return body.method === 'project.update' && body.params.projectId === project.id;
+      }, { timeout: 30_000 }),
+      action(),
+    ]);
+    const payload = await response.json();
+    expect(response.ok()).toBe(true); expect(payload.error).toBeUndefined(); expect(payload.result.id).toBe(project.id);
+  }
   const pointerId = await startDrag(page, clip, bounds.width / 4); const transformed = await page.locator('.timeline-clip.selected').evaluateAll(elements => elements.map(element => (element as HTMLElement).style.transform)); expect(transformed).toHaveLength(2); expect(new Set(transformed).size).toBe(1); expect(transformed[0]).toContain('translateX'); await clip.dispatchEvent('pointercancel', { pointerId, pointerType: 'mouse', isPrimary: true }); expect(await clip.evaluate((element, id) => element.hasPointerCapture(id), pointerId)).toBe(false); await page.mouse.up(); await expect(page.locator('.timeline-drop-marker')).toHaveCount(0); expect(await saved(request, project.id)).toEqual(project);
   await startDrag(page, clip, bounds.width / 4); await page.keyboard.press('Escape'); await page.mouse.up(); await selection(page, []); await expect(page.locator('.timeline-drop-marker')).toHaveCount(0); expect(await saved(request, project.id)).toEqual(project);
-  await select(page, [1, 3]); clip = videoClip(page, 1); await startDrag(page, clip, bounds.width / 2); await page.mouse.up(); await expect.poll(async () => (await saved(request, project.id)).shots.map(shot => shot.id)).toEqual(['bulk-0', 'bulk-2', 'bulk-4', 'bulk-5', 'bulk-1', 'bulk-3']); expect((await saved(request, project.id)).revision).toBe(project.revision + 1); await undo(page); await expect.poll(async () => (await saved(request, project.id)).shots).toEqual(project.shots);
-  await select(page, [1, 3]); await timeline(page).getByRole('button', { name: '将镜头前移', exact: true }).click(); await expect.poll(async () => (await saved(request, project.id)).shots.map(shot => shot.id)).toEqual(['bulk-1', 'bulk-0', 'bulk-3', 'bulk-2', 'bulk-4', 'bulk-5']); await undo(page); await expect.poll(async () => (await saved(request, project.id)).shots).toEqual(project.shots);
-  await select(page, [1, 3]); await timeline(page).getByRole('button', { name: '复制镜头', exact: true }).click(); await expect.poll(async () => (await saved(request, project.id)).shots.length).toBe(8); const duplicated = await saved(request, project.id); expect(duplicated.shots.map(shot => shot.title)).toEqual(['多选镜头 1', '多选镜头 2', '多选镜头 2 · 副本', '多选镜头 3', '多选镜头 4', '多选镜头 4 · 副本', '多选镜头 5', '多选镜头 6']); await timeline(page).getByRole('button', { name: '移除所选镜头', exact: true }).click(); await confirmAction(page, '确认移除'); await expect.poll(async () => (await saved(request, project.id)).shots).toEqual(project.shots); await undo(page); await expect.poll(async () => (await saved(request, project.id)).shots).toEqual(duplicated.shots); await undo(page); await expect.poll(async () => (await saved(request, project.id)).shots).toEqual(project.shots); await healthy(page, errors);
+  await select(page, [1, 3]); clip = videoClip(page, 1); await startDrag(page, clip, bounds.width / 2); await persist(() => page.mouse.up()); await expect.poll(async () => (await saved(request, project.id)).shots.map(shot => shot.id)).toEqual(['bulk-0', 'bulk-2', 'bulk-4', 'bulk-5', 'bulk-1', 'bulk-3']); expect((await saved(request, project.id)).revision).toBe(project.revision + 1); await persist(() => undo(page)); await expect.poll(async () => (await saved(request, project.id)).shots).toEqual(project.shots);
+  await select(page, [1, 3]); await persist(() => timeline(page).getByRole('button', { name: '将镜头前移', exact: true }).click()); await expect.poll(async () => (await saved(request, project.id)).shots.map(shot => shot.id)).toEqual(['bulk-1', 'bulk-0', 'bulk-3', 'bulk-2', 'bulk-4', 'bulk-5']); await persist(() => undo(page)); await expect.poll(async () => (await saved(request, project.id)).shots).toEqual(project.shots);
+  await select(page, [1, 3]); await persist(() => timeline(page).getByRole('button', { name: '复制镜头', exact: true }).click()); await expect.poll(async () => (await saved(request, project.id)).shots.length).toBe(8); const duplicated = await saved(request, project.id); expect(duplicated.shots.map(shot => shot.title)).toEqual(['多选镜头 1', '多选镜头 2', '多选镜头 2 · 副本', '多选镜头 3', '多选镜头 4', '多选镜头 4 · 副本', '多选镜头 5', '多选镜头 6']); await persist(async () => { await timeline(page).getByRole('button', { name: '移除所选镜头', exact: true }).click(); await confirmAction(page, '确认移除'); }); await expect.poll(async () => (await saved(request, project.id)).shots).toEqual(project.shots); await persist(() => undo(page)); await expect.poll(async () => (await saved(request, project.id)).shots).toEqual(duplicated.shots); await persist(() => undo(page)); await expect.poll(async () => (await saved(request, project.id)).shots).toEqual(project.shots); await healthy(page, errors);
 });
 
 test('rejects an entire selected group when any target is locked', async ({ page, request }) => {

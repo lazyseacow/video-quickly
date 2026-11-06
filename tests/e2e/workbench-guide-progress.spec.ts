@@ -70,7 +70,7 @@ function observe(page: Page) {
 }
 async function fixture(request: APIRequestContext) {
   const pending: ServerResponse[] = [];
-  const server = createServer((incoming, response) => {
+  const server = createServer({ keepAliveTimeout: 0 }, (incoming, response) => {
     void (async () => {
       for await (const _ of incoming) { /* Consume the real local provider request. */ }
       if (incoming.method !== 'POST' || incoming.url !== '/v1/chat/completions') { response.writeHead(404).end(); return; }
@@ -173,7 +173,7 @@ test('keeps the newer run highlighted after an old inspection arrives and expose
 for (const viewport of [{ width: 1536, height: 960, theme: 'light' }, { width: 600, height: 900, theme: 'dark' }] as const) {
   test(`shows the native generation tasks before and after a single script run at ${viewport.width}px in ${viewport.theme}`, async ({ page, request }, info) => {
     test.setTimeout(60_000);
-    const server = createServer((incoming, response) => { incoming.resume(); response.setHeader('content-type', 'application/json'); response.end(JSON.stringify({ choices: [{ message: { content: JSON.stringify({ shots: [{ id: 'local-shot', title: '生成的本地分镜', narration: '本地视频制作文稿', visualPrompt: '', durationUs: 1_000_000 }] }) } }] })); });
+    const server = createServer({ keepAliveTimeout: 0 }, (incoming, response) => { incoming.resume(); response.setHeader('content-type', 'application/json'); response.end(JSON.stringify({ choices: [{ message: { content: JSON.stringify({ shots: [{ id: 'local-shot', title: '生成的本地分镜', narration: '本地视频制作文稿', visualPrompt: '', durationUs: 1_000_000 }] }) } }] })); });
     await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve)); const address = server.address(); if (!address || typeof address === 'string') throw new Error('本地分镜服务未启动');
     try {
     const model = await rpc<{ id: string }>(request, 'model.save', { model: { name: '四阶段分镜边界', provider: 'openai-compatible', connectionType: 'text', capabilities: ['text'], model: 'fixture-script', baseUrl: `http://127.0.0.1:${address.port}/v1` } });

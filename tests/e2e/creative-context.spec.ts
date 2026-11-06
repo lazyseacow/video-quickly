@@ -17,7 +17,7 @@ async function fixture(request: APIRequestContext, hold = false) {
   let release!: () => void, entered!: () => void;
   const gate = new Promise<void>(resolve => { release = resolve; }), started = new Promise<void>(resolve => { entered = resolve; });
   const prompts: string[] = [];
-  const server = createServer((incoming, response) => { void (async () => {
+  const server = createServer({ keepAliveTimeout: 0 }, (incoming, response) => { void (async () => {
     let body = ''; for await (const part of incoming) body += String(part); prompts.push(body); entered(); if (hold) await gate;
     response.setHeader('content-type', 'application/json'); response.end(JSON.stringify({ choices: [{ message: { content: JSON.stringify({
       entities: [{ key: 'gate', kind: 'prop', name: '铜锁', description: '旧铜色、圆形锁孔' }],

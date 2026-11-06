@@ -69,7 +69,7 @@ test('dismisses success and error notifications after two seconds and restarts f
   await openApp(page);
   await openProjectFromList(page, project.title);
   await expect(page.getByLabel('镜头标题', { exact: true })).toHaveValue('计时验收镜头');
-  await page.clock.pauseAt(new Date(time.getTime() + 60_000));
+  await page.clock.pauseAt(new Date(time.getTime() + 2 * test.info().timeout));
   let failNextSave = true;
   await page.route('**/__desktop_rpc', async route => {
     if (failNextSave && route.request().postDataJSON().method === 'project.update') {

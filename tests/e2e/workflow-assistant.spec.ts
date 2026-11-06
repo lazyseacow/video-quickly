@@ -15,7 +15,7 @@ async function fixture(request: APIRequestContext, mode: 'complete' | 'hold-firs
   const prompts: string[] = [], suffix = randomUUID().slice(0, 7);
   let release!: () => void;
   const gate = new Promise<void>(resolve => { release = resolve; });
-  const server = createServer((incoming, response) => { void (async () => {
+  const server = createServer({ keepAliveTimeout: 0 }, (incoming, response) => { void (async () => {
     let body = ''; for await (const bytes of incoming) body += String(bytes);
     const request = JSON.parse(body); prompts.push(request.messages[0].content);
     const index = prompts.length;

@@ -3,8 +3,13 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 const port = Number(process.env.VIDEO_QUICKLY_PORT ?? 1421);
 const baseURL = `http://127.0.0.1:${port}`;
+const ci = Boolean(process.env.CI);
 export default defineConfig({
   testDir: './tests/e2e', fullyParallel: false,
+  // Observed CI runtime stalls reach 16s; retain tighter local feedback budgets.
+  timeout: ci ? 90_000 : 30_000,
+  expect: { timeout: ci ? 30_000 : 5_000 },
+  retries: 0,
   // Each browser uses the same serial FFmpeg preparation queue in the local runtime.
   workers: 2,
   reporter: process.env.PLAYWRIGHT_JSON_OUTPUT_NAME ? [['line'], ['json']] : 'list',

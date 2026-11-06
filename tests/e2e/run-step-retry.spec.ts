@@ -13,7 +13,7 @@ async function fixture(request: APIRequestContext, flat = false, failure: 'downl
   let ready = false, textCalls = 0;
   const submissions: string[] = [], downloads: string[] = [];
   const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=', 'base64');
-  const server = createServer(async (incoming, response) => {
+  const server = createServer({ keepAliveTimeout: 0 }, async (incoming, response) => {
     if (incoming.url === '/v1/chat/completions') {
       incoming.resume(); textCalls++;
       response.setHeader('content-type', 'application/json'); response.end(JSON.stringify({ choices: [{ message: { content: '本次生成的水彩风格' } }] })); return;

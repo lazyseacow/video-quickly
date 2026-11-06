@@ -45,7 +45,7 @@ async function fixture(media?: { image: Buffer; audio: Buffer; video: Buffer }) 
   let failure = false, calls = 0;
   let gate: Promise<void> | undefined, release: (() => void) | undefined;
   let origin = '';
-  const server = createServer((incoming, response) => {
+  const server = createServer({ keepAliveTimeout: 0 }, (incoming, response) => {
     const chunks: Buffer[] = []; incoming.on('data', chunk => chunks.push(chunk));
     incoming.on('end', () => { void (async () => {
       const path = incoming.url ?? ''; requests.push({ path, body: Buffer.concat(chunks).toString() });

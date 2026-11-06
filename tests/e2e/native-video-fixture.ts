@@ -23,7 +23,7 @@ async function fixture(request: APIRequestContext, info: TestInfo, hold = false,
   const bytes = await readFile(path), requests: Record<string, unknown>[] = [];
   let release!: () => void, entered!: () => void, held = false, baseUrl = '';
   const gate = new Promise<void>(resolve => { release = resolve; }), pending = new Promise<void>(resolve => { entered = resolve; });
-  const server = createServer(async (incoming, response) => {
+  const server = createServer({ keepAliveTimeout: 0 }, async (incoming, response) => {
     if (incoming.url === '/source.mp4') { response.setHeader('content-type', 'video/mp4'); response.end(bytes); return; }
     response.setHeader('content-type', 'application/json');
     if (incoming.method === 'GET') { response.end(JSON.stringify({ status: 'succeeded', content: { video_url: `${baseUrl}/source.mp4` } })); return; }

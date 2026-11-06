@@ -60,7 +60,7 @@ for (const { width, theme } of [{ width: 1536, theme: 'dark' }, { width: 390, th
 
 test('offers branded platform presets and a persisted Gemini-compatible connection', async ({ page, request }) => {
   let checkedPath = '';
-  const server = createServer((incoming, response) => { checkedPath = incoming.url ?? ''; response.setHeader('content-type', 'application/json'); response.end(JSON.stringify({ data: [{ id: 'fixture-gemini' }] })); });
+  const server = createServer({ keepAliveTimeout: 0 }, (incoming, response) => { checkedPath = incoming.url ?? ''; response.setHeader('content-type', 'application/json'); response.end(JSON.stringify({ data: [{ id: 'fixture-gemini' }] })); });
   await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
   const address = server.address(); if (!address || typeof address === 'string') throw new Error('无效测试服务地址');
   try {
@@ -144,7 +144,7 @@ for (const delayedProgress of [false, true]) test(`uses the saved structured con
     await route.continue();
   });
   const png = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScLbtAAAAABJRU5ErkJggg==';
-  const server = createServer((incoming, response) => { void (async () => {
+  const server = createServer({ keepAliveTimeout: 0 }, (incoming, response) => { void (async () => {
     if (incoming.method === 'GET') { response.end(JSON.stringify({ data: [{ id: 'fixture-parameters' }] })); return; }
     let text = ''; for await (const chunk of incoming) text += chunk.toString(); const path = incoming.url ?? '', body = JSON.parse(text) as Record<string, unknown>; requests.push({ path, body });
     if (path.endsWith('/chat/completions')) response.end(JSON.stringify({ choices: [{ message: { content: JSON.stringify({ shots: [{ title: '真实参数候选', narration: '旁白', visualPrompt: '画面', durationUs: 2_000_000 }] }) } }] }));

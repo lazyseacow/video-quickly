@@ -96,7 +96,7 @@ test('creates a visual character library, binds a shot with durable undo, and pr
 
 test('sends frozen character settings into generation and records provider token counters across reload', async ({ page, request }, info) => {
   const errors = observeErrors(page), calls: string[] = [];
-  const server = createServer((request, response) => { void (async () => {
+  const server = createServer({ keepAliveTimeout: 0 }, (request, response) => { void (async () => {
     let body = ''; for await (const chunk of request) body += chunk.toString(); calls.push(body);
     response.setHeader('content-type', 'application/json');
     response.end(JSON.stringify({ choices: [{ message: { content: JSON.stringify({ shots: [{ title: '人物候选', narration: '候选旁白', visualPrompt: '人物轻轻推门', durationUs: 1_000_000 }] }) } }], usage: { prompt_tokens: 100, completion_tokens: 50, total_tokens: 150 } }));

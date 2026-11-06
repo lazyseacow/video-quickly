@@ -15,7 +15,7 @@ async function fixture(request: APIRequestContext) {
   const calls: { path: string; prompt?: string }[] = [];
   let baseUrl = '';
   const video = fixtureNativeVideo();
-  const server = createServer((incoming, response) => { void (async () => {
+  const server = createServer({ keepAliveTimeout: 0 }, (incoming, response) => { void (async () => {
     response.setHeader('content-type', 'application/json');
     if (incoming.method !== 'POST') {
       if (incoming.url === '/video.mp4') { response.setHeader('content-type', 'video/mp4'); response.end(video); }

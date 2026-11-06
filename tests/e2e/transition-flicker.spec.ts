@@ -9,7 +9,7 @@ import { decodeTransitionFrames, transitionPixels, type Rgb } from '../fixtures/
 
 const execute = promisify(execFile), points = [108, 972].flatMap(y => [230, 691, 1228, 1689].map(x => ({ x, y })));
 type AuditEvent = { kind: string; wallMs: number; path: string | null; value?: number; uiMs: number; frame: number };
-type Sample = { wallMs: number; uiMs: number; frame: number; width: number; height: number; visible: boolean; badge: boolean; audioPaused: boolean; audioMs: number; buffered: boolean; cachePixels: number; pixels: Rgb[] };
+type Sample = { source: 'raf'; wallMs: number; readbackMs: number; uiMs: number; frame: number; width: number; height: number; visible: boolean; badge: boolean; audioPaused: boolean; audioMs: number; buffered: boolean; cachePixels: number; pixels: Rgb[] };
 async function rpc<T>(request: APIRequestContext, method: string, params: unknown = {}): Promise<T> {
   const response = await request.post('/__desktop_rpc', { data: { method, params } }), body = await response.json(); expect(response.ok(), JSON.stringify(body.error)).toBe(true); expect(body.error).toBeUndefined(); return body.result;
 }
@@ -76,15 +76,24 @@ for (const scenario of [{ transition: 'fade', cold: false }, { transition: 'wipe
   const canvas = page.locator('.preview-frame canvas[role="img"]'); await expect(canvas).toBeVisible(); await expect(page.locator('.preview-panel .prepared-mix-preview')).toHaveAttribute('data-status', 'ready', { timeout: 20_000 });
   await seek(page, 126); if (!scenario.cold) await page.waitForTimeout(800);
   const capture = await canvas.evaluateHandle((element: HTMLCanvasElement, points) => {
-    const state = { active: true, raf: 0, samples: [] as Sample[] };
+    const state = { active: true, raf: 0, observer: null as MutationObserver | null, samples: [] as Sample[], commits: [] as { source: 'commit'; wallMs: number; uiMs: number; frame: number }[] };
     function tick() {
       if (!state.active) return;
       const bounds = element.getBoundingClientRect(), style = getComputedStyle(element), parent = element.closest('.scene-preview'), badge = parent?.querySelector<HTMLElement>('.timeline-preview__buffering'), badgeStyle = badge && getComputedStyle(badge), audio = document.querySelector<HTMLAudioElement>('audio[data-audio-role="处理后混音"]');
       const status = parent?.querySelector<HTMLElement>('[role="status"]'), statusBounds = status?.getBoundingClientRect(), statusStyle = status && getComputedStyle(status), alpha = statusStyle?.backgroundColor.match(/rgba\([^,]+,[^,]+,[^,]+,\s*([\d.]+)\)/)?.[1];
       const occluded = Boolean(statusBounds && statusBounds.width >= bounds.width * .95 && statusBounds.height >= bounds.height * .95 && statusStyle?.backgroundColor !== 'transparent' && Number(alpha ?? 1) * Number(statusStyle?.opacity ?? 1) >= .95);
-      state.samples.push({ wallMs: performance.now(), uiMs: Number(document.querySelector('[role="slider"][aria-label="预览播放位置"]')?.getAttribute('aria-valuenow')), frame: Number(element.dataset.renderedFrame ?? -1), width: element.width, height: element.height, visible: style.visibility !== 'hidden' && style.display !== 'none' && bounds.width > 0 && !occluded, badge: Boolean(badge && badge.getBoundingClientRect().width && badgeStyle?.display !== 'none' && badgeStyle?.visibility !== 'hidden' && Number(badgeStyle?.opacity ?? 1) > 0), audioPaused: audio?.paused ?? true, audioMs: (audio?.currentTime ?? 0) * 1000, buffered: element.dataset.transitionBuffered === 'true', cachePixels: Number(element.dataset.transitionCachePixels ?? 0), pixels: points.map(({ x, y }) => [...element.getContext('2d')!.getImageData(Math.floor(x * element.width / 1920), Math.floor(y * element.height / 1080), 1, 1).data].slice(0, 3) as Rgb) });
+      const coordinates = points.map(({ x, y }) => ({ x: Math.floor(x * element.width / 1920), y: Math.floor(y * element.height / 1080) }));
+      const left = Math.min(...coordinates.map(point => point.x)), top = Math.min(...coordinates.map(point => point.y));
+      const width = Math.max(...coordinates.map(point => point.x)) - left + 1, height = Math.max(...coordinates.map(point => point.y)) - top + 1;
+      // Read the same eight pixels on every RAF with one canvas synchronization.
+      const start = performance.now(), pixels = element.getContext('2d')!.getImageData(left, top, width, height).data;
+      const readbackMs = performance.now() - start;
+      state.samples.push({ source: 'raf', wallMs: performance.now(), readbackMs, uiMs: Number(document.querySelector('[role="slider"][aria-label="预览播放位置"]')?.getAttribute('aria-valuenow')), frame: Number(element.dataset.renderedFrame ?? -1), width: element.width, height: element.height, visible: style.visibility !== 'hidden' && style.display !== 'none' && bounds.width > 0 && !occluded, badge: Boolean(badge && badge.getBoundingClientRect().width && badgeStyle?.display !== 'none' && badgeStyle?.visibility !== 'hidden' && Number(badgeStyle?.opacity ?? 1) > 0), audioPaused: audio?.paused ?? true, audioMs: (audio?.currentTime ?? 0) * 1000, buffered: element.dataset.transitionBuffered === 'true', cachePixels: Number(element.dataset.transitionCachePixels ?? 0), pixels: coordinates.map(({ x, y }) => { const offset = ((y - top) * width + x - left) * 4; return [pixels[offset], pixels[offset + 1], pixels[offset + 2]] as Rgb; }) });
       state.raf = requestAnimationFrame(tick);
     }
+    // Commits diagnose producer cadence separately and never count as pixel samples.
+    state.observer = new MutationObserver(() => { if (state.active) state.commits.push({ source: 'commit', wallMs: performance.now(), uiMs: Number(document.querySelector('[role="slider"][aria-label="预览播放位置"]')?.getAttribute('aria-valuenow')), frame: Number(element.dataset.renderedFrame ?? -1) }); });
+    state.observer.observe(element, { attributes: true, attributeFilter: ['data-rendered-frame'] });
     state.raf = requestAnimationFrame(tick); return state;
   }, points);
   try {
@@ -92,14 +101,14 @@ for (const scenario of [{ transition: 'fade', cold: false }, { transition: 'wipe
     if (scenario.cold) { await page.waitForTimeout(1300); const wait = await capture.evaluate(state => state.samples.at(-1)!); await info.attach('cold-before-release', { body: JSON.stringify(wait), contentType: 'application/json' }); expect(wait.visible).toBe(true); expect(wait.uiMs).toBeLessThanOrEqual(2517); expect(wait.audioPaused).toBe(true); release(); }
     await expect.poll(() => capture.evaluate(state => state.samples.some(sample => sample.visible && sample.frame >= 174)), { timeout: 30_000 }).toBe(true);
     await page.getByRole('button', { name: '暂停预览', exact: true }).click();
-    const samples = await capture.evaluate(state => { state.active = false; cancelAnimationFrame(state.raf); return state.samples; }), events = await page.evaluate(() => (window as unknown as { transitionAudit: AuditEvent[] }).transitionAudit);
+    const { samples, commits } = await capture.evaluate(state => { state.active = false; cancelAnimationFrame(state.raf); state.observer?.disconnect(); return { samples: state.samples, commits: state.commits }; }), events = await page.evaluate(() => (window as unknown as { transitionAudit: AuditEvent[] }).transitionAudit);
     let shown = 0, hidden = 0, before = false;
     for (const sample of samples) { if (sample.badge !== before) { if (sample.badge) shown++; else hidden++; before = sample.badge; } }
     const setters = events.filter(event => event.kind === 'set-currentTime' && event.path === source.assets[1].path && event.uiMs >= 2500 && event.uiMs < 2700 && event.frame >= 150);
     const pauseEvents = events.filter(event => event.kind === 'audio-pause' && event.uiMs >= 2500 && event.uiMs < 2700 && event.frame >= 150), playEvents = events.filter(event => event.kind === 'audio-play' && event.uiMs >= 2500 && event.uiMs < 2700 && event.frame >= 150);
     const paints = samples.filter((sample, index) => !index || sample.frame !== samples[index - 1].frame), paintIntervals = paints.slice(1).map((sample, index) => sample.wallMs - paints[index].wallMs);
     const comparisons = samples.filter(sample => sample.visible && reference.has(sample.frame) && sample.frame >= 150 && sample.frame <= 162).map(sample => ({ frame: sample.frame, buffered: sample.buffered, difference: Math.max(...sample.pixels.flatMap((pixel, index) => pixel.map((value, channel) => Math.abs(value - transitionPixels(reference.get(sample.frame)!, 1920, points)[index][channel])))) }));
-    await info.attach('badge-audio-decoder-and-presented-pixels', { body: JSON.stringify({ shown, hidden, setters, pauseEvents, playEvents, paintIntervals, comparisons, samples, events }), contentType: 'application/json' }); await page.screenshot({ path: info.outputPath(`1080p60-${scenario.transition}-${scenario.cold ? 'cold' : 'warm'}.png`) });
+    await info.attach('badge-audio-decoder-and-presented-pixels', { body: JSON.stringify({ shown, hidden, setters, pauseEvents, playEvents, paintIntervals, comparisons, samples, commits, events }), contentType: 'application/json' }); await page.screenshot({ path: info.outputPath(`1080p60-${scenario.transition}-${scenario.cold ? 'cold' : 'warm'}.png`) });
     expect(new Set(comparisons.map(sample => sample.frame)).size).toBeGreaterThanOrEqual(3); for (const sample of comparisons) expect(sample.difference, `Presented frame ${sample.frame}`).toBeLessThanOrEqual(12);
     expect(shown, 'Preparing-frame feedback must not flash repeatedly.').toBeLessThanOrEqual(1); expect(hidden).toBeLessThanOrEqual(1);
     if (scenario.cold && setters.length === 1) expect(setters[0]).toMatchObject({ value: .2, uiMs: 2500, frame: 150 });
@@ -107,6 +116,6 @@ for (const scenario of [{ transition: 'fade', cold: false }, { transition: 'wipe
     expect(pauseEvents).toHaveLength(0); expect(playEvents.length).toBeLessThanOrEqual(1);
     const transition = samples.filter(sample => sample.frame >= 150 && sample.frame < 162); expect(transition.every(sample => sample.buffered)).toBe(true); expect(Math.max(...samples.map(sample => sample.cachePixels))).toBeLessThanOrEqual(12_582_912);
     expect(samples.every(sample => sample.visible)).toBe(true); expect(errors).toEqual([]);
-  } finally { release(); await capture.evaluate(state => { state.active = false; cancelAnimationFrame(state.raf); }); await capture.dispose(); }
+  } finally { release(); await capture.evaluate(state => { state.active = false; cancelAnimationFrame(state.raf); state.observer?.disconnect(); }); await capture.dispose(); }
   expect((await rpc<{ project: ProjectDocument }>(request, 'project.get', { projectId: source.project.id })).project).toEqual(source.project);
 });

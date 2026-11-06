@@ -21,7 +21,7 @@ if (mode === 'inspect') {
   const require = createRequire(join(sidecar, 'package.json'));
   const Database = require('better-sqlite3');
   const db = new Database(join(dataDirectory, 'workspace.sqlite'), { readonly: true });
-  try { assert.equal(db.pragma('user_version', { simple: true }), 11); assert.equal(db.pragma('quick_check', { simple: true }), 'ok'); } finally { db.close(); }
+  try { assert.equal(db.pragma('user_version', { simple: true }), 19); assert.equal(db.pragma('quick_check', { simple: true }), 'ok'); } finally { db.close(); }
   console.log('原生客户端已完成数据库迁移');
   process.exit(0);
 }
@@ -94,4 +94,4 @@ try {
   const exited = new Promise(resolve => child.once('exit', resolve));
   if (child.exitCode === null && child.signalCode === null) { child.kill('SIGKILL'); await exited; }
 }
-console.log(`安装后的执行组件验收通过：${mode}`);
+console.log(mode === 'prepare' ? '安装夹具的已完成运行、项目和素材已保存。' : '覆盖安装后已完成运行及活动保留、实际导出验收通过。');

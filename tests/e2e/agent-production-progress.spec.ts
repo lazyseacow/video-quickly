@@ -16,7 +16,7 @@ for (const surface of [{ width: 1536, height: 960, theme: 'dark', custom: false 
   await promisify(execFile)(process.env.VIDEO_QUICKLY_FFMPEG ?? 'ffmpeg', ['-hide_banner', '-loglevel', 'error', '-y', '-f', 'lavfi', '-i', 'color=c=blue:s=160x90:r=30:d=2', '-f', 'lavfi', '-i', 'sine=frequency=440:sample_rate=48000:duration=2', '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-c:a', 'aac', '-shortest', sourcePath]);
   const planning = gate(), planned = gate(), script = gate(), scripting = gate(), errors: string[] = [];
   let controllerCalls = 0;
-  const server = createServer(async (incoming, response) => {
+  const server = createServer({ keepAliveTimeout: 0 }, async (incoming, response) => {
     try {
       let encoded = ''; for await (const chunk of incoming) encoded += chunk.toString();
       const payload = JSON.parse(encoded) as { tools?: unknown[]; messages: Array<{ role: string; content?: string }> };

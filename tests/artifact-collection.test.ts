@@ -40,7 +40,7 @@ async function fixture(platform: 'win32' | 'darwin') {
   const native = { status: 'passed', packaged: true, platform, architecture: process.arch, distributionScope: 'bundled-runtime-and-media', electron: 'fixture-electron', checks };
   const protectedFiles = Array.from({ length: 3 }, (_, index) => ({ path: `fixture-protected-${index}`, role: `role-${index}`, exists: true, bytes: 1, sha256: packageSha256 }));
   const installation = platform === 'win32' ? {
-    installed: true, overwriteInstall: true, nativeLaunch: true, installedRuntime: true, actualExport: true, reviewResumed: true,
+    installed: true, overwriteInstall: true, nativeLaunch: true, installedRuntime: true, actualExport: true, completedRunRetained: true,
     uninstall: true, dataContentPreserved: true, explicitDataDeletion: true, installerSha256: packageSha256,
     deletionScope: { option: '--delete-electron-workspace', protectedDirectoriesPreserved: true, before: protectedFiles, afterDefault: protectedFiles, afterExplicit: protectedFiles },
   } : { status: 'passed', architecture: process.arch, dataContentPreserved: true, archiveSha256: packageSha256 };

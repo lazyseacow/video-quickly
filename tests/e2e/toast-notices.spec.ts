@@ -58,7 +58,7 @@ for (const reducedMotion of ['no-preference', 'reduce'] as const) {
     let calls = 0;
     let release: (() => void) | undefined;
     const pending = new Promise<void>(resolve => { release = resolve; });
-    const server = createServer((_incoming, response) => { void (async () => {
+    const server = createServer({ keepAliveTimeout: 0 }, (_incoming, response) => { void (async () => {
       calls++; if (calls === 1) await pending;
       response.setHeader('content-type', 'application/json'); response.end(JSON.stringify({ data: [{ id: 'notice-fixture' }] }));
     })().catch(error => response.destroy(error instanceof Error ? error : undefined)); });
@@ -75,7 +75,7 @@ for (const reducedMotion of ['no-preference', 'reduce'] as const) {
       await openModels(page, request, `${name}项目`);
       await expect(page.getByRole('button', { name: '添加模型', exact: true }).locator('svg')).toHaveCount(1);
       await expect(page.getByRole('button', { name: '新建项目', exact: true }).locator('svg')).toHaveCount(1);
-      await page.clock.pauseAt(new Date(time.getTime() + 60_000));
+      await page.clock.pauseAt(new Date(time.getTime() + 2 * test.info().timeout));
       const trigger = page.getByRole('button', { name: `检查“${name}”连接`, exact: true });
       await expect(trigger.locator('svg')).toHaveCount(1);
       await trigger.click(); await expect.poll(() => calls).toBe(1);

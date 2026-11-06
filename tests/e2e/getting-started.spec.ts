@@ -138,7 +138,7 @@ async function holdNextRpc(page: Page, method: string, error?: string) {
 }
 async function localProvider() {
   const calls: Array<{ method: string; path: string }> = [];
-  const server = createServer(async (request, response) => {
+  const server = createServer({ keepAliveTimeout: 0 }, async (request, response) => {
     for await (const _ of request) { /* Consume the real provider request. */ }
     calls.push({ method: request.method ?? '', path: request.url ?? '' }); response.setHeader('content-type', 'application/json');
     response.end(JSON.stringify(request.method === 'GET' ? { data: [{ id: 'guide-local-text', display_name: '本地操作指引模型' }] } : { choices: [{ message: { content: '本地指引夹具已完成。' } }] }));

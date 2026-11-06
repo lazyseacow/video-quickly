@@ -10,7 +10,8 @@ async function rpc<T>(request: APIRequestContext, method: string, params: unknow
 }
 async function fixture(request: APIRequestContext, title: string, usage: Record<string, unknown> = { prompt_tokens: 100, completion_tokens: 50, prompt_tokens_details: { cached_tokens: 30 }, completion_tokens_details: { cached_tokens: 2 } }) {
   const counts: ProviderCounts = { received: 0, finished: 0, closed: 0 }, receipts = new Map<string, ProviderCounts>();
-  const server = createServer((request, response) => {
+  // Disable idle connection closes; explicit teardown owns this local provider's lifetime.
+  const server = createServer({ keepAliveTimeout: 0 }, (request, response) => {
     const operationId = request.headers['x-client-request-id'];
     const runId = typeof operationId === 'string' ? /^([0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}):archive-step-\d+$/i.exec(operationId)?.[1] : undefined;
     const receipt = runId ? receipts.get(runId) ?? { received: 0, finished: 0, closed: 0 } : undefined;
@@ -20,8 +21,6 @@ async function fixture(request: APIRequestContext, title: string, usage: Record<
     response.once('close', () => { if (!response.writableFinished) { counts.closed++; if (receipt) receipt.closed++; } });
     response.setHeader('content-type', 'application/json'); response.end(JSON.stringify({ choices: [{ message: { content: '归档测试结果' } }], usage }));
   });
-  // Disable idle connection closes; explicit teardown owns this local provider's lifetime.
-  server.keepAliveTimeout = 0;
   await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
   const address = server.address(); if (!address || typeof address === 'string') throw new Error('夹具服务启动失败');
   const project = await rpc<ProjectDocument>(request, 'project.create', { title });

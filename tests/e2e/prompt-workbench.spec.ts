@@ -13,7 +13,7 @@ async function fixture(request: APIRequestContext, hold = false) {
   const prompts: string[] = [];
   let release!: () => void;
   const gate = new Promise<void>(resolve => { release = resolve; });
-  const server = createServer((incoming, response) => { void (async () => {
+  const server = createServer({ keepAliveTimeout: 0 }, (incoming, response) => { void (async () => {
     let body = ''; for await (const bytes of incoming) body += String(bytes);
     const input = JSON.parse(body); prompts.push(input.messages[0].content); if (hold) await gate;
     response.setHeader('content-type', 'application/json'); response.end(JSON.stringify({ choices: [{ message: { content: '实验生成的创意简报正文' } }], usage: { prompt_tokens: 17, completion_tokens: 9 } }));

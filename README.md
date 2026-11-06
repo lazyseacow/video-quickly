@@ -89,6 +89,8 @@ macOS ZIP 未签名，最低系统版本为 13.5；可运行 `node scripts/verif
 
 浏览器回归使用 `pnpm test:e2e`，默认端口为 1421。多个工作目录同时验证时，可通过 `VIDEO_QUICKLY_PORT` 指定不同端口；各次运行的数据目录独立。
 
+浏览器测试本机默认用例预算为 30 秒、状态断言等待为 5 秒；CI 曾出现约 16 秒的运行时事件循环停顿，因此 CI 默认预算为 90 秒和 30 秒。测试不自动重试，单独声明的用例预算、计时窗口与画面、音频和资源数值门槛按各场景执行。
+
 开发检查使用 `pnpm typecheck`、`pnpm test` 和 `pnpm build`；`pnpm check` 顺序执行这三项。浏览器、媒体与真实桌面验收分别使用 `pnpm test:e2e`、`pnpm test:media` 和 `pnpm test:desktop`，具体覆盖与平台边界见下列文档。
 
 ## 数据与文档

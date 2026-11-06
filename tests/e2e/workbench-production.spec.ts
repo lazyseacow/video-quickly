@@ -13,7 +13,7 @@ async function fixture(request: APIRequestContext, holdStyle = false) {
   let releaseStyle!: () => void, styleEntered!: () => void;
   const release = new Promise<void>(resolve => { releaseStyle = resolve; });
   const entered = new Promise<void>(resolve => { styleEntered = resolve; });
-  const server = createServer(async (incoming, response) => {
+  const server = createServer({ keepAliveTimeout: 0 }, async (incoming, response) => {
     let body = ''; for await (const chunk of incoming) body += chunk.toString();
     calls++;
     if (calls === 1 && holdStyle) { styleEntered(); await release; }

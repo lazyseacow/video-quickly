@@ -54,8 +54,8 @@ try {
   await rm(installation, { recursive: true });
   const after = await snapshot(files);
   assert.deepEqual(after, before, 'Removing a macOS app must retain workspace data byte-for-byte');
-  await writeFile(join(root, '.generated/macos-install-smoke.json'), JSON.stringify({ status: 'passed', platform: 'darwin', architecture: process.arch, version, archiveSha256: await sha256File(archive), installed: true, overwriteInstall: true, nativeLaunch: true, runtimeExited: true, actualExport: true, reviewResumed: true, uninstall: true, dataContentPreserved: true, dataRetention: { before, after }, finderInteraction: 'filesystem ZIP extraction / app replacement; Finder UI not automated' }, null, 2));
-  console.log('macOS ZIP 安装、覆盖、原待审任务继续、实际导出及移除应用保留数据通过。');
+  await writeFile(join(root, '.generated/macos-install-smoke.json'), JSON.stringify({ status: 'passed', platform: 'darwin', architecture: process.arch, version, archiveSha256: await sha256File(archive), installed: true, overwriteInstall: true, nativeLaunch: true, runtimeExited: true, actualExport: true, completedRunRetained: true, uninstall: true, dataContentPreserved: true, dataRetention: { before, after }, finderInteraction: 'filesystem ZIP extraction / app replacement; Finder UI not automated' }, null, 2));
+  console.log('macOS ZIP 安装、覆盖、已完成运行及活动保留、实际导出及移除应用保留数据通过。');
 } finally {
   if (createdData) await rm(data, { recursive: true, force: true });
   await rm(temporary, { recursive: true, force: true });

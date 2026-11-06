@@ -108,7 +108,7 @@ test('restores an unsaved multi-field draft and resolves external edits without 
 
 test('keeps generated results editable with undo and rejects reapplying them after revisions', async ({ page, request }) => {
   test.setTimeout(60_000);
-  const server = createServer((incoming, response) => {
+  const server = createServer({ keepAliveTimeout: 0 }, (incoming, response) => {
     incoming.resume();
     response.setHeader('Content-Type', 'application/json');
     response.end(JSON.stringify({ choices: [{ message: { content: JSON.stringify({ shots: [{ title: '已生成的分镜', narration: '生成的旁白', visualPrompt: '', durationUs: 2_000_000 }] }) } }] }));
@@ -145,7 +145,7 @@ test('keeps generated results editable with undo and rejects reapplying them aft
     const stale = await request.post('/__desktop_rpc', { data: { method: 'node.apply', params: { runId: run.id, nodeId: 'script' } } });
     expect((await stale.json()).error).toContain('项目已在生成后修改');
     await rpc(request, 'run.cancel', { runId: run.id });
-  } finally { await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve())); }
+  } finally { server.closeAllConnections(); await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve())); }
 });
 
 test('separates adjacent layout controls and keeps both monochrome themes usable at desktop and narrow sizes', async ({ page, request }, info) => {

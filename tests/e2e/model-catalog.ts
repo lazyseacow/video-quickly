@@ -1,7 +1,7 @@
 import { createServer } from 'node:http';
 
 export async function modelCatalog(ids: readonly string[]) {
-  const server = createServer((request, response) => {
+  const server = createServer({ keepAliveTimeout: 0 }, (request, response) => {
     if (request.method !== 'GET' || !new URL(request.url ?? '/', 'http://localhost').pathname.endsWith('/models')) {
       response.writeHead(404); response.end(); return;
     }

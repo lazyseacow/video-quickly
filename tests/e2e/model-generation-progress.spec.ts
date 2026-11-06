@@ -6,6 +6,7 @@ import { saveAndStartProduction } from './production-settings';
 function gate() { return { entered: false, ...Promise.withResolvers<void>() }; }
 for (const viewport of [{ width: 1536, height: 960, theme: 'dark', references: true }, { width: 390, height: 844, theme: 'light', references: false }]) {
   test(`tracks only actual model generation at ${viewport.width}px`, async ({ page, request }, info) => {
+    test.setTimeout(90_000);
     const errors: string[] = [], submissions: string[] = [];
     page.on('pageerror', error => errors.push(error.message)); page.on('console', message => { if (message.type() === 'error') errors.push(message.text()); });
     const gates = { brief: gate(), style: gate(), script: gate(), assets: gate(), video: gate() };
@@ -21,6 +22,11 @@ for (const viewport of [{ width: 1536, height: 960, theme: 'dark', references: t
       await page.setViewportSize(viewport); await page.emulateMedia({ reducedMotion: 'reduce' }); await page.addInitScript(theme => localStorage.setItem('vq-theme', theme), viewport.theme);
       const settings = await open(page, source.project);
       await saveAndStartProduction(settings);
+      await expect.poll(async () => {
+        if (gates.brief.entered) return 'brief request received';
+        const run = await latest(request, source.project.id);
+        return gates.brief.entered ? 'brief request received' : JSON.stringify(run ? { runId: run.id, status: run.status, error: run.error } : { status: 'not-created' });
+      }, { timeout: 30_000, message: 'The first real model request must begin before checking generation progress' }).toBe('brief request received');
       const production = page.getByRole('region', { name: '当前制作', exact: true }), progress = production.getByRole('list', { name: '模型生成进度', exact: true });
       const labels = ['简报生成', '风格与角色生成', '分镜生成', ...(viewport.references ? ['参考图生成'] : []), '镜头视频生成'];
       await expect(progress.locator('.workbench-guide__step-copy > strong')).toHaveText(labels);

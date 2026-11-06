@@ -136,7 +136,7 @@ try {
   if ($taskDeleted.ExitCode -ne 0 -or (Test-Path -LiteralPath $taskData)) { throw '明确选择删除数据后工作区仍存在' }
   $taskSentinelAfterExplicit = @(Get-ProtectedSentinelSnapshot '明确删除工作区')
   $taskDeletionScope = @{ option='--delete-electron-workspace'; workspace=$taskData; protectedDirectoriesPreserved=$true; before=@($taskSentinelBefore); afterDefault=@($taskSentinelAfterDefault); afterExplicit=@($taskSentinelAfterExplicit) }
-  $taskReport = @{ installerSha256=$taskInstallerSha256; installed=$true; overwriteInstall=$true; framework='electron'; nativeLaunch=$true; installedRuntime=$true; actualExport=$true; reviewResumed=$true; uninstall=$true; databaseFileRetained=$true; dataPreserved=$true; dataContentPreserved=$true; explicitDataDeletion=$true; dataRetention=$taskRetention; deletionScope=$taskDeletionScope; systemFilePicker='manual-check-required' }
+  $taskReport = @{ installerSha256=$taskInstallerSha256; installed=$true; overwriteInstall=$true; framework='electron'; nativeLaunch=$true; installedRuntime=$true; actualExport=$true; completedRunRetained=$true; uninstall=$true; databaseFileRetained=$true; dataPreserved=$true; dataContentPreserved=$true; explicitDataDeletion=$true; dataRetention=$taskRetention; deletionScope=$taskDeletionScope; systemFilePicker='manual-check-required' }
   $taskReportPath = '.generated/install-smoke.json'
   $taskReport | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $taskReportPath -Encoding utf8
 } finally {

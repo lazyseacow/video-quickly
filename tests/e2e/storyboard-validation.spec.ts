@@ -10,7 +10,7 @@ async function rpc<T>(request: APIRequestContext, method: string, params: unknow
 }
 async function fixture(request: APIRequestContext, protocol: 'chat-completions' | 'responses', options: { rejectSecondScript?: boolean; maasFormatFailure?: boolean } = {}) {
   const calls: { step: string; body: Record<string, unknown> }[] = [];
-  const server = createServer(async (incoming, response) => {
+  const server = createServer({ keepAliveTimeout: 0 }, async (incoming, response) => {
     let text = ''; for await (const chunk of incoming) text += chunk.toString();
     const body = JSON.parse(text), prompt = JSON.stringify(body);
     const step = prompt.includes('自动视频制作步骤：旁白与分镜') ? 'script' : prompt.includes('自动视频制作步骤：创意简报') ? 'brief' : 'style';

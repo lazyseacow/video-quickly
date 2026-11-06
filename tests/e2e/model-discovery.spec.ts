@@ -9,7 +9,7 @@ test.afterEach(async () => { if (server) await new Promise<void>(resolve => { se
 for (const viewport of [{ width: 1536, height: 960, theme: 'dark' }, { width: 390, height: 844, theme: 'light' }]) {
   test(`retains a saved API key when editing the service address at ${viewport.width}px`, async ({ page, request }, info) => {
     const calls: string[] = [], errors: string[] = [], inputs: unknown[] = [];
-    server = createServer((incoming, response) => {
+    server = createServer({ keepAliveTimeout: 0 }, (incoming, response) => {
       expect(incoming.headers.authorization).toBe('Bearer retained-ui-fixture-key');
       calls.push(incoming.url ?? '');
       response.end(JSON.stringify({ data: [{ id: 'fixture-key-model' }] }));
@@ -84,7 +84,7 @@ for (const viewport of [{ width: 1536, height: 960, theme: 'dark' }, { width: 39
     const errors: string[] = [], consoleErrors: string[] = []; page.on('pageerror', error => errors.push(error.message));
     page.on('console', message => { if (['error', 'warning'].includes(message.type())) consoleErrors.push(message.text()); });
     const requests: string[] = []; let recovered = false;
-    server = createServer((request, response) => {
+    server = createServer({ keepAliveTimeout: 0 }, (request, response) => {
       requests.push(request.url!);
       if (request.url === '/unsupported/models') {
         if (recovered) response.end(JSON.stringify({ data: [{ id: 'fixture-text-2' }] }));
@@ -180,7 +180,7 @@ test('keeps address editing focused across the first frame after a validation er
 
 test('keeps an empty model catalogue read-only until the service returns a selectable model', async ({ page }) => {
   let available = false;
-  server = createServer((_request, response) => response.end(JSON.stringify({ data: available ? [{ id: 'remote-model' }] : [] })));
+  server = createServer({ keepAliveTimeout: 0 }, (_request, response) => response.end(JSON.stringify({ data: available ? [{ id: 'remote-model' }] : [] })));
   await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve)); const address = server.address(); if (!address || typeof address === 'string') throw new Error('无测试端口');
   await page.goto('/'); await page.getByRole('button', { name: '模型连接', exact: true }).click(); const dialog = await addModelConnection(page);
   await (await settingField(dialog, '模型平台')).selectOption('custom'); await (await settingField(dialog, '连接名称')).fill('空目录重试');
@@ -197,7 +197,7 @@ test('keeps an empty model catalogue read-only until the service returns a selec
 });
 
 test('filters OpenAI discovery by connection type', async ({ page }, info) => {
-  server = createServer((request, response) => {
+  server = createServer({ keepAliveTimeout: 0 }, (request, response) => {
     expect(request.method).toBe('GET'); expect(request.url).toBe('/v1/models');
     response.end(JSON.stringify({ data: [
       { id: 'gpt-4o', created: 1_700_000_000 }, { id: 'gpt-4.1', created: 1_800_000_000 },
@@ -230,7 +230,7 @@ test('filters OpenAI discovery by connection type', async ({ page }, info) => {
 test('keeps the latest service results after the address changes', async ({ page }) => {
   let firstRequest: (() => void) | undefined;
   const started = new Promise<void>(resolve => { firstRequest = resolve; });
-  server = createServer((request, response) => {
+  server = createServer({ keepAliveTimeout: 0 }, (request, response) => {
     if (request.url === '/slow/models') { firstRequest?.(); setTimeout(() => response.end(JSON.stringify({ data: [{ id: 'stale-model' }] })), 1200); }
     else response.end(JSON.stringify({ data: [{ id: 'latest-model' }] }));
   });

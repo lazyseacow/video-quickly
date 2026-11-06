@@ -58,7 +58,7 @@ for (const viewport of viewports) test(`previews and saves deterministic grid cr
 
 for (const viewport of viewports) test(`generates a masked image candidate and applies it explicitly with undo at ${viewport.width}px`, async ({ page, request }, info) => {
   const source = await fixture(request), resultBytes = png('green'), calls: Array<{ path: string; source: Buffer; mask: Buffer; prompt: string }> = [], errors: string[] = [];
-  const server = createServer((incoming, response) => { void (async () => {
+  const server = createServer({ keepAliveTimeout: 0 }, (incoming, response) => { void (async () => {
     const chunks: Buffer[] = []; for await (const chunk of incoming) chunks.push(Buffer.from(chunk));
     const body = Buffer.concat(chunks), form = await new Request('http://fixture/images/edits', { method: 'POST', headers: { 'content-type': incoming.headers['content-type'] ?? '' }, body }).formData();
     const image = form.get('image[]'), mask = form.get('mask');

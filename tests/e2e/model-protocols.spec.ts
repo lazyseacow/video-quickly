@@ -12,7 +12,7 @@ test('requires a confirmed model selection before saving', async ({ page, reques
   let releaseModels!: () => void, requestedModels!: () => void;
   const released = new Promise<void>(resolve => { releaseModels = resolve; });
   const requested = new Promise<void>(resolve => { requestedModels = resolve; });
-  const server = createServer(async (incoming, response) => {
+  const server = createServer({ keepAliveTimeout: 0 }, async (incoming, response) => {
     expect(incoming.method).toBe('GET'); expect(incoming.url).toBe('/v1/models');
     requestedModels(); await released;
     response.setHeader('Content-Type', 'application/json'); response.end(JSON.stringify({ data: [{ id: 'discovered-model' }] }));
@@ -48,7 +48,8 @@ for (const viewport of [{ width: 1536, height: 960, theme: 'dark' }, { width: 39
     test(`saves and executes ${protocol} from the model form at ${viewport.width}px`, async ({ page, request }, info) => {
       test.setTimeout(60_000);
       const calls: Array<{ path: string; body: Record<string, unknown> }> = [], errors: string[] = [];
-      const server = createServer(async (incoming, response) => {
+      // Explicit teardown owns this successful provider's connection lifetime.
+      const server = createServer({ keepAliveTimeout: 0 }, async (incoming, response) => {
         let body = ''; for await (const chunk of incoming) body += chunk.toString();
         calls.push({ path: incoming.url ?? '', body: body ? JSON.parse(body) : {} }); response.setHeader('Content-Type', 'application/json');
         if (incoming.method === 'GET') response.end(JSON.stringify({ data: [{ id: 'fixture-protocol' }] }));

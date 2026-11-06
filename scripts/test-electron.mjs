@@ -46,7 +46,7 @@ let expectedSecret = testSecret;
 const credentialReferences = new Set();
 let credentialRequests = 0;
 let credentialContacts = 0;
-const credentialServer = createServer((request, response) => {
+const credentialServer = createServer({ keepAliveTimeout: 0 }, (request, response) => {
   credentialContacts++;
   if (request.headers.authorization !== `Bearer ${expectedSecret}`) { response.writeHead(401); response.end(); return; }
   credentialRequests++;

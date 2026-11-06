@@ -16,7 +16,7 @@ async function rpc<T>(request: APIRequestContext, method: string, params: unknow
 async function close(server: Server) { server.closeAllConnections(); await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve())); }
 async function fixture(request: APIRequestContext) {
   let calls = 0;
-  const server = createServer((request, response) => { request.resume(); calls++; response.setHeader('content-type', 'application/json'); response.end(JSON.stringify({ choices: [{ message: { content: `第 ${calls} 版生成风格` } }], usage: { prompt_tokens: 8, completion_tokens: 4 } })); });
+  const server = createServer({ keepAliveTimeout: 0 }, (request, response) => { request.resume(); calls++; response.setHeader('content-type', 'application/json'); response.end(JSON.stringify({ choices: [{ message: { content: `第 ${calls} 版生成风格` } }], usage: { prompt_tokens: 8, completion_tokens: 4 } })); });
   await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
   const address = server.address(); if (!address || typeof address === 'string') throw new Error('夹具服务没有启动');
   try {
