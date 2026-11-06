@@ -6,7 +6,6 @@ import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const playwright = createRequire(import.meta.url).resolve('@playwright/test/cli');
-const shardCount = 2;
 type Identity = { commit: string; platform: string; architecture: string };
 
 function object(value: unknown): Record<string, unknown> {
@@ -55,14 +54,20 @@ export function verifyBrowserCoverage(discovered: unknown, merged: unknown): num
   return actual.length;
 }
 
-export async function recordBrowserShard(directory: string, shard: number, identity: Identity) {
+function validateShardCount(shardCount: number) {
+  assert.ok(Number.isSafeInteger(shardCount) && shardCount >= 1, 'Invalid browser shard total');
+}
+
+export async function recordBrowserShard(directory: string, shard: number, shardCount: number, identity: Identity) {
+  validateShardCount(shardCount);
   assert.ok(Number.isInteger(shard) && shard >= 1 && shard <= shardCount, 'Invalid browser shard');
   assert.match(identity.commit, /^[a-f0-9]{40}$/, 'A browser shard must identify its exact commit');
   await mkdir(directory, { recursive: true });
   await writeFile(join(directory, 'identity.json'), JSON.stringify({ ...identity, shard, total: shardCount }));
 }
 
-export async function mergeBrowserReports(root: string, identity: Identity): Promise<number> {
+export async function mergeBrowserReports(root: string, shardCount: number, identity: Identity): Promise<number> {
+  validateShardCount(shardCount);
   const generated = join(root, '.generated'), artifacts = join(generated, 'browser-artifacts');
   await mkdir(artifacts, { recursive: true });
   // Playwright extracts attachments next to its input blobs, inside the archived evidence directory.
@@ -70,7 +75,7 @@ export async function mergeBrowserReports(root: string, identity: Identity): Pro
   const diagnostics: Buffer[] = [];
   for (let shard = 1; shard <= shardCount; shard++) {
     const directory = join(artifacts, `shard-${shard}`);
-    assert.deepEqual(await json(join(directory, 'identity.json')), { ...identity, shard, total: shardCount }, 'Browser shard belongs to another commit, platform, architecture or index');
+    assert.deepEqual(await json(join(directory, 'identity.json')), { ...identity, shard, total: shardCount }, 'Browser shard belongs to another commit, platform, architecture, index or total');
     const reports = (await readdir(join(directory, 'blob'))).filter(name => name.endsWith('.zip'));
     assert.equal(reports.length, 1, `Expected one blob report for browser shard ${shard}`);
     await copyFile(join(directory, 'blob', reports[0]), join(blobs, `shard-${shard}.zip`));
@@ -93,7 +98,9 @@ export async function mergeBrowserReports(root: string, identity: Identity): Pro
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   const identity = { commit: process.env.GITHUB_SHA ?? '', platform: process.platform, architecture: process.arch };
-  if (process.argv[2] === 'record') await recordBrowserShard(resolve('.generated/browser-shard'), Number(process.argv[3]), identity);
-  else if (process.argv[2] === 'merge') console.log(`Verified all ${await mergeBrowserReports(process.cwd(), identity)} browser tests across both shards.`);
-  else throw new Error('Use browser-reports.ts record <1|2> or merge');
+  if (process.argv[2] === 'record' && process.argv.length === 5) await recordBrowserShard(resolve('.generated/browser-shard'), Number(process.argv[3]), Number(process.argv[4]), identity);
+  else if (process.argv[2] === 'merge' && process.argv.length === 4) {
+    const shardCount = Number(process.argv[3]);
+    console.log(`Verified all ${await mergeBrowserReports(process.cwd(), shardCount, identity)} browser tests across ${shardCount} shards.`);
+  } else throw new Error('Use browser-reports.ts record <index> <total> or merge <total>');
 }

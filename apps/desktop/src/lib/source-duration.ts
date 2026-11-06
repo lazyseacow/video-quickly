@@ -19,6 +19,7 @@ async function readDuration(asset: AssetRecord, signal: AbortSignal): Promise<nu
   return new Promise<number>((resolve, reject) => {
     // Metadata probing owns a detached element so it never seeks or pauses the preview.
     const element = document.createElement(asset.kind === 'video' ? 'video' : 'audio');
+    element.dataset.previewRole = 'duration-probe';
     const cleanup = () => {
       clearTimeout(timeout);
       signal.removeEventListener('abort', abort);

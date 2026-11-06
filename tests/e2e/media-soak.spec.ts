@@ -10,7 +10,7 @@ import type { AssetRecord, ProjectDocument } from '@video-quickly/contracts';
 
 const execute = promisify(execFile), requested = process.env.VIDEO_QUICKLY_SOAK_SECONDS;
 const sourceColors = ['d12a36', '2ac950', '2f4bd1', 'd1bd2a', '2ac7c7', 'c72ac7', 'd16a2a', '6ac72a', '2a72c7', '902ac7', 'c72a72', '2ac794'];
-interface VideoSample { source: string; width: number; height: number; ready: number; playing: boolean; currentTime: number; decodedFrames: number; droppedFrames: number }
+interface VideoSample { role: string; source: string; width: number; height: number; ready: number; playing: boolean; currentTime: number; decodedFrames: number; droppedFrames: number }
 interface PresentationSample { source: string; stable: boolean; frames: number; mediaTimes: number[]; pixel: number[]; sourcePixel: number[]; pattern: string }
 
 async function rpc<T>(request: APIRequestContext, method: string, params: unknown = {}): Promise<T> {
@@ -25,7 +25,7 @@ async function decodedVideos(session: CDPSession) {
   try {
     const result = await session.send('Runtime.callFunctionOn', { objectId: objects.objects.objectId, returnByValue: true, awaitPromise: true, functionDeclaration: `async function () {
       const live = this.filter(video => video.getAttribute('src'));
-      const videos = live.map(video => { const quality = video.getVideoPlaybackQuality(); return { source: video.currentSrc, width: video.videoWidth, height: video.videoHeight, ready: video.readyState, playing: !video.paused, currentTime: video.currentTime, decodedFrames: quality.totalVideoFrames, droppedFrames: quality.droppedVideoFrames }; });
+      const videos = live.map(video => { const quality = video.getVideoPlaybackQuality(); return { role: video.dataset.previewRole ?? 'unknown', source: video.currentSrc, width: video.videoWidth, height: video.videoHeight, ready: video.readyState, playing: !video.paused, currentTime: video.currentTime, decodedFrames: quality.totalVideoFrames, droppedFrames: quality.droppedVideoFrames }; });
       const video = live.find(video => !video.paused && video.readyState >= 2);
       if (!video) return { videos };
       const source = video.currentSrc, times = []; let callback;
@@ -81,7 +81,7 @@ if (requested !== undefined) {
     } });
     const session = await page.context().newCDPSession(page), players = new Set<string>();
     session.on('Media.playerCreated', ({ player }) => players.add(player.playerId)); session.on('Media.playerErrorsRaised', event => mediaErrors.push(event)); await session.send('Media.enable');
-    const observed = new Map<string, Set<string>>(); let maxLiveVideos = 0, presentedFrames = 0, openToPreviewMs: number | undefined;
+    const observed = new Map<string, Set<string>>(); let maxLiveVideos = 0, maxPreviewVideos = 0, maxDurationProbes = 0, presentedFrames = 0, openToPreviewMs: number | undefined, afterSeekVideos: VideoSample[] = [];
     try {
       const started = performance.now();
       await openProjectFromList(page, project.title);
@@ -91,6 +91,8 @@ if (requested !== undefined) {
       while (performance.now() - clockStart < seconds * 1_000) {
         await page.waitForTimeout(Math.max(0, Math.min(650, seconds * 1_000 - (performance.now() - clockStart))));
         const { videos, presentation } = await decodedVideos(session); maxLiveVideos = Math.max(maxLiveVideos, videos.length);
+        const previewVideos = videos.filter(video => ['scene', 'thumbnail'].includes(video.role)), durationProbes = videos.filter(video => video.role === 'duration-probe');
+        maxPreviewVideos = Math.max(maxPreviewVideos, previewVideos.length); maxDurationProbes = Math.max(maxDurationProbes, durationProbes.length);
         const heap = await session.send('Runtime.getHeapUsage');
         samples.push({ elapsedMs: performance.now() - clockStart, programTimeMs: Number(await ruler.getAttribute('aria-valuenow')), heap, videos, presentation });
         if (presentation?.stable && presentation.frames > 0) {
@@ -104,7 +106,10 @@ if (requested !== undefined) {
           const patterns = observed.get(assets[index].id) ?? new Set<string>(); patterns.add(presentation.pattern); observed.set(assets[index].id, patterns); presentedFrames += presentation.frames;
           if (presentation.mediaTimes.length > 1) expect(presentation.mediaTimes.at(-1)!).toBeGreaterThan(presentation.mediaTimes[0]);
         }
-        expect(videos.length).toBeLessThanOrEqual(3); await expect(page.getByRole('button', { name: '暂停预览', exact: true })).toBeVisible();
+        expect(previewVideos.length).toBeLessThanOrEqual(4); expect(durationProbes.length).toBeLessThanOrEqual(1); expect(videos.length).toBeLessThanOrEqual(5);
+        expect(videos.filter(video => video.role === 'scene').length).toBeLessThanOrEqual(2); expect(videos.filter(video => video.role === 'thumbnail').length).toBeLessThanOrEqual(2);
+        expect(videos.filter(video => !['scene', 'thumbnail', 'duration-probe'].includes(video.role))).toEqual([]);
+        await expect(page.getByRole('button', { name: '暂停预览', exact: true })).toBeVisible();
         await expect(page.locator('.preview-panel .scene-preview__state[role="alert"]')).toHaveCount(0);
       }
       const advanced = Number(await ruler.getAttribute('aria-valuenow')) - beginning;
@@ -118,10 +123,11 @@ if (requested !== undefined) {
       await page.locator('.outline-shot').last().scrollIntoViewIfNeeded(); await page.locator('.outline-shot').last().click();
       await expect(page.getByLabel('镜头标题', { exact: true })).toHaveValue('独立镜头 200');
       await expect(page.locator('.preview-panel .scene-preview')).toHaveAttribute('aria-busy', 'false');
+      await expect.poll(async () => { afterSeekVideos = (await decodedVideos(session)).videos; return afterSeekVideos.filter(video => video.role === 'duration-probe').length; }, { message: 'The newly selected source duration probe must release its source.' }).toBe(0);
       expect(errors).toEqual([]); expect(mediaErrors).toEqual([]);
       await page.screenshot({ path: info.outputPath('independent-media-after-soak.png') });
     } finally {
-      const evidence = { fixture: { shots: 200, independentSourceFiles: assets.length, uniqueSourceHashes: new Set(assets.map(asset => asset.sha256)).size, source: '3s H.264 1920x1080 30fps; unique background and moving test pattern for every file', playbackSecondsRequested: seconds }, machine: { platform: platform(), cpu: cpus()[0]?.model, memoryGiB: totalmem() / 1024 ** 3, node: process.version, browser: browser.version(), headless, trace }, measurements: { openToPreviewMs, maxLiveVideos, playersCreated: players.size, observedSourceIds: [...observed.keys()], canvasPatternsPerSource: Object.fromEntries([...observed].map(([id, patterns]) => [id, patterns.size])), presentedFramesInObservationWindows: presentedFrames, samples, mixJobs }, errors, mediaErrors, nativeGpuMeasured: false };
+      const evidence = { fixture: { shots: 200, independentSourceFiles: assets.length, uniqueSourceHashes: new Set(assets.map(asset => asset.sha256)).size, source: '3s H.264 1920x1080 30fps; unique background and moving test pattern for every file', playbackSecondsRequested: seconds }, machine: { platform: platform(), cpu: cpus()[0]?.model, memoryGiB: totalmem() / 1024 ** 3, node: process.version, browser: browser.version(), headless, trace }, measurements: { openToPreviewMs, maxLiveVideos, maxPreviewVideos, maxDurationProbes, afterSeekVideos, playersCreated: players.size, observedSourceIds: [...observed.keys()], canvasPatternsPerSource: Object.fromEntries([...observed].map(([id, patterns]) => [id, patterns.size])), presentedFramesInObservationWindows: presentedFrames, samples, mixJobs }, errors, mediaErrors, nativeGpuMeasured: false };
       const path = info.outputPath('independent-media-soak.json'); await writeFile(path, JSON.stringify(evidence, null, 2)); await info.attach('independent-media-soak', { path, contentType: 'application/json' }); await session.detach();
     }
   });

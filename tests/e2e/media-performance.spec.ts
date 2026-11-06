@@ -8,10 +8,32 @@ import { expect, test, type APIRequestContext, type Browser, type CDPSession, ty
 import type { AssetRecord, ProjectDocument } from '@video-quickly/contracts';
 
 const execute = promisify(execFile);
+interface ResourceVideo { role: string; ready: number; paused: boolean; seeking: boolean; time: number; width: number; height: number }
+interface ResourceSample { wallMs: number; action: string; videos: ResourceVideo[] }
 
 // Recording every canvas update changes the cadence being measured. Functional
 // thumbnail/clip tests retain the normal failure traces and pixel assertions.
 test.use({ trace: 'off' });
+
+async function observeResources(page: Page) {
+  await page.addInitScript(() => {
+    const samples: ResourceSample[] = [], seen = new WeakSet<HTMLVideoElement>(), videos: WeakRef<HTMLVideoElement>[] = [];
+    (window as unknown as { previewResourceSamples: ResourceSample[] }).previewResourceSamples = samples;
+    function record(element: Element, action: string) {
+      if (!(element instanceof HTMLVideoElement)) return;
+      if (!seen.has(element)) { seen.add(element); videos.push(new WeakRef(element)); }
+      const live = videos.flatMap(reference => { const video = reference.deref(); return video?.getAttribute('src') ? [video] : []; });
+      samples.push({ wallMs: performance.now(), action: `${element.dataset.previewRole ?? 'unknown'}:${action}`, videos: live.map(video => ({ role: video.dataset.previewRole ?? 'unknown', ready: video.readyState, paused: video.paused, seeking: video.seeking, time: video.currentTime, width: video.videoWidth, height: video.videoHeight })) });
+    }
+    // Observe real source ownership changes without polling/collecting the heap
+    // during the cadence measurement. Weak references do not retain decoders.
+    const source = Object.getOwnPropertyDescriptor(HTMLMediaElement.prototype, 'src')!;
+    Object.defineProperty(HTMLMediaElement.prototype, 'src', { ...source, set(this: HTMLMediaElement, value: string) { source.set!.call(this, value); record(this, 'src-set'); } });
+    const remove = Element.prototype.removeAttribute, set = Element.prototype.setAttribute;
+    Element.prototype.removeAttribute = function (name: string) { remove.call(this, name); if (name.toLowerCase() === 'src') record(this, 'src-remove'); };
+    Element.prototype.setAttribute = function (name: string, value: string) { set.call(this, name, value); if (name.toLowerCase() === 'src') record(this, 'src-set'); };
+  });
+}
 
 async function rpc<T>(request: APIRequestContext, method: string, params: unknown = {}): Promise<T> {
   const response = await request.post('/__desktop_rpc', { data: { method, params } });
@@ -37,11 +59,11 @@ async function videoElements(session: CDPSession) {
   try {
     const result = await session.send('Runtime.callFunctionOn', { objectId: objects.objects.objectId, returnByValue: true, functionDeclaration: `function () {
       const live = this.filter(element => element.getAttribute('src'));
-      return { live: live.length, ready: live.filter(element => element.readyState >= 2).length, playing: live.filter(element => !element.paused).length, sourcePixels: live.reduce((sum, element) => sum + element.videoWidth * element.videoHeight, 0) };
+      return { live: live.length, ready: live.filter(element => element.readyState >= 2).length, playing: live.filter(element => !element.paused).length, sourcePixels: live.reduce((sum, element) => sum + element.videoWidth * element.videoHeight, 0), videos: live.map(video => ({ role: video.dataset.previewRole ?? 'unknown', ready: video.readyState, paused: video.paused, seeking: video.seeking, time: video.currentTime, width: video.videoWidth, height: video.videoHeight })) };
     }` });
     const value: unknown = result.result.value;
-    if (!value || typeof value !== 'object' || !('live' in value) || typeof value.live !== 'number') throw new Error('无法测量真实视频元素');
-    return value;
+    if (!value || typeof value !== 'object' || !('live' in value) || typeof value.live !== 'number' || !('videos' in value) || !Array.isArray(value.videos)) throw new Error('无法测量真实视频元素');
+    return value as { live: number; ready: number; playing: number; sourcePixels: number; videos: ResourceVideo[] };
   } finally { await session.send('Runtime.releaseObjectGroup', { objectGroup: group }); }
 }
 
@@ -105,6 +127,7 @@ for (const count of [50, 200]) test(`bounds real 1080p video resources and measu
   const errors: string[] = [], mediaErrors: unknown[] = [], players = new Map<string, Record<string, string>>();
   page.on('pageerror', error => errors.push(error.message));
   page.on('console', message => { if (message.type() === 'error') errors.push(message.text()); });
+  await observeResources(page);
   await page.goto('/'); await expect(page.getByLabel('项目名称', { exact: true })).toBeVisible();
   const session = await page.context().newCDPSession(page);
   session.on('Media.playerCreated', ({ player }) => { if (!players.has(player.playerId)) players.set(player.playerId, {}); });
@@ -130,11 +153,19 @@ for (const count of [50, 200]) test(`bounds real 1080p video resources and measu
     timing.playback = await playbackCadence(page, session, () => players.size);
   } finally {
     const elements = await videoElements(session), heap = await session.send('Runtime.getHeapUsage');
-    const metrics = { fixture: { shots: count, source: '5s H.264 1920x1080 30fps, one real asset, distinct 20ms source offsets', preview: '1920x1080, previewScale=0.5', viewport: page.viewportSize() }, machine: { platform: platform(), cpu: cpus()[0]?.model, memoryGiB: totalmem() / 1024 ** 3, node: process.version, browser: { version: browser.version(), headless, trace } }, timing, videoElements: elements, createdMediaPlayers: players.size, reportedDecoders: [...players.values()].flatMap(properties => Object.entries(properties).filter(([key]) => key.includes('DecoderName')).map(([key, value]) => ({ key, value }))), heap, browserMemory: await processMemory(browser), errors, mediaErrors };
+    const resourceSamples = await page.evaluate(() => (window as unknown as { previewResourceSamples: ResourceSample[] }).previewResourceSamples);
+    const maximum = (filter: (video: ResourceVideo) => boolean) => Math.max(0, ...resourceSamples.map(sample => sample.videos.filter(filter).length));
+    const peak = { total: maximum(() => true), preview: maximum(video => ['scene', 'thumbnail'].includes(video.role)), scene: maximum(video => video.role === 'scene'), thumbnail: maximum(video => video.role === 'thumbnail'), durationProbe: maximum(video => video.role === 'duration-probe'), unknown: maximum(video => !['scene', 'thumbnail', 'duration-probe'].includes(video.role)) };
+    const metrics = { fixture: { shots: count, source: '5s H.264 1920x1080 30fps, one real asset, distinct 20ms source offsets', preview: '1920x1080, previewScale=0.5', viewport: page.viewportSize() }, machine: { platform: platform(), cpu: cpus()[0]?.model, memoryGiB: totalmem() / 1024 ** 3, node: process.version, browser: { version: browser.version(), headless, trace } }, timing, videoElements: elements, resources: { peak, samples: resourceSamples }, createdMediaPlayers: players.size, reportedDecoders: [...players.values()].flatMap(properties => Object.entries(properties).filter(([key]) => key.includes('DecoderName')).map(([key, value]) => ({ key, value }))), heap, browserMemory: await processMemory(browser), errors, mediaErrors };
     await writeFile(info.outputPath('real-media-metrics.json'), JSON.stringify(metrics, null, 2));
     await info.attach('real-media-metrics', { path: info.outputPath('real-media-metrics.json'), contentType: 'application/json' });
-    console.log(JSON.stringify({ shots: count, liveVideos: elements.live, createdPlayers: players.size, timing, errors: errors.length, mediaErrors: mediaErrors.length }));
-    expect(elements.live).toBeLessThanOrEqual(3);
+    console.log(JSON.stringify({ shots: count, liveVideos: elements.live, resourcePeaks: peak, createdPlayers: players.size, timing, errors: errors.length, mediaErrors: mediaErrors.length }));
+    expect(elements.live).toBeLessThanOrEqual(4);
+    // This one-source fixture can overlap one metadata probe during opening.
+    // Rendering keeps its independent two-scene + two-thumbnail budget.
+    expect(peak.total).toBeLessThanOrEqual(5); expect(peak.preview).toBeLessThanOrEqual(4);
+    expect(peak.scene).toBeLessThanOrEqual(2); expect(peak.thumbnail).toBeLessThanOrEqual(2); expect(peak.durationProbe).toBeLessThanOrEqual(1); expect(peak.unknown).toBe(0);
+    expect(elements.videos.filter(video => video.role === 'duration-probe'), 'Completed source-duration probes must release their source.').toEqual([]);
     expect(errors).toEqual([]); expect(mediaErrors).toEqual([]);
     await session.detach();
   }

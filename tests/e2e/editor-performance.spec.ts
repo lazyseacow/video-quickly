@@ -28,14 +28,17 @@ async function createProject(request: APIRequestContext, title: string, shotCoun
   const project = await rpc(request, 'project.create', { title });
   return rpc(request, 'project.update', { projectId: project.id, revision: project.revision, patch: { shots: Array.from({ length: shotCount }, (_, index) => ({ id: `shot-${index}`, title: `测试镜头 ${index + 1}`, narration: '', visualPrompt: '', durationUs: 2_000_000 })) } });
 }
-async function openProject(page: Page, project: Pick<ProjectDocument, 'title' | 'shots'>) {
-  await page.goto('/');
-  await page.getByRole('button', { name: '我的项目', exact: true }).click();
-  await page.locator('.project-card').filter({ hasText: project.title }).getByRole('button', { name: /继续创作/ }).click();
+async function waitForEditor(page: Page, project: Pick<ProjectDocument, 'title' | 'shots'>) {
   await page.waitForFunction(({ title, count }) => [...document.querySelectorAll<HTMLElement>('.workbench')].some(root =>
     root.querySelector<HTMLInputElement>('input[aria-label="项目名称"]')?.value === title && root.querySelectorAll('.outline-shot').length === count &&
     root.getClientRects().length > 0 && getComputedStyle(root).visibility === 'visible'), { title: project.title, count: project.shots.length });
   await expect(page.getByLabel('镜头标题', { exact: true })).toBeVisible();
+}
+async function openProject(page: Page, project: Pick<ProjectDocument, 'title' | 'shots'>) {
+  await page.goto('/');
+  await page.getByRole('button', { name: '我的项目', exact: true }).click();
+  await page.locator('.project-card').filter({ hasText: project.title }).getByRole('button', { name: /继续创作/ }).click();
+  await waitForEditor(page, project);
 }
 
 for (const shotCount of [200, 1000]) test(`loads ${shotCount} shots without snapshot or hidden historical reads and keeps controls responsive`, async ({ page, request, browser }, info) => {
@@ -72,7 +75,9 @@ for (const shotCount of [200, 1000]) test(`loads ${shotCount} shots without snap
   }, { id: project.id, last: shotCount - 1 })).toBe(true);
   const recoveryStarted = Date.now();
   await page.reload();
-  await openProjectFromList(page, project.title);
+  // Large-project readiness is measured within this case's budget, with every shot restored.
+  await openProjectFromList(page, project.title, { waitForReady: false });
+  await waitForEditor(page, project);
   await expect(page.getByLabel('镜头标题', { exact: true })).toHaveValue('待恢复的大项目草稿');
   const recoveryMs = Date.now() - recoveryStarted;
   await page.getByRole('button', { name: '撤销', exact: true }).click();

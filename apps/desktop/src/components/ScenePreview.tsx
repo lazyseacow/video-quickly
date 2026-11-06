@@ -154,6 +154,7 @@ export const ScenePreview = memo(function ScenePreview({ project, shot, shotInde
     let active = true;
     setMediaError(undefined);
     const element = document.createElement('video');
+    element.dataset.previewRole = 'scene';
     element.muted = true;
     element.playsInline = true;
     element.preload = thumbnail ? 'metadata' : 'auto';

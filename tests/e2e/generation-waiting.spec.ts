@@ -92,9 +92,9 @@ test('restores partial previews on reload and stops without submitting a second 
 
 for (const viewport of [{ width: 1464, height: 895, theme: 'dark' }, { width: 1024, height: 720, theme: 'light' }, { width: 390, height: 844, theme: 'light' }]) {
   test(`replaces six storyboard skeletons individually as parallel video results arrive at ${viewport.width}px`, async ({ page, request }, info) => {
-    const held = Array.from({ length: 6 }, gate); let submissions = 0;
+    const held = Array.from({ length: 6 }, gate), submitted = gate(); let submissions = 0;
     const source = await fixture(request, info, false, 6, { beforeReply: async (_body, path) => {
-      if (path.includes('contents/generations/tasks')) await held[submissions++].pending;
+      if (path.includes('contents/generations/tasks')) { const index = submissions++; if (submissions === 2) submitted.release(); await held[index].pending; }
     } });
     try {
       await page.setViewportSize(viewport); await page.emulateMedia({ reducedMotion: 'reduce' });
@@ -103,7 +103,7 @@ for (const viewport of [{ width: 1464, height: 895, theme: 'dark' }, { width: 10
         execution: { maxConcurrentShots: 2, modelLimits: { [source.video.id]: 2 } },
         production: { ...source.project.workflow.production, textModelId: source.models[0].id, videoModelId: source.video.id } } });
       const run = await rpc<RunSummary>(request, 'run.start', { projectId: source.project.id });
-      await expect.poll(() => submissions).toBe(2);
+      await submitted.pending; expect(submissions).toBe(2);
       await page.goto('/'); await openProjectFromList(page, source.project.title);
       await page.getByRole('button', { name: '打开步骤：镜头视频生成', exact: true }).click();
       const dialog = page.getByRole('dialog', { name: '本次制作', exact: true }), gallery = dialog.getByRole('group', { name: '选择预览素材', exact: true });

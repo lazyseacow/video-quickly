@@ -98,7 +98,14 @@ async function holdWrites(page: Page) {
     window.__vqDraftWriteGate = { async release() { holding = false; await complete; } };
   });
 }
-async function clean(page: Page) { await expect(page.getByRole('button', { name: '保存修改', exact: true })).toBeDisabled(); await settleWrites(page); }
+async function clean(page: Page) {
+  // Wait for the save lifecycle before traversing a large editor's accessibility tree.
+  await page.waitForFunction(() => [...document.querySelectorAll<HTMLElement>('.workbench')].some(root =>
+    root.getClientRects().length > 0 && getComputedStyle(root).visibility === 'visible' &&
+    !root.querySelector('button[aria-label="正在保存修改"]') && root.querySelector<HTMLButtonElement>('button[aria-label="保存修改"]')?.disabled));
+  await expect(page.getByRole('button', { name: '保存修改', exact: true })).toBeDisabled();
+  await settleWrites(page);
+}
 test.beforeEach(async ({ page }) => { await page.emulateMedia({ reducedMotion: 'reduce' }); await installProbe(page); });
 test.afterEach(async ({ page }) => { await page.evaluate(async () => { await window.__vqDraftWriteGate?.release(); window.__vqDraftWrites?.restore(); }); });
 

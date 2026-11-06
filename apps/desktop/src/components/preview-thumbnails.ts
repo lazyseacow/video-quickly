@@ -84,6 +84,7 @@ function capture(input: ThumbnailRequest, signal: AbortSignal): Promise<Thumbnai
   if (signal.aborted) return Promise.reject(aborted());
   return new Promise((resolve, reject) => {
     const video = document.createElement('video');
+    video.dataset.previewRole = 'thumbnail';
     video.muted = true; video.playsInline = true; video.preload = 'auto';
     let settled = false, timeout: ReturnType<typeof setTimeout> | undefined;
     let controller: ReturnType<typeof createPreviewVideoController> | undefined;

@@ -297,8 +297,16 @@ test('continues the same tour only after a real project is created, preserving c
   await active(page).click(); await dialog.getByLabel('项目名称', { exact: true }).fill(cancelledTitle);
   const cancelledResponse = page.waitForResponse(response => response.url().endsWith('/__desktop_rpc') && response.request().postDataJSON()?.method === 'project.create');
   await dialog.getByRole('button', { name: '创建项目', exact: true }).click(); await cancelled.entered;
+  const dismissal = await dialog.locator('.dialog__surface').evaluateHandle(element => {
+    const state = { becameInert: false };
+    const observer = new MutationObserver(() => { state.becameInert ||= (element as HTMLElement).inert; });
+    observer.observe(element, { attributes: true, attributeFilter: ['inert'] });
+    return { state, stop: () => observer.disconnect() };
+  });
   await dialog.getByRole('button', { name: '关闭对话框', exact: true }).click();
-  const closing = await dialog.locator('.dialog__surface').evaluate(element => (element as HTMLElement).inert); cancelled.release(); expect(closing).toBe(true);
+  cancelled.release();
+  try { expect(await dismissal.evaluate(value => { value.stop(); return value.state.becameInert; })).toBe(true); }
+  finally { await dismissal.dispose(); }
   const cancelledProject: ProjectDocument = (await (await cancelledResponse).json()).result;
   expect((await savedProject(request, cancelledProject.id)).title).toBe(cancelledTitle); await atStep(page, '新建创作项目');
   expect(await page.evaluate(key => localStorage.getItem(key), preference)).toBeNull(); await page.emulateMedia({ reducedMotion: 'reduce' });
