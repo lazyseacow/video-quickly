@@ -8,6 +8,7 @@ import { stepGuidance } from '../lib/workflow-guidance';
 import { generationLabel, resolveWorkbenchStages } from '../lib/workbench-stages';
 import { isConfigurationFailure } from '../lib/run-recovery';
 import WorkbenchStepCard from './WorkbenchStepCard';
+import { stepProgressText } from '../lib/run-progress';
 import './workbench-guide.css';
 import './workbench-production.css';
 
@@ -102,15 +103,11 @@ export default function WorkbenchProduction({ workflow, run, version, action, no
         const task = stage.tasks.find(task => active && isCurrent(task)) ?? stage.tasks.find(task => task.step && ['failed', 'needs_attention', 'waiting_review', 'running', 'waiting_external', 'retry_scheduled'].includes(task.step.status)) ?? stage.tasks.find(task => !taskCompleted(task)) ?? stage.tasks.at(-1);
         if (!task) return null;
         const status = !synchronized ? 'pending' : active ? run.status : finished ? stage.tasks.every(task => task.step?.status === 'skipped') ? 'skipped' : 'succeeded' : task.step?.status ?? 'pending';
-        const state = synchronized ? native && status === 'running' ? '生成中' : progressLabel(status) : inspection.error ? '进度读取失败' : '正在同步进度';
+        const state = synchronized ? status === 'running' && task.step ? stepProgressText(task.step) : progressLabel(status) : inspection.error ? '进度读取失败' : '正在同步进度';
         return <WorkbenchStepCard key={stage.key} index={status === 'succeeded' ? <Check size={12} aria-hidden="true" /> : index + 1} label={stage.label} description={stage.description} actionLabel={`打开${stages ? '阶段' : '步骤'}：${stage.label}`} current={highlighted} status={status} onClick={() => openStage(stage)}>{stages ? active ? `${task.step?.label ?? task.label} · ${state}` : `${stage.tasks.filter(taskCompleted).length} / ${stage.tasks.length} 任务 · ${state}` : state}</WorkbenchStepCard>;
       })}</ol>
       {inspection.error && <IconButton label="重试读取制作进度" disabled={inspection.busy} onClick={inspection.refresh}><RefreshCw size={16} className={inspection.busy ? 'spin' : undefined} /></IconButton>}
     </div>
-    {native && <div className="workbench-production__completion" aria-label="成片状态">
-      <span role="status">{!synchronized ? inspection.error ? '进度读取失败' : '正在同步进度' : run.status === 'succeeded' ? run.selection ? '所选任务已完成' : '成片已完成' : current && !visibleTasks.some(task => task.id === current.id) ? `${current.label} · ${progressLabel(current.status)}` : `本次制作 · ${progressLabel(run.status)}`}</span>
-      <Button static variant="ghost" disabled={!synchronized} onClick={() => { const task = tasks.find(task => task.id === run.currentNodeId) ?? tasks.at(-1); if (task) openStage({ key: `task:${task.id}`, label: task.label, description: task.description, tasks: [task] }, task.id); }}>查看制作记录</Button>
-    </div>}
     {data?.recovery.resume && !configurationFailure && <div className="workbench-production__actions">
       <div className="workbench-production__buttons">
         <Button static variant="primary" busy={pending === 'run.resume'} disabled={blocked || Boolean(pending)} onClick={() => void perform('run.resume')}>继续原制作</Button>

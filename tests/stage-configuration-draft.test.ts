@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { createNativeVideoWorkflow, type WorkflowNode } from '@video-quickly/contracts';
-import { applyStageConfigurationDraft, stageConfigurationDraftSchema, updateStageConfigurationDraft } from '../apps/desktop/src/lib/stage-configuration-draft';
+import { createNativeVideoWorkflow, DEFAULT_VIDEO_PROFILE, projectSchema, type WorkflowNode } from '@video-quickly/contracts';
+import { applyStageConfigurationDraft, stageConfigurationDraftSchema, updateProductionConfigurationDraft, updateStageConfigurationDraft } from '../apps/desktop/src/lib/stage-configuration-draft';
 
 const projectId = 'stage-configuration-project';
 function task(id: string, changes: Partial<WorkflowNode> = {}) {
@@ -10,6 +10,24 @@ function task(id: string, changes: Partial<WorkflowNode> = {}) {
 }
 
 describe('pending stage configuration', () => {
+  it('round trips pending concurrency without changing the live workflow and detects a competing concurrency edit', () => {
+    const workflow = createNativeVideoWorkflow(), before = structuredClone(workflow);
+    const project = projectSchema.parse({ id: projectId, title: '生成并发', brief: '', profile: DEFAULT_VIDEO_PROFILE, shots: [], revision: 1, createdAt: '', updatedAt: '', workflow });
+    const settings = { brief: project.brief, style: project.style, profile: project.profile, creativeContext: project.creativeContext };
+    const execution = { maxConcurrentShots: 3, modelLimits: { video: 2, image: 1 } };
+    const draft = updateProductionConfigurationDraft(projectId, undefined, workflow, workflow.nodes, workflow.production, settings, settings, execution);
+    const restored = stageConfigurationDraftSchema.parse(JSON.parse(JSON.stringify(draft)));
+    expect(workflow).toEqual(before); expect(restored.execution).toMatchObject({ value: execution });
+    expect(applyStageConfigurationDraft(workflow, restored).workflow.execution).toEqual(execution);
+    expect(applyStageConfigurationDraft({ ...workflow, execution }, restored).conflicts).toEqual([]);
+    const other = { ...workflow, execution: { maxConcurrentShots: 4, modelLimits: { video: 1 } } };
+    expect(applyStageConfigurationDraft(other, restored)).toEqual({ workflow: other, conflicts: ['execution'] });
+    const repeated = updateProductionConfigurationDraft(projectId, restored, other, other.nodes, other.production, settings, settings, { ...execution, maxConcurrentShots: 5 });
+    expect(repeated.execution?.baseline).toBeUndefined();
+    expect(applyStageConfigurationDraft(other, repeated).conflicts).toEqual(['execution']);
+    const reverted = updateProductionConfigurationDraft(projectId, restored, workflow, workflow.nodes, workflow.production, settings, settings);
+    expect(reverted.execution).toBeUndefined();
+  });
   it('retains frozen prompt bindings and template versions in pending configuration', () => {
     const workflow = createNativeVideoWorkflow();
     const configured = task('style', { prompt: '{{tone}}', promptBindings: { tone: { literal: '水彩' } }, promptTemplate: { id: 'fixed-style', version: 2 } });

@@ -1,3 +1,4 @@
+import { openAdvancedWorkflow } from './production-settings';
 import { openProjectFromList } from './workspace-navigation';
 import { expect, test, type APIRequestContext } from '@playwright/test';
 import type { ProjectDocument } from '@video-quickly/contracts';
@@ -52,7 +53,7 @@ for (const platform of [
   expect(placeholder).not.toContain(String.fromCharCode(92).repeat(2));
   await page.keyboard.press('Escape'); await expect(exporter).toHaveCount(0);
 
-  await page.getByRole('button', { name: '流程', exact: true }).click();
+  await openAdvancedWorkflow(page);
   await expect(page.locator('.flow-gestures')).toContainText(`${platform.label} + 滚轮缩放`);
   const canvas = page.locator('.react-flow__viewport');
   const zoom = () => canvas.evaluate(element => new DOMMatrixReadOnly(getComputedStyle(element).transform).a);

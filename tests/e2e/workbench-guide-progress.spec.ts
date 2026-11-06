@@ -19,7 +19,8 @@ async function shotOutlineOnly(page: Page) {
   const outline = page.locator('#project-outline');
   await expect(outline.locator('.outline-header')).toHaveCount(0); await expect(outline.getByRole('region', { name: '镜头列表', exact: true })).toBeVisible();
   await expect(outline.getByRole('tablist')).toHaveCount(0); await expect(outline.getByRole('tab')).toHaveCount(0); await expect(outline.getByRole('tabpanel')).toHaveCount(0); await expect(outline.locator('.step-list, .step-item')).toHaveCount(0);
-  await expect(page.getByRole('button', { name: '流程', exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: '流程', exact: true })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: '制作设置', exact: true })).toBeVisible();
 }
 async function descriptionHelp(page: Page, list: Locator, label: string, description: string, options: { touch: boolean; screenshot?: string }) {
   const main = list.locator('.workbench-guide__step').filter({ hasText: label }), help = list.getByRole('button', { name: `${label}说明`, exact: true }), tooltip = page.getByRole('tooltip');

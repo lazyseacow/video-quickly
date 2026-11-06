@@ -1,6 +1,6 @@
 export type GuideAction =
   | 'project-created' | 'models-opened' | 'model-saved' | 'projects-opened' | 'workbench-opened'
-  | 'view-changed' | 'shot-selected' | 'preview-played' | 'timeline-seeked'
+  | 'production-settings-opened' | 'shot-selected' | 'preview-played' | 'timeline-seeked'
   | 'outline-opened' | 'inspector-opened' | 'project-saved' | 'workflow-selected'
   | 'check-completed' | 'production-started' | 'export-completed' | 'help-used';
 

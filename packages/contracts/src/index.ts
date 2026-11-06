@@ -519,6 +519,23 @@ export { buildMediaPrompt, characterReferencePrompt } from './media-prompts.js';
 export const runStepStatusSchema = z.enum(['pending', 'running', 'waiting_review', 'waiting_external', 'retry_scheduled', 'needs_attention', 'succeeded', 'failed', 'canceled', 'skipped', 'not_recorded']);
 export const modelResponseIssueSchema = z.object({ path: z.string(), message: z.string() });
 export type ModelResponseIssue = z.infer<typeof modelResponseIssueSchema>;
+export const generationShotStatusSchema = z.enum(['pending', 'queued', 'preparing', 'submitting', 'waiting', 'generating', 'downloading', 'validating', 'completed', 'interrupted', 'canceled']);
+export const runStepProgressSchema = z.object({
+  phase: z.enum(['preparing', 'requesting', 'receiving', 'validating', 'saving', 'generating', 'rendering', 'completed']),
+  startedAt: z.string(), updatedAt: z.string(), endedAt: z.string().optional(), lastConfirmedAt: z.string().optional(),
+  completed: z.number().int().nonnegative().optional(), total: z.number().int().nonnegative().optional(),
+  fraction: z.number().min(0).max(1).optional(),
+});
+export type RunStepProgress = z.infer<typeof runStepProgressSchema>;
+export const generationShotProgressSchema = z.object({
+  id: z.string(), title: z.string(), durationUs: z.number(), status: generationShotStatusSchema,
+  assetId: z.string().optional(), referenceAssetId: z.string().optional(), updatedAt: z.string(),
+});
+export type GenerationShotProgress = z.infer<typeof generationShotProgressSchema>;
+export const runStepProgressDetailSchema = runStepProgressSchema.extend({
+  shots: z.array(generationShotProgressSchema), assets: z.array(assetSchema),
+});
+export type RunStepProgressDetail = z.infer<typeof runStepProgressDetailSchema>;
 export const runStepSummarySchema = z.object({
   id: z.string().min(1), label: z.string(), kind: nodeKindSchema, description: z.string(), requiresReview: z.boolean(),
   status: runStepStatusSchema, reason: z.string(), inputAvailable: z.boolean(), outputAvailable: z.boolean(),
@@ -526,6 +543,7 @@ export const runStepSummarySchema = z.object({
   modelGeneration: z.boolean().optional(),
   responseAvailable: z.boolean().optional(),
   retry: z.object({ allowed: z.boolean(), reason: z.string() }).optional(),
+  progress: runStepProgressSchema.optional(),
   startedAt: z.string().optional(), completedAt: z.string().optional(), error: z.string().optional(),
 });
 export type RunStepSummary = z.infer<typeof runStepSummarySchema>;
@@ -548,6 +566,7 @@ export const runStepPayloadSchema = z.object({
   value: jsonValueSchema.nullable(), inputHash: z.string().optional(), resolvedPromptRecorded: z.boolean().optional(),
   mediaShots: z.array(shotSchema.pick({ id: true, title: true, durationUs: true })).optional(),
   mediaGeneration: z.object({ kind: z.enum(['image', 'video']), modelName: z.string() }).optional(),
+  progress: runStepProgressDetailSchema.optional(),
   modelResponse: z.object({ attempt: z.number().int().positive(), receivedAt: z.string(), text: z.string(), incomplete: z.boolean().optional(), issues: z.array(modelResponseIssueSchema).optional() }).optional(),
   modelResponseHistory: z.array(z.object({ attempt: z.number().int().positive(), receivedAt: z.string(), invalid: z.boolean() })).optional(),
 });

@@ -1,3 +1,4 @@
+import { openAdvancedWorkflow } from './production-settings';
 import { expect, test } from '@playwright/test';
 import { productionFixture, openProduction, pickProductionModel, productionStep, saveProduction } from './production-settings';
 
@@ -21,7 +22,7 @@ for (const width of [1536, 390]) test('saves four native stages once at ' + widt
   await expect(reopened.locator('.dialog__surface')).toHaveCSS('opacity', '1');
   await page.screenshot({ path: info.outputPath('unified-stages-' + width + '.png') });
   await reopened.getByRole('button', { name: '取消', exact: true }).click();
-  await page.getByRole('button', { name: '流程', exact: true }).click(); await page.locator('.react-flow__node[data-id="script"]').click();
+  await openAdvancedWorkflow(page); await page.locator('.react-flow__node[data-id="script"]').click();
   await expect(page.getByRole('button', { name: '制作设置', exact: true })).toHaveCount(1);
   await expect(page.getByRole('button', { name: '配置所属阶段', exact: true })).toHaveCount(0);
   await expect(page.getByRole('button', { name: '配置与执行步骤', exact: true })).toBeVisible(); expect(errors).toEqual([]);

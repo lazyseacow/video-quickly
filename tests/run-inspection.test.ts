@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { gunzipSync } from 'node:zlib';
 import { afterEach, expect, it } from 'vitest';
-import { activitySchema, assetSchema, jsonValueSchema, modelSchema, projectDetailSchema, projectSchema, recordPageSchema, runDiagnosticBundleSchema, runDiagnosticsSchema, runEventSchema, runInspectionSchema, runStepPayloadSchema, runSchema, stepOutputVersionSchema, workflowNodeSchema, type AssetRecord, type WorkflowNode, type WorkflowStage } from '@video-quickly/contracts';
+import { activitySchema, assetSchema, jsonValueSchema, modelSchema, projectDetailSchema, projectSchema, recordPageSchema, runDiagnosticBundleSchema, runDiagnosticsSchema, runEventSchema, runInspectionSchema, runStepPayloadSchema, runSchema, stepOutputVersionSchema, workflowNodeSchema, DEFAULT_AUDIO_PROCESSING, type AssetRecord, type WorkflowNode, type WorkflowStage } from '@video-quickly/contracts';
 import { createRuntime, SimulatedProcessExit, type RuntimeOptions } from '../packages/runtime/src';
 import { ActivityJournal } from '../packages/runtime/src/activities';
 import { DocumentStore, openDatabase } from '../packages/runtime/src/database';
@@ -222,6 +222,80 @@ it('keeps the project unchanged when a selected step media file has changed afte
   const corrupted = await readFile(assets[0].path); corrupted[0] ^= 1; await writeFile(assets[0].path, corrupted);
   await expect(runtime.dispatch('node.apply', { runId: run.id, nodeId: 'image-a', revision: baseline.revision })).rejects.toThrow(/素材.*(损坏|更改|校验|缺失)/);
   expect(projectDetailSchema.parse(await runtime.dispatch('project.get', { projectId: baseline.id })).project).toEqual(baseline);
+});
+
+it('applies an earlier image output after unrelated project edits while preserving the current text', async () => {
+  const { runtime, baseline, run } = await mediaVersions();
+  const later = projectSchema.parse(await runtime.dispatch('project.update', { projectId: baseline.id, revision: baseline.revision, patch: { style: '当前风格', shots: baseline.shots.map(shot => ({ ...shot, title: '当前标题', narration: '当前旁白' })) } }));
+  const applied = projectSchema.parse(await runtime.dispatch('node.apply', { runId: run.id, nodeId: 'image-a', revision: later.revision }));
+  expect(applied.style).toBe(later.style); expect(applied.shots).toEqual(later.shots.map(shot => ({ ...shot, assetId: 'image-a' })));
+});
+
+async function videoApplication(automatic = false) {
+  const { runtime, project } = await fixture({ executeActivity: async ({ project, node, dataDirectory }) => {
+    if (node.id !== 'video') return {};
+    const bytes = fixtureNativeVideo(), path = join(dataDirectory, 'generated.mp4'); await writeFile(path, bytes);
+    return { assets: [assetSchema.parse({ id: 'generated-video', projectId: project.id, shotId: 'target', name: '模型生成的视频', kind: 'video', durationUs: 1_000_000, path, mimeType: 'video/mp4', size: bytes.length, sha256: createHash('sha256').update(bytes).digest('hex'), version: 1, createdAt: new Date().toISOString(), provenance: 'test provider' })] };
+  } });
+  await runtime.dispatch('project.update', { projectId: project.id, revision: project.revision, patch: { shots: [
+    { id: 'target', title: '生成时的标题', narration: '生成时的旁白', visualPrompt: '蓝色天空', durationUs: 2_000_000 },
+    { id: 'untouched', title: '其他镜头', narration: '', visualPrompt: '', durationUs: 2_000_000 },
+    { id: 'removed', title: '可以移除的其他镜头', narration: '', visualPrompt: '', durationUs: 2_000_000 },
+  ] } });
+  const model = modelSchema.parse(await runtime.dispatch('model.save', { model: { name: '视频应用夹具', provider: 'openai-compatible', baseUrl: 'http://127.0.0.1:1', model: 'fixture', connectionType: 'video', capabilities: ['video'] } }));
+  const baseline = await workflow(runtime, project.id, [workflowNodeSchema.parse({ id: 'video', kind: 'animation', label: '镜头视频生成', modelId: model.id }), ...(automatic ? [workflowNodeSchema.parse({ id: 'prepare', kind: 'animation', label: '剪辑准备', config: { operation: 'prepare-edit' } })] : [])], automatic ? [{ id: 'video-prepare', source: 'video', target: 'prepare' }] : []);
+  const run = await start(runtime, project.id); expect((await inspect(runtime, run.id)).run.status).toBe('succeeded');
+  return { runtime, baseline, run };
+}
+
+it('merges generated video into the current shot while preserving later edits, ordering and added shots', async () => {
+  const { runtime, baseline, run } = await videoApplication();
+  const later = projectSchema.parse(await runtime.dispatch('project.update', { projectId: baseline.id, revision: baseline.revision, patch: {
+    title: '后来保存的项目名称', brief: '保留当前简报', style: '保留当前风格', shots: [
+      { ...baseline.shots[1], title: '精修的其他镜头', locked: true },
+      { ...baseline.shots[0], title: '保留人工标题', narration: '保留人工旁白', visualPrompt: '精修的画面描述', animation: { ...baseline.shots[0].animation, zoom: 1.5 } },
+      { ...baseline.shots[1], id: 'added', title: '后来添加的镜头' },
+    ],
+  } }));
+  const applied = projectSchema.parse(await runtime.dispatch('node.apply', { runId: run.id, nodeId: 'video', revision: later.revision }));
+  expect(applied.shots.map(shot => shot.id)).toEqual(['untouched', 'target', 'added']);
+  expect(applied).toMatchObject({ title: later.title, brief: later.brief, style: later.style });
+  expect(applied.shots[0]).toEqual(later.shots[0]); expect(applied.shots[2]).toEqual(later.shots[2]);
+  expect(applied.shots[1]).toMatchObject({ title: '保留人工标题', narration: '保留人工旁白', visualPrompt: '精修的画面描述', animation: { zoom: 1.5 }, videoAssetId: 'generated-video', videoInUs: 0, durationUs: 1_000_000, audioProcessing: { version: 2, videoAudio: { enabled: true } } });
+});
+
+it.each(['duration', 'trim', 'audio', 'locked', 'removed'] as const)('keeps all current edits when the target video has a %s conflict', async conflict => {
+  const { runtime, baseline, run } = await videoApplication();
+  const later = projectSchema.parse(await runtime.dispatch('project.update', { projectId: baseline.id, revision: baseline.revision, patch: { shots: conflict === 'removed' ? baseline.shots.slice(1) : baseline.shots.map(shot => shot.id !== 'target' ? shot : { ...shot,
+    ...(conflict === 'duration' ? { durationUs: 1_500_000 } : conflict === 'trim' ? { videoInUs: 200_000 } : conflict === 'audio' ? { audioProcessing: { ...DEFAULT_AUDIO_PROCESSING, gainDb: -6 } } : { locked: true }),
+  }) } }));
+  await expect(runtime.dispatch('node.apply', { runId: run.id, nodeId: 'video', revision: later.revision })).rejects.toThrow(/剪辑区间|解锁|移除/);
+  expect(projectDetailSchema.parse(await runtime.dispatch('project.get', { projectId: baseline.id })).project).toEqual(later);
+});
+
+it('treats applying an automatically applied video as a no-op and preserves subsequent trims and audio edits', async () => {
+  const { runtime, baseline, run } = await videoApplication(true);
+  const current = projectDetailSchema.parse(await runtime.dispatch('project.get', { projectId: baseline.id })).project!;
+  expect(current.revision).toBeGreaterThan(baseline.revision); expect(current.shots[0].videoAssetId).toBe('generated-video');
+  const later = projectSchema.parse(await runtime.dispatch('project.update', { projectId: current.id, revision: current.revision, patch: { shots: current.shots.map(shot => shot.id !== 'target' ? shot : { ...shot, title: '应用后手动精修', durationUs: 500_000, videoInUs: 200_000, audioProcessing: { ...DEFAULT_AUDIO_PROCESSING, gainDb: -6 }, locked: true }) } }));
+  const input = { runId: run.id, nodeId: 'video', revision: later.revision, applicationId: 'already-applied-video' };
+  expect(await runtime.dispatch('node.apply', input)).toEqual(later);
+  expect(await runtime.dispatch('node.apply', input)).toEqual(later);
+  expect(projectDetailSchema.parse(await runtime.dispatch('project.get', { projectId: baseline.id })).project).toEqual(later);
+});
+
+it('still rejects an explicitly stale editor revision when applying generated video', async () => {
+  const { runtime, baseline, run } = await videoApplication();
+  await runtime.dispatch('project.update', { projectId: baseline.id, revision: baseline.revision, patch: { title: '其他视图的修改' } });
+  await expect(runtime.dispatch('node.apply', { runId: run.id, nodeId: 'video', revision: baseline.revision })).rejects.toThrow('其他视图');
+});
+
+it('rechecks concurrent project changes across media validation even when no revision was provided', async () => {
+  const { runtime, baseline, run } = await videoApplication();
+  const applying = expect(runtime.dispatch('node.apply', { runId: run.id, nodeId: 'video' })).rejects.toThrow('其他视图');
+  const later = projectSchema.parse(await runtime.dispatch('project.update', { projectId: baseline.id, revision: baseline.revision, patch: { title: '验证期间另一个视图的修改' } }));
+  await applying;
+  expect(projectDetailSchema.parse(await runtime.dispatch('project.get', { projectId: baseline.id })).project).toEqual(later);
 });
 
 async function mediaReuseFixture(options: Partial<RuntimeOptions> = {}, lockShot = true, kind: 'image' | 'audio' | 'video' = 'image') {

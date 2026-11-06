@@ -1,3 +1,4 @@
+import { openAdvancedWorkflow } from './production-settings';
 import { expect, test, type APIRequestContext, type Page } from '@playwright/test';
 import { execFileSync } from 'node:child_process';
 import { readFile } from 'node:fs/promises';
@@ -23,7 +24,7 @@ async function open(page: Page, project: ProjectDocument) {
   await page.getByLabel('搜索项目', { exact: true }).fill(project.title);
   await page.locator('.project-card').filter({ hasText: project.title }).getByRole('button', { name: '继续创作', exact: true }).click();
   await expect(page.getByLabel('项目名称', { exact: true })).toHaveValue(project.title);
-  await page.getByRole('button', { name: '流程', exact: true }).click();
+  await openAdvancedWorkflow(page);
   await expect(page.locator('.react-flow')).toBeVisible();
   const start = page.locator('.react-flow__node[data-id="start"]'); await start.focus(); await start.press('Enter');
   await expect(page.getByRole('button', { name: '配置所属阶段', exact: true })).toHaveCount(0);

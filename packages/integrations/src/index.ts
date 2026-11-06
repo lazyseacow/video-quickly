@@ -16,7 +16,7 @@ export { createWaveformReader } from './waveform.js';
 export { readResearchSource, searchWikipedia, selectResearchPassages, parseResearchResult } from './research.js';
 
 export interface MediaDiagnosticEvent {
-  event: `media.${'queued' | 'started' | 'completed' | 'failed' | 'canceled' | 'reused' | 'receipt_loaded' | 'request_started' | 'request_completed' | 'request_failed' | 'poll_started' | 'poll_completed' | 'poll_retry_scheduled' | 'poll_recovered' | 'download_started' | 'download_completed' | 'validation_started' | 'validation_completed' | 'render_started' | 'render_completed'}`;
+  event: `media.${'queued' | 'started' | 'completed' | 'failed' | 'canceled' | 'reused' | 'receipt_loaded' | 'request_started' | 'request_completed' | 'request_failed' | 'status_received' | 'poll_started' | 'poll_completed' | 'poll_retry_scheduled' | 'poll_recovered' | 'download_started' | 'download_completed' | 'validation_started' | 'validation_completed' | 'render_started' | 'render_completed'}`;
   level: 'debug' | 'info' | 'warn' | 'error';
   phase?: 'queue' | 'generate' | 'submit' | 'poll' | 'download' | 'validate' | 'render';
   shotId?: string;
@@ -32,6 +32,7 @@ export interface MediaDiagnosticEvent {
   cached?: boolean;
   resumed?: boolean;
   hasRemoteId?: boolean;
+  remoteStatus?: 'queued' | 'generating';
   error?: unknown;
 }
 
@@ -48,6 +49,7 @@ export interface MediaActivityContext {
   characters?: CharacterProfile[];
   promptUpstream?: Record<string, JsonValue>;
   onProgress?: (value: number) => void;
+  onAsset?: (asset: AssetRecord) => void;
   onDiagnostic?: (event: MediaDiagnosticEvent) => void;
   preparedAudioMix?: PreparedAudioMix;
   model?: ModelProfile;
@@ -77,6 +79,10 @@ const rejectedPostStatuses = new Set([400, 401, 402, 403, 404, 405, 406, 410, 41
 const stringOrUndefined = (value: unknown) => typeof value === 'string' ? value : undefined;
 const nested = (value: unknown, ...keys: string[]): unknown => keys.reduce<unknown>((current, key) => current && typeof current === 'object' ? Reflect.get(current, key) : undefined, value);
 const atPath = (value: unknown, path: unknown): unknown => typeof path === 'string' ? nested(value, ...path.split('.')) : undefined;
+function generationStatus(value: unknown): MediaDiagnosticEvent['remoteStatus'] {
+  if (['queued', 'pending', 'submitted'].includes(String(value))) return 'queued';
+  if (['running', 'in_progress', 'processing', 'generating'].includes(String(value))) return 'generating';
+}
 
 async function boundedResponseBytes(response: Response, maximum = MAX_MEDIA_BYTES): Promise<Uint8Array> {
   const declaredSize = Number(response.headers.get('content-length'));
@@ -525,13 +531,14 @@ async function generateMedia(context: MediaActivityContext, directory: string, s
     while (!context.signal.aborted) {
       if (Date.now() >= pollDeadlineAt) throw new Error('等待生成结果已超过本次查询时限，原任务已保留');
       pollCount++;
-      let completed: string | undefined;
+      let completed: string | undefined, remoteStatus: MediaDiagnosticEvent['remoteStatus'];
       try {
         if (model.provider === 'custom-http') {
           const pollPath = z.string().min(1).parse(model.parameters.pollPath).replaceAll('{{taskId}}', encodeURIComponent(receipt.taskId!));
           const result = await requestJson(endpoint(model.baseUrl, pollPath), pollContext);
           receipt.providerUsage = providerReportedUsage(result) ?? receipt.providerUsage;
           const status = atPath(result, model.parameters.statusPath);
+          remoteStatus = generationStatus(status);
           if (['failed', 'canceled', 'cancelled', 'expired', 'error'].includes(String(status))) throw new Error('模型任务失败，请核对服务端任务记录');
           completed = stringOrUndefined(atPath(result, model.parameters.resultUrlPath));
         } else if (model.provider === 'comfyui') {
@@ -554,6 +561,7 @@ async function generateMedia(context: MediaActivityContext, directory: string, s
           const result = await requestJson(endpoint(model.baseUrl, `${model.provider === 'seedance' ? 'contents/generations/tasks' : 'videos'}/${encodeURIComponent(receipt.taskId!)}`), pollContext);
           receipt.providerUsage = providerReportedUsage(result) ?? receipt.providerUsage;
           const status = result.status;
+          remoteStatus = generationStatus(status);
           if (['failed', 'canceled', 'cancelled', 'expired'].includes(String(status))) throw new Error('视频任务未完成，请检查服务端任务状态');
           completed = stringOrUndefined(nested(result, 'content', 'video_url')) ?? stringOrUndefined(result.url) ?? stringOrUndefined(nested(result, 'output', 'url'));
           if (!completed && status === 'completed' && model.provider === 'openai-compatible') {
@@ -578,6 +586,7 @@ async function generateMedia(context: MediaActivityContext, directory: string, s
         await delay(retryDelayMs, undefined, { signal: context.signal });
         continue;
       }
+      context.onDiagnostic?.({ event: 'media.status_received', level: 'debug', phase: 'poll', remoteStatus });
       if (completed) { receipt = { ...receipt, state: 'download', downloadUrl: completed }; await atomicJson(receiptPath, receipt); break; }
       await delay(Math.min(2000, Math.max(0, pollDeadlineAt - Date.now())), undefined, { signal: context.signal });
     }
@@ -662,7 +671,7 @@ export function createActivityExecutor(options: { ffmpegPath?: string } = {}) {
       const existing = context.assets.find(asset => asset.projectId === context.project.id && asset.shotId === shot.id && asset.kind === kind && asset.active);
       let phase: MediaDiagnosticEvent['phase'] = 'queue';
       const diagnostic = (event: MediaDiagnosticEvent) => { phase = event.phase ?? phase; context.onDiagnostic?.({ ...event, shotId: shot.id }); };
-      if (!regenerating && shot.locked && existing && await validAsset(existing)) { diagnostic({ event: 'media.reused', level: 'info', cached: true, assetId: existing.id }); return existing; }
+      if (!regenerating && shot.locked && existing && await validAsset(existing)) { context.onAsset?.(existing); diagnostic({ event: 'media.reused', level: 'info', cached: true, assetId: existing.id }); return existing; }
       const instruction = regenerating && typeof context.node.config.instruction === 'string' ? context.node.config.instruction : '';
       const generationShot = instruction && !context.node.prompt.trim().endsWith(instruction.trim()) ? { ...shot, visualPrompt: `${shot.visualPrompt}\n\n本次调整要求：${instruction}` } : shot;
       const queued = performance.now(); let started: number | undefined;
@@ -673,6 +682,7 @@ export function createActivityExecutor(options: { ffmpegPath?: string } = {}) {
           diagnostic({ event: 'media.started', level: 'info', phase: 'generate', queueMs: started - queued });
           try {
             const asset = await generateMedia({ ...context, onDiagnostic: diagnostic }, directory, generationShot, kind, usage => usages.push(usage));
+            context.onAsset?.(asset);
             diagnostic({ event: 'media.completed', level: 'info', phase: 'generate', assetId: asset.id, byteSize: asset.size, durationMs: performance.now() - started });
             return asset;
           } catch (error) { context.onFailure?.(error); fail(error); throw error; }

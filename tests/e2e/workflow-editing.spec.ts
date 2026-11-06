@@ -1,3 +1,4 @@
+import { openAdvancedWorkflow } from './production-settings';
 import { confirmAction } from './confirmation-actions';
 import { productionStep, saveProduction } from './production-settings';
 import { openProjectFromList } from './workspace-navigation';
@@ -22,7 +23,7 @@ async function open(page: Page, title: string, flow = true) {
   await page.goto('/'); await expect(page.getByRole('navigation', { name: '主导航', exact: true })).toBeVisible();
   await openProjectFromList(page, title);
   await expect(page.getByLabel('项目名称', { exact: true })).toHaveValue(title);
-  if (flow) { await page.getByRole('button', { name: '流程', exact: true }).click(); await expect(page.locator('.react-flow')).toBeVisible(); }
+  if (flow) { await openAdvancedWorkflow(page); await expect(page.locator('.react-flow')).toBeVisible(); }
 }
 const node = (page: Page, id: string) => page.locator(`.react-flow__node[data-id="${id}"]`);
 async function save(page: Page) { const button = page.getByRole('button', { name: '保存流程', exact: true }); await expect(button).toBeEnabled(); await button.click(); await expect(button).toBeDisabled(); await expect(button).not.toHaveAttribute('aria-busy', 'true'); }
@@ -200,7 +201,7 @@ test('retains input added during a committed save and keeps the view open until 
   try {
     await page.getByLabel('步骤名称', { exact: true }).fill('先提交的名称'); await page.getByRole('button', { name: '保存流程', exact: true }).click();
     await expect.poll(() => captured).toBe(1); await page.getByLabel('步骤名称', { exact: true }).fill('等待期间的新名称');
-    await page.getByRole('button', { name: '分镜', exact: true }).click(); release?.();
+    await page.getByRole('button', { name: '返回工作台', exact: true }).click(); release?.();
     await expect(page.locator('.react-flow')).toBeVisible(); await expect(page.getByLabel('步骤名称', { exact: true })).toHaveValue('等待期间的新名称');
     await expect(page.getByRole('button', { name: '保存流程', exact: true })).toBeEnabled();
     expect((await current(request, project.id)).workflow.nodes[0].label).toBe('先提交的名称');
@@ -360,9 +361,9 @@ test('keeps a rejected save recoverable and retries it without duplicating the e
 test('keeps unfinished shot fields reachable while retaining the workflow draft in the shared session', async ({ page, request }) => {
   const project = await fixture(request, '未完成镜头与流程草稿切换'); await open(page, project.title, false);
   await page.getByLabel('镜头标题', { exact: true }).fill('');
-  await page.getByRole('button', { name: '流程', exact: true }).click(); await node(page, 'a').click();
+  await openAdvancedWorkflow(page); await node(page, 'a').click();
   await page.getByLabel('步骤名称', { exact: true }).fill('保留的流程草稿');
-  await page.getByRole('button', { name: '分镜', exact: true }).click();
+  await page.getByRole('button', { name: '返回工作台', exact: true }).click();
   await expect(page.getByLabel('镜头标题', { exact: true })).toBeVisible();
   await expect(page.getByLabel('镜头标题', { exact: true })).toHaveValue('');
   expect((await current(request, project.id)).workflow).toEqual(project.workflow);

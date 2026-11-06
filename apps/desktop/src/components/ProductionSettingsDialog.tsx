@@ -11,6 +11,8 @@ import VideoSettings from './VideoSettings';
 import { ProjectSettingsActions, type ProjectSettingsAction } from './ProjectSettingsPanel';
 import ReferenceAudioPicker from './ReferenceAudioPicker';
 import CreativeContextEditor from './CreativeContextEditor';
+import GenerationConcurrencySettings from './GenerationConcurrencySettings';
+import { sameContent } from '../lib/project-edits';
 import ToastNotice, { type ToastMessage } from './ToastNotice';
 import './production-settings.css';
 
@@ -20,9 +22,9 @@ const WorkflowAssistant = lazy(() => import('./WorkflowAssistant'));
 const ModelAlternatives = lazy(() => import('./ModelAlternatives'));
 const steps = [{ id: 'planning', label: '创作要求' }, { id: 'materials', label: '模型与素材' }, { id: 'delivery', label: '声音与成片' }, { id: 'review', label: '确认保存' }] as const;
 type ConfigurationStep = typeof steps[number]['id'];
-export interface ProductionConfiguration { nodes: WorkflowNode[]; production: ProductionSettings; project: ProductionProjectSettings; }
+export interface ProductionConfiguration { nodes: WorkflowNode[]; production: ProductionSettings; project: ProductionProjectSettings; execution: WorkflowDefinition['execution']; }
 
-export default function ProductionSettingsDialog({ project, projectId, projectRevision, workflow, workspace, run, version, usedEntityKeys = [], initialStage = 'planning', initialNodeId, initialTab, flatRecords, pendingConfiguration, configurationError, onSave, onDiscardPending, onClose, onOpenOutput, onOpenCandidate, onOpenTool, onSectionChange, onImportReferenceAudio, planning }: {
+export default function ProductionSettingsDialog({ project, projectId, projectRevision, workflow, workspace, run, version, usedEntityKeys = [], initialStage = 'planning', initialNodeId, initialTab, flatRecords, pendingConfiguration, configurationError, onSave, onDiscardPending, onClose, onOpenOutput, onOpenCandidate, onOpenTool, onOpenAdvanced, onSectionChange, onImportReferenceAudio, planning }: {
   project: Pick<ProjectDocument, 'brief' | 'style' | 'profile' | 'creativeContext'>; workflow: WorkflowDefinition; workspace: WorkspaceView; run?: RunSummary; version: number; usedEntityKeys?: string[];
   projectId?: string; projectRevision?: number; onOpenCandidate?(shotId: string): void;
   planning?: PlanningControls;
@@ -30,11 +32,14 @@ export default function ProductionSettingsDialog({ project, projectId, projectRe
   onSave: (value: ProductionConfiguration) => Promise<boolean>;
   onDiscardPending?: () => Promise<boolean>; onClose: () => void; onOpenOutput: (value: StepOutputSelection) => void;
   onOpenTool: (action: ProjectSettingsAction) => void; onSectionChange?: (section: string) => void;
+  onOpenAdvanced: () => void;
   onImportReferenceAudio: (path: string) => Promise<AssetRecord | undefined>;
 }) {
   const [settings, setSettings] = useState(() => productionSettingsSchema.parse(workflow.production));
   const [fields, setFields] = useState<ProductionProjectSettings>(() => ({ brief: project.brief, style: project.style, profile: project.profile, creativeContext: project.creativeContext }));
   const [nodes, setNodes] = useState(workflow.nodes);
+  const [execution, setExecution] = useState(workflow.execution);
+  const baseline = useRef({ settings, fields, nodes, execution });
   const [promptNode, setPromptNode] = useState<WorkflowNode>();
   const [assistantNodeId, setAssistantNodeId] = useState<string>(), [alternativesId, setAlternativesId] = useState<string>();
   const initialTask = workflow.nodes.find(node => node.id === initialNodeId);
@@ -43,7 +48,7 @@ export default function ProductionSettingsDialog({ project, projectId, projectRe
   const [runStage, setRunStage] = useState(initialStage);
   const [selectedTasks, setSelectedTasks] = useState<Record<string, string>>(initialNodeId ? { [initialStep]: initialNodeId } : {});
   const [advancedStage, setAdvancedStage] = useState<string | undefined>(initialNodeId ? initialStep : undefined);
-  const [requestedTool, setRequestedTool] = useState<ProjectSettingsAction>();
+  const [requestedTool, setRequestedTool] = useState<ProjectSettingsAction | 'workflow'>();
   const [error, setError] = useState('');
   const [pending, setPending] = useState<'save' | 'discard' | 'import'>();
   const [runActionsTarget, setRunActionsTarget] = useState<HTMLDivElement | null>(null);
@@ -64,13 +69,13 @@ export default function ProductionSettingsDialog({ project, projectId, projectRe
   const records = initialTab === 'run';
   const flat = flatRecords ?? workflow.id === 'native-video';
   const active = Boolean(run && ['queued', 'running', 'waiting_review', 'waiting_external', 'retry_scheduled'].includes(run.status));
-  const resolved = resolveProductionWorkflow({ ...workflow, nodes, production: settings });
+  const resolved = resolveProductionWorkflow({ ...workflow, nodes, production: settings, execution });
   const assistantNode = resolved.nodes.find(node => node.id === assistantNodeId);
   const stages = resolved.stages ?? resolved.nodes.map(node => ({ id: node.id, label: node.label, description: node.description, nodeIds: [node.id] }));
   const selectedStage = stages.find(item => item.id === runStage) ?? stages[0];
   const stepIndex = steps.findIndex(item => item.id === step);
   const modelName = (modelId?: string) => workspace.models.find(model => model.id === modelId)?.name ?? '未选择';
-  const toolNames = { series: '系列模板', saveSeries: '保存系列模板', music: '背景音乐', caption: '字幕样式' };
+  const toolNames = { series: '系列模板', saveSeries: '保存系列模板', music: '背景音乐', caption: '字幕样式', workflow: '高级编排' };
 
   function updateSettings(patch: Partial<ProductionSettings>) { setSettings(value => ({ ...value, ...patch })); setError(''); }
   function updateNode(node: WorkflowNode, patch: Partial<WorkflowNode>) { setNodes(current => current.map(item => item.id === node.id ? { ...item, ...patch } : item)); setError(''); }
@@ -79,7 +84,11 @@ export default function ProductionSettingsDialog({ project, projectId, projectRe
     if (value !== 'review') setRequestedTool(undefined);
     if (content.current) content.current.scrollTop = 0;
   }
-  function requestTool(tool: ProjectSettingsAction) { setRequestedTool(tool); selectStep('review'); }
+  function requestTool(tool: ProjectSettingsAction | 'workflow') { setRequestedTool(tool); selectStep('review'); }
+  function openAdvanced() {
+    if (sameContent({ settings, fields, nodes, execution }, baseline.current)) { close(); onOpenAdvanced(); }
+    else requestTool('workflow');
+  }
   function validate(all = false) {
     if ((all || step === 'delivery') && !videoProfileSchema.safeParse(fields.profile).success) {
       selectStep('delivery'); setError('请检查成片尺寸与帧率。');
@@ -124,9 +133,9 @@ export default function ProductionSettingsDialog({ project, projectId, projectRe
     if (inFlight.current || configurationError || !validate(true)) return;
     inFlight.current = true; setPending('save'); setError('');
     try {
-      const saved = await onSave({ nodes: resolved.nodes, production: settings, project: fields });
+      const saved = await onSave({ nodes: resolved.nodes, production: settings, project: fields, execution });
       if (closed.current) return;
-      if (saved) { close(); if (requestedTool) onOpenTool(requestedTool); }
+      if (saved) { close(); if (requestedTool === 'workflow') onOpenAdvanced(); else if (requestedTool) onOpenTool(requestedTool); }
       else setError('操作尚未完成，当前输入已保留，请核对提示后重试。');
     } catch (failure) { if (!closed.current) setError(failure instanceof Error ? failure.message : String(failure)); }
     finally { inFlight.current = false; if (!closed.current) setPending(undefined); }
@@ -170,7 +179,9 @@ export default function ProductionSettingsDialog({ project, projectId, projectRe
             <Field label="参考素材"><Select value={settings.referenceMode} onChange={event => updateSettings({ referenceMode: event.target.value as ProductionSettings['referenceMode'] })}><option value="none">直接文生视频</option><option value="existing">使用已有参考图</option><option value="generate">先生成参考图</option></Select></Field>
             {settings.referenceMode === 'generate' && modelField('图片模型', settings.imageModelId, workspace.models.filter(model => model.enabled && model.capabilities.includes('image')), value => updateSettings({ imageModelId: value }))}
             <ReferenceAudioPicker assets={workspace.assets} value={settings.referenceAudioAssetIds ?? []} onChange={referenceAudioAssetIds => updateSettings({ referenceAudioAssetIds })} onImport={importReferenceAudio} disabled={Boolean(pending)} />
+            <GenerationConcurrencySettings workflow={resolved} models={workspace.models} onChange={setExecution} />
             {advanced({ id: 'materials', label: '模型与素材', nodeIds: resolved.nodes.filter(node => stepGuidance(node).capability && stepGuidance(node).capability !== 'text').map(node => node.id) })}
+            <details className="production-settings__advanced"><summary>高级编排</summary><p className="production-settings__note">编辑制作步骤、依赖关系和子流程。有设置修改时，先确认保存再进入。</p><Button onClick={openAdvanced}>打开高级编排</Button></details>
           </section>
           <section data-production-step="delivery" hidden={step !== 'delivery'} aria-label="声音与成片">
             <Field label="声音要求"><textarea value={settings.soundPrompt} onChange={event => updateSettings({ soundPrompt: event.target.value })} rows={3} placeholder="语言、说话方式、环境音与音乐…" /></Field>
@@ -184,7 +195,7 @@ export default function ProductionSettingsDialog({ project, projectId, projectRe
             <p className="production-settings__note">核对以下配置，保存后返回工作台。准备好后再点击“开始制作”。</p>
             {requestedTool && <Notice>保存设置后将打开{toolNames[requestedTool]}。<Button static onClick={() => setRequestedTool(undefined)}>仅保存设置</Button></Notice>}
             <section><header><h3>创作要求</h3><Button static variant="ghost" aria-label="修改创作要求" onClick={() => selectStep('planning')}>修改</Button></header><dl><div><dt>创作要求</dt><dd>{fields.brief.trim() || '尚未填写'}</dd></div><div><dt>视觉风格</dt><dd>{fields.style.trim() || '沿用默认风格'}</dd></div><div><dt>项目角色池</dt><dd>{fields.creativeContext?.characterIds.length ? `已选择 ${fields.creativeContext.characterIds.length} 个角色` : '未选择'}</dd></div>{fields.creativeContext?.continuity && <div><dt>连续性要求</dt><dd>{fields.creativeContext.continuity}</dd></div>}{Boolean(fields.creativeContext?.entities.length) && <div><dt>文字设定</dt><dd>{fields.creativeContext?.entities.map(entity => entity.name).join('、')}</dd></div>}</dl></section>
-            <section><header><h3>模型与素材</h3><Button static variant="ghost" aria-label="修改模型与素材" onClick={() => selectStep('materials')}>修改</Button></header><dl><div><dt>文本模型</dt><dd>{modelName(settings.textModelId)}</dd></div><div><dt>视频模型</dt><dd>{modelName(settings.videoModelId)}</dd></div><div><dt>参考素材</dt><dd>{{ none: '直接文生视频', existing: '使用已有参考图', generate: '先生成参考图' }[settings.referenceMode]}</dd></div>{settings.referenceMode === 'generate' && <div><dt>图片模型</dt><dd>{modelName(settings.imageModelId)}</dd></div>}<div><dt>参考音频</dt><dd>{settings.referenceAudioAssetIds?.length ? `已选择 ${settings.referenceAudioAssetIds.length} 段` : '未添加'}</dd></div></dl></section>
+            <section><header><h3>模型与素材</h3><Button static variant="ghost" aria-label="修改模型与素材" onClick={() => selectStep('materials')}>修改</Button></header><dl><div><dt>文本模型</dt><dd>{modelName(settings.textModelId)}</dd></div><div><dt>视频模型</dt><dd>{modelName(settings.videoModelId)}</dd></div><div><dt>参考素材</dt><dd>{{ none: '直接文生视频', existing: '使用已有参考图', generate: '先生成参考图' }[settings.referenceMode]}</dd></div>{settings.referenceMode === 'generate' && <div><dt>图片模型</dt><dd>{modelName(settings.imageModelId)}</dd></div>}<div><dt>参考音频</dt><dd>{settings.referenceAudioAssetIds?.length ? `已选择 ${settings.referenceAudioAssetIds.length} 段` : '未添加'}</dd></div><div><dt>镜头同时处理数</dt><dd>{execution?.maxConcurrentShots ?? 1}</dd></div><div><dt>模型并发上限</dt><dd>{Object.entries(execution?.modelLimits ?? {}).map(([modelId, limit]) => `${modelName(modelId)}：${limit}`).join('；') || '跟随镜头并发'}</dd></div></dl></section>
             <section><header><h3>声音与成片</h3><Button static variant="ghost" aria-label="修改声音与成片" onClick={() => selectStep('delivery')}>修改</Button></header><dl><div><dt>声音要求</dt><dd>{settings.soundPrompt.trim() || '跟随分镜内容'}</dd></div><div><dt>成片规格</dt><dd>{fields.profile.width} × {fields.profile.height} · {Number((fields.profile.frameRate.numerator / fields.profile.frameRate.denominator).toFixed(2))} fps</dd></div><div><dt>字幕</dt><dd>{settings.subtitleMode === 'off' ? '关闭' : '显示分镜文本（预估时间）'}</dd></div></dl></section>
           </section>}
         </div></fieldset>

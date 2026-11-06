@@ -21,6 +21,7 @@ import { validateWorkflowComposition, workflowNodesWithSubflows, workflowEdgesWi
 import { createWorkflowTemplateLibrary } from './workflow-templates.js';
 import { buildWorkflowPrompt, parseWorkflowScript, scriptOutputJsonSchema, type WorkflowUpstreamResult } from './workflow-prompts.js';
 import { createModelResponses, ModelResponseValidationError } from './model-responses.js';
+import { createRunProgress } from './run-progress.js';
 import { creativeContextSchema, MediaRequestRejectedError, projectCharacterIds, shotCreativePrompt, validateCreativeReferences } from '@video-quickly/contracts';
 import { executeMediaGraph } from './media-graph.js';
 import { discoverModels, generateText, testModelConnection, TextRequestRejectedError, type ModelRequestPhase, type TextProvider } from './providers.js';
@@ -80,6 +81,7 @@ export interface ActivityExecutionContext {
   characters?: CharacterProfile[];
   promptUpstream?: Record<string, JsonValue>;
   onProgress?: (value: number) => void;
+  onAsset?: (asset: AssetRecord) => void;
   onDiagnostic?: (event: MediaDiagnosticEvent) => void;
   preparedAudioMix?: PreparedAudioMix;
   persistRemoteTask(id: string): void;
@@ -181,6 +183,7 @@ export function createRuntime(options: RuntimeOptions) {
   const assetRecovery = createAssetRecovery({ directory, store, onRestored(assetIds) { workspaceVersion++; emit({ type: 'workspace.changed', data: { repairedAssetIds: assetIds } }); } });
   const journal = new ActivityJournal(database, { failpoint: options.failpoint, onEvent: changed, logger });
   const modelResponses = createModelResponses(store);
+  const runProgress = createRunProgress(store, changed);
   const costs = createCostLedger({ database, store, onChanged: changed });
   const characters = createCharacterLibrary({ database, store, onChanged: changed });
   const seriesTemplates = createSeriesTemplateLibrary({ database, store, onChanged: changed });
@@ -547,6 +550,42 @@ export function createRuntime(options: RuntimeOptions) {
     return working;
   }
 
+  function applyMediaResult(current: ProjectDocument, input: ProjectDocument, node: WorkflowNode, result: JsonValue, assets: AssetRecord[]): ProjectDocument {
+    const originalShots = new Map(input.shots.map(shot => [shot.id, shot]));
+    const currentShots = new Map(current.shots.map(shot => [shot.id, shot]));
+    const pending: AssetRecord[] = [];
+    const fieldsByShot = new Map<string, Set<keyof Shot>>();
+    for (const asset of assets) {
+      if (asset.projectId !== current.id) throw new Error('生成素材与当前项目不匹配。');
+      if (!asset.shotId || !['image', 'audio', 'video'].includes(asset.kind)) continue;
+      const shot = currentShots.get(asset.shotId), original = originalShots.get(asset.shotId);
+      if (!shot || !original) throw new Error('生成素材对应的镜头已移除或不在执行输入中，请核对后再应用。');
+      const binding = asset.kind === 'image' ? 'assetId' : asset.kind === 'audio' ? 'audioAssetId' : 'videoAssetId';
+      // An already-applied stream may have been trimmed or mixed since then.
+      if (shot[binding] === asset.id) continue;
+      if (shot.locked) throw new Error('请先解锁镜头，再更换素材。');
+      const fields = fieldsByShot.get(shot.id) ?? new Set<keyof Shot>();
+      fields.add(binding);
+      if (asset.kind === 'audio' || asset.kind === 'video') {
+        for (const key of ['durationUs', 'sourceInUs', 'clipEdit'] as const) fields.add(key);
+        fields.add(asset.kind === 'audio' ? 'audioInUs' : 'videoInUs');
+        if (original.clipEdit) fields.add('captionTrack');
+      }
+      if (asset.kind === 'video' && isVideoGenerationNode(node)) {
+        for (const key of ['audioAssetId', 'audioInUs', 'captionTrack', 'sceneTemplate', 'audioProcessing'] as const) fields.add(key);
+      }
+      fieldsByShot.set(shot.id, fields);
+      pending.push(asset);
+    }
+    for (const [shotId, fields] of fieldsByShot) {
+      const shot = currentShots.get(shotId)!, original = originalShots.get(shotId)!;
+      if ([...fields].some(key => !isDeepStrictEqual(shot[key], original[key]))) throw new Error(`镜头“${shot.title}”的素材或剪辑区间已在生成后修改，请核对后再应用。`);
+    }
+    // Reuse the normal binding path against the current document so other shots,
+    // authored text and immutable clip-edit history stay intact.
+    return pending.length ? projectAfterNode(current, node, result, pending) : current;
+  }
+
   function updateRun(id: string, patch: Partial<RunRecord>) {
     const previous = run(id);
     const updated = { ...previous, ...patch, updatedAt: now() };
@@ -753,14 +792,20 @@ export function createRuntime(options: RuntimeOptions) {
     }
     try {
     const result = await journal.execute(runId, node.id, input, safety, async context => {
+      runProgress.begin(context.operationId, executionProject, selectedModel && node.kind === 'assets' ? 'image' : selectedModel && isVideoGenerationNode(node) ? 'video' : undefined, activityAssets);
       if (usesProvider) {
+        runProgress.phase(context.operationId, 'requesting');
         const generate = async () => {
+          runProgress.phase(context.operationId, 'requesting');
           if (node.kind === 'script') runInspector.captureInput(runId, node.id, { inputHash: fingerprint(input), recordedAt: now(), prompt: redactInspectionText(prompt, text => redactError(text, saved.models, transientSecrets, Number.POSITIVE_INFINITY)) });
           const started = performance.now();
           let requestPhase: ModelRequestPhase | undefined;
           nodeLogger.info('provider.request_started', { phase: 'submit' });
           try {
-            const result = await (options.provider ?? generateText)({ model: selectedModel, secret, prompt, operationId: responseAttempt ? `${context.operationId}:response:${responseAttempt}` : context.operationId, signal: controller.signal, outputSchema: node.kind === 'script' ? scriptOutputJsonSchema : undefined, promptOutputFormat: node.kind === 'script' && modelResponses.promptFormat(context.operationId), onOutputFormatFallback: () => { modelResponses.usePromptFormat(context.operationId); nodeLogger.info('provider.output_format_fallback'); }, onRequestPhase: phase => { requestPhase = phase; } });
+            const result = await (options.provider ?? generateText)({ model: selectedModel, secret, prompt, operationId: responseAttempt ? `${context.operationId}:response:${responseAttempt}` : context.operationId, signal: controller.signal, outputSchema: node.kind === 'script' ? scriptOutputJsonSchema : undefined, promptOutputFormat: node.kind === 'script' && modelResponses.promptFormat(context.operationId), onOutputFormatFallback: () => { modelResponses.usePromptFormat(context.operationId); nodeLogger.info('provider.output_format_fallback'); }, onRequestPhase: phase => {
+              requestPhase = phase;
+              runProgress.phase(context.operationId, phase === 'validate' || phase === 'parse' ? 'validating' : phase === 'headers' || phase === 'read' ? 'receiving' : 'requesting', ['headers', 'read', 'parse', 'validate'].includes(phase));
+            } });
             nodeLogger.info('provider.request_completed', { durationMs: performance.now() - started });
             return result;
           } catch (error) {
@@ -780,6 +825,7 @@ export function createRuntime(options: RuntimeOptions) {
             })()
           : node.kind === 'script' ? await modelResponses.generate({ operationId: context.operationId, inputHash: fingerprint(input), recordReceipt: context.recordRemoteId, generate }) : await generate();
         const text = typeof generated === 'string' ? generated : generated.text;
+        runProgress.phase(context.operationId, 'validating', true);
         const usage = typeof generated === 'string' ? undefined : generated.usage;
         if (costOperation) costs.status(costOperation, 'completed', usage);
         if (node.kind === 'script') {
@@ -800,9 +846,19 @@ export function createRuntime(options: RuntimeOptions) {
         const batch = saved.exportBatch;
         const executeActivity = options.executeActivity;
         const activityContext: ActivityExecutionContext = { project: executionProject, node, runId, operationId: context.operationId, signal: controller.signal, remoteTaskId: context.remoteId, persistRemoteTask: context.recordRemoteId, dataDirectory: directory, assets: activityAssets, model: selectedModel, apiKey: secret, characters: executionCharacters, promptUpstream: Object.fromEntries(upstreamResults(runId, node, saved).map(result => [result.nodeId, result.output])),
-          onDiagnostic: ({ event, level, ...fields }) => nodeLogger[level](event, { ...fields, shotCount: executionProject.shots.length }),
+          onDiagnostic: event => {
+            const { event: name, level, ...fields } = event;
+            nodeLogger[level](name, { ...fields, shotCount: executionProject.shots.length });
+            runProgress.media(context.operationId, event);
+            if (name === 'media.render_started') runProgress.phase(context.operationId, 'rendering');
+          },
+          onAsset: value => {
+            const asset = assetSchema.parse(value);
+            if (asset.projectId !== executionProject.id || !executionProject.shots.some(shot => shot.id === asset.shotId)) throw new Error('生成进度素材不属于本次镜头。');
+            runProgress.asset(context.operationId, asset);
+          },
           ...(node.kind === 'export' ? { preparedAudioMix: audioPreview.ready(executionProject, activityAssets) } : {}),
-          ...(batch ? { onProgress: value => batches.progress(batch.batchId, batch.targetId, value) } : {}) };
+          onProgress: value => { if (batch) batches.progress(batch.batchId, batch.targetId, value); runProgress.phase(context.operationId, 'rendering', false, value); } };
         let output: JsonValue;
         if (saved.handlerVersion >= 3 && executionProject.workflow.execution && selectedModel && ['assets', 'animation'].includes(node.kind)) {
           // Each Send owns a stable shot identity. The adapter keeps its existing
@@ -834,6 +890,7 @@ export function createRuntime(options: RuntimeOptions) {
         } else output = await executeActivity(activityContext);
         const usage = providerUsageSchema.safeParse(output && typeof output === 'object' && !Array.isArray(output) ? output.providerUsage : undefined);
         if (costOperation) costs.status(costOperation, 'completed', usage.success ? usage.data : undefined);
+        runProgress.phase(context.operationId, 'saving');
         return output;
       }
       return localNodeResult(node, executionProject, store.list<AssetRecord>('asset'));
@@ -882,8 +939,14 @@ export function createRuntime(options: RuntimeOptions) {
       store.put('run-project', runId, working);
       store.put('node-result', `${runId}:${node.id}`, output);
     });
+    for (const asset of nodeResultAssets(result)) {
+      runProgress.asset(`${runId}:${node.id}`, asset);
+      if (asset.shotId) runProgress.media(`${runId}:${node.id}`, { event: 'media.completed', level: 'info', shotId: asset.shotId, assetId: asset.id });
+    }
+    runProgress.end(`${runId}:${node.id}`, 'completed');
     return result;
     } catch (error) {
+      if (!(error instanceof SimulatedProcessExit)) runProgress.end(`${runId}:${node.id}`, controller.signal.aborted ? 'canceled' : 'interrupted');
       if (costOperation && !(error instanceof SimulatedProcessExit)) costs.status(costOperation, controller.signal.aborted ? 'canceled' : error instanceof TextRequestRejectedError || error instanceof MediaRequestRejectedError ? 'failed' : 'unknown');
       throw error;
     }
@@ -1664,7 +1727,7 @@ export function createRuntime(options: RuntimeOptions) {
       case 'asset.delete': {
         const { assetId } = z.object({ assetId: z.string() }).parse(rawParams);
         const asset = store.get<AssetRecord>('asset', assetId); if (!asset) throw new Error('素材不存在。');
-        if (asset.retained || reads.assetInUse(assetId) || characters.assetInUse(assetId) || imageTools.assetsInUse([assetId]).has(assetId)) throw new Error('正在使用或已保留的素材不能移除。');
+        if (asset.retained || reads.assetInUse(assetId) || reads.generationAssetInUse(assetId) || characters.assetInUse(assetId) || imageTools.assetsInUse([assetId]).has(assetId)) throw new Error('正在使用或已保留的素材不能移除。');
         store.put('asset', assetId, { ...asset, active: false }); changed(); return { deleted: true };
       }
       case 'project.backup': {
@@ -1778,9 +1841,9 @@ export function createRuntime(options: RuntimeOptions) {
           return receipt?.result;
         };
         const receipt = appliedReceipt(); if (receipt) return receipt;
-        const saveApplied = (next: ProjectDocument) => database.transaction(() => {
+        const saveApplied = (next: ProjectDocument, persist = true) => database.transaction(() => {
           const previous = appliedReceipt(); if (previous) return previous;
-          const result = saveProject(next);
+          const result = persist ? saveProject(next) : next;
           if (applicationKey) store.put('node-application', applicationKey, { input: applicationInput, result });
           return result;
         })();
@@ -1795,20 +1858,22 @@ export function createRuntime(options: RuntimeOptions) {
           const candidateId = `candidate-${createHash('sha256').update(`${runId}:${nodeId}`).digest('hex').slice(0, 32)}`;
           return dispatch('shot.candidate.apply', { projectId: record.projectId, candidateId, revision: revision ?? value.revision });
         }
-        if (!saved || value.revision !== saved.project.revision) throw new Error('项目已在生成后修改，请基于当前内容重新生成建议。');
+        if (!saved) throw new Error('未找到本次制作的执行快照。');
+        const node = store.get<WorkflowNode>('node-definition', `${runId}:${nodeId}`) ?? (saved.inspectionNodes ?? saved.nodes).find(item => item.id === nodeId);
+        const media = node && ['assets', 'animation'].includes(node.kind);
+        if (!media && value.revision !== saved.project.revision) throw new Error('项目已在生成后修改，请基于当前内容重新生成建议。');
         const frozenCharacters = saved.characters ?? [], frozenReferences = saved.characterAssets ?? [];
         await validateCharacterAssets(frozenCharacters, frozenReferences, creativeReferenceAssetIds(saved.project));
         const captured = appliedReceipt(); if (captured) return captured;
         const verifiedProject = () => {
-          const current = project(record.projectId); requireRevision(current, revision);
-          if (current.revision !== saved.project.revision) throw new Error('项目已在生成后修改，请基于当前内容重新生成建议。');
+          const current = project(record.projectId); requireRevision(current, revision ?? value.revision);
+          if (!media && current.revision !== saved.project.revision) throw new Error('项目已在生成后修改，请基于当前内容重新生成建议。');
           requireCurrentCharacters(frozenCharacters); requireCandidateAssets(frozenReferences);
           return current;
         };
         const currentValue = verifiedProject();
         const result = store.get<JsonValue>('node-result', `${runId}:${nodeId}`);
         if (!result || typeof result !== 'object' || Array.isArray(result)) throw new Error('步骤没有可应用的结果。');
-        const node = store.get<WorkflowNode>('node-definition', `${runId}:${nodeId}`) ?? (saved.inspectionNodes ?? saved.nodes).find(item => item.id === nodeId);
 
         if (node?.kind === 'script' && Array.isArray(result.shots)) return saveApplied(projectAfterNode(currentValue, node, result, []));
         if (node && ['brief', 'style'].includes(node.kind) && typeof result.text === 'string') return saveApplied(projectAfterNode(currentValue, node, result, []));
@@ -1825,8 +1890,8 @@ export function createRuntime(options: RuntimeOptions) {
           }
           const repeated = appliedReceipt(); if (repeated) return repeated;
           const latest = verifiedProject(); requireCandidateAssets(assets);
-          const working = projectAfterNode(input, node, result, assets);
-          return saveApplied({ ...latest, creativeContext: working.creativeContext, shots: working.shots, clipEditSources: working.clipEditSources, clipEditPlans: working.clipEditPlans });
+          const working = applyMediaResult(latest, input, node, result, assets);
+          return saveApplied(working, working !== latest);
         }
         throw new Error('此步骤结果无需写入项目。');
       }

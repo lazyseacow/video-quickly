@@ -1,3 +1,4 @@
+import { openAdvancedWorkflow } from './production-settings';
 import { createServer, type Server } from 'node:http';
 import { randomUUID } from 'node:crypto';
 import { expect, test, type APIRequestContext, type Locator } from '@playwright/test';
@@ -119,7 +120,7 @@ test('reuses a lost start response and keeps alternative selection as a reversib
     expect(source.prompts).toHaveLength(1); expect(await source.current()).toEqual(source.project);
     await dialog.getByRole('button', { name: '关闭', exact: true }).click(); await expect(dialog).toHaveCount(0);
     await settings.getByRole('button', { name: '取消', exact: true }).click(); await expect(settings).toHaveCount(0);
-    await page.getByRole('button', { name: '流程', exact: true }).click();
+    await openAdvancedWorkflow(page);
     const node = source.project.workflow.nodes.find(node => node.kind === 'brief')!;
     await page.locator(`.react-flow__node[data-id="${node.id}"]`).click();
     await page.getByRole('button', { name: '查看替代模型', exact: true }).click();

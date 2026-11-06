@@ -29,11 +29,11 @@ export function useStageConfigurationDraft(projectId: string, workflow: Workflow
   const draft = ready ? loaded.draft : undefined;
   const applied = useMemo(() => applyStageConfigurationDraft(workflow, draft), [workflow, draft]);
   const projectDraft = projectSettings ? applyProductionProjectDraft(projectSettings, draft) : undefined;
-  const write = useCallback((nodes?: WorkflowNode[], production?: ProductionSettings, settings?: ProductionProjectSettings, baseline?: ProductionProjectSettings) => {
+  const write = useCallback((nodes?: WorkflowNode[], production?: ProductionSettings, settings?: ProductionProjectSettings, baseline?: ProductionProjectSettings, execution?: WorkflowDefinition['execution']) => {
     if (!ready) return Promise.reject(new Error('请先恢复待用配置后再保存。'));
     const operation = writes.current.then(async () => {
       if (owner.current !== key) throw new Error('项目已切换，未保存待用配置。');
-      const next = nodes && production && settings && currentSettings.current ? updateProductionConfigurationDraft(projectId, currentDraft.current, currentWorkflow.current, nodes, production, baseline ?? currentSettings.current, settings)
+      const next = nodes && production && settings && currentSettings.current ? updateProductionConfigurationDraft(projectId, currentDraft.current, currentWorkflow.current, nodes, production, baseline ?? currentSettings.current, settings, execution)
         : nodes ? updateStageConfigurationDraft(projectId, currentDraft.current, currentWorkflow.current.nodes, nodes)
         : { version: 1 as const, projectId, changes: [] };
       await saveStageConfigurationDraft(key, next);
@@ -46,6 +46,6 @@ export function useStageConfigurationDraft(projectId: string, workflow: Workflow
     writes.current = operation.catch(() => undefined);
     return operation;
   }, [key, projectId, ready]);
-  return { ...applied, conflicts: [...applied.conflicts, ...projectDraft?.conflicts ?? []], projectSettings: projectDraft?.settings, ready, draft, pending: Boolean(draft?.changes.length || draft?.production || draft?.project), error: loaded.key === key ? loaded.error : '',
-    saveNodes: (nodes: WorkflowNode[]) => write(nodes), saveConfiguration: (nodes: WorkflowNode[], production: ProductionSettings, settings: ProductionProjectSettings, baseline?: ProductionProjectSettings) => write(nodes, production, settings, baseline), clear: () => write(), retry: () => setAttempt(value => value + 1) };
+  return { ...applied, conflicts: [...applied.conflicts, ...projectDraft?.conflicts ?? []], projectSettings: projectDraft?.settings, ready, draft, pending: Boolean(draft?.changes.length || draft?.production || draft?.project || draft?.execution), error: loaded.key === key ? loaded.error : '',
+    saveNodes: (nodes: WorkflowNode[]) => write(nodes), saveConfiguration: (nodes: WorkflowNode[], production: ProductionSettings, settings: ProductionProjectSettings, baseline?: ProductionProjectSettings, execution?: WorkflowDefinition['execution']) => write(nodes, production, settings, baseline, execution), clear: () => write(), retry: () => setAttempt(value => value + 1) };
 }

@@ -9,6 +9,9 @@ import { useRuntimeRead } from '../lib/use-runtime-read';
 import type { StepOutputSelection } from '../lib/types';
 import RunActions from './RunActions';
 import StepResultView from '../components/StepResultView';
+import StepProgress, { ProgressIcon } from '../components/StepProgress';
+import { runningStep, stepProgressText } from '../lib/run-progress';
+import { generationLabel } from '../lib/workbench-stages';
 import { stepGuidance } from '../lib/workflow-guidance';
 import { isPlanningSection, planningLabels, planningResultValue, type PlanningControls, type PlanningSection } from '../lib/planning-edits';
 import './run-inspector.css';
@@ -67,6 +70,8 @@ export default function RunInspector({ runId, initialNodeId, version, onClose, o
 }
 
 export function StepStatus({ step }: { step: RunStepSummary }) {
+  if (runningStep(step.status)) return <span className="run-inspector__state generation-state" data-state={step.status}><ProgressIcon status={step.status} />{stepProgressText(step)}</span>;
+  if (step.status === 'succeeded') return <span className="run-inspector__state generation-state" data-state="succeeded"><ProgressIcon status="succeeded" />已完成</span>;
   return stepStates[step.status] ? <span className="run-inspector__state">{stepStates[step.status]}</span> : <Status value={step.status} />;
 }
 
@@ -74,7 +79,7 @@ export function CurrentStepResult({ inspection, step, version, onOpenOutput, pla
   const currentPlanning = !inspection.run.selection && inspection.run.stepRetry?.nodeId !== step.id && inspection.steps.filter(item => item.kind !== 'subflow').length > 1 && (!inspection.run.purpose || inspection.run.purpose === 'production') ? planning : undefined;
   const planningSection = currentPlanning && isPlanningSection(step.kind) ? step.kind : undefined;
   return <section className="run-inspector__detail" aria-label={`步骤详情：${step.label}`}>
-    <header className="run-inspector__step-heading"><div><h3>{step.label}</h3>{planningSection && <p className="run-inspector__planning-label">当前项目内容</p>}</div>{planningSection && currentPlanning && <Button static aria-label={`编辑${planningLabels[planningSection]}`} disabled={Boolean(currentPlanning.disabledReason)} onClick={() => currentPlanning.onEdit(planningSection)}><PencilLine size={16} />编辑内容</Button>}</header>
+    <header className="run-inspector__step-heading"><div><h3>{inspection.workflowId === 'native-video' && step.modelGeneration ? generationLabel(step.label) : step.label}</h3>{planningSection && <p className="run-inspector__planning-label">当前项目内容</p>}</div>{planningSection && currentPlanning && <Button static aria-label={`编辑${planningLabels[planningSection]}`} disabled={Boolean(currentPlanning.disabledReason)} onClick={() => currentPlanning.onEdit(planningSection)}><PencilLine size={16} />编辑内容</Button>}</header>
     <StepRetryAction step={step} controls={retry} />
     <div className="run-inspector__panel"><ModelResponseDetails runId={inspection.run.id} step={step} version={version} /><StepOutputs inspection={inspection} step={step} version={version} onOpenOutput={onOpenOutput} planning={currentPlanning} showApply={step.kind !== 'assets'} /></div>
   </section>;
@@ -149,8 +154,9 @@ function StepRetryAction({ step, controls }: { step: RunStepSummary; controls?: 
   return <div className="run-inspector__retry"><Button static aria-label="重试此步骤" aria-describedby={id} busy={controls.busy} disabled={controls.disabled || !step.retry.allowed} onClick={controls.onRetry}><RotateCcw size={16} />重试此步骤</Button><p id={id} className="run-inspector__muted">{step.retry.reason || '沿用本次制作的配置与上游产物，完成后停在此步骤。'}</p></div>;
 }
 function StepOutputs(props: StepOutputsProps) {
-  if (props.planning && isPlanningSection(props.step.kind) && props.inspection.run.purpose !== 'workflow-assistant') return <PlanningOutput section={props.step.kind} planning={props.planning} />;
-  return <RecordedStepOutput {...props} />;
+  if (props.step.status === 'pending' && !props.step.outputAvailable) return <p>等待上游步骤完成后执行。</p>;
+  return <><StepProgress step={props.step} />{props.planning && isPlanningSection(props.step.kind) && props.inspection.run.purpose !== 'workflow-assistant'
+    ? <PlanningOutput section={props.step.kind} planning={props.planning} /> : <RecordedStepOutput {...props} />}</>;
 }
 
 function PlanningOutput({ section, planning }: { section: PlanningSection; planning: PlanningControls }) {
@@ -166,8 +172,8 @@ function RecordedStepOutput({ inspection, step, version, onOpenOutput, showApply
   const open = () => onOpenOutput({ projectId: inspection.run.projectId, runId: inspection.run.id, nodeId: step.id, kind: step.kind });
   return <>{output.error && <Notice kind="error">{output.error}<Button aria-label="重试读取产物" onClick={output.refresh}>重试</Button></Notice>}
     {!output.data && !output.error && <p role="status">正在读取步骤产物…</p>}
-    {output.data && !output.data.available && <p>这个步骤尚未保存产物。</p>}
-    {output.data?.available && <section aria-label="本次产物"><StepResultView value={output.data.value} kind={step.kind} mediaShots={output.data.mediaShots} mediaGeneration={output.data.mediaGeneration} onRegenerate={!inspection.run.purpose || inspection.run.purpose === 'production' ? (shotId, kind) => onOpenOutput({ projectId: inspection.run.projectId, runId: inspection.run.id, nodeId: step.id, kind: step.kind, regeneration: { shotId, kind, modelName: output.data?.mediaGeneration?.modelName ?? '' } }) : undefined} /></section>}
+    {output.data && !output.data.available && !runningStep(step.status) && !output.data.progress?.shots.length && <p>{step.status === 'pending' ? '等待上游步骤完成后执行。' : '这个步骤尚未保存产物。'}</p>}
+    {output.data && (output.data.available || Boolean(output.data.progress?.shots.length)) && <section aria-label="本次产物"><StepResultView value={output.data.value} kind={step.kind} mediaShots={output.data.mediaShots} mediaGeneration={output.data.mediaGeneration} progress={output.data.progress} onRegenerate={output.data.available && !runningStep(step.status) && (!inspection.run.purpose || inspection.run.purpose === 'production') ? (shotId, kind) => onOpenOutput({ projectId: inspection.run.projectId, runId: inspection.run.id, nodeId: step.id, kind: step.kind, regeneration: { shotId, kind, modelName: output.data?.mediaGeneration?.modelName ?? '' } }) : undefined} /></section>}
     {applicable && output.data?.available && <div className="run-inspector__output-actions"><Button aria-label="在项目中查看与应用" onClick={open}>在工作台使用</Button></div>}
   </>;
 }

@@ -1,3 +1,4 @@
+import { openAdvancedWorkflow } from './production-settings';
 import { confirmAction } from './confirmation-actions';
 import { saveProduction } from './production-settings';
 import { selectModel, closeProjectSettings } from './settings';
@@ -317,7 +318,7 @@ test('edits real project state, output profiles, graph and theme', async ({ page
   await expect((await projectSettingField(page, '视频高度'))).toHaveValue('1920');
 
   await closeProjectSettings(page);
-  await page.getByRole('button', { name: '流程', exact: true }).click();
+  await openAdvancedWorkflow(page);
   await expect(page.locator('.react-flow')).toBeVisible();
   await expect(page.getByRole('button', { name: '保存流程', exact: true })).toBeDisabled();
   await page.getByRole('button', { name: '添加编排步骤', exact: true }).click();
@@ -343,7 +344,7 @@ test('keeps flow edits through background refresh and saves before switching vie
   await page.getByRole('button', { name: '我的项目', exact: true }).click();
   await page.locator('.project-card').filter({ hasText: '流程交互验收' }).getByRole('button', { name: /继续创作/ }).click();
   await closeProjectSettings(page);
-  await page.getByRole('button', { name: '流程', exact: true }).click();
+  await openAdvancedWorkflow(page);
   await expect(page.getByRole('button', { name: '保存流程', exact: true })).toBeDisabled();
   await page.getByRole('button', { name: '添加编排步骤', exact: true }).click();
   await page.getByLabel('步骤名称').fill('后台刷新保留的步骤');
@@ -354,10 +355,10 @@ test('keeps flow edits through background refresh and saves before switching vie
   await page.setViewportSize({ width: 600, height: 900 });
   const canvas = await page.locator('.react-flow').boundingBox();
   expect(canvas?.height).toBeGreaterThan(300);
-  await page.getByRole('button', { name: '分镜', exact: true }).click();
+  await page.getByRole('button', { name: '返回工作台', exact: true }).click();
   await expect(page.locator('.react-flow')).toHaveCount(0);
   await closeProjectSettings(page);
-  await page.getByRole('button', { name: '流程', exact: true }).click();
+  await openAdvancedWorkflow(page);
   await expect(page.getByText('后台刷新保留的步骤', { exact: true }).first()).toBeVisible();
   await expect(page.getByRole('button', { name: '保存流程', exact: true })).toBeDisabled();
 });

@@ -1,3 +1,4 @@
+import { openAdvancedWorkflow } from './production-settings';
 import { writeFile } from 'node:fs/promises';
 import { expect, type Locator } from '@playwright/test';
 import type { AssetRecord, CharacterProfile, MCPServer, ModelProfile, ProjectDocument, SeriesTemplate } from '@video-quickly/contracts';
@@ -136,7 +137,7 @@ test('leaves shots and workflow nodes intact on cancel, including keyboard delet
   await page.getByRole('button', { name: '移除所选镜头', exact: true }).click();
   const dialog = page.getByRole('alertdialog'); await dialog.getByRole('button', { name: '取消', exact: true }).click();
   await expect(page.locator('.outline-shot')).toHaveCount(2); expect((await rpc<{ project: ProjectDocument }>(request, 'project.get', { projectId: project.id })).project).toEqual(project);
-  await page.getByRole('button', { name: '流程', exact: true }).click();
+  await openAdvancedWorkflow(page);
   const node = page.locator('.react-flow__node').first(); await expect(node).toBeVisible(); await node.click();
   const count = await page.locator('.react-flow__node').count();
   await node.focus(); await page.keyboard.press('Delete'); await expect(dialog).toBeVisible(); await page.keyboard.press('Escape');

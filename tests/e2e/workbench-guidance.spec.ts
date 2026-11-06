@@ -1,3 +1,4 @@
+import { openAdvancedWorkflow } from './production-settings';
 import { pickProductionModel, productionStep, saveProduction } from './production-settings';
 import { randomUUID } from 'node:crypto';
 import { expect, test, type APIRequestContext, type Page } from '@playwright/test';
@@ -62,7 +63,7 @@ test('retains an unavailable saved model until the user chooses a compatible rep
   await expect(selector).toHaveValue('removed-model');
   const text = source.models.find(model => model.capabilities.includes('text'))!; await pickProductionModel(dialog, '生成分镜模型', text);
   await saveProduction(dialog); await expect(dialog).toHaveCount(0);
-  await page.getByRole('button', { name: '流程', exact: true }).click();
+  await openAdvancedWorkflow(page);
   await page.locator('.react-flow__node[data-id="script"]').click();
   const graphSelector = page.getByLabel('使用模型', { exact: true }); await expect(graphSelector).toHaveValue(text.id);
   for (const other of source.models.filter(model => model.id !== text.id)) await expect(graphSelector.locator(`option[value="${other.id}"]`)).toHaveCount(0);

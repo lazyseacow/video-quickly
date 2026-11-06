@@ -65,6 +65,8 @@
 .production-settings__advanced { padding-block: var(--space-4); border-top: 1px solid var(--border); }
 .production-settings__advanced > summary { min-height: var(--control-hit-size); cursor: pointer; font-size: var(--text-size-label); }
 .production-settings__task { min-inline-size: 0; margin-top: var(--space-4); }
+.production-settings__concurrency { padding-block: var(--space-4); border-top: 1px solid var(--border); }
+.production-settings__concurrency h3 { margin: 0 0 var(--space-4); font-size: var(--text-size-body); font-weight: var(--font-weight-semibold); }
 .production-settings__reference-audio { margin-bottom: var(--space-4); }
 .production-settings__reference-audio-list { display: grid; gap: var(--space-2); list-style: none; margin: var(--space-3) 0; padding: 0; }
 .production-settings__reference-audio-list li { display: flex; align-items: center; gap: var(--space-2); border-bottom: 1px solid var(--border); }

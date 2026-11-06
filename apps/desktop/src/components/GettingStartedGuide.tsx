@@ -22,7 +22,7 @@ function definitions(): GuideStep[] {
     { id: 'model-connection', action: 'model-saved', title: '添加模型连接', description: '点击高亮的添加按钮，选择模型类型，填写服务地址和密钥，再选择型号并保存。保存成功且表单关闭后继续；已有连接可以直接跳过。' },
     { id: 'projects', action: 'projects-opened', title: '打开我的项目', description: '点击左侧图标打开项目列表，再选择一个项目继续创作。也可以使用上方加号创建新项目。', side: 'right', when: () => !target('project-open') && !target('view') && !target('workflow') && !target('preview') },
     { id: 'project-open', action: 'workbench-opened', title: '进入创作工作台', description: '点击项目卡片上的“继续创作”进入工作台。项目加载完成后，指引会继续介绍镜头、预览和制作区域。' },
-    { id: 'view', action: 'view-changed', title: '分镜与流程', description: '可以切换“分镜”或“流程”。切换后自动继续：“分镜”编辑内容和时间轴，“流程”配置制作步骤与模型。' },
+    { id: 'view', action: 'production-settings-opened', title: '制作设置', description: '点击“制作设置”配置创作要求、模型和生成并发。需要自定义步骤或子流程时，从“模型与素材”的“高级编排”进入。关闭设置后继续介绍工作台。' },
     { id: 'outline-toggle', action: 'outline-opened', title: '展开镜头导航', description: '左侧镜头导航已收起，点击高亮按钮展开。展开后会接着介绍真实的镜头列表。', when: () => !target('shots') },
     { id: 'shots', action: 'shot-selected', title: '整理镜头', description: '直接点击列表中的镜头，查看它的画面、旁白与时长。成功选择镜头后，指引会自动继续。', side: 'right' },
     { id: 'preview', action: 'preview-played', title: '预览画面', description: '可以点击播放按钮，或在此区域按空格播放。预览实际开始播放后继续；也可以先核对画面、字幕和声音。', side: 'left' },

@@ -197,7 +197,7 @@ export default function WorkflowCanvas({ workflow, models, dirty, saving, confli
     <aside className="flow-inspector">
       <div className="section-heading"><h3>流程编排</h3><IconButton label="添加编排步骤" disabled={nodes.length >= 100} onClick={addNode}><Plus size={17} /></IconButton></div>
       {error && <Notice kind="error">{error}</Notice>}
-      <WorkflowComposition workflow={workflow} models={models} onChange={onChange} />
+      <WorkflowComposition workflow={workflow} onChange={onChange} />
       {selected ? <>
         {onConfigure && <Button className="button-full" onClick={() => onConfigure(selected)}>配置与执行步骤</Button>}
         <Field label="步骤名称"><input value={selected.label} onChange={event => updateSelected({ label: event.target.value })} /></Field>

@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { productionSettingsSchema, projectSchema, resolveProductionWorkflow, workflowNodeSchema, type ProductionSettings, type WorkflowDefinition, type WorkflowNode } from '@video-quickly/contracts';
+import { productionSettingsSchema, projectSchema, resolveProductionWorkflow, workflowExecutionSchema, workflowNodeSchema, type ProductionSettings, type WorkflowDefinition, type WorkflowNode } from '@video-quickly/contracts';
 import { sameContent } from './project-edits';
 
 export const productionProjectSettingsSchema = projectSchema.pick({ brief: true, style: true, profile: true, creativeContext: true });
@@ -10,6 +10,7 @@ export const stageConfigurationDraftSchema = z.object({
   changes: z.array(z.object({ baseline: workflowNodeSchema, node: workflowNodeSchema })).max(100),
   production: z.object({ baseline: productionSettingsSchema, value: productionSettingsSchema }).optional(),
   project: z.object({ baseline: productionProjectSettingsSchema, value: productionProjectSettingsSchema }).optional(),
+  execution: z.object({ baseline: workflowExecutionSchema.optional(), value: workflowExecutionSchema.optional() }).optional(),
 }).superRefine((draft, context) => {
   const ids = new Set<string>();
   draft.changes.forEach((change, index) => {
@@ -34,14 +35,16 @@ export function updateStageConfigurationDraft(projectId: string, previous: Stage
   return stageConfigurationDraftSchema.parse({ ...(previous?.projectId === projectId ? previous : {}), version: 1, projectId, changes: [...changes.values()] });
 }
 
-export function updateProductionConfigurationDraft(projectId: string, previous: StageConfigurationDraft | undefined, workflow: WorkflowDefinition, nodes: WorkflowNode[], production: ProductionSettings, current: ProductionProjectSettings, next: ProductionProjectSettings): StageConfigurationDraft {
+export function updateProductionConfigurationDraft(projectId: string, previous: StageConfigurationDraft | undefined, workflow: WorkflowDefinition, nodes: WorkflowNode[], production: ProductionSettings, current: ProductionProjectSettings, next: ProductionProjectSettings, execution = workflow.execution): StageConfigurationDraft {
   if (!workflow.production) throw new Error('当前流程不支持统一制作设置。');
   const draft = updateStageConfigurationDraft(projectId, previous, workflow.nodes, nodes);
   const baseline = draft.production?.baseline ?? workflow.production;
   const projectBaseline = draft.project?.baseline ?? current;
+  const executionBaseline = draft.execution ? draft.execution.baseline : workflow.execution;
   return stageConfigurationDraftSchema.parse({ ...draft,
     production: sameContent(baseline, production) ? undefined : { baseline, value: production },
     project: sameContent(projectBaseline, next) ? undefined : { baseline: projectBaseline, value: next },
+    execution: sameContent(executionBaseline, execution) ? undefined : { baseline: executionBaseline, value: execution },
   });
 }
 
@@ -58,7 +61,7 @@ export function applyProductionProjectDraft(current: ProductionProjectSettings, 
 }
 
 export function applyStageConfigurationDraft(workflow: WorkflowDefinition, draft: StageConfigurationDraft | undefined): { workflow: WorkflowDefinition; conflicts: string[] } {
-  if (!draft?.changes.length && !draft?.production) return { workflow, conflicts: [] };
+  if (!draft?.changes.length && !draft?.production && !draft?.execution) return { workflow, conflicts: [] };
   const changes = new Map(draft!.changes.map(change => [change.node.id, change]));
   const currentIds = new Set(workflow.nodes.map(node => node.id));
   const conflicts = draft!.changes.filter(change => !currentIds.has(change.node.id)).map(change => change.node.id);
@@ -75,5 +78,10 @@ export function applyStageConfigurationDraft(workflow: WorkflowDefinition, draft
     if (sameContent(production, draft.production.baseline) || sameContent(production, draft.production.value)) { production = draft.production.value; changed = true; }
     else conflicts.push('production');
   }
-  return { workflow: changed ? resolveProductionWorkflow({ ...workflow, nodes, production }) : workflow, conflicts };
+  let execution = workflow.execution;
+  if (draft?.execution) {
+    if (sameContent(execution, draft.execution.baseline) || sameContent(execution, draft.execution.value)) { execution = draft.execution.value; changed = true; }
+    else conflicts.push('execution');
+  }
+  return { workflow: changed ? resolveProductionWorkflow({ ...workflow, nodes, production, execution }) : workflow, conflicts };
 }

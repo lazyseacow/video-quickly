@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { z } from 'zod';
-import { subflowInputSchema, subflowOutputSchema, workflowTemplateSchema, recordPageSchema, subflowReferenceSchema, type ModelProfile, type WorkflowDefinition, type WorkflowNode, type WorkflowTemplate } from '@video-quickly/contracts';
+import { subflowInputSchema, subflowOutputSchema, workflowTemplateSchema, recordPageSchema, subflowReferenceSchema, type WorkflowDefinition, type WorkflowNode, type WorkflowTemplate } from '@video-quickly/contracts';
 import { Button, Dialog, Field, Notice, Select } from './Primitives';
 import { rpc } from '../lib/client';
 
@@ -19,15 +19,11 @@ export function SubflowInputBindings({ node, onChange }: { node: WorkflowNode; o
   }} /></Field>{error && <Notice kind="error">{error}</Notice>}</>;
 }
 
-export default function WorkflowComposition({ workflow, models, onChange }: { workflow: WorkflowDefinition; models: ModelProfile[]; onChange: (workflow: WorkflowDefinition, label: string) => void }) {
+export default function WorkflowComposition({ workflow, onChange }: { workflow: WorkflowDefinition; onChange: (workflow: WorkflowDefinition, label: string) => void }) {
   const [libraryMode, setLibraryMode] = useState<'save' | 'insert'>();
   const current = useRef(workflow); current.current = workflow;
-  const used = new Set([...workflow.nodes, ...(workflow.subflows ?? []).flatMap(definition => definition.nodes)].flatMap(node => node.modelId ? [node.modelId] : []));
-  const execution = workflow.execution;
   return <div className="workflow-composition-controls">
     <div className="pill-row"><Button onClick={() => setLibraryMode('save')}>保存为子流程</Button><Button onClick={() => setLibraryMode('insert')}>插入子流程</Button></div>
-    <Field label="镜头同时处理数" hint="图片、配音及视频使用逐镜头持久回执。恢复时复用已完成结果；失败后停止领取新镜头，并等待在途请求结束。"><Select value={execution?.maxConcurrentShots ?? 1} onChange={event => onChange({ ...current.current, execution: { modelLimits: execution?.modelLimits ?? {}, maxConcurrentShots: Number(event.target.value) } }, '修改镜头并行数')}>{Array.from({ length: 8 }, (_, index) => <option key={index + 1} value={index + 1}>{index + 1}{index === 0 ? '（串行）' : ''}</option>)}</Select></Field>
-    {execution && models.filter(model => used.has(model.id) && model.capabilities.some(capability => ['image', 'video'].includes(capability))).map(model => <Field key={model.id} label={`${model.name} 并发上限`}><Select value={execution.modelLimits[model.id] ?? execution.maxConcurrentShots} onChange={event => onChange({ ...current.current, execution: { ...execution, modelLimits: { ...execution.modelLimits, [model.id]: Number(event.target.value) } } }, '修改模型并发上限')}>{Array.from({ length: 8 }, (_, index) => <option key={index + 1} value={index + 1}>{index + 1}</option>)}</Select></Field>)}
     {libraryMode && <SubflowLibrary mode={libraryMode} workflow={workflow} onClose={() => setLibraryMode(undefined)} onInsert={template => {
       const latest = current.current, definitions = new Map((latest.subflows ?? []).map(definition => [`${definition.id}@${definition.version}`, definition]));
       for (const definition of [...template.dependencies, template.definition]) definitions.set(`${definition.id}@${definition.version}`, definition);

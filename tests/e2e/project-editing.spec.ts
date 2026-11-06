@@ -1,3 +1,4 @@
+import { openAdvancedWorkflow } from './production-settings';
 import { confirmAction } from './confirmation-actions';
 import { openProjectFromList } from './workspace-navigation';
 import { setWorkspaceTheme } from './workspace-settings';
@@ -124,14 +125,14 @@ test('keeps generated results editable with undo and rejects reapplying them aft
     await rpc(request, 'node.apply', { runId: run.id, nodeId: 'script', revision: project.revision });
     await openProject(page, project.title);
     await expect(page.getByLabel('镜头标题')).toHaveValue('已生成的分镜');
-    await page.getByRole('button', { name: '流程', exact: true }).click(); await page.locator('.react-flow__node[data-id="script"]').click();
+    await openAdvancedWorkflow(page); await page.locator('.react-flow__node[data-id="script"]').click();
     await page.getByRole('button', { name: '配置与执行步骤', exact: true }).click();
     const step = page.getByRole('dialog', { name: '旁白与分镜', exact: true });
     await expect(step.getByRole('button', { name: '保存', exact: true })).toBeVisible();
     await expect(step.getByRole('button', { name: '执行', exact: true })).toBeVisible();
     await expect(step.getByRole('button', { name: '查看最近产物', exact: true })).toHaveCount(0);
     await step.getByRole('button', { name: '取消', exact: true }).click();
-    await page.getByRole('button', { name: '分镜', exact: true }).click();
+    await page.getByRole('button', { name: '返回工作台', exact: true }).click();
     await page.getByLabel('镜头标题').fill('人工修订的分镜');
     await page.getByRole('button', { name: '保存镜头', exact: true }).click();
     await page.getByRole('button', { name: '撤销', exact: true }).click();

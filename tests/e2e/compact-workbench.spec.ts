@@ -1,3 +1,4 @@
+import { openAdvancedWorkflow } from './production-settings';
 
 import { expect, type APIRequestContext } from '@playwright/test';
 import { createSceneTemplate, type ProjectDocument } from '@video-quickly/contracts';
@@ -41,10 +42,10 @@ for (const viewport of [{ width: 1536, height: 960, theme: 'light' }, { width: 1
     const saved = (await rpc<{ project: ProjectDocument }>(request, 'project.get', { projectId: project.id })).project;
     expect(saved.workflow.nodes.find(node => node.id === 'brief')?.prompt).toBe('精简弹窗也保留可编辑的配置');
     expect(saved.workflow.nodes.find(node => node.id === 'style')?.prompt).toBe('style原有提示词');
-    await page.getByRole('button', { name: '流程', exact: true }).click(); await page.locator('.react-flow__node[data-id="script"]').click();
+    await openAdvancedWorkflow(page); await page.locator('.react-flow__node[data-id="script"]').click();
     const type = page.getByLabel('步骤类型', { exact: true }); await expect(type.locator('option[value="research"], option[value="review"]')).toHaveCount(0);
     await expect(page.getByLabel('完成后人工审阅', { exact: true })).toHaveCount(0);
-    await page.getByRole('button', { name: '分镜', exact: true }).click();
+    await page.getByRole('button', { name: '返回工作台', exact: true }).click();
     await expect(page.getByRole('region', { name: '制作指引', exact: true }).locator('.workbench-guide__step')).toHaveCount(4);
     expect((await rpc<{ project: ProjectDocument }>(request, 'project.get', { projectId: project.id })).project).toEqual(saved);
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true); await expect(page.locator('vite-error-overlay')).toHaveCount(0); expect(errors).toEqual([]);

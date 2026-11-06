@@ -14,6 +14,7 @@ import {
 import { DocumentStore } from './database.js';
 import { activityNodeId, createReadModels } from './read-models.js';
 import { createModelResponses } from './model-responses.js';
+import { createRunProgress } from './run-progress.js';
 
 const runInput = z.object({ runId: z.string().min(1) });
 const stepInput = runInput.extend({ nodeId: z.string().min(1) });
@@ -60,6 +61,7 @@ export function createRunInspector(options: {
   redactText: (text: string, models: ModelProfile[], secrets: readonly string[]) => string;
 }) {
   const { database, store } = options, reads = createReadModels(database, store), responses = createModelResponses(store);
+  const progress = createRunProgress(store);
   function metadata(runId: string) {
     const row = database.prepare("SELECT json_extract(body, '$.project.title') AS title, json_extract(body, '$.project.workflow.id') AS workflowId, coalesce(json_extract(body, '$.inspectionNodes'), json_extract(body, '$.nodes')) AS nodes, json_extract(body, '$.models') AS models, json_extract(body, '$.skills') AS skills, coalesce(json_extract(body, '$.inspectionEdges'), json_extract(body, '$.project.workflow.edges')) AS edges, json_extract(body, '$.project.workflow.stages') AS stages, json_extract(body, '$.handlerVersion') AS handlerVersion, json_extract(body, '$.inspectionThreads') AS inspectionThreads, json_type(body, '$.exportBatch') AS exportBatch FROM documents WHERE kind = 'run-snapshot' AND id = ?").get(runId) as SnapshotRow | undefined;
     if (!row) return undefined;
@@ -129,7 +131,7 @@ export function createRunInspector(options: {
       const retry = current && node.kind !== 'subflow' && ['failed', 'needs_attention'].includes(status) ? { allowed: !retryReason, reason: retryReason } : undefined;
       return { id: node.id, label: node.label, kind: node.kind, description: node.description, requiresReview: node.requiresReview, modelGeneration: isModelGenerationNode(node), status, reason,
         inputAvailable: has('node-project', node.id), outputAvailable: has('node-result', node.id), responseAvailable: has('model-response-head', node.id), activityCount: receipt?.count ?? 0,
-        unknownSubmission: unknown && Boolean(receipt?.unknown_count), retry, startedAt: receipt?.started_at, completedAt: status === 'succeeded' ? receipt?.completed_at ?? undefined : undefined, error };
+        unknownSubmission: unknown && Boolean(receipt?.unknown_count), retry, progress: progress.summary(`${runId}:${node.id}`), startedAt: receipt?.started_at, completedAt: status === 'succeeded' ? receipt?.completed_at ?? undefined : undefined, error };
     });
     const selectedNode = nodeId ? store.get<WorkflowNode>('node-definition', `${runId}:${nodeId}`) ?? saved?.nodes.find(node => node.id === nodeId) : undefined, model = selectedNode?.modelId ? saved?.models.find(value => value.id === selectedNode.modelId) : undefined;
     return runInspectionSchema.parse({ run: reads.runSummary(run), projectTitle: saved?.title ?? '历史制作', workflowId: saved?.workflowId ?? undefined, snapshotAvailable: !!saved, checkpointAvailable: state.available, steps, stages: saved?.stages,
@@ -158,7 +160,8 @@ export function createRunInspector(options: {
     const response = kind === 'output' ? responses.current(`${runId}:${nodeId}`, responseAttempt) : undefined;
     const modelResponseHistory = kind === 'output' ? responses.history(`${runId}:${nodeId}`).map(item => ({ ...item, invalid: Boolean(item.invalid) })) : undefined;
     const modelResponse = response?.status === 'received' && response.response && response.receivedAt ? redact(json({ attempt: response.attempt, receivedAt: response.receivedAt, ...response.response, issues: response.issues })) : undefined;
-    return runStepPayloadSchema.parse({ runId, nodeId, kind, available: value !== undefined, value: value === undefined ? null : redact(value), inputHash: captured?.inputHash, resolvedPromptRecorded: kind === 'input' ? captured?.prompt !== undefined : undefined, mediaShots: mediaShots ? redact(json(mediaShots)) : undefined, mediaGeneration, modelResponse, modelResponseHistory });
+    const detail = kind === 'output' ? progress.detail(`${runId}:${nodeId}`) : undefined;
+    return runStepPayloadSchema.parse({ runId, nodeId, kind, available: value !== undefined, value: value === undefined ? null : redact(value), inputHash: captured?.inputHash, resolvedPromptRecorded: kind === 'input' ? captured?.prompt !== undefined : undefined, mediaShots: mediaShots ? redact(json(mediaShots)) : undefined, mediaGeneration, modelResponse, modelResponseHistory, progress: detail ? redact(json(detail)) : undefined });
   }
   async function payload(runId: string, nodeId: string, kind: 'input' | 'output', responseAttempt?: number) {
     options.run(runId);

@@ -1,3 +1,4 @@
+import { openAdvancedWorkflow } from './production-settings';
 import { openProjectFromList } from './workspace-navigation';
 import { openCosts, openGuide, openWorkspaceSettings } from './workspace-settings';
 import { randomUUID } from 'node:crypto';
@@ -11,7 +12,7 @@ import { selectModel, settingField } from './settings';
 const preference = 'vq-onboarding-v1';
 const targets: Record<string, string[]> = {
   '新建创作项目': ['create-project'], '打开模型连接': ['models'], '添加模型连接': ['model-connection'], '打开我的项目': ['projects'], '进入创作工作台': ['project-open'],
-  '分镜与流程': ['view'], '展开镜头导航': ['outline-toggle'], '整理镜头': ['shots'], '预览画面': ['preview'],
+  '制作设置': ['view'], '展开镜头导航': ['outline-toggle'], '整理镜头': ['shots'], '预览画面': ['preview'],
   '安排镜头节奏': ['timeline'], '展开属性面板': ['inspector-toggle'], '编辑属性': ['inspector'], '当前流程画布': ['workflow'],
   '制作前检查': ['check'], '自动制作': ['produce'], '导出成片': ['export'], '随时重开指引': ['help'],
 };
@@ -242,10 +243,10 @@ test('does not navigate or target the hidden cached workbench when reopened from
 
 test('includes only the actual workflow canvas when reopened in the flow view', async ({ page }) => {
   const observed = observe(page); await page.emulateMedia({ reducedMotion: 'reduce' }); await dismissFirst(page);
-  await page.getByRole('button', { name: '流程', exact: true }).click(); await expect(page.locator('[data-guide="workflow"]')).toBeVisible();
+  await openAdvancedWorkflow(page); await expect(page.locator('[data-guide="workflow"]')).toBeVisible();
   await openGuide(page); await opened(page); const seen = await walk(page);
   expect(seen).toContain('workflow'); for (const hidden of ['preview', 'shots', 'timeline', 'inspector']) expect(seen).not.toContain(hidden);
-  await expect(page.getByRole('button', { name: '流程', exact: true })).toHaveAttribute('aria-pressed', 'true');
+  await expect(page.getByRole('button', { name: '返回工作台', exact: true })).toBeVisible();
   expect(observed.writes).toEqual([]); expect(observed.errors).toEqual([]);
 });
 
@@ -326,8 +327,9 @@ test('navigates to current model controls, saves a real local connection and ret
     const pending = await holdNextRpc(page, 'model.save'); await dialog.getByRole('button', { name: '保存连接', exact: true }).click(); await pending.entered;
     await expect(guide(page)).toHaveCount(0); pending.release(); await expect(dialog).toHaveCount(0); await atStep(page, '打开我的项目');
     const summary = await rpc<{ models: ModelProfile[] }>(request, 'workspace.summary'); expect(summary.models.find(model => model.name === name)).toMatchObject({ model: 'guide-local-text', baseUrl: provider.baseUrl });
-    await active(page).click(); await atStep(page, '进入创作工作台'); await active(page).click(); await expect(page.getByLabel('项目名称', { exact: true })).toBeVisible(); await atStep(page, '分镜与流程');
-    await active(page).getByRole('button', { name: '流程', exact: true }).click(); await expect(page.locator('[data-guide="workflow"]')).toBeVisible(); await atStep(page, '当前流程画布');
+    await active(page).click(); await atStep(page, '进入创作工作台'); await active(page).click(); await expect(page.getByLabel('项目名称', { exact: true })).toBeVisible(); await atStep(page, '制作设置');
+    await active(page).click(); await expect(page.getByRole('dialog', { name: '制作设置', exact: true })).toBeVisible();
+    await page.getByRole('dialog', { name: '制作设置', exact: true }).getByRole('button', { name: '取消', exact: true }).click(); await atStep(page, '整理镜头');
     expect(provider.calls.length).toBeGreaterThan(0); expect(provider.calls.every(call => call.method === 'GET')).toBe(true);
     expect(observed.writes).toEqual(['model.save']); expect(observed.errors).toEqual([]);
   } finally { await provider.close(); }

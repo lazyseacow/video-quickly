@@ -75,14 +75,21 @@ export function createReadModels(database: Database.Database, store: DocumentSto
     return page(rows, limit, row => ({ id: row.activity_id, runId, nodeId: activityNodeId(row.activity_id, ids), status: (row.status === 'dispatched' ? 'submitted' : row.status) as ActivityRecord['status'], inputHash: row.input_hash, remoteTaskId: row.remote_id ?? undefined, attempt: 1, createdAt: row.started_at, updatedAt: row.completed_at ?? row.started_at, error: row.error ?? undefined }));
   }
   function assets(before: number | undefined, limit: number, kind?: AssetRecord['kind']): RecordPage<AssetListItem> {
+    const generating = generationAssets();
     const rows = database.prepare(`SELECT rowid AS cursor, body FROM documents WHERE kind = 'asset' AND coalesce(json_extract(body, '$.active'), 1) = 1 AND (? IS NULL OR rowid < ?) AND (? IS NULL OR json_extract(body, '$.kind') = ?) ORDER BY rowid DESC LIMIT ?`).all(before ?? null, before ?? null, kind ?? null, kind ?? null, limit + 1) as DocumentRow[];
     return page(rows, limit, row => {
       const asset = JSON.parse(row.body) as AssetRecord;
-      return { ...asset, inUse: assetInUse(asset.id) };
+      return { ...asset, inUse: assetInUse(asset.id) || generating.has(asset.id) };
     });
   }
   function assetInUse(id: string) { return !!database.prepare('SELECT 1 FROM project_asset_references WHERE asset_id = ? LIMIT 1').get(id); }
-  return { assetsVersion, projects, projectDetail, runSummary, runs, events, activities, assets, assetInUse, nodeIds };
+  function generationAssets(): Set<string> {
+    const rows = database.prepare(`SELECT json_extract(shot.value, '$.assetId') AS assetId, json_extract(shot.value, '$.referenceAssetId') AS referenceAssetId
+      FROM documents r JOIN documents p ON p.kind = 'run-step-progress' AND substr(p.id, 1, length(r.id) + 1) = r.id || ':', json_each(p.body, '$.shots') shot
+      WHERE r.kind = 'run' AND json_extract(r.body, '$.status') IN ('queued','running','waiting_review','waiting_external','retry_scheduled')`).all() as { assetId: string | null; referenceAssetId: string | null }[];
+    return new Set(rows.flatMap(row => [row.assetId, row.referenceAssetId]).filter((id): id is string => id !== null));
+  }
+  return { assetsVersion, projects, projectDetail, runSummary, runs, events, activities, assets, assetInUse, generationAssetInUse: (id: string) => generationAssets().has(id), nodeIds };
 }
 
 function page<T extends { cursor: number }, R>(rows: T[], limit: number, map: (row: T) => R): RecordPage<R> {

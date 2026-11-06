@@ -62,10 +62,11 @@ function RecordedStageRun({ runId, stageId, nodeIds, configurableNodeIds = nodeI
     const list = navigation.current, item = list?.querySelector<HTMLElement>('[aria-current="step"]');
     if (!list || !item) return;
     const bounds = list.getBoundingClientRect(), target = item.getBoundingClientRect();
-    if (target.left < bounds.left) list.scrollLeft -= bounds.left - target.left;
-    else if (target.right > bounds.right) list.scrollLeft += target.right - bounds.right;
-    if (target.top < bounds.top) list.scrollTop -= bounds.top - target.top;
-    else if (target.bottom > bounds.bottom) list.scrollTop += target.bottom - bounds.bottom;
+    const left = bounds.left + list.clientLeft, right = left + list.clientWidth, top = bounds.top + list.clientTop, bottom = top + list.clientHeight;
+    if (target.left < left) list.scrollLeft -= Math.ceil(left - target.left);
+    else if (target.right > right) list.scrollLeft += Math.ceil(target.right - right);
+    if (target.top < top) list.scrollTop -= Math.ceil(top - target.top);
+    else if (target.bottom > bottom) list.scrollTop += Math.ceil(target.bottom - bottom);
   }, [flat, selectedEntry?.id]);
   const failed = steps.find(step => step.error || ['failed', 'needs_attention'].includes(step.status));
   const configurableIds = onConfigure ? nodeIds.filter(nodeId => configurableNodeIds.includes(nodeId)) : [];

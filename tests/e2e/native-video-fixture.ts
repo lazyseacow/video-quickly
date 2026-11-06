@@ -27,10 +27,10 @@ async function fixture(request: APIRequestContext, info: TestInfo, hold = false,
     if (incoming.url === '/source.mp4') { response.setHeader('content-type', 'video/mp4'); response.end(bytes); return; }
     response.setHeader('content-type', 'application/json');
     if (incoming.method === 'GET') { response.end(JSON.stringify({ status: 'succeeded', content: { video_url: `${baseUrl}/source.mp4` } })); return; }
-    let body = ''; for await (const chunk of incoming) body += chunk; const value = JSON.parse(body); requests.push(value);
+    let body = ''; for await (const chunk of incoming) body += chunk; const value = JSON.parse(body); requests.push(value); const requestNumber = requests.length;
     await documents.beforeReply?.(value, incoming.url ?? '');
     if (incoming.url?.endsWith('/images/generations')) { response.end(JSON.stringify({ data: [{ b64_json: 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScLbtAAAAABJRU5ErkJggg==' }] })); return; }
-    if (incoming.url?.includes('contents/generations/tasks')) { response.end(JSON.stringify({ id: `video-${requests.length}` })); return; }
+    if (incoming.url?.includes('contents/generations/tasks')) { response.end(JSON.stringify({ id: `video-${requestNumber}` })); return; }
     if (hold && !held) { held = true; entered(); await gate; }
     const prompt = JSON.stringify(value), content = prompt.includes('自动视频制作步骤：旁白与分镜') ? JSON.stringify({ shots: Array.from({ length: shotCount }, (_, index) => ({ title: `生成的蓝色镜头${shotCount > 1 ? ` ${index + 1}` : ''}`, narration: '天空是蓝色的。', visualPrompt: '蓝色天空', soundPrompt: '自然讲述', durationUs: 1_000_000 })) }) : (prompt.includes('自动视频制作步骤：创意简报') ? documents.brief : documents.style) ?? '采用柔和蓝色画面，面向普通观众讲述。';
     response.end(JSON.stringify({ choices: [{ message: { content } }] }));
