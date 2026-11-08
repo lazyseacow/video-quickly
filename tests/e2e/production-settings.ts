@@ -44,7 +44,6 @@ export async function openAdvancedWorkflow(page: Page) {
   await page.getByRole('button', { name: '制作设置', exact: true }).click();
   const dialog = page.getByRole('dialog', { name: '制作设置', exact: true });
   await productionStep(dialog, '模型与素材');
-  await dialog.locator('summary').filter({ hasText: /^高级编排$/ }).click();
   await dialog.getByRole('button', { name: '打开高级编排', exact: true }).click();
   await expect(dialog).toHaveCount(0); await expect(page.locator('.react-flow')).toBeVisible();
 }

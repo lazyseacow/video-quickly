@@ -94,6 +94,7 @@ test('keeps a completed execution plan usable while an unrelated workspace updat
   const dialog = page.getByRole('dialog', { name: '执行范围', exact: true });
   const confirm = dialog.getByRole('button', { name: '确认执行', exact: true });
   await expect(dialog.locator('.run-scope-steps li')).toHaveCount(5); await expect(confirm).toBeEnabled();
+  await expect(dialog.getByRole('button', { name: '重新预览', exact: true })).toHaveCount(0);
   let release!: () => void;
   const held = new Promise<void>(resolve => { release = resolve; });
   await page.route('**/__desktop_rpc', async route => {
@@ -141,7 +142,7 @@ test('previews the original scope when restarting from either the task list or i
   try {
   const created = await fixture(request, true);
   const model = await rpc<{ id: string }>(request, 'model.save', { model: { name: '可取消的本地步骤', provider: 'openai-compatible', model: 'local-scope', baseUrl: `http://127.0.0.1:${address.port}/v1`, connectionType: 'text', capabilities: ['text'] } });
-  const project = await rpc<ProjectDocument>(request, 'workflow.save', { projectId: created.id, revision: created.revision, workflow: { ...created.workflow, nodes: created.workflow.nodes.map(node => node.id === 'tail' ? { ...node, modelId: model.id } : node) } });
+  const project = await rpc<ProjectDocument>(request, 'project.update', { projectId: created.id, revision: created.revision, patch: { workflow: { ...created.workflow, nodes: created.workflow.nodes.map(node => node.id === 'tail' ? { ...node, modelId: model.id } : node) } } });
   const preview = await rpc<RunPlan>(request, 'run.plan', { projectId: project.id, selection: { nodeId: 'start', mode: 'downstream' } });
   const parent = await rpc<RunRecord>(request, 'run.start', { projectId: project.id, selection: { ...preview.selection, previewDigest: preview.digest } });
   await expect.poll(() => pending.length).toBe(1); await rpc(request, 'run.cancel', { runId: parent.id });

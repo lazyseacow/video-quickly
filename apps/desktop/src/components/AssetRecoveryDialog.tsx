@@ -40,7 +40,10 @@ export default function AssetRecoveryDialog({ project, directory, onClose }: { p
       if (page.job.generation !== job?.generation) setSource(page.job.directory ?? '');
       setView({ page, offset }); setError('');
       return page;
-    } catch (error) { if (sequence === request.current && current === owner.current) setError(explain(error)); }
+    } catch (error) {
+      if (sequence === request.current && current === owner.current) setError(explain(error));
+      return undefined;
+    }
   }
   async function start(fresh = false) {
     const current = owner.current; request.current++; setBusy(true); setError(''); setSelected({});

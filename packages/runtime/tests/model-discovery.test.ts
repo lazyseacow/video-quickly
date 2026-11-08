@@ -1,17 +1,11 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
-import { mkdtemp, rm } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
 import { afterEach, expect, it } from 'vitest';
-import { modelSchema, type ModelDiscovery, type ModelProfile } from '@video-quickly/contracts';
+import { modelSchema, type ModelProfile } from '@video-quickly/contracts';
 import { discoverModels } from '../src/providers';
-import { createRuntime } from '../src/index';
 
-const servers: Server[] = [], directories: string[] = [], runtimes: ReturnType<typeof createRuntime>[] = [];
+const servers: Server[] = [];
 afterEach(async () => {
-  await Promise.all(runtimes.splice(0).map(runtime => runtime.close()));
   await Promise.all(servers.splice(0).map(server => new Promise<void>((resolve, reject) => { server.closeAllConnections(); server.close(error => error ? reject(error) : resolve()); })));
-  await Promise.all(directories.splice(0).map(path => rm(path, { recursive: true, force: true })));
 });
 async function service(handler: (request: IncomingMessage, response: ServerResponse) => void) {
   const server = createServer(handler); servers.push(server);
@@ -22,27 +16,6 @@ async function service(handler: (request: IncomingMessage, response: ServerRespo
 function model(baseUrl: string, overrides: Partial<ModelProfile> = {}) {
   return modelSchema.parse({ id: 'fixture', name: '读取夹具', provider: 'openai-compatible', model: 'unused', baseUrl, connectionType: 'text', capabilities: ['text'], createdAt: '', updatedAt: '', ...overrides });
 }
-async function runtimeWithSecrets() {
-  const directory = await mkdtemp(join(tmpdir(), 'vq-discovery-')); directories.push(directory);
-  const secrets = new Map<string, string>();
-  const runtime = createRuntime({ dataDirectory: directory, secretStore: { async get(key) { return secrets.get(key); }, async set(key, value) { secrets.set(key, value); }, async delete(key) { secrets.delete(key); } } }); runtimes.push(runtime);
-  return { runtime, secrets };
-}
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 it('reads authenticated compatible model lists, preserves IDs and deduplicates without a generation call', async () => {
   let calls = 0;
   const base = await service((request, response) => {

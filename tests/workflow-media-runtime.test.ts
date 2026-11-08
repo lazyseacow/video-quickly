@@ -33,7 +33,7 @@ it('recovers a rejected image in the same run and retains the completed sibling 
     response.end(Buffer.from(png, 'base64'));
   });
   const { runtime, directory, project } = await fixture(base), modelId = project.workflow.nodes[0].modelId!;
-  await runtime.dispatch('workflow.save', { projectId: project.id, revision: project.revision, workflow: { ...project.workflow, execution: { maxConcurrentShots: 1, modelLimits: { [modelId]: 1 } } } });
+  await runtime.dispatch('project.update', { projectId: project.id, revision: project.revision, patch: { workflow: { ...project.workflow, execution: { maxConcurrentShots: 1, modelLimits: { [modelId]: 1 } } } } });
   const run = await runtime.dispatch('run.start', { projectId: project.id }) as RunRecord; await runtime.waitForIdle();
   const failed = await runtime.dispatch('run.inspect', { runId: run.id }) as RunInspection;
   expect(failed.run.error).toContain('HTTP 400'); expect(failed.steps[0]).toMatchObject({ status: 'needs_attention', unknownSubmission: false, retry: { allowed: true } });
@@ -68,7 +68,7 @@ it.each([408, 409, 503])('stops native sibling requests on HTTP %i and preserves
     response.writeHead(status, { 'Retry-After': '1' }).end();
   });
   const { runtime, directory, project } = await fixture(base); const modelId = project.workflow.nodes[0].modelId!;
-  await runtime.dispatch('workflow.save', { projectId: project.id, revision: project.revision, workflow: { ...project.workflow, execution: { maxConcurrentShots: 2, modelLimits: { [modelId]: 1 } } } });
+  await runtime.dispatch('project.update', { projectId: project.id, revision: project.revision, patch: { workflow: { ...project.workflow, execution: { maxConcurrentShots: 2, modelLimits: { [modelId]: 1 } } } } });
   const run = await runtime.dispatch('run.start', { projectId: project.id }) as RunRecord; await runtime.waitForIdle();
   expect(posts).toHaveLength(1); const unknownShot = posts[0]; expect(project.shots.map(shot => shot.id)).toContain(unknownShot);
   const failed = (await runtime.dispatch('run.inspect', { runId: run.id }) as RunInspection).run;

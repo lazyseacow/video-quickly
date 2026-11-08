@@ -12,7 +12,7 @@ const directories: string[] = [];
 const runtimes: ReturnType<typeof createRuntime>[] = [];
 async function location() { const directory = await mkdtemp(join(tmpdir(), 'video-quickly-runtime-')); directories.push(directory); return directory; }
 async function runtime(options: Partial<Parameters<typeof createRuntime>[0]> = {}) {
-  const value = createRuntime({ dataDirectory: await location(), ...options }); runtimes.push(value); return value;
+  const value = createRuntime({ dataDirectory: await location(), seed: true, ...options }); runtimes.push(value); return value;
 }
 afterEach(async () => {
   await Promise.allSettled(runtimes.splice(0).map(value => value.close()));
@@ -58,7 +58,7 @@ describe('native LangGraph persistence and project behavior', () => {
     let crashed = false;
     const first = await runtime({ dataDirectory: directory, failpoint(point, id) { if (point === 'after-commit' && id === 'brief' && !crashed) { crashed = true; throw new SimulatedProcessExit(); } } });
     const snapshot = await first.dispatch('workspace.snapshot') as WorkspaceSnapshot;
-    await first.dispatch('workflow.save', { projectId: snapshot.projects[0].id, workflow: { ...snapshot.projects[0].workflow, nodes: snapshot.projects[0].workflow.nodes.map(node => node.id === 'brief' ? { ...node, config: {} } : node) } });
+    await first.dispatch('project.update', { projectId: snapshot.projects[0].id, patch: { workflow: { ...snapshot.projects[0].workflow, nodes: snapshot.projects[0].workflow.nodes.map(node => node.id === 'brief' ? { ...node, config: {} } : node) } } });
     const run = await first.dispatch('run.start', { projectId: snapshot.projects[0].id, nodeId: 'brief' }) as RunRecord;
     await first.waitForIdle(); await first.close();
     const second = await runtime({ dataDirectory: directory });
@@ -82,7 +82,7 @@ describe('native LangGraph persistence and project behavior', () => {
       workflowNodeSchema.parse({ id: 'no', kind: 'style', label: '否' }),
       workflowNodeSchema.parse({ id: 'merge', kind: 'join', label: '汇合' }),
     ];
-    await instance.dispatch('workflow.save', { projectId: project.id, workflow: { id: 'branch', version: 1, name: '分支', production: { mode: 'native-video', referenceMode: 'none', soundPrompt: '', subtitleMode: 'off' }, nodes, edges: [{ id: 'a', source: 'choice', target: 'yes', condition: 'true' }, { id: 'b', source: 'choice', target: 'no', condition: 'false' }, { id: 'c', source: 'yes', target: 'merge' }, { id: 'd', source: 'no', target: 'merge' }] } });
+    await instance.dispatch('project.update', { projectId: project.id, patch: { workflow: { id: 'branch', version: 1, name: '分支', production: { mode: 'native-video', referenceMode: 'none', soundPrompt: '', subtitleMode: 'off' }, nodes, edges: [{ id: 'a', source: 'choice', target: 'yes', condition: 'true' }, { id: 'b', source: 'choice', target: 'no', condition: 'false' }, { id: 'c', source: 'yes', target: 'merge' }, { id: 'd', source: 'no', target: 'merge' }] } } });
     const run = await instance.dispatch('run.start', { projectId: project.id }) as RunRecord;
     await instance.waitForIdle();
     const after = await instance.dispatch('workspace.snapshot') as WorkspaceSnapshot;
@@ -98,7 +98,7 @@ describe('native LangGraph persistence and project behavior', () => {
     const model = await instance.dispatch('model.save', { model: { name: '测试服务', provider: 'openai-compatible', baseUrl: 'http://localhost:1234/v1', model: 'fixture', connectionType: 'text', capabilities: ['text'] } }) as { id: string };
     const script = workflowNodeSchema.parse({ id: 'script', kind: 'script', label: '分镜', modelId: model.id });
     const animation = workflowNodeSchema.parse({ id: 'animation', kind: 'animation', label: '剪辑准备', config: { operation: 'prepare-edit' } });
-    const ready = await instance.dispatch('workflow.save', { projectId: project.id, workflow: { id: 'test', version: 1, name: '测试', production: { mode: 'native-video', referenceMode: 'none', soundPrompt: '', subtitleMode: 'off' }, nodes: [script, animation], edges: [{ id: 'edge', source: 'script', target: 'animation' }] } }) as ProjectDocument;
+    const ready = await instance.dispatch('project.update', { projectId: project.id, patch: { workflow: { id: 'test', version: 1, name: '测试', production: { mode: 'native-video', referenceMode: 'none', soundPrompt: '', subtitleMode: 'off' }, nodes: [script, animation], edges: [{ id: 'edge', source: 'script', target: 'animation' }] } } }) as ProjectDocument;
     const run = await instance.dispatch('run.start', { projectId: project.id }) as RunRecord;
     await instance.waitForIdle();
     expect(renderedTitle).toBe('新镜头');
@@ -158,7 +158,7 @@ describe('native LangGraph persistence and project behavior', () => {
     const instance = await runtime({ provider: async () => { throw new Error(`服务拒绝访问：${sensitive}`); }, secretStore: { async get(key) { return secrets.get(key); }, async set(key, value) { secrets.set(key, value); }, async delete(key) { secrets.delete(key); } } });
     const before = await instance.dispatch('workspace.snapshot') as WorkspaceSnapshot;
     const model = await instance.dispatch('model.save', { model: { name: 'fixture', provider: 'openai-compatible', baseUrl: 'http://localhost:1234/v1', model: 'fixture', connectionType: 'text', capabilities: ['text'] }, secret: sensitive }) as { id: string };
-    await instance.dispatch('workflow.save', { projectId: before.projects[0].id, workflow: { id: 'error', version: 1, name: '错误处理', production: { mode: 'native-video', referenceMode: 'none', soundPrompt: '', subtitleMode: 'off' }, nodes: [workflowNodeSchema.parse({ id: 'brief', kind: 'brief', label: '简报', modelId: model.id })], edges: [] } });
+    await instance.dispatch('project.update', { projectId: before.projects[0].id, patch: { workflow: { id: 'error', version: 1, name: '错误处理', production: { mode: 'native-video', referenceMode: 'none', soundPrompt: '', subtitleMode: 'off' }, nodes: [workflowNodeSchema.parse({ id: 'brief', kind: 'brief', label: '简报', modelId: model.id })], edges: [] } } });
     await instance.dispatch('run.start', { projectId: before.projects[0].id }); await instance.waitForIdle();
     const snapshot = await instance.dispatch('workspace.snapshot') as WorkspaceSnapshot;
     expect(JSON.stringify(snapshot)).not.toContain(sensitive);
@@ -188,7 +188,7 @@ describe('native LangGraph persistence and project behavior', () => {
   it('rejects incompatible media models before creating an external receipt', async () => {
     const instance = await runtime(); const before = await instance.dispatch('workspace.snapshot') as WorkspaceSnapshot;
     const model = await instance.dispatch('model.save', { model: { name: '文本模型', provider: 'openai-compatible', baseUrl: 'http://localhost:1234/v1', model: 'fixture', connectionType: 'text', capabilities: ['text'] } }) as { id: string };
-    await instance.dispatch('workflow.save', { projectId: before.projects[0].id, workflow: { id: 'wrong-model', version: 1, name: '能力检查', production: { mode: 'native-video', referenceMode: 'none', soundPrompt: '', subtitleMode: 'off' }, nodes: [workflowNodeSchema.parse({ id: 'assets', kind: 'assets', label: '图片', modelId: model.id })], edges: [] } });
+    await instance.dispatch('project.update', { projectId: before.projects[0].id, patch: { workflow: { id: 'wrong-model', version: 1, name: '能力检查', production: { mode: 'native-video', referenceMode: 'none', soundPrompt: '', subtitleMode: 'off' }, nodes: [workflowNodeSchema.parse({ id: 'assets', kind: 'assets', label: '图片', modelId: model.id })], edges: [] } } });
     await expect(instance.dispatch('run.start', { projectId: before.projects[0].id })).rejects.toThrow('生成能力');
     const after = await instance.dispatch('workspace.snapshot') as WorkspaceSnapshot;
     expect(after.runs).toHaveLength(0);
@@ -204,7 +204,7 @@ describe('native LangGraph persistence and project behavior', () => {
     const first = await runtime({ dataDirectory, executeActivity: executor, failpoint(point, id) { if (!crashed && point === 'after-commit' && id === 'assets') { crashed = true; throw new SimulatedProcessExit(); } } });
     const initial = await first.dispatch('workspace.snapshot') as WorkspaceSnapshot;
     const model = await first.dispatch('model.save', { model: { name: '图片', provider: 'openai-compatible', baseUrl: 'http://localhost:1234/v1', model: 'fixture', connectionType: 'image', capabilities: ['image'] } }) as { id: string };
-    await first.dispatch('workflow.save', { projectId: initial.projects[0].id, workflow: { id: 'generation', version: 1, name: '图片', production: { mode: 'native-video', referenceMode: 'none', soundPrompt: '', subtitleMode: 'off' }, nodes: [workflowNodeSchema.parse({ id: 'assets', kind: 'assets', label: '图片', modelId: model.id })], edges: [] } });
+    await first.dispatch('project.update', { projectId: initial.projects[0].id, patch: { workflow: { id: 'generation', version: 1, name: '图片', production: { mode: 'native-video', referenceMode: 'none', soundPrompt: '', subtitleMode: 'off' }, nodes: [workflowNodeSchema.parse({ id: 'assets', kind: 'assets', label: '图片', modelId: model.id })], edges: [] } } });
     const run = await first.dispatch('run.start', { projectId: initial.projects[0].id }) as RunRecord;
     await first.waitForIdle(); await first.close(); await rm(outputPath);
     const second = await runtime({ dataDirectory, executeActivity: executor });

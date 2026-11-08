@@ -1,11 +1,11 @@
 import Database from 'better-sqlite3';
 import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
+import { z } from 'zod';
 import { migrateDatabase, type DatabaseMigration } from './migrations.js';
-import type { ProjectDocument, Shot } from '@video-quickly/contracts';
 import { clipEditSource, resolveShotTime } from '@video-quickly/video/clip-edits';
 import { projectCaptionCues } from '@video-quickly/video';
-import { captionsEnabled } from '@video-quickly/contracts';
+import { captionsEnabled, createNativeVideoWorkflow, nodeKindSchema, productionSettingsSchema, projectSchema, resolveProductionWorkflow, workflowNodeSchema, workflowSchema, type ProjectDocument, type Shot } from '@video-quickly/contracts';
 
 export const INITIAL_SCHEMA = `
     CREATE TABLE IF NOT EXISTS documents (
@@ -189,6 +189,55 @@ const WORK_PRODUCTION_SCHEMA = PRODUCTION_AUDIO_REFERENCE_SCHEMA.replaceAll(clip
   INSERT INTO runtime_metadata(key, value) VALUES ('work-production', '1');
 `;
 
+const legacyProjectSchema = z.looseObject({
+  revision: projectSchema.shape.revision,
+  workflow: z.looseObject({ version: workflowSchema.shape.version, production: z.undefined().optional() }),
+});
+const legacyBuiltinWorkflowSchema = workflowSchema.omit({ production: true }).extend({
+  id: z.enum(['history-handdrawn', 'general-video']),
+  nodes: workflowNodeSchema.extend({ kind: nodeKindSchema.or(z.literal('voice')) }).array().min(7).max(9),
+});
+
+function upgradeLegacyProject(body: string): string {
+  const parsed = legacyProjectSchema.safeParse(JSON.parse(body));
+  if (!parsed.success) return body;
+  const project = parsed.data;
+  const version = project.workflow.version + 1;
+  // The old production pipeline always rendered subtitles.
+  const production = productionSettingsSchema.parse({ mode: 'native-video', subtitleMode: 'script' });
+  let workflow = { ...project.workflow, version, production };
+  const builtin = legacyBuiltinWorkflowSchema.safeParse(project.workflow);
+  if (builtin.success) {
+    const { nodes, edges, subflows, execution } = builtin.data;
+    const roles = nodes.filter(node => node.kind !== 'research' && node.kind !== 'review').map(node => node.kind);
+    const isBuiltinChain = !subflows?.length
+      && nodes.every(node => node.id === node.kind)
+      && new Set(nodes.map(node => node.id)).size === nodes.length
+      && roles.join(' ') === 'brief style script assets voice animation export'
+      && edges.length === nodes.length - 1
+      && nodes.slice(1).every((node, index) => edges.some(edge => edge.source === nodes[index].id && edge.target === node.id && edge.condition === undefined));
+    if (isBuiltinChain) {
+      const native = createNativeVideoWorkflow();
+      const previous = new Map(nodes.map(node => [node.id, node]));
+      workflow = resolveProductionWorkflow({
+        ...native, version, execution,
+        production: { ...production, referenceMode: previous.get('assets')?.modelId ? 'generate' : 'none' },
+        nodes: native.nodes.map(node => {
+          if (node.id === 'animation') return node;
+          const saved = previous.get(node.id === 'video' ? 'animation' : node.id);
+          if (!saved) return node;
+          return {
+            ...node, prompt: saved.prompt || node.prompt, skillIds: saved.skillIds, modelId: saved.modelId,
+            config: saved.modelId && node.config.modelBinding === 'default' ? { ...node.config, modelOverride: true } : node.config,
+          };
+        }),
+      });
+    }
+  }
+  if (!workflowSchema.safeParse(workflow).success) return body;
+  return JSON.stringify({ ...project, revision: project.revision + 1, workflow });
+}
+
 export const WORKSPACE_MIGRATIONS: readonly DatabaseMigration[] = [
   { version: 1, name: 'workspace-baseline', sql: INITIAL_SCHEMA },
   { version: 2, name: 'execution-event-index', sql: 'CREATE INDEX execution_events_run_sequence ON execution_events(run_id, sequence);' },
@@ -216,6 +265,21 @@ export const WORKSPACE_MIGRATIONS: readonly DatabaseMigration[] = [
   { version: 17, name: 'script-response-receipts', sql: "INSERT INTO runtime_metadata(key, value) VALUES ('script-response-receipts', '1');" },
   { version: 18, name: 'text-request-rejection-receipts', sql: "INSERT INTO runtime_metadata(key, value) VALUES ('text-request-rejections', '1');" },
   { version: 19, name: 'media-request-rejection-receipts', sql: "INSERT INTO runtime_metadata(key, value) VALUES ('media-request-rejections', '1');" },
+  { version: 20, name: 'legacy-project-production-workflows', sql: `
+    WITH upgrades AS MATERIALIZED (
+      SELECT id, vq_upgrade_legacy_project(body) AS body FROM documents
+      WHERE kind = 'project' AND json_type(body, '$.workflow.production') IS NULL
+    )
+    UPDATE documents SET body = upgrades.body FROM upgrades
+    WHERE documents.kind = 'project' AND documents.id = upgrades.id AND documents.body != upgrades.body;
+  ` },
+  { version: 21, name: 'asset-read-indexes', sql: `
+    CREATE INDEX documents_active_assets ON documents(kind)
+      WHERE kind = 'asset' AND coalesce(json_extract(body, '$.active'), 1) = 1;
+    CREATE INDEX documents_active_asset_derivations ON documents(json_extract(body, '$.derivation.sourceAssetId'))
+      WHERE kind = 'asset' AND json_extract(body, '$.active') = 1
+        AND json_type(body, '$.derivation.sourceAssetId') = 'text';
+  ` },
 ];
 
 export function openDatabase(directory: string) {
@@ -229,36 +293,53 @@ export function openDatabase(directory: string) {
       if (typeof body !== 'string') throw new TypeError('项目投影需要JSON正文。');
       return JSON.stringify(thumbnailShot(JSON.parse(body) as ProjectDocument));
     });
+    database.function('vq_upgrade_legacy_project', { deterministic: true }, (body: unknown) => {
+      if (typeof body !== 'string') throw new TypeError('流程升级需要项目JSON正文。');
+      return upgradeLegacyProject(body);
+    });
     migrateDatabase(database, directory, WORKSPACE_MIGRATIONS);
     database.pragma('journal_mode = WAL');
     return database;
   } catch (error) { database.close(); throw error; }
 }
 
+type DocumentBody = { body: string };
+
 export class DocumentStore {
+  private getDocument?: Database.Statement<[kind: string, id: string], DocumentBody>;
+  private listDocuments?: Database.Statement<[kind: string], DocumentBody>;
+  private putDocument?: Database.Statement<[kind: string, id: string, body: string]>;
+  private deleteDocument?: Database.Statement<[kind: string, id: string]>;
+  private insertEvent?: Database.Statement<[runId: string, type: string, body: string, createdAt: string]>;
+
   constructor(readonly database: Database.Database) {}
 
   get<T>(kind: string, id: string): T | undefined {
-    const value = this.database.prepare('SELECT body FROM documents WHERE kind = ? AND id = ?').get(kind, id) as { body: string } | undefined;
+    const statement = this.getDocument ??= this.database.prepare('SELECT body FROM documents WHERE kind = ? AND id = ?');
+    const value = statement.get(kind, id);
     return value ? JSON.parse(value.body) as T : undefined;
   }
 
   list<T>(kind: string): T[] {
-    const rows = this.database.prepare('SELECT body FROM documents WHERE kind = ? ORDER BY rowid').all(kind) as { body: string }[];
+    const statement = this.listDocuments ??= this.database.prepare('SELECT body FROM documents WHERE kind = ? ORDER BY rowid');
+    const rows = statement.all(kind);
     return rows.map(row => JSON.parse(row.body) as T);
   }
 
   put(kind: string, id: string, value: unknown) {
-    this.database.prepare('INSERT INTO documents(kind, id, body) VALUES (?, ?, ?) ON CONFLICT(kind, id) DO UPDATE SET body = excluded.body').run(kind, id, JSON.stringify(value));
+    const statement = this.putDocument ??= this.database.prepare('INSERT INTO documents(kind, id, body) VALUES (?, ?, ?) ON CONFLICT(kind, id) DO UPDATE SET body = excluded.body');
+    statement.run(kind, id, JSON.stringify(value));
   }
 
   delete(kind: string, id: string) {
-    this.database.prepare('DELETE FROM documents WHERE kind = ? AND id = ?').run(kind, id);
+    const statement = this.deleteDocument ??= this.database.prepare('DELETE FROM documents WHERE kind = ? AND id = ?');
+    statement.run(kind, id);
   }
 
   event(runId: string, type: string, body: unknown) {
     const createdAt = new Date().toISOString();
-    const result = this.database.prepare('INSERT INTO execution_events(run_id, type, body, created_at) VALUES (?, ?, ?, ?)').run(runId, type, JSON.stringify(body), createdAt);
+    const statement = this.insertEvent ??= this.database.prepare('INSERT INTO execution_events(run_id, type, body, created_at) VALUES (?, ?, ?, ?)');
+    const result = statement.run(runId, type, JSON.stringify(body), createdAt);
     return { sequence: Number(result.lastInsertRowid), runId, type, body, createdAt };
   }
 }

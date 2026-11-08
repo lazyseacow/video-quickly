@@ -4,8 +4,8 @@ import type { SkillGroup, SkillPackage } from '@video-quickly/contracts';
 import { Button } from './Primitives';
 import './skill-library.css';
 
-export default function SkillPicker({ skills, groups = [], value, onChange, label = '应用 Skill', disabled = false }: {
-  skills: SkillPackage[]; groups?: SkillGroup[]; value: string[]; onChange(ids: string[]): void; label?: string; disabled?: boolean;
+export default function SkillPicker({ skills, groups = [], value, onChange, label = '应用 Skill', showLegend = true, disabled = false }: {
+  skills: SkillPackage[]; groups?: SkillGroup[]; value: string[]; onChange(ids: string[]): void; label?: string; showLegend?: boolean; disabled?: boolean;
 }) {
   const [search, setSearch] = useState('');
   const selected = new Set(value), grouped = new Set(groups.flatMap(group => group.skillIds));
@@ -16,7 +16,7 @@ export default function SkillPicker({ skills, groups = [], value, onChange, labe
   const query = search.trim().toLocaleLowerCase();
   const missing = value.filter(id => !skills.some(skill => skill.id === id));
   return <fieldset className="skill-picker" disabled={disabled} aria-label={label}>
-    <legend>{label}</legend>
+    {showLegend && <legend>{label}</legend>}
     {skills.length ? <>
       <div className="skill-picker__toolbar"><input type="search" aria-label={`搜索${label}`} placeholder="搜索 Skill 或分组" value={search} onChange={event => setSearch(event.target.value)} /><span className="tiny-meta">已选 {selected.size} 个</span>{value.length > 0 && <Button variant="ghost" onClick={() => onChange([])}>清空选择</Button>}</div>
       <div className="skill-picker__groups">{collections.map(group => {
@@ -31,7 +31,7 @@ export default function SkillPicker({ skills, groups = [], value, onChange, labe
           <div className="skill-picker__items">{members.map(skill => <label key={skill.id} className="skill-picker__item"><input type="checkbox" checked={selected.has(skill.id)} disabled={!skill.enabled && !selected.has(skill.id)} onChange={event => onChange(event.target.checked ? [...new Set([...value, skill.id])] : value.filter(id => id !== skill.id))} /><span><strong>{skill.name} <span className="tiny-meta">{skill.version.slice(0, 12)}</span>{!skill.enabled && '（已停用）'}</strong><small>{skill.description}</small></span></label>)}</div>
         </details>;
       })}</div>
-    </> : <p className="field__hint">在 Skill 工作室导入创作方法后，可在这里整组或单独选用。</p>}
+    </> : <p className="field__hint">暂无 Skill，可在 Skill 工作室导入。</p>}
     {missing.length > 0 && <p className="field-error" role="alert">有 {missing.length} 个 Skill 已不可用，请移除后重新选择。<Button onClick={() => onChange(value.filter(id => !missing.includes(id)))}>移除不可用项</Button></p>}
   </fieldset>;
 }

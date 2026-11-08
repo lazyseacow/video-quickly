@@ -30,7 +30,7 @@ async function fixture(options: Partial<RuntimeOptions> = {}) {
   const model = await runtime.dispatch('model.save', { model: { name: '研究HTTP夹具', provider: 'openai-compatible', baseUrl: `http://127.0.0.1:${address.port}/v1`, model: 'research-fixture', connectionType: 'text', capabilities: ['text'], pricing: { currency: 'USD', inputPerMillionTokens: 1, outputPerMillionTokens: 2 } } }) as ModelProfile;
   return { runtime, directory, project, source, model, requests, state, requestReceived };
 }
-async function analyze(runtime: ReturnType<typeof createRuntime>, project: ProjectDocument, model: ModelProfile, extra = {}) { return runSchema.parse(await runtime.dispatch('research.analyze', { projectId: project.id, revision: project.revision, modelId: model.id, ...extra })); }
+async function analyze(runtime: ReturnType<typeof createRuntime>, project: ProjectDocument, model: ModelProfile, extra = {}) { return runSchema.parse(await runtime.dispatch('run.start', { projectId: project.id, revision: project.revision, research: { modelId: model.id, ...extra } })); }
 
 it('keeps real model evidence pending until explicit human application, review and shot binding', async () => {
   const { runtime, project, source, model, requests } = await fixture();
@@ -48,7 +48,7 @@ it('keeps real model evidence pending until explicit human application, review a
   await expect(runtime.dispatch('project.update', { projectId: project.id, revision: verified.revision, patch: { researchSources: [{ ...source, title: '更正来源名' }] } })).rejects.toThrow('重新核验');
   const changed = projectSchema.parse(await runtime.dispatch('project.update', { projectId: project.id, revision: verified.revision, patch: { claims: verified.claims.map(claim => ({ ...claim, text: '已重新核对的修改', reviewedAt: '2026-10-30T01:00:00.000Z' })) } })); expect(changed.claims[0].status).toBe('verified');
   const pending = projectSchema.parse(await runtime.dispatch('project.update', { projectId: project.id, revision: changed.revision, patch: { claims: changed.claims.map(claim => ({ ...claim, text: '修改后待核验', status: 'pending', reviewedAt: undefined })) } })); expect(pending.claims[0].reviewedAt).toBeUndefined();
-  await expect(runtime.dispatch('project.saveShot', { projectId: project.id, revision: pending.revision, shot: { ...pending.shots[0], claimIds: ['not-in-project'] } })).rejects.toThrow('事实主张');
+  await expect(runtime.dispatch('project.update', { projectId: project.id, revision: pending.revision, patch: { shots: [{ ...pending.shots[0], claimIds: ['not-in-project'] }] } })).rejects.toThrow('事实主张');
   await expect(runtime.dispatch('project.update', { projectId: project.id, revision: pending.revision, patch: { claims: [] } })).rejects.toThrow('事实主张');
   const costs = await runtime.dispatch('cost.list', { projectId: project.id }) as { items: UsageRecord[] }; expect(costs.items).toHaveLength(1); expect(costs.items[0]).toMatchObject({ status: 'completed', providerUsage: { source: 'provider', inputTokens: 20, outputTokens: 30 } });
 });

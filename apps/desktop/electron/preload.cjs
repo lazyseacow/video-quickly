@@ -6,6 +6,7 @@ contextBridge.exposeInMainWorld('videoQuickly', Object.freeze({
   assetUrl: path => ipcRenderer.invoke('vq:asset-url', path),
   pickPath: options => ipcRenderer.invoke('vq:pick-path', options),
   revealFile: path => ipcRenderer.invoke('vq:reveal-file', path),
+  ...(process.platform === 'darwin' ? { waitForNativeFullscreenEntry: () => ipcRenderer.invoke('vq:wait-for-native-fullscreen-entry') } : {}),
   subscribe: listener => {
     if (typeof listener !== 'function') throw new TypeError('事件监听器无效。');
     const receive = (_event, value) => listener(value);

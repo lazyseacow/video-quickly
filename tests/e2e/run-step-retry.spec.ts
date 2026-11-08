@@ -68,7 +68,7 @@ for (const failure of ['download', 'rejection'] as const) for (const surface of 
         await page.locator(`.run-card[data-run-id="${source.run.id}"]`).getByRole('button', { name: '查看步骤', exact: true }).click();
       } else {
         await openProjectFromList(page, source.project.title);
-        await page.getByRole('button', { name: surface === 'flat' ? '打开步骤：镜头图片生成' : '打开阶段：素材与配音', exact: true }).click();
+        await page.getByRole('button', { name: '打开阶段：素材与配音', exact: true }).click();
       }
       const dialog = page.getByRole('dialog', { name: surface === 'history' ? '制作步骤详情' : '本次制作', exact: true });
       const retry = dialog.getByRole('button', { name: '重试此步骤', exact: true });
@@ -137,7 +137,7 @@ for (const viewport of [{ width: 1536, height: 960, theme: 'dark' }, { width: 39
     await page.goto('/'); await openProjectFromList(page, source.project.title);
     const production = page.getByRole('region', { name: '当前制作', exact: true }), toast = page.locator('.toast');
     await expect(toast).toContainText('HTTP 400'); await expect(production.locator('.notice')).toHaveCount(0);
-    await expect(production.getByRole('button', { name: '打开步骤：镜头图片生成', exact: true })).toHaveAttribute('data-state', /failed|needs_attention/);
+    await expect(production.getByRole('button', { name: '打开阶段：素材与配音', exact: true })).toHaveAttribute('data-state', /failed|needs_attention/);
     const failedBounds = await page.locator('.preview-panel').boundingBox();
     await expect(toast).not.toBeVisible({ timeout: 4000 }); expect(await page.locator('.preview-panel').boundingBox()).toEqual(failedBounds);
     source.ready(); await rpc(request, 'run.step.retry', { runId: source.run.id, nodeId: 'images' });
@@ -169,7 +169,7 @@ isolatedTest('keeps a compact progress retry after the workspace read-error toas
     await expect(toast).not.toBeVisible({ timeout: 4000 }); expect(await page.locator('.preview-panel').boundingBox()).toEqual(bounds);
     await page.screenshot({ path: info.outputPath('workspace-progress-retry.png') });
     rejectRead = false; await retry.click(); await expect(retry).toHaveCount(0);
-    await expect(production.getByRole('button', { name: '打开步骤：镜头图片生成', exact: true })).toHaveAttribute('data-state', /failed|needs_attention/);
+    await expect(production.getByRole('button', { name: '打开阶段：素材与配音', exact: true })).toHaveAttribute('data-state', /failed|needs_attention/);
     await expect(page.locator('vite-error-overlay')).toHaveCount(0);
   } finally { await page.unrouteAll({ behavior: 'wait' }); await source.close(); }
 });

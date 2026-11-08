@@ -41,9 +41,9 @@ export async function settingControl(dialog: Locator, role: Parameters<Locator['
   return await field.count() > 1 ? dialog.getByRole(role, options) : revealSetting(dialog, field);
 }
 
-export async function showSettingsPreview(dialog: Locator) {
+export async function showSettingsPreview(dialog: Locator, label = '实时预览') {
   await expect(dialog).toBeVisible();
-  const toggle = dialog.getByRole('button', { name: '实时预览', exact: true });
+  const toggle = dialog.getByRole('button', { name: label, exact: true });
   if (await dialog.page().evaluate(() => matchMedia('(max-width: 800px)').matches)) {
     await expect(toggle).toBeVisible();
     if (await toggle.getAttribute('aria-expanded') === 'false') await toggle.click();

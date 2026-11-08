@@ -46,7 +46,7 @@ it.each([
   runtimes.push(runtime);
   const model = modelSchema.parse(await runtime.dispatch('model.save', { model: { name: 'private-model-name', provider: 'openai-compatible', connectionType: 'text', capabilities: ['text'], baseUrl: `http://127.0.0.1:${address.port}/private-base-path/v1`, model: 'fixture' }, secret: 'fixture-private-credential' }));
   const project = projectSchema.parse(await runtime.dispatch('project.create', { title: 'private-project-title' }));
-  await runtime.dispatch('workflow.save', { projectId: project.id, workflow: { id: 'request-diagnostics', version: 1, name: '请求诊断', production: { mode: 'native-video', referenceMode: 'none', soundPrompt: '', subtitleMode: 'off' }, nodes: [workflowNodeSchema.parse({ id: 'brief', kind: 'brief', label: '简报', modelId: model.id, prompt: 'private-node-prompt' })], edges: [] } });
+  await runtime.dispatch('project.update', { projectId: project.id, patch: { workflow: { id: 'request-diagnostics', version: 1, name: '请求诊断', production: { mode: 'native-video', referenceMode: 'none', soundPrompt: '', subtitleMode: 'off' }, nodes: [workflowNodeSchema.parse({ id: 'brief', kind: 'brief', label: '简报', modelId: model.id, prompt: 'private-node-prompt' })], edges: [] } } });
   const run = runSchema.parse(await runtime.dispatch('run.start', { projectId: project.id }));
   await runtime.waitForIdle();
   expect(runSchema.parse(await runtime.dispatch('run.get', { runId: run.id })).status).toBe('failed');

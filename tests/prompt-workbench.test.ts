@@ -3,8 +3,9 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { afterEach, expect, it } from 'vitest';
-import { modelSchema, projectSchema, promptLibraryItemSchema, promptPreviewSchema, promptSessionSchema, runSchema, runSummarySchema, shotSchema, skillSchema, workflowNodeSchema, subflowDefinitionSchema, type ProjectDocument, type PromptDraft } from '@video-quickly/contracts';
+import { modelSchema, projectSchema, promptLibraryItemSchema, promptPreviewSchema, promptSessionSchema, runSchema, runSummarySchema, shotSchema, workflowNodeSchema, subflowDefinitionSchema, type ProjectDocument, type PromptDraft } from '@video-quickly/contracts';
 import { createRuntime, SimulatedProcessExit, type RuntimeOptions } from '../packages/runtime/src/index';
+import { importSkillFixture } from './fixtures/import-skill';
 
 const directories: string[] = [], runtimes: ReturnType<typeof createRuntime>[] = [];
 afterEach(async () => { await Promise.all(runtimes.splice(0).map(runtime => runtime.close())); await Promise.all(directories.splice(0).map(path => rm(path, { recursive: true, force: true }))); });
@@ -106,7 +107,7 @@ it('freezes the selected model and Skill version and prevents applying a trial o
   const calls: { prompt: string; model: string }[] = [];
   const source = await fixture({ provider: async input => { calls.push({ prompt: input.prompt, model: input.model.name }); return '旧快照的生成结果'; } });
   const skillDirectory = join(source.directory, 'story-skill'); await mkdir(skillDirectory); await writeFile(join(skillDirectory, 'SKILL.md'), '---\nname: story-method\ndescription: 实验夹具\n---\n沿用旧版叙事方法');
-  const skill = skillSchema.parse(await source.runtime.dispatch('skill.import', { path: skillDirectory }));
+  const skill = (await importSkillFixture(source.runtime.dispatch, { path: skillDirectory })).skills[0];
   const { preview, session: saved } = await session(source, { ...source.draft, node: { ...source.draft.node, skillIds: [skill.id] } });
   await source.runtime.dispatch('skill.update', { skillId: skill.id, instructions: '新版方法不能改写旧快照' });
   await source.runtime.dispatch('model.save', { model: { ...source.model, name: '新版连接' } });

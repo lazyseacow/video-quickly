@@ -3,7 +3,7 @@ import { projectDetailSchema, runSummarySchema, shotCandidateSchema, type RunSum
 import { rpc } from './client';
 
 export const candidateKindLabels: Record<ShotCandidateKind, string> = { script: '文案与分镜', image: '画面图片', video: '镜头视频' };
-export const candidatePageSchema = z.object({ items: z.array(shotCandidateSchema), total: z.number().int().nonnegative(), activeRun: runSummarySchema.nullish() });
+const candidatePageSchema = z.object({ items: z.array(shotCandidateSchema), total: z.number().int().nonnegative(), activeRun: runSummarySchema.nullish() });
 export const candidateRunActive = (run: Pick<RunSummary, 'status'> | undefined) => !!run && ['queued', 'running', 'waiting_external', 'retry_scheduled'].includes(run.status);
 
 export async function readShotCandidates(projectId: string, shotId: string, offset = 0, source?: { runId: string; nodeId: string }) {

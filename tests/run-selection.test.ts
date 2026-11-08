@@ -4,10 +4,11 @@ import { tmpdir } from 'node:os';
 import { basename, dirname, join, resolve } from 'node:path';
 import { afterEach, expect, it, vi } from 'vitest';
 import {
-  assetSchema, characterProfileSchema, modelSchema, projectDetailSchema, projectSchema, recordPageSchema, runInspectionSchema, runPlanSchema, runSchema, skillSchema, workflowNodeSchema,
+  assetSchema, characterProfileSchema, modelSchema, projectDetailSchema, projectSchema, recordPageSchema, runInspectionSchema, runPlanSchema, runSchema, workflowNodeSchema,
   type AssetRecord, type ProjectDocument, type RunPlan, type WorkflowNode, type WorkspaceSummary,
 } from '@video-quickly/contracts';
 import { createRuntime, SimulatedProcessExit, type RuntimeOptions } from '../packages/runtime/src';
+import { importSkillFixture } from './fixtures/import-skill';
 
 const runtimes: ReturnType<typeof createRuntime>[] = [], directories: string[] = [];
 afterEach(async () => {
@@ -79,7 +80,7 @@ it.each(['project', 'workflow', 'model', 'skill', 'asset', 'character'] as const
   const { runtime, directory, project, current } = await setup({ provider });
   const model = modelSchema.parse(await runtime.dispatch('model.save', { model: { name: '步骤模型', provider: 'ollama', baseUrl: 'http://127.0.0.1:1', model: 'scope-test', connectionType: 'text', capabilities: ['text'] } }));
   const skillPath = join(directory, 'skill'); await mkdir(skillPath); await writeFile(join(skillPath, 'SKILL.md'), '---\nname: scoped-style\ndescription: A reproducible style fixture\n---\nUse the saved project.');
-  const skill = skillSchema.parse(await runtime.dispatch('skill.import', { path: skillPath }));
+  const skill = (await importSkillFixture(runtime.dispatch, { path: skillPath })).skills[0];
   const character = characterProfileSchema.parse(await runtime.dispatch('character.save', { character: { name: '已绑定角色', description: '', referenceAssetIds: [] } }));
   const imagePath = join(directory, 'reference.svg'); await writeFile(imagePath, '<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64"><rect width="64" height="64" fill="red"/></svg>');
   const asset = assetSchema.parse(await runtime.dispatch('asset.import', { projectId: project.id, path: imagePath }));

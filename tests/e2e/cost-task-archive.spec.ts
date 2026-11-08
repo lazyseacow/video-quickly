@@ -29,7 +29,7 @@ async function fixture(request: APIRequestContext, title: string, usage: Record<
     let run: RunRecord | undefined, succeeded = false;
     try {
       const nodes = Array.from({ length: count }, (_, index) => ({ id: `archive-step-${index}`, kind: 'brief', label: `归档步骤 ${index + 1}`, modelId: model.id }));
-      await rpc(request, 'workflow.save', { projectId: project.id, workflow: { id: 'archive-workflow', version: 1, name: '归档制作流程', production: { mode: 'native-video', referenceMode: 'none', soundPrompt: '', subtitleMode: 'off' }, nodes, edges: [] } });
+      await rpc(request, 'project.update', { projectId: project.id, patch: { workflow: { id: 'archive-workflow', version: 1, name: '归档制作流程', production: { mode: 'native-video', referenceMode: 'none', soundPrompt: '', subtitleMode: 'off' }, nodes, edges: [] } } });
       const created = await rpc<RunRecord>(request, 'run.start', { projectId: project.id });
       run = created; const runId = created.id;
       await expect.poll(async () => {
@@ -107,9 +107,51 @@ test('retains usage rows and totals until new project results arrive, then repla
     await page.getByLabel('用量项目', { exact: true }).selectOption(second.project.id); await expect.poll(() => held.size).toBe(2);
     expect(await previous!.evaluate(element => element.isConnected)).toBe(true); expect(await previousOverview!.evaluate(element => element.isConnected)).toBe(true);
     await expect(row.getByRole('button')).toBeDisabled(); await expect(overview.locator('[data-metric="inputTokens"] > .token-amount')).toHaveText('100');
+    await expect(overview.getByRole('status')).toContainText(first.project.title);
+    await expect(page.locator('.cost-task-list').getByRole('status')).toContainText('上一次结果');
     release?.(); await expect(page.locator(`.cost-task[data-task-id="${newRun.id}"]`)).toBeVisible(); await expect(row).toHaveCount(0);
     await expect(overview.locator('[data-metric="inputTokens"] > .token-amount')).toHaveText('900'); await expect(page.locator('.cost-task').getByRole('button')).toBeEnabled();
   } finally { release?.(); await Promise.all([close(first.server), close(second.server)]); }
+});
+
+test('preserves a known summary after a failed refresh and recovers detail reads without false loading or empty states', async ({ page, request }, info) => {
+  const source = await fixture(request, '用量失败反馈');
+  const empty = await rpc<ProjectDocument>(request, 'project.create', { title: '用量读取失败的新筛选' });
+  let failSummary = false, failDetails = true;
+  try {
+    const run = await source.start(1);
+    await page.route('**/__desktop_rpc', async route => {
+      const input = route.request().postDataJSON();
+      if (input.method === 'cost.summary' && failSummary) return route.fulfill({ status: 503, json: { error: '汇总暂时无法读取' } });
+      if (['cost.task.get', 'cost.list'].includes(input.method) && input.params.runId === run.id && failDetails) return route.fulfill({ status: 503, json: { error: '任务明细暂时无法读取' } });
+      await route.continue();
+    });
+    await openCosts(page, source.project.id);
+    const overview = page.getByRole('region', { name: 'Token 用量汇总', exact: true });
+    await expect(overview.locator('[data-metric="inputTokens"] > .token-amount')).toHaveText('100');
+    failSummary = true; await page.getByRole('button', { name: '刷新用量', exact: true }).click();
+    await expect(page.getByRole('alert')).toContainText('汇总暂时无法读取');
+    await expect(overview).toHaveAttribute('aria-busy', 'false');
+    await expect(overview.locator('[data-metric="inputTokens"] > .token-amount')).toHaveText('100');
+    await page.getByRole('button', { name: `查看任务用量详情：${run.id}`, exact: true }).click();
+    const detail = page.locator('.cost-task-detail');
+    await expect(detail.getByRole('alert')).toContainText('任务明细暂时无法读取');
+    await expect(detail.getByText('正在读取任务用量…', { exact: true })).toHaveCount(0);
+    await expect(detail.getByText('还没有调用明细', { exact: true })).toHaveCount(0);
+    await page.screenshot({ path: info.outputPath('usage-detail-read-failed.png') });
+    failDetails = false; await detail.getByRole('button', { name: '刷新详情', exact: true }).click();
+    await expect(detail.getByRole('region', { name: '任务 Token 汇总', exact: true })).toContainText(run.id);
+    await expect(detail.locator('.cost-record')).toHaveCount(1);
+    await expect(detail.getByRole('alert')).toHaveCount(0);
+    await detail.getByRole('button', { name: '返回任务归档', exact: true }).click();
+    await page.getByLabel('用量项目', { exact: true }).selectOption(empty.id);
+    await expect(page.getByRole('alert')).toContainText('汇总暂时无法读取');
+    await expect(overview).toHaveAttribute('aria-busy', 'false');
+    await expect(overview.locator('.token-amount')).toHaveText(['未读取', '未读取', '未读取', '未读取']);
+    failSummary = false; await page.getByRole('button', { name: '刷新用量', exact: true }).click();
+    await expect(overview.locator('.token-amount')).toHaveText(['—', '—', '—', '—']);
+    await expect(page.getByRole('alert')).toHaveCount(0);
+  } finally { await close(source.server); }
 });
 
 test('archives all four token counters with task and record pagination, retaining counts across reload', async ({ page, request }) => {

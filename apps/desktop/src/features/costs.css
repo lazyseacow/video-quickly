@@ -6,8 +6,9 @@
 .cost-metric h3 { margin: 0 0 var(--space-3); color: var(--text-secondary); font-size: var(--text-size-label); font-weight: var(--font-weight-medium); }
 .token-amount { font-variant-numeric: tabular-nums; white-space: nowrap; }
 .cost-metric > .token-amount { font-size: var(--costs-number-size); line-height: var(--line-height-number); font-weight: var(--font-weight-medium); letter-spacing: var(--letter-spacing-number); }
+.cost-metric > .token-amount--pending { display: inline-flex; align-items: center; min-height: calc(var(--costs-number-size) * var(--line-height-number)); color: var(--text-subtle); font-size: var(--text-size-label); }
 .token-partial { color: var(--text-subtle); font-size: var(--text-size-caption); margin-left: var(--space-1); vertical-align: super; }
-.token-legend { margin: var(--space-3) 0 0; color: var(--text-subtle); font-size: var(--text-size-caption); line-height: var(--line-height-body); }
+.token-legend { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin: var(--space-3) 0 0; color: var(--text-subtle); font-size: var(--text-size-caption); line-height: var(--line-height-body); }
 .cost-archive-toolbar { display: flex; align-items: center; justify-content: space-between; gap: var(--space-5); margin-bottom: var(--space-4); }
 .cost-filter { width: 240px; max-width: 100%; }
 .cost-filter .field { margin: 0; }
@@ -23,6 +24,7 @@
 .cost-task__action { text-align: right; white-space: nowrap; }
 .cost-task__action .button { margin-left: auto; padding-inline: var(--space-2); }
 .cost-loading { padding-block: var(--space-8); color: var(--text-subtle); font-size: var(--text-size-label); }
+.cost-results-note { margin: 0 0 var(--space-3); color: var(--text-secondary); font-size: var(--text-size-caption); }
 .cost-task-meta { margin: var(--space-5) 0; display: grid; grid-template-columns: minmax(0, 1.4fr) repeat(2, minmax(0, 1fr)); gap: var(--space-3) var(--space-6); font-size: var(--text-size-caption); line-height: var(--line-height-label); }
 .cost-task-meta dt { color: var(--text-subtle); margin-bottom: var(--space-1); }
 .cost-task-meta dd { margin: 0; overflow-wrap: anywhere; }

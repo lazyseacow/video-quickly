@@ -5,9 +5,7 @@ const voiceProcessingSchema = z.object({
   denoise: z.boolean(), noiseReductionDb: z.number().finite().min(3).max(40),
   videoAudio: z.never().optional(),
 });
-export const videoAudioSettingsSchema = z.object({ enabled: z.boolean(), gainDb: z.number().finite().min(-60).max(18) });
-export type VideoAudioSettings = z.infer<typeof videoAudioSettingsSchema>;
-export const DEFAULT_VIDEO_AUDIO: VideoAudioSettings = { enabled: false, gainDb: 0 };
+const videoAudioSettingsSchema = z.object({ enabled: z.boolean(), gainDb: z.number().finite().min(-60).max(18) });
 // Version 2 makes the additional source explicit. Older readers reject it instead
 // of silently stripping an enabled video track when they save the project.
 export const audioProcessingSchema = z.discriminatedUnion('version', [
@@ -32,7 +30,7 @@ export const DEFAULT_AUDIO_MIX_SETTINGS: AudioMixSettings = {
   ducking: { enabled: false, thresholdDb: -30, ratio: 8, attackMs: 20, releaseMs: 250 },
 };
 
-export const audioMixAnalysisSchema = z.object({
+const audioMixAnalysisSchema = z.object({
   integratedLufs: z.number().finite().optional(), truePeakDb: z.number().finite().optional(),
   sampleRate: z.literal(48000), channels: z.literal(2),
 });

@@ -6,6 +6,7 @@ import { resolve, relative, isAbsolute, extname } from 'node:path';
 import { createRuntime } from '../../packages/runtime/src/index.ts';
 import { createLogger, logError } from '../../packages/runtime/src/logging.ts';
 import { generateText } from '../../packages/runtime/src/providers.ts';
+import { readStoryboardWebResearch } from '../../packages/runtime/src/storyboard-research.ts';
 import { createActivityExecutor, createWaveformReader, validateMediaActivity } from '../../packages/integrations/src/index.ts';
 import { readRpcRequest } from './dev/read-rpc-request.ts';
 import { createRpcDiagnostics } from './dev/rpc-diagnostics.ts';
@@ -41,8 +42,9 @@ function developmentBridge(browserTest: boolean): Plugin {
     const waveforms = createWaveformReader({ dataDirectory, ffmpegPath });
     const diagnostics = browserTest && process.env.VIDEO_QUICKLY_RPC_DIAGNOSTICS ? createRpcDiagnostics(process.env.VIDEO_QUICKLY_RPC_DIAGNOSTICS) : undefined;
     let runtime: ReturnType<typeof createRuntime>;
-    try { runtime = await createRuntime({ dataDirectory, mode: 'development', logger, ffmpegPath, readAudioWaveform: asset => waveforms.read(asset),
+    try { runtime = await createRuntime({ dataDirectory, seed: browserTest, mode: 'development', logger, ffmpegPath, readAudioWaveform: asset => waveforms.read(asset),
       provider: diagnostics?.textProvider(generateText),
+      webResearch: browserTest ? undefined : readStoryboardWebResearch,
       audioMix: { projectionKey: audioMixProjectionKey, prepare: options => prepareAudioMix({ ...options, ffmpegPath }), levels: readAudioLevelWindow, silence: options => detectAudioSilence({ ...options, ffmpegPath }) },
       preflightActivity: validateMediaActivity, executeActivity: createActivityExecutor({ ffmpegPath }), secretStore: {
       persistent: false,

@@ -47,7 +47,7 @@ for (const viewport of [{ width: 1536, height: 960, theme: 'dark' }, { width: 10
     const created = await rpc<ProjectDocument>(request, 'project.create', { title: '统一设置验收 ' + viewport.width, profile: { width: 320, height: 180, frameRate: { numerator: 24, denominator: 1 }, fitMode: 'contain', previewScale: 1 } });
     const project = await rpc<ProjectDocument>(request, 'project.update', { projectId: created.id, revision: created.revision, patch: { shots: ['第一镜头', '第二镜头'].map((title, index) => ({ id: 'settings-shot-' + index, title, narration: '保留所有输入与真实预览。', visualPrompt: '', durationUs: 1_000_000 })) } });
     const errors: string[] = [], writes: string[] = []; page.on('pageerror', error => errors.push(error.message));
-    page.on('request', value => { if (value.url().endsWith('/__desktop_rpc')) { const method = value.postDataJSON()?.method; if (['run.start', 'workflow.save'].includes(method)) writes.push(method); } });
+    page.on('request', value => { if (value.url().endsWith('/__desktop_rpc') && value.postDataJSON()?.method === 'run.start') writes.push('run.start'); });
     await page.addInitScript(theme => localStorage.setItem('vq-theme', theme), viewport.theme);
     await page.goto('/'); await openProjectFromList(page, project.title); await page.setViewportSize(viewport);
     const settings = page.locator('.project-heading-actions').getByRole('button', { name: '制作设置', exact: true });
@@ -75,7 +75,7 @@ for (const viewport of [{ width: 1536, height: 960, theme: 'dark' }, { width: 10
     await page.locator('.outline-shot').nth(1).click(); await expect(page.getByLabel('镜头标题', { exact: true })).toHaveValue('第二镜头');
     await page.reload(); await openProjectFromList(page, project.title); await settings.click(); await productionStep(dialog, '创作要求');
     await expect(dialog.getByLabel('创作要求', { exact: true })).toHaveValue(brief); await expect(dialog.getByLabel('视觉风格', { exact: true })).toHaveValue(style);
-    await productionStep(dialog, '创作要求'); await dialog.getByLabel('创作要求', { exact: true }).fill('尚未保存的修改'); await dialog.getByRole('button', { name: '取消', exact: true }).click();
+    await productionStep(dialog, '创作要求'); await dialog.getByLabel('创作要求', { exact: true }).fill('尚未保存的修改'); await dialog.getByRole('button', { name: '关闭对话框', exact: true }).click();
     const saved = (await rpc<{ project: ProjectDocument }>(request, 'project.get', { projectId: project.id })).project;
     expect(saved).toMatchObject({ brief, style, profile: { width: 180, height: 320, previewScale: 1 }, workflow: { production: { soundPrompt: '自然中文旁白' } } });
     expect(saved.shots).toEqual(project.shots); expect(writes).toEqual([]); expect(errors).toEqual([]);

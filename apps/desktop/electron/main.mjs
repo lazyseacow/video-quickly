@@ -1,5 +1,6 @@
 import { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, protocol, session, shell, Tray } from 'electron';
 import { AsyncEntry } from '@napi-rs/keyring';
+import { once } from 'node:events';
 import { mkdir, stat } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -27,6 +28,7 @@ let window;
 let controller;
 let exiting = false;
 let shutdown;
+const macFullscreenWindows = new WeakMap();
 export let tray;
 export let trayMenu;
 
@@ -73,6 +75,16 @@ function installIpc() {
     await stat(path);
     shell.showItemInFolder(path);
   });
+  if (process.platform === 'darwin') {
+    ipcMain.handle('vq:wait-for-native-fullscreen-entry', async event => {
+      trust(event);
+      const owner = window;
+      const fullscreen = macFullscreenWindows.get(owner);
+      if (fullscreen.entered) return;
+      const signal = AbortSignal.any([fullscreen.closed.signal, AbortSignal.timeout(5_000)]);
+      await once(owner, 'enter-full-screen', { signal });
+    });
+  }
 }
 
 function createWindow() {
@@ -95,6 +107,14 @@ function createWindow() {
   });
   window.webContents.on('will-attach-webview', event => event.preventDefault());
   const owner = window;
+  if (process.platform === 'darwin') {
+    // Chromium enters HTML fullscreen before the native window finishes switching spaces.
+    const fullscreen = { entered: false, closed: new AbortController() };
+    macFullscreenWindows.set(owner, fullscreen);
+    owner.on('enter-full-screen', () => { fullscreen.entered = true; });
+    owner.on('leave-full-screen', () => { fullscreen.entered = false; });
+    owner.once('closed', () => fullscreen.closed.abort());
+  }
   owner.webContents.on('render-process-gone', (_event, details) => logger.error('desktop.renderer_gone', { reason: details.reason, exitCode: details.exitCode }));
   owner.webContents.on('did-fail-load', (_event, code, _description, _url, mainFrame) => logger.error('desktop.load_failed', { exitCode: code, status: mainFrame ? 'main_frame' : 'sub_frame' }));
   owner.webContents.on('preload-error', (_event, _path, error) => logger.error('desktop.preload_failed', { error: logError(error) }));

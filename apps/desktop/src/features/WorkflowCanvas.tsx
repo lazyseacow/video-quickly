@@ -1,7 +1,7 @@
 import { primaryModifier } from '../lib/desktop';
 import { lazy, memo, Suspense, useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { Background, ControlButton, Controls, Handle, Panel, Position, ReactFlow, SelectionMode, addEdge, applyEdgeChanges, applyNodeChanges, type AriaLabelConfig, type Connection, type Edge, type IsValidConnection, type Node, type NodeProps, type NodeTypes, type OnEdgesChange, type OnInit, type OnNodesChange, type OnSelectionChangeFunc, type ReactFlowInstance } from '@xyflow/react';
-import { BookOpen, Check, GitBranch, Image, Layers, Maximize, Mic, Plus, Sparkles, Trash2, Save } from 'lucide-react';
+import { BookOpen, Check, GitBranch, Image, Layers, Maximize, Plus, Sparkles, Trash2, Save } from 'lucide-react';
 import { applyWorkflowProposal, nodeKindSchema, type ModelProfile, type WorkflowDefinition, type WorkflowNode } from '@video-quickly/contracts';
 import { Button, Field, IconButton, Notice, Select } from '../components/Primitives';
 import ToolBindings from '../components/ToolBindings';

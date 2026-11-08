@@ -159,13 +159,14 @@ export default memo(function Timeline({ project, assets, shots, timeline, select
   const rowBegin = useCommittedCallback(begin), rowMove = useCommittedCallback(move), rowFinish = useCommittedCallback(finish);
   const rowSelect = useCommittedCallback(selectClip), rowTrimKey = useCommittedCallback(trimKey);
   const rowHandlers = useMemo<TimelineRowHandlers>(() => ({ begin: rowBegin, move: rowMove, finish: rowFinish, select: rowSelect, trimKey: rowTrimKey }), [rowBegin, rowMove, rowFinish, rowSelect, rowTrimKey]);
+  const zoomPercent = `${Math.round(zoom * 100)}%`;
   return <section data-guide="timeline" className="timeline" aria-label="项目时间轴" onKeyDown={selectionKey}>
     <div className="timeline-toolbar">
       <div className="timeline-heading"><h2>时间轴</h2><span className="timeline-summary">{shots.length} 个镜头</span><span className="timeline-selection-count" aria-live="polite">已选 {selected.size} 个镜头</span></div>
       <div className="timeline-edit-actions" role="group" aria-label="镜头操作">
         {onSelectAll && <IconButton label="全选镜头" disabled={!shots.length || selected.size === shots.length} onClick={onSelectAll}><ListChecks size={15} /></IconButton>}
         {onClearSelection && <IconButton label="清除镜头选择" disabled={!selected.size} onClick={onClearSelection}><X size={15} /></IconButton>}
-        {onBulkEdit && <Button className="timeline-bulk-button" disabled={editingDisabled || !selected.size} onClick={onBulkEdit}><SlidersHorizontal size={14} />批量编辑镜头</Button>}
+        {onBulkEdit && <Button className="timeline-bulk-button" aria-label="批量编辑镜头" disabled={editingDisabled || !selected.size} onClick={onBulkEdit}><SlidersHorizontal size={14} />批量编辑</Button>}
         <SplitControl shot={shots[selectedIndex]} clip={timeline[selectedIndex]} rate={rate} clock={clock} disabled={editingDisabled || !singleSelected} onSplit={onSplit} />
         <IconButton label="将镜头前移" disabled={editingDisabled || !selected.size || singleSelected && selectedIndex <= 0} onClick={() => void onMove(-1)}><ArrowLeft size={15} /></IconButton>
         <IconButton label="将镜头后移" disabled={editingDisabled || !selected.size || singleSelected && selectedIndex >= shots.length - 1} onClick={() => void onMove(1)}><ArrowRight size={15} /></IconButton>
@@ -177,9 +178,9 @@ export default memo(function Timeline({ project, assets, shots, timeline, select
       <div className="timeline-view-actions" role="group" aria-label="时间轴视图">
         <IconButton label="适配完整时间轴" onClick={() => changeZoom(1)}><ScanLine size={16} /></IconButton>
         <IconButton className="timeline-zoom-step" label="缩小时间轴" disabled={zoom <= 1} onClick={() => changeZoom(Math.max(1, Math.round((zoom - .5) * 10) / 10))}><ZoomOut size={15} /></IconButton>
-        <input className="timeline-zoom" aria-label="时间轴缩放" type="range" min="1" max="5" step="0.1" value={zoom} onChange={event => changeZoom(Number(event.target.value))} />
+        <input className="timeline-zoom" aria-label="时间轴缩放" aria-valuetext={zoomPercent} type="range" min="1" max="5" step="0.1" value={zoom} onChange={event => changeZoom(Number(event.target.value))} />
         <IconButton className="timeline-zoom-step" label="放大时间轴" disabled={zoom >= 5} onClick={() => changeZoom(Math.min(5, Math.round((zoom + .5) * 10) / 10))}><ZoomIn size={15} /></IconButton>
-        <span className="timeline-zoom-value">{Math.round(zoom * 100)}%</span>
+        <span className="timeline-zoom-value" aria-hidden="true">{zoomPercent}</span>
       </div>
     </div>
     <div className="timeline-body">

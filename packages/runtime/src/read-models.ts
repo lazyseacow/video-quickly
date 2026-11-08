@@ -3,6 +3,7 @@ import type { ActivityRecord, AssetListItem, AssetRecord, ProjectDetail, Project
 import { DocumentStore } from './database.js';
 
 type DocumentRow = { cursor: number; body: string };
+type AssetPageRow = DocumentRow & { project_reference: 0 | 1 };
 type EventRow = { sequence: number; type: string; body: string; created_at: string };
 type ActivityRow = { cursor: number; activity_id: string; status: string; input_hash: string; remote_id: string | null; error: string | null; started_at: string; completed_at: string | null };
 
@@ -75,11 +76,30 @@ export function createReadModels(database: Database.Database, store: DocumentSto
     return page(rows, limit, row => ({ id: row.activity_id, runId, nodeId: activityNodeId(row.activity_id, ids), status: (row.status === 'dispatched' ? 'submitted' : row.status) as ActivityRecord['status'], inputHash: row.input_hash, remoteTaskId: row.remote_id ?? undefined, attempt: 1, createdAt: row.started_at, updatedAt: row.completed_at ?? row.started_at, error: row.error ?? undefined }));
   }
   function assets(before: number | undefined, limit: number, kind?: AssetRecord['kind']): RecordPage<AssetListItem> {
+    // Match the partial index and give SQLite a direct rowid bound on subsequent pages.
+    const conditions = ["asset.kind = 'asset'", "coalesce(json_extract(asset.body, '$.active'), 1) = 1"];
+    const parameters: Record<string, string | number> = { limit: limit + 1 };
+    if (before !== undefined) {
+      conditions.push('asset.rowid < @before');
+      parameters.before = before;
+    }
+    if (kind !== undefined) {
+      conditions.push("json_extract(asset.body, '$.kind') = @kind");
+      parameters.kind = kind;
+    }
+    const rows = database.prepare<typeof parameters, AssetPageRow>(`
+      SELECT asset.rowid AS cursor, asset.body, EXISTS (
+        SELECT 1 FROM project_asset_references WHERE asset_id = asset.id
+      ) AS project_reference
+      FROM documents AS asset
+      WHERE ${conditions.join(' AND ')}
+      ORDER BY asset.rowid DESC LIMIT @limit
+    `).all(parameters);
+    if (rows.length === 0) return { items: [], nextCursor: null };
     const generating = generationAssets();
-    const rows = database.prepare(`SELECT rowid AS cursor, body FROM documents WHERE kind = 'asset' AND coalesce(json_extract(body, '$.active'), 1) = 1 AND (? IS NULL OR rowid < ?) AND (? IS NULL OR json_extract(body, '$.kind') = ?) ORDER BY rowid DESC LIMIT ?`).all(before ?? null, before ?? null, kind ?? null, kind ?? null, limit + 1) as DocumentRow[];
     return page(rows, limit, row => {
       const asset = JSON.parse(row.body) as AssetRecord;
-      return { ...asset, inUse: assetInUse(asset.id) || generating.has(asset.id) };
+      return { ...asset, inUse: row.project_reference === 1 || generating.has(asset.id) };
     });
   }
   function assetInUse(id: string) { return !!database.prepare('SELECT 1 FROM project_asset_references WHERE asset_id = ? LIMIT 1').get(id); }

@@ -1,4 +1,4 @@
-export const credentialService = 'video-quickly-electron';
+const credentialService = 'video-quickly-electron';
 
 export function credentialEntry(Entry, key, platform = process.platform) {
   if (typeof key !== 'string' || !key.length || key.length > 512 || key.includes('\0')) throw new Error('凭据引用无效。');

@@ -16,6 +16,7 @@ import { verifyNativeMediaExtensions } from './native-media-extensions.mjs';
 import { verifyNativeTransitions } from './native-transitions.mjs';
 import { verifyNativeTransitionLoading } from './native-transition-loading.mjs';
 import { verifyNativeTransitionCache } from './native-transition-cache.mjs';
+import { verifyNativeCompactDialogs } from './native-compact-dialogs.mjs';
 
 const execute = promisify(execFile);
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
@@ -33,6 +34,7 @@ const errors = [];
 const windows = [];
 let nativeTextInputTypes;
 let gettingStartedHelpBounds;
+let previewFullscreenTiming;
 let application;
 let page;
 let runtimePid;
@@ -114,32 +116,38 @@ async function launch() {
   assert.equal(new URL(page.url()).protocol, 'video-quickly:');
   assert.equal(new URL(page.url()).hostname, 'app');
   await inspectWindow();
-  if (!checks.gettingStarted) { await verifyGettingStarted(); await verifyGenericWorkflow(); await verifyWorkProduction(); await verifyNativeMediaExtensions({ page, rpc, openProject, fixture, artifacts, ffmpegPath: fixtureFfmpeg, environment: packaged ? environment : process.env, checks }); await verifyNativeTransitions({ page, rpc, openProject, fixture, artifacts, ffmpegPath: fixtureFfmpeg, environment: packaged ? environment : process.env, checks }); await verifyNativeTransitionLoading({ page, rpc, openProject, fixture, artifacts, ffmpegPath: fixtureFfmpeg, environment: packaged ? environment : process.env, checks }); await verifyNativeTransitionCache({ page, rpc, openProject, fixture, artifacts, ffmpegPath: fixtureFfmpeg, environment: packaged ? environment : process.env, checks }); }
-  else {
+  if (!checks.gettingStarted) {
+    const project = await verifyGettingStarted();
+    await verifyGenericWorkflow(project);
+    if (compact) await verifyNativeCompactDialogs({ page, rpc, openProject, fixture, artifacts, ffmpegPath: fixtureFfmpeg, environment: packaged ? environment : process.env, checks });
+    await verifyWorkProduction(project.title);
+    await verifyNativeMediaExtensions({ page, rpc, openProject, fixture, artifacts, ffmpegPath: fixtureFfmpeg, environment: packaged ? environment : process.env, checks });
+    await verifyNativeTransitions({ page, rpc, openProject, fixture, artifacts, ffmpegPath: fixtureFfmpeg, environment: packaged ? environment : process.env, checks });
+    await verifyNativeTransitionLoading({ page, rpc, openProject, fixture, artifacts, ffmpegPath: fixtureFfmpeg, environment: packaged ? environment : process.env, checks });
+    await verifyNativeTransitionCache({ page, rpc, openProject, fixture, artifacts, ffmpegPath: fixtureFfmpeg, environment: packaged ? environment : process.env, checks });
+  } else {
     assert.equal(await page.evaluate(() => localStorage.getItem('vq-onboarding-v1')), 'done');
     await expect(page.getByRole('dialog', { name: '使用指南', exact: true })).toHaveCount(0);
   }
   return page;
 }
-async function verifyGenericWorkflow() {
+async function verifyGenericWorkflow(project) {
   const character = await rpc('character.save', { character: { name: '原生制作角色', description: '固定外形与服装', referenceAssetIds: [] } });
   const snapshot = await rpc('workspace.snapshot');
-  const project = snapshot.projects.find(item => item.id === 'example-history');
-  assert.ok(project);
   assert.equal(project.workflow.id, 'native-video');
   assert.equal(project.workflow.production.subtitleMode, 'off');
   assert.equal(project.workflow.nodes.some(node => ['research', 'review'].includes(node.kind) || node.requiresReview), false);
   assert.equal(project.workflow.nodes.length, 7);
   assert.equal(project.workflow.stages.length, 4);
   const guidance = page.getByRole('region', { name: '制作指引', exact: true });
-  const generationLabels = ['简报生成', '风格与角色生成', '分镜生成', '镜头视频生成'];
-  const progress = guidance.getByRole('list', { name: '模型生成进度', exact: true });
-  await expect(progress.getByRole('button', { name: /^打开步骤：/ })).toHaveCount(4);
-  await expect(progress.locator('.workbench-guide__step-copy > strong')).toHaveText(generationLabels);
-  for (const label of generationLabels) {
-    const trigger = progress.getByRole('button', { name: `打开步骤：${label}`, exact: true });
+  const stageLabels = ['策划与分镜', '素材与配音', '剪辑与动画', '审阅与导出'];
+  const progress = guidance.getByRole('list', { name: '制作阶段进度', exact: true });
+  await expect(progress.getByRole('button', { name: /^打开阶段：/ })).toHaveCount(4);
+  await expect(progress.locator('.workbench-guide__step-copy > strong')).toHaveText(stageLabels);
+  for (const label of stageLabels) {
+    const trigger = progress.getByRole('button', { name: `打开阶段：${label}`, exact: true });
     await expect(trigger).toHaveAttribute('data-state', 'pending');
-    await expect(trigger).toContainText('尚未生成');
+    await expect(trigger).toContainText('尚未制作');
     await trigger.focus(); await trigger.press('Enter');
     const records = page.getByRole('dialog', { name: '本次制作', exact: true });
     await expect(records).toBeVisible();
@@ -193,7 +201,7 @@ async function verifyGenericWorkflow() {
   await steps.getByRole('button', { name: '确认保存', exact: true }).click();
   await expect(dialog.getByRole('button', { name: '保存设置', exact: true })).toBeVisible();
   await expect(dialog.getByRole('button', { name: '保存并开始制作', exact: true })).toHaveCount(0);
-  await dialog.getByRole('button', { name: '取消', exact: true }).click();
+  await dialog.getByRole('button', { name: '关闭对话框', exact: true }).click();
   await expect(dialog).toHaveCount(0);
   assert.deepEqual((await rpc('workspace.snapshot')).projects, snapshot.projects, 'Canceling the configuration wizard must preserve the project');
   await expect(page.getByRole('button', { name: '添加模型连接', exact: true })).toHaveCount(0);
@@ -209,8 +217,7 @@ async function verifyGenericWorkflow() {
   checks.projectSettings = true;
   checks.genericWorkflow = true;
 }
-async function verifyWorkProduction() {
-  const original = (await rpc('workspace.snapshot')).projects.find(project => project.id === 'example-history');
+async function verifyWorkProduction(projectTitle) {
   await page.getByRole('button', { name: '我的项目', exact: true }).click();
   await page.getByRole('button', { name: '作品与分集', exact: true }).click();
   await page.getByRole('button', { name: '新建作品', exact: true }).click();
@@ -225,11 +232,22 @@ async function verifyWorkProduction() {
   await batch.getByRole('textbox', { name: '第 1 集原始文案', exact: true }).fill('原生包中的第一集文案');
   await batch.getByRole('button', { name: '创建 2 个分集', exact: true }).click();
   await expect(page.locator('.episode-row')).toHaveCount(2);
+  const selectAllEpisodes = page.getByRole('checkbox', { name: '全选分集', exact: true });
+  await expect(selectAllEpisodes).toBeChecked();
+  await selectAllEpisodes.uncheck();
+  await expect(page.getByRole('button', { name: '所选分集入队（2）', exact: true })).toHaveCount(0);
+  await selectAllEpisodes.press('Space');
+  await expect(page.getByRole('button', { name: '所选分集入队（2）', exact: true })).toBeEnabled();
   const works = await rpc('work.list'), work = works.items.find(work => work.title === '原生分集作品'); assert.ok(work);
   const episodes = (await rpc('workspace.summary')).projects.filter(project => project.episode?.workId === work.id);
   assert.equal(episodes.length, 2); assert.deepEqual(episodes.map(project => project.episode.number).sort(), [1, 2]);
   await page.getByRole('button', { name: '所选分集入队（2）', exact: true }).click();
   await expect(page.locator('.queue-item')).toHaveCount(2);
+  await expect(page.getByRole('button', { name: '生产队列', exact: true })).toBeFocused();
+  await expect(page.getByRole('button', { name: '刷新作品', exact: true })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: '刷新队列', exact: true })).toHaveCount(1);
+  await expect(page.getByRole('button', { name: '开始队列', exact: true })).toBeInViewport({ ratio: 1 });
+  await expect(page.getByRole('button', { name: '暂停后续派发', exact: true })).toHaveCount(0);
   const queues = await rpc('productionQueue.list', { workId: work.id }), queue = queues.items[0]; assert.equal(queue.status, 'paused');
   const duplicate = await rpc('productionQueue.enqueue', { workId: work.id, workRevision: work.revision, requestId: randomUUID(), projects: episodes.map(project => ({ projectId: project.id, revision: project.revision })) });
   assert.equal(duplicate.queue, null); assert.equal(duplicate.reused.length, 2);
@@ -238,11 +256,14 @@ async function verifyWorkProduction() {
   await page.getByRole('button', { name: '取消后续排队项', exact: true }).click();
   await page.getByRole('alertdialog').getByRole('button', { name: '取消后续排队项', exact: true }).click();
   await expect(page.locator('.queue-item__status')).toHaveText(['已取消', '已取消']);
+  await expect(page.getByRole('button', { name: '取消后续排队项', exact: true })).toHaveCount(0);
   workFixture = { workId: work.id, queueId: queue.id, projectIds: episodes.map(project => project.id) };
   checks.workBatchCreation = true; checks.workMembershipProjection = true; checks.queueActiveDeduplication = true; checks.queueControlIsolation = true;
+  checks.workQueueContextualControls = true;
+  checks.workEpisodeBulkSelection = true;
   await page.getByRole('button', { name: '全部作品', exact: true }).click();
   await page.getByRole('button', { name: '全部项目', exact: true }).click();
-  await openProject(original.title);
+  await openProject(projectTitle);
 }
 
 async function verifyGettingStarted() {
@@ -267,7 +288,12 @@ async function verifyGettingStarted() {
   await expect(heading).toHaveText('新建创作项目');
   assert.equal(await activeTarget(), 'create-project');
   assert.equal(await page.evaluate(() => localStorage.getItem('vq-onboarding-v1')), null);
-  const before = await rpc('workspace.snapshot');
+  const empty = await rpc('workspace.snapshot');
+  assert.deepEqual(empty.projects, []);
+  assert.deepEqual(empty.assets, []);
+  await expect(page.getByRole('heading', { name: '我的项目', exact: true })).toBeVisible();
+  await expect(page.getByLabel('搜索项目', { exact: true })).toBeVisible();
+  checks.emptyWorkspaceStartup = true;
   await page.screenshot({ path: join(artifacts, 'desktop-getting-started.png') });
 
   await highlighted.click();
@@ -282,6 +308,21 @@ async function verifyGettingStarted() {
   await expect(heading).toHaveText('新建创作项目');
   assert.equal(await activeTarget(), 'create-project');
   assert.equal(await page.evaluate(() => localStorage.getItem('vq-onboarding-v1')), null);
+  assert.deepEqual((await rpc('workspace.summary')).projects, []);
+
+  const projectTitle = '原生流程验收项目';
+  await highlighted.click();
+  await create.getByLabel('项目名称', { exact: true }).fill(projectTitle);
+  await create.getByRole('button', { name: '创建项目', exact: true }).click();
+  await expect(create).toHaveCount(0);
+  await expect(page.getByLabel('项目名称', { exact: true })).toHaveValue(projectTitle);
+  const created = (await rpc('workspace.snapshot')).projects[0];
+  assert.equal(created.title, projectTitle);
+  const project = await rpc('project.update', { projectId: created.id, revision: created.revision, patch: {
+    shots: [{ id: 'guide-shot', title: '导览首镜头', narration: '原生导览播放验收。', visualPrompt: '固定画面', durationUs: 5_000_000 }],
+  } });
+  await expect(page.locator('.workbench .outline-shot')).toHaveCount(1);
+  const before = await rpc('workspace.snapshot');
 
   let reachedEnd = false, contextCaptured = false;
   for (let step = 0; step < 20; step++) {
@@ -352,6 +393,7 @@ async function verifyGettingStarted() {
   for (const field of ['projects', 'models', 'skills', 'runs', 'assets']) assert.deepEqual(after[field], before[field], `Getting started must not change workspace ${field}`);
   checks.gettingStartedInteractive = true;
   checks.gettingStarted = true;
+  return project;
 }
 function observePage(next) {
   page = next;
@@ -361,12 +403,14 @@ function observePage(next) {
 async function inspectWindow() {
   const native = await application.evaluate(({ BrowserWindow, screen }, compact) => {
     const window = BrowserWindow.getAllWindows()[0];
-    if (compact) window.setContentSize(1024, 720);
-    return { visible: window.isVisible(), bounds: window.getBounds(), contentBounds: window.getContentBounds(), workArea: screen.getDisplayMatching(window.getBounds()).workArea };
+    const minimumSize = window.getMinimumSize();
+    if (compact) window.setSize(...minimumSize);
+    return { visible: window.isVisible(), bounds: window.getBounds(), contentBounds: window.getContentBounds(), workArea: screen.getDisplayMatching(window.getBounds()).workArea, minimumSize };
   }, compact);
   assert.equal(native.visible, true, 'Native acceptance requires a shown Electron window');
   if (compact) {
-    await expect.poll(() => page.evaluate(() => innerWidth)).toBe(1024);
+    assert.deepEqual([native.bounds.width, native.bounds.height], native.minimumSize);
+    await expect.poll(() => page.evaluate(() => ({ width: innerWidth, height: innerHeight }))).toEqual({ width: native.contentBounds.width, height: native.contentBounds.height });
     assert.equal((await page.getByRole('complementary', { name: '工作空间导航', exact: true }).boundingBox()).width, 52);
   }
   windows.push({ ...native, viewport: await page.evaluate(() => ({ width: innerWidth, height: innerHeight })) });
@@ -456,6 +500,10 @@ try {
     const other = new BrowserWindow({ show: false, webPreferences: { preload: app.getAppPath() + '/electron/preload.cjs', contextIsolation: true, sandbox: true, nodeIntegration: false } });
     try {
       await other.loadURL('video-quickly://app/');
+      if (process.platform === 'darwin') {
+        const denied = await other.webContents.executeJavaScript("window.videoQuickly.waitForNativeFullscreenEntry().then(() => false, error => error.message.includes('不允许此页面调用桌面功能'))");
+        if (!denied) return false;
+      }
       return await other.webContents.executeJavaScript("window.videoQuickly.rpc('workspace.summary',{}).then(()=>false,()=>true)");
     } finally { other.destroy(); }
   });
@@ -578,12 +626,61 @@ try {
   checks.mediaBoundary = true;
   await expect.poll(() => page.locator('.preview-panel .scene-preview canvas').evaluate(canvas => { const pixel = canvas.getContext('2d').getImageData(Math.floor(canvas.width / 2), Math.floor(canvas.height / 2), 1, 1).data; return pixel[0] < 50 && pixel[1] < 50 && pixel[2] > 180; }), { timeout: 10_000 }).toBe(true);
   checks.videoPreview = true;
-  await page.getByRole('button', { name: '全屏预览', exact: true }).click();
-  await expect.poll(() => page.evaluate(() => document.fullscreenElement?.classList.contains('preview-player'))).toBe(true);
-  await expect(page.getByRole('button', { name: '退出全屏预览', exact: true })).toBeVisible();
+  const nativePreviewFullscreen = () => application.evaluate(() => globalThis.previewNativeFullscreen);
+  if (process.platform === 'darwin') {
+    await application.evaluate(({ BrowserWindow }) => {
+      const window = BrowserWindow.getAllWindows()[0];
+      globalThis.previewNativeFullscreen = {};
+      window.once('enter-full-screen', () => { globalThis.previewNativeFullscreen.enteredAt = Date.now(); });
+      window.once('leave-full-screen', () => { globalThis.previewNativeFullscreen.leftAt = Date.now(); });
+    });
+    await page.evaluate(() => {
+      function recordExit(event) {
+        if (!event.isTrusted || !event.target.closest?.('button[aria-label="退出全屏预览"]')) return;
+        globalThis.previewFullscreenExit = { clickedAt: Date.now(), previewWasFullscreen: document.fullscreenElement?.classList.contains('preview-player') };
+        document.removeEventListener('click', recordExit, true);
+      }
+      document.addEventListener('click', recordExit, true);
+    });
+  }
+  const enterPreviewFullscreen = page.getByRole('button', { name: '全屏预览', exact: true });
+  await enterPreviewFullscreen.click();
+  if (process.platform !== 'darwin') await expect.poll(() => page.evaluate(() => document.fullscreenElement?.classList.contains('preview-player'))).toBe(true);
+  // Click as soon as the player shows its exit control, while the Mac is still switching spaces.
   await page.getByRole('button', { name: '退出全屏预览', exact: true }).click();
-  await expect.poll(() => page.evaluate(() => document.fullscreenElement)).toBeNull();
+  if (process.platform === 'darwin') {
+    const exit = await page.evaluate(() => globalThis.previewFullscreenExit);
+    assert.equal(exit?.previewWasFullscreen, true, 'A real click must reach the fullscreen preview exit control');
+    await expect.poll(nativePreviewFullscreen).toMatchObject({ enteredAt: expect.any(Number) });
+    const { enteredAt } = await nativePreviewFullscreen();
+    previewFullscreenTiming = { clickBeforeNativeEnterMs: enteredAt - exit.clickedAt };
+    assert.ok(previewFullscreenTiming.clickBeforeNativeEnterMs > 0, 'The exit click must arrive before the native fullscreen transition finishes');
+  }
+  await expect.poll(() => page.evaluate(() => document.fullscreenElement === null)).toBe(true);
+  if (process.platform === 'darwin') {
+    await expect.poll(nativePreviewFullscreen).toMatchObject({ leftAt: expect.any(Number) });
+    const { enteredAt, leftAt } = await nativePreviewFullscreen();
+    previewFullscreenTiming.nativeExitAfterEntryMs = leftAt - enteredAt;
+    checks.previewFullscreenDuringTransition = true;
+  }
+  await expect(enterPreviewFullscreen).toBeVisible();
   checks.previewFullscreen = true;
+
+  if (process.platform === 'darwin') {
+    const setNativeFullscreen = fullscreen => application.evaluate(async ({ BrowserWindow }, enabled) => {
+      const window = BrowserWindow.getAllWindows()[0];
+      const completed = process.getBuiltinModule('node:events').once(window, enabled ? 'enter-full-screen' : 'leave-full-screen', { signal: AbortSignal.timeout(5_000) });
+      window.setFullScreen(enabled);
+      await completed;
+    }, fullscreen);
+    await setNativeFullscreen(true);
+    await enterPreviewFullscreen.click();
+    await page.getByRole('button', { name: '退出全屏预览', exact: true }).click();
+    await expect.poll(() => page.evaluate(() => document.fullscreenElement === null)).toBe(true);
+    assert.equal(await application.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].isFullScreen()), true);
+    await setNativeFullscreen(false);
+    checks.previewFullscreenInNativeWindow = true;
+  }
 
   const beforeCheck = await projectDocument(project.id), contactsBeforeCheck = credentialContacts;
   await page.getByRole('button', { name: '制作前检查', exact: true }).click();
@@ -643,11 +740,16 @@ try {
 
   const narration = page.getByLabel('旁白', { exact: true });
   await narration.fill('Electron 重启后恢复的未保存草稿');
-  await expect.poll(() => page.evaluate(async () => {
+  await expect.poll(() => page.evaluate(async key => {
     const database = await new Promise((resolveDatabase, reject) => { const request = indexedDB.open('video-quickly-drafts', 1); request.onsuccess = () => resolveDatabase(request.result); request.onerror = () => reject(request.error); });
-    try { return await new Promise(resolveResult => { const query = database.transaction('projects').objectStore('projects').getAll(); query.onsuccess = () => resolveResult(query.result.some(value => value.present.shots[0]?.narration === 'Electron 重启后恢复的未保存草稿')); }); }
-    finally { database.close(); }
-  }), { timeout: 10_000 }).toBe(true);
+    try {
+      return await new Promise((resolveResult, reject) => {
+        const query = database.transaction('projects').objectStore('projects').get(key);
+        query.onsuccess = () => resolveResult(query.result?.present?.shots?.[0]?.narration);
+        query.onerror = () => reject(query.error);
+      });
+    } finally { database.close(); }
+  }, `${workspace}:${project.id}`), { timeout: 10_000 }).toBe('Electron 重启后恢复的未保存草稿');
   await application.evaluate(({ dialog, BrowserWindow }) => {
     globalThis.__vqQuitDialogs = [];
     dialog.showMessageBoxSync = (_owner, options) => { globalThis.__vqQuitDialogs.push({ buttons: options.buttons, defaultId: options.defaultId, cancelId: options.cancelId }); return 0; };
@@ -728,15 +830,16 @@ try {
   await writeFile(reportPath, JSON.stringify({ status: 'passed', platform: process.platform, architecture: process.arch, packaged, compact, windows, distributionScope, relocatedExecutable: Boolean(process.env.VIDEO_QUICKLY_ELECTRON_EXECUTABLE), electron: actualElectronVersion, checks,
     nativeTextInputTypes,
     gettingStartedHelpBounds,
+    previewFullscreenTiming,
     nativeDialogs: 'file/directory/save selection, cancellation and close decisions substituted; OS dialog UI requires manual verification',
     nativeShell: 'reveal invocation substituted; Finder/Explorer UI requires manual verification',
-    screenshots: ['desktop-getting-started.png', 'desktop-getting-started-context.png', 'desktop-workflow-stage.png', 'desktop-editor.png', 'desktop-restored-draft.png'],
+    screenshots: ['desktop-getting-started.png', 'desktop-getting-started-context.png', 'desktop-workflow-stage.png', 'desktop-editor.png', 'desktop-restored-draft.png', ...(compact ? ['desktop-compact-production-settings.png', 'desktop-compact-run-scope.png', 'desktop-compact-export-mp4.png', 'desktop-compact-export-other.png'] : [])],
   }, null, 2));
   console.log('Electron 原生窗口、真实 IPC/Node、编辑历史、媒体 Range/导出、失联重连和重启草稿验收通过。');
 } catch (error) {
   await page?.screenshot({ path: join(artifacts, 'failure.png') }).catch(() => {});
   await mkdir(dirname(reportPath), { recursive: true });
-  await writeFile(reportPath, JSON.stringify({ status: 'failed', platform: process.platform, packaged, compact, windows, distributionScope, checks, errors, failure: error instanceof Error ? error.message : String(error) }, null, 2));
+  await writeFile(reportPath, JSON.stringify({ status: 'failed', platform: process.platform, packaged, compact, windows, distributionScope, checks, previewFullscreenTiming, errors, failure: error instanceof Error ? error.message : String(error) }, null, 2));
   throw error;
 } finally {
   if (credentialModel && application) await rpc('model.delete', { modelId: credentialModel.id }).catch(() => {});

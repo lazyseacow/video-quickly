@@ -1,38 +1,84 @@
-import { lazy, Suspense, useEffect, useRef, useState } from 'react';
+import { lazy, Suspense, useEffect, useRef, useState, type ReactNode } from 'react';
 import { ArrowLeft, Layers, Plus, RefreshCw } from 'lucide-react';
-import { projectDetailSchema, projectSchema, productionQueueEnqueueResultSchema, recordPageSchema, workDefaultsSchema, workSchema, type ProjectDocument, type ProjectSummary, type StoryWork } from '@video-quickly/contracts';
+import { formatFrameRate, projectDetailSchema, projectSchema, productionQueueEnqueueResultSchema, recordPageSchema, workDefaultsSchema, workSchema, type ProjectDocument, type ProjectSummary, type StoryWork } from '@video-quickly/contracts';
 import { rpc } from '../lib/client';
 import { useRecordPage } from '../lib/use-record-page';
+import { useRuntimeRead } from '../lib/use-runtime-read';
 import type { StepOutputSelection, WorkspaceView } from '../lib/types';
-import { Button, Dialog, EmptyState, Field, Notice, Select } from '../components/Primitives';
+import { Button, Dialog, EmptyState, Field, IconButton, Notice, Select } from '../components/Primitives';
 import CreativeContextEditor from '../components/CreativeContextEditor';
 import { useConfirmation } from '../components/ConfirmationDialog';
 import './works.css';
 const QueuePanel = lazy(() => import('./ProductionQueuePanel'));
 const workPage = recordPageSchema(workSchema);
 const failure = (error: unknown) => error instanceof Error ? error.message : String(error);
+const episodeSelectionLimit = 100;
 
-export default function WorksPanel({ workspace, onBack, onOpen, onOpenOutput }: { workspace: WorkspaceView; onBack(): void; onOpen(id: string): void; onOpenOutput(value: StepOutputSelection): void }) {
-  const [archived, setArchived] = useState(false), [selectedId, setSelectedId] = useState<string>(), [editing, setEditing] = useState<StoryWork | 'new'>();
+export default function WorksPanel({ workspace, notify, onBack, onOpen, onOpenOutput }: { workspace: WorkspaceView; notify(message: string): void; onBack(): void; onOpen(id: string): void; onOpenOutput(value: StepOutputSelection): void }) {
+  const [archived, setArchived] = useState(false), [selected, setSelected] = useState<StoryWork>(), [editing, setEditing] = useState(false);
   const [error, setError] = useState('');
   const library = useRecordPage('work.list', { archived, limit: 30 }, workspace.version, workPage);
-  const selected = library.items.find(work => work.id === selectedId);
+  const works = library.stale ? [] : library.items;
+  const loading = library.busy || !library.hasLoaded;
   const confirm = useConfirmation();
+  function changeArchive(value: boolean) { setError(''); setArchived(value); }
   async function archive(work: StoryWork) {
     if (!await confirm({ title: work.archived ? '恢复作品？' : '归档作品？', description: `“${work.title}”的分集项目与制作记录会保留。`, confirmLabel: work.archived ? '恢复作品' : '归档作品', variant: 'primary' })) return;
-    try { await rpc(work.archived ? 'work.restore' : 'work.archive', { workId: work.id, revision: work.revision }); setSelectedId(undefined); library.refresh(); }
+    setError('');
+    try { await rpc(work.archived ? 'work.restore' : 'work.archive', { workId: work.id, revision: work.revision }); library.refresh(); }
     catch (error) { setError(failure(error)); }
   }
+  if (selected) return <SelectedWork key={selected.id} initial={selected} workspace={workspace} notify={notify} onOpen={onOpen} onOpenOutput={onOpenOutput}
+    onBack={() => { setSelected(undefined); library.refresh(); }} />;
   return <div className="content-page works-panel">
-    <div className="page-heading"><div><Button variant="ghost" onClick={selected ? () => setSelectedId(undefined) : onBack}><ArrowLeft size={15} />{selected ? '全部作品' : '全部项目'}</Button><h1>{selected?.title ?? '作品与分集'}</h1><p>{selected ? selected.description : '按作品组织分集，选择顺序后排队制作。'}</p></div><div className="heading-actions"><Button aria-label="刷新作品" onClick={library.refresh}><RefreshCw size={15} />刷新</Button><Button variant="primary" onClick={() => setEditing(selected ?? 'new')}>{selected ? '编辑作品默认设置' : <><Plus size={15} />新建作品</>}</Button></div></div>
+    <WorksHeading onBack={onBack}>
+      <div className="heading-actions">
+        <Button variant="ghost" aria-label="刷新作品" busy={library.busy && !library.loadingMore} onClick={library.refresh}><RefreshCw size={15} aria-hidden="true" />刷新</Button>
+        {!archived && <Button variant="primary" onClick={() => setEditing(true)}><Plus size={15} aria-hidden="true" />新建作品</Button>}
+      </div>
+    </WorksHeading>
     {(library.error || error) && <Notice kind="error">{library.error || error}</Notice>}
-    {selected ? <WorkEpisodes key={`episodes:${selected.id}`} work={selected} workspace={workspace} onOpen={onOpen} onOpenOutput={onOpenOutput} /> : <>
-      <div className="page-toolbar"><label className="field-inline"><input type="checkbox" checked={archived} onChange={event => setArchived(event.target.checked)} />已归档作品</label></div>
-      <div className="work-cards">{library.items.map(work => <article className="section-card work-card" key={work.id}><h2>{work.title}</h2><p>{work.description || '尚未填写作品说明'}</p><p className="tiny-meta">{workspace.projects.filter(project => project.episode?.workId === work.id).length} 集 · 默认设置 v{work.revision}</p><div className="work-actions"><Button onClick={() => setSelectedId(work.id)}>查看分集</Button><Button variant="ghost" onClick={() => void archive(work)}>{work.archived ? '恢复作品' : '归档作品'}</Button></div></article>)}</div>
-      {!library.items.length && !library.busy && <EmptyState icon={<Layers size={24} />} title="创建一部作品" description="作品保存角色、风格及制作默认设置，每集拥有独立项目。" />}
-      {library.nextCursor !== null && <Button busy={library.loadingMore} onClick={() => void library.loadMore()}>加载更多作品</Button>}
-    </>}
-    {editing && <WorkEditor key={editing === 'new' ? 'new' : `edit:${editing.id}`} work={editing === 'new' ? undefined : editing} workspace={workspace} onClose={() => setEditing(undefined)} onSaved={work => { setEditing(undefined); setSelectedId(work.id); setArchived(work.archived); library.refresh(); }} />}
+    <div className="page-toolbar"><div className="tabs" role="group" aria-label="作品筛选">
+      <button type="button" className={!archived ? 'active' : ''} aria-pressed={!archived} onClick={() => changeArchive(false)}>全部</button>
+      <button type="button" className={archived ? 'active' : ''} aria-pressed={archived} onClick={() => changeArchive(true)}>已归档</button>
+    </div></div>
+    {works.length > 0 && <div className="work-cards">{works.map(work => <article className="section-card work-card" key={work.id}>
+      <h2>{work.title}</h2>{work.description && <p className="work-card__description">{work.description}</p>}
+      <p className="tiny-meta">{workspace.projects.filter(project => project.episode?.workId === work.id).length} 集</p>
+      <div className="work-actions"><Button onClick={() => setSelected(work)}>查看分集</Button><Button variant="ghost" onClick={() => void archive(work)}>{work.archived ? '恢复作品' : '归档作品'}</Button></div>
+    </article>)}</div>}
+    {!works.length && !library.error && (loading
+      ? <p className="muted" role="status">正在读取作品…</p>
+      : <EmptyState icon={<Layers size={24} />} title={archived ? '没有归档作品' : '还没有作品'} description={archived ? '归档的作品可在这里恢复。' : '用作品组织分集，共用角色、风格和制作设置。'} />)}
+    {!library.stale && library.nextCursor !== null && <Button busy={library.loadingMore} disabled={!library.canLoadMore} onClick={() => void library.loadMore()}>加载更多作品</Button>}
+    {editing && <WorkEditor workspace={workspace} onClose={() => setEditing(false)} onSaved={work => { setEditing(false); setSelected(work); setArchived(work.archived); library.refresh(); }} />}
+  </div>;
+}
+
+function WorksHeading({ work, onBack, children }: { work?: StoryWork; onBack(): void; children: ReactNode }) {
+  return <div className="page-heading">
+    <div className="works-heading__title">
+      <IconButton label={work ? '全部作品' : '全部项目'} onClick={onBack}><ArrowLeft size={16} aria-hidden="true" /></IconButton>
+      <div><h1>{work?.title ?? '作品与分集'}</h1>{work?.description && <p>{work.description}</p>}</div>
+    </div>
+    {children}
+  </div>;
+}
+
+function SelectedWork({ initial, workspace, notify, onBack, onOpen, onOpenOutput }: {
+  initial: StoryWork; workspace: WorkspaceView; notify(message: string): void; onBack(): void; onOpen(id: string): void; onOpenOutput(value: StepOutputSelection): void;
+}) {
+  const detail = useRuntimeRead('work.get', { workId: initial.id }, workspace.version, workSchema);
+  const [saved, setSaved] = useState(initial);
+  const [editing, setEditing] = useState<StoryWork>();
+  const work = detail.data && detail.data.revision >= saved.revision ? detail.data : saved;
+  return <div className="content-page works-panel">
+    <WorksHeading work={work} onBack={onBack}><div className="heading-actions">
+      <Button aria-label="编辑作品默认设置" onClick={() => setEditing(work)}>作品设置</Button>
+    </div></WorksHeading>
+    {detail.error && <Notice kind="error"><span>{detail.error}</span><Button busy={detail.busy} onClick={detail.refresh}>重试读取作品</Button></Notice>}
+    <WorkEpisodes work={work} workspace={workspace} notify={notify} onOpen={onOpen} onOpenOutput={onOpenOutput} />
+    {editing && <WorkEditor work={editing} workspace={workspace} onClose={() => setEditing(undefined)} onSaved={next => { setSaved(next); setEditing(undefined); detail.refresh(); }} />}
   </div>;
 }
 
@@ -64,36 +110,95 @@ function WorkEditor({ work, workspace, onClose, onSaved }: { work?: StoryWork; w
     </details><p className="tiny-meta">保存后用于新分集。已有分集可选择后显式同步。</p></fieldset>{error && <Notice kind="error">{error}</Notice>}</div><div className="dialog__footer"><Button onClick={onClose}>取消</Button><Button type="submit" variant="primary" busy={busy}>保存作品</Button></div></form></Dialog>;
 }
 
-function WorkEpisodes({ work, workspace, onOpen, onOpenOutput }: { work: StoryWork; workspace: WorkspaceView; onOpen(id: string): void; onOpenOutput(value: StepOutputSelection): void }) {
+function WorkEpisodes({ work, workspace, notify, onOpen, onOpenOutput }: { work: StoryWork; workspace: WorkspaceView; notify(message: string): void; onOpen(id: string): void; onOpenOutput(value: StepOutputSelection): void }) {
   const [tab, setTab] = useState<'episodes' | 'queue'>('episodes'), [creating, setCreating] = useState(false), [attaching, setAttaching] = useState<ProjectSummary | 'new'>();
   const [selectedIds, setSelectedIds] = useState<string[]>([]), [showArchived, setShowArchived] = useState(false), [sync, setSync] = useState<ProjectSummary[]>();
-  const [queueId, setQueueId] = useState<string>(), [busy, setBusy] = useState(false), [error, setError] = useState(''), [notice, setNotice] = useState('');
+  const [queueId, setQueueId] = useState<string>(), [busy, setBusy] = useState(false), [error, setError] = useState('');
   const inFlight = useRef(false), enqueueIdentity = useRef<{ key: string; id: string } | undefined>(undefined), confirm = useConfirmation();
+  const episodesTab = useRef<HTMLButtonElement>(null), queueTab = useRef<HTMLButtonElement>(null);
+  const selectAll = useRef<HTMLInputElement>(null);
   const episodes = workspace.projects.filter(project => project.episode?.workId === work.id).sort((a, b) => a.episode!.number - b.episode!.number);
-  const selected = episodes.filter(project => !project.archived && selectedIds.includes(project.id));
+  const visibleEpisodes = showArchived ? episodes : episodes.filter(project => !project.archived);
+  const eligible = work.archived ? [] : episodes.filter(project => !project.archived);
+  const selected = eligible.filter(project => selectedIds.includes(project.id));
+  const bulkSelection = eligible.slice(0, episodeSelectionLimit);
+  const allSelected = bulkSelection.length > 0 && bulkSelection.every(project => selectedIds.includes(project.id));
+  useEffect(() => {
+    if (selectAll.current) selectAll.current.indeterminate = selected.length > 0 && !allSelected;
+  }, [tab, selected.length, allSelected]);
+  function selectTab(value: typeof tab) {
+    setError('');
+    setTab(value);
+  }
   async function enqueue() {
-    if (inFlight.current || !selected.length) return; inFlight.current = true; setBusy(true); setError(''); setNotice('');
+    if (inFlight.current || !selected.length || selected.length > episodeSelectionLimit) return; inFlight.current = true; setBusy(true); setError('');
     const projects = selected.map(project => ({ projectId: project.id, revision: project.revision })), key = JSON.stringify({ workId: work.id, workRevision: work.revision, projects });
     if (enqueueIdentity.current?.key !== key) enqueueIdentity.current = { key, id: crypto.randomUUID() };
     try {
       const result = productionQueueEnqueueResultSchema.parse(await rpc('productionQueue.enqueue', { workId: work.id, workRevision: work.revision, projects, requestId: enqueueIdentity.current.id }));
       enqueueIdentity.current = undefined;
-      setQueueId(result.queue?.id ?? result.reused[0]?.queueId); setTab('queue'); setNotice(`已加入 ${result.items.length} 集，${result.reused.length} 集沿用已有排队项。`);
+      setQueueId(result.queue?.id ?? result.reused[0]?.queueId);
+      setTab('queue');
+      notify([result.items.length > 0 && `已将 ${result.items.length} 集加入队列。`, result.reused.length > 0 && `${result.reused.length} 集已在队列中。`].filter(Boolean).join(''));
+      queueTab.current?.focus({ preventScroll: true });
     } catch (error) { setError(failure(error)); } finally { inFlight.current = false; setBusy(false); }
   }
   async function detach(project: ProjectSummary) {
     if (!await confirm({ title: '将分集移出作品？', description: `“${project.title}”会保留为独立项目，分集来源仍可追溯。`, confirmLabel: '移出作品', variant: 'primary' })) return;
     try { await rpc('work.episode.detach', { projectId: project.id, revision: project.revision }); } catch (error) { setError(failure(error)); }
   }
-  return <><nav className="tabs" aria-label="作品内容">{([['episodes', '分集'], ['queue', '生产队列']] as const).map(([id, label]) => <button key={id} type="button" className={tab === id ? 'active' : ''} aria-current={tab === id ? 'page' : undefined} onClick={() => setTab(id)}>{label}</button>)}</nav>
-    {error && <Notice kind="error">{error}</Notice>}{notice && <Notice kind="success">{notice}</Notice>}
-    {tab === 'episodes' ? <><div className="work-actions"><Button variant="primary" disabled={work.archived} onClick={() => setCreating(true)}>批量新建分集</Button><Button disabled={work.archived} onClick={() => setAttaching('new')}>加入已有项目</Button><Button disabled={!selected.length || work.archived} onClick={() => setSync(selected)}>同步作品默认设置</Button><Button disabled={!selected.length || work.archived} busy={busy} onClick={() => void enqueue()}>所选分集入队（{selected.length}）</Button><label><input type="checkbox" checked={showArchived} onChange={event => setShowArchived(event.target.checked)} />显示回收站分集</label></div><p className="tiny-meta">按集数从小到大入队。入队后核对列表，再开始顺序制作。</p>
-      <div className="episode-list">{episodes.filter(project => showArchived || !project.archived).map(project => <article className="section-card episode-row" key={project.id} data-project-id={project.id}><label className="episode-choice"><input type="checkbox" aria-label={`选择第 ${project.episode!.number} 集`} disabled={project.archived || work.archived} checked={selectedIds.includes(project.id)} onChange={event => setSelectedIds(ids => event.target.checked ? [...ids, project.id] : ids.filter(id => id !== project.id))} /><span>第 {project.episode!.number} 集</span></label><div className="episode-content"><h3>{project.title}</h3><p className="tiny-meta">项目修订 {project.revision} · {project.archived ? '回收站' : `${project.shotCount} 个镜头`}</p></div><div className="work-actions"><Button onClick={() => onOpen(project.id)}>打开分集</Button><Button variant="ghost" disabled={project.archived || work.archived} onClick={() => setAttaching(project)}>编辑分集</Button><Button variant="ghost" disabled={work.archived} onClick={() => void detach(project)}>移出作品</Button></div></article>)}</div>
-      {!episodes.length && <EmptyState icon={<Layers size={24} />} title="添加第一批分集" description="输入每集标题和原始文案，原子创建独立项目。" />}
-    </> : <Suspense fallback={<p role="status">正在读取生产队列…</p>}><QueuePanel work={work} version={workspace.version} selectedQueueId={queueId} onOpen={onOpen} onOpenOutput={onOpenOutput} /></Suspense>}
+  return <>
+    <nav className="tabs works-content-tabs" aria-label="作品内容">
+      {([['episodes', '分集'], ['queue', '生产队列']] as const).map(([id, label]) => <button key={id} ref={id === 'episodes' ? episodesTab : queueTab} type="button" className={tab === id ? 'active' : ''} aria-current={tab === id ? 'page' : undefined} onClick={() => selectTab(id)}>{label}</button>)}
+    </nav>
+    {error && <Notice kind="error">{error}</Notice>}
+    {tab === 'episodes' ? <>
+      <div className="episode-toolbar">
+        {!work.archived && <div className="work-actions">
+          {selected.length > 0 ? <>
+            <Button variant="primary" busy={busy} disabled={selected.length > episodeSelectionLimit} aria-label={`所选分集入队（${selected.length}）`} onClick={() => void enqueue()}>加入队列（{selected.length}）</Button>
+            <Button disabled={busy || selected.length > episodeSelectionLimit} aria-label="同步作品默认设置" onClick={() => setSync(selected)}>同步设置</Button>
+            <Button variant="ghost" disabled={busy} onClick={() => { setSelectedIds([]); episodesTab.current?.focus(); }}>清除选择</Button>
+          </> : <>
+            <Button variant="primary" onClick={() => setCreating(true)}>批量新建分集</Button>
+            <Button onClick={() => setAttaching('new')}>加入已有项目</Button>
+          </>}
+        </div>}
+        <div className="episode-filters">
+          {bulkSelection.length > 0 && <label className="field-inline"><input ref={selectAll} type="checkbox" aria-label={eligible.length > episodeSelectionLimit ? `选择前 ${episodeSelectionLimit} 集` : '全选分集'} checked={allSelected} disabled={busy}
+            onChange={event => setSelectedIds(event.target.checked ? bulkSelection.map(project => project.id) : [])} />
+            {eligible.length > episodeSelectionLimit ? `选择前 ${episodeSelectionLimit} 集` : '全选分集'}
+          </label>}
+          {episodes.some(project => project.archived) && <label className="field-inline"><input type="checkbox" checked={showArchived} onChange={event => setShowArchived(event.target.checked)} />显示回收站分集</label>}
+        </div>
+      </div>
+      {selected.length >= episodeSelectionLimit && <p className="tiny-meta" role="status">每批最多选择 {episodeSelectionLimit} 集。</p>}
+      {visibleEpisodes.length > 0 ? <div className="episode-list">{visibleEpisodes.map(project => {
+        const number = `第 ${project.episode!.number} 集`;
+        const canSelect = !project.archived && !work.archived;
+        return <article className="episode-row" key={project.id} data-project-id={project.id}>
+          <div className="episode-identity">
+            {canSelect && <label className="episode-choice"><input type="checkbox" aria-label={`选择${number}`} disabled={busy || selected.length >= episodeSelectionLimit && !selectedIds.includes(project.id)} checked={selectedIds.includes(project.id)} onChange={event => setSelectedIds(ids => event.target.checked ? [...ids, project.id] : ids.filter(id => id !== project.id))} /></label>}
+            <div className="episode-content">
+              {project.title !== number && <span className="tiny-meta">{number}</span>}
+              <h3>{project.title}</h3>
+              <p className="tiny-meta">项目修订 {project.revision} · {project.archived ? '回收站' : `${project.shotCount} 个镜头`}</p>
+            </div>
+          </div>
+          <div className="work-actions">
+            <Button onClick={() => onOpen(project.id)}>打开分集</Button>
+            {canSelect && <Button variant="ghost" onClick={() => setAttaching(project)}>编辑分集</Button>}
+            {!work.archived && <Button variant="ghost" onClick={() => void detach(project)}>移出作品</Button>}
+          </div>
+        </article>;
+      })}</div> : <EmptyState icon={<Layers size={24} />}
+        title={episodes.length ? '分集都在回收站' : '还没有分集'}
+        description={episodes.length ? '开启“显示回收站分集”可查看。' : work.archived ? '此作品归档前没有分集。' : '可批量新建分集，也可加入已有项目。'} />}
+    </> : <Suspense fallback={<p role="status">正在读取生产队列…</p>}><QueuePanel work={work} version={workspace.version} selectedQueueId={queueId} onSelectQueue={setQueueId}
+      onSelectEpisodes={() => { selectTab('episodes'); episodesTab.current?.focus(); }} onOpen={onOpen} onOpenOutput={onOpenOutput} /></Suspense>}
     {creating && <BatchEpisodesDialog work={work} nextNumber={Math.max(0, ...episodes.map(project => project.episode!.number)) + 1} onClose={() => setCreating(false)} onSaved={projects => { setCreating(false); setSelectedIds(projects.map(project => project.id)); }} />}
     {attaching && <AttachEpisodeDialog work={work} project={attaching === 'new' ? undefined : attaching} workspace={workspace} onClose={() => setAttaching(undefined)} onSaved={() => setAttaching(undefined)} />}
-    {sync && <SyncDefaultsDialog work={work} projects={sync} onClose={() => setSync(undefined)} onSaved={() => setSync(undefined)} />}
+    {sync && <SyncDefaultsDialog work={work} projects={sync} models={workspace.models} onClose={() => setSync(undefined)} onSaved={() => setSync(undefined)} />}
   </>;
 }
 
@@ -128,12 +233,31 @@ function AttachEpisodeDialog({ work, project, workspace, onClose, onSaved }: { w
   return <Dialog title={project ? '编辑分集' : '加入已有项目'} onClose={onClose}><form onSubmit={event => { event.preventDefault(); void submit(); }}><div className="dialog__body"><fieldset disabled={busy} className="work-fieldset">{!project && <Field label="已有项目"><Select value={target?.id ?? ''} onChange={event => { const value = workspace.projects.find(project => project.id === event.target.value); if (value) void choose(value); }}><option value="">选择独立项目</option>{workspace.projects.filter(project => !project.archived && !project.episode).map(project => <option key={project.id} value={project.id}>{project.title}</option>)}</Select></Field>}<Field label="分集编号"><input type="number" min={1} max={100000} required value={number || ''} onChange={event => setNumber(Number(event.target.value))} /></Field><Field label="分集标题"><input required maxLength={160} value={title} onChange={event => setTitle(event.target.value)} /></Field><Field label="分集原始文案" hint="原文独立保存，已有制作简报和分镜会保留。"><textarea rows={5} maxLength={30000} value={originalText} onChange={event => setOriginalText(event.target.value)} /></Field></fieldset>{error && <Notice kind="error">{error}</Notice>}</div><div className="dialog__footer"><Button onClick={onClose}>取消</Button><Button variant="primary" type="submit" busy={busy} disabled={!target}>保存分集关联</Button></div></form></Dialog>;
 }
 
-function SyncDefaultsDialog({ work, projects, onClose, onSaved }: { work: StoryWork; projects: ProjectSummary[]; onClose(): void; onSaved(): void }) {
+function SyncDefaultsDialog({ work, projects, models, onClose, onSaved }: { work: StoryWork; projects: ProjectSummary[]; models: WorkspaceView['models']; onClose(): void; onSaved(): void }) {
   const [fields, setFields] = useState(['style', 'creativeContext']), [busy, setBusy] = useState(false), [error, setError] = useState(''); const inFlight = useRef(false);
+  const { style, creativeContext, profile, production } = work.defaults;
+  const connections = (['text', 'image', 'video'] as const).map(kind => {
+    const id = production[`${kind}ModelId`];
+    return `${{ text: '文本', image: '图片', video: '视频' }[kind]} ${id ? models.find(model => model.id === id)?.name ?? '连接已不可用' : '未选择'}`;
+  }).join(' · ');
+  const options = [
+    { id: 'style', label: '视觉风格', value: style || '未填写视觉风格' },
+    { id: 'creativeContext', label: '角色与创作设定', value: `${creativeContext?.characterIds.length ?? 0} 个角色 · ${creativeContext?.entities.length ?? 0} 项设定${creativeContext?.continuity.trim() ? ' · 已填写连续性要求' : ''}` },
+    { id: 'profile', label: '成片规格', value: `${profile.width} × ${profile.height} · ${formatFrameRate(profile.frameRate)} fps · ${{ contain: '完整显示', cover: '裁剪填满', blur: '模糊背景填充' }[profile.fitMode]}` },
+    { id: 'production', label: '统一模型与声音设置', value: `${connections}${production.soundPrompt ? ` · 声音要求 ${production.soundPrompt}` : ' · 未填写声音要求'}` },
+  ];
   async function submit() {
     if (inFlight.current) return; inFlight.current = true; setBusy(true); setError('');
     try { await rpc('work.defaults.apply', { workId: work.id, revision: work.revision, projects: projects.map(project => ({ projectId: project.id, revision: project.revision })), fields }); onSaved(); }
     catch (error) { setError(failure(error)); } finally { inFlight.current = false; setBusy(false); }
   }
-  return <Dialog title="同步作品默认设置" onClose={onClose}><div className="dialog__body"><p>将作品默认设置 v{work.revision} 应用到 {projects.length} 个分集。</p><ul>{projects.map(project => <li key={project.id}>{project.title} · 项目修订 {project.revision}</li>)}</ul><p className="tiny-meta">风格：{work.defaults.style || '未填写'} · 角色：{work.defaults.creativeContext?.characterIds.length ?? 0} 个</p><div className="work-checks">{[['style', '视觉风格'], ['creativeContext', '角色与创作设定'], ['profile', '成片规格'], ['production', '统一模型与声音设置']].map(([id, label]) => <label key={id}><input type="checkbox" disabled={busy} checked={fields.includes(id)} onChange={event => setFields(value => event.target.checked ? [...value, id] : value.filter(field => field !== id))} />{label}</label>)}</div>{error && <Notice kind="error">{error}</Notice>}</div><div className="dialog__footer"><Button onClick={onClose}>取消</Button><Button variant="primary" busy={busy} disabled={!fields.length} onClick={() => void submit()}>同步到所选分集</Button></div></Dialog>;
+  return <Dialog title="同步作品默认设置" onClose={onClose} className="work-sync-dialog"><div className="dialog__body">
+    <p className="work-sync__source">{work.title}</p>
+    <details className="work-sync__targets"><summary>已选 {projects.length} 个分集</summary><ul>{projects.map(project => <li key={project.id}>{project.title}</li>)}</ul></details>
+    <fieldset className="work-checks"><legend>同步内容</legend>{options.map(({ id, label, value }) => <label key={id}>
+      <input type="checkbox" aria-label={label} disabled={busy} checked={fields.includes(id)} onChange={event => setFields(current => event.target.checked ? [...current, id] : current.filter(field => field !== id))} />
+      <span className="work-sync__option-copy"><span>{label}</span><span className="work-sync__value" title={value}>{value}</span></span>
+    </label>)}</fieldset>
+    {error && <Notice kind="error">{error}</Notice>}
+  </div><div className="dialog__footer"><Button onClick={onClose}>取消</Button><Button variant="primary" busy={busy} disabled={!fields.length} onClick={() => void submit()}>同步到所选分集</Button></div></Dialog>;
 }

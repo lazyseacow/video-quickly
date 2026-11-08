@@ -86,7 +86,7 @@ describe('on-demand workspace reads', () => {
     } }); runtimes.push(runtime);
     try {
       const project = projectSchema.parse(await runtime.dispatch('project.create', { templateId: 'history-handdrawn', title: '恢复较早的制作' }));
-      await runtime.dispatch('workflow.save', { projectId: project.id, revision: project.revision, workflow: { ...project.workflow, id: 'read-custom-review', nodes: project.workflow.nodes.map(node => node.id === 'brief' ? { ...node, config: {} } : node.id === 'animation' ? { ...node, requiresReview: true } : node) } });
+      await runtime.dispatch('project.update', { projectId: project.id, revision: project.revision, patch: { workflow: { ...project.workflow, id: 'read-custom-review', nodes: project.workflow.nodes.map(node => node.id === 'brief' ? { ...node, config: {} } : node.id === 'animation' ? { ...node, requiresReview: true } : node) } } });
       const older = await runtime.dispatch('run.start', { projectId: project.id, nodeId: 'animation' }) as RunRecord;
       await runtime.waitForIdle();
       expect(runSummarySchema.parse(await runtime.dispatch('run.get', { runId: older.id })).status).toBe(failureStatus);
@@ -95,7 +95,7 @@ describe('on-demand workspace reads', () => {
       expect(projectDetailSchema.parse(await runtime.dispatch('project.get', { projectId: project.id })).latestRun).toMatchObject({ id: newer.id, status: 'succeeded' });
 
       const other = projectSchema.parse(await runtime.dispatch('project.create', { title: '另一项目的活动制作' }));
-      await runtime.dispatch('workflow.save', { projectId: other.id, revision: other.revision, workflow: { ...other.workflow, id: 'other-custom-review', nodes: other.workflow.nodes.map(node => node.id === 'animation' ? { ...node, requiresReview: true } : node) } });
+      await runtime.dispatch('project.update', { projectId: other.id, revision: other.revision, patch: { workflow: { ...other.workflow, id: 'other-custom-review', nodes: other.workflow.nodes.map(node => node.id === 'animation' ? { ...node, requiresReview: true } : node) } } });
       const otherRun = await runtime.dispatch('run.start', { projectId: other.id, nodeId: 'animation' }) as RunRecord;
       await expect.poll(async () => runSummarySchema.parse(await runtime.dispatch('run.get', { runId: otherRun.id })).status).toBe('running');
       expect(projectDetailSchema.parse(await runtime.dispatch('project.get', { projectId: project.id })).latestRun?.id).toBe(newer.id);

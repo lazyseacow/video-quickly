@@ -119,7 +119,7 @@ test('reuses a lost start response and keeps alternative selection as a reversib
     await expect(dialog.getByRole('region', { name: '修改预览', exact: true })).toContainText('缓慢推近木盒');
     expect(source.prompts).toHaveLength(1); expect(await source.current()).toEqual(source.project);
     await dialog.getByRole('button', { name: '关闭', exact: true }).click(); await expect(dialog).toHaveCount(0);
-    await settings.getByRole('button', { name: '取消', exact: true }).click(); await expect(settings).toHaveCount(0);
+    await settings.getByRole('button', { name: '关闭对话框', exact: true }).click(); await expect(settings).toHaveCount(0);
     await openAdvancedWorkflow(page);
     const node = source.project.workflow.nodes.find(node => node.kind === 'brief')!;
     await page.locator(`.react-flow__node[data-id="${node.id}"]`).click();
@@ -142,7 +142,7 @@ test('restores a saved suggestion after reopening and rejects applying it after 
     await dialog.getByRole('button', { name: '生成修改预览', exact: true }).click();
     await expect(dialog.getByRole('region', { name: '修改预览', exact: true })).toContainText('缓慢推近木盒');
     await dialog.getByRole('button', { name: '关闭', exact: true }).click(); await expect(dialog).toHaveCount(0);
-    await settings.getByRole('button', { name: '取消', exact: true }).click(); await expect(settings).toHaveCount(0);
+    await settings.getByRole('button', { name: '关闭对话框', exact: true }).click(); await expect(settings).toHaveCount(0);
     let failedHistory = false;
     await page.route('**/__desktop_rpc', async route => {
       const input = route.request().postDataJSON();
@@ -157,7 +157,7 @@ test('restores a saved suggestion after reopening and rejects applying it after 
     await expect(dialog.getByRole('textbox', { name: '修改要求', exact: true })).toBeDisabled();
     expect(source.prompts).toHaveLength(1); expect(await source.current()).toEqual(source.project);
     await dialog.getByRole('button', { name: '关闭', exact: true }).click(); await expect(dialog).toHaveCount(0);
-    await settings.getByRole('button', { name: '取消', exact: true }).click(); await expect(settings).toHaveCount(0);
+    await settings.getByRole('button', { name: '关闭对话框', exact: true }).click(); await expect(settings).toHaveCount(0);
     const changed = await rpc<ProjectDocument>(request, 'project.update', { projectId: source.project.id, revision: source.project.revision, patch: { title: `${source.project.title} 修订` } });
     settings = await openProduction(page, changed); dialog = await openAssistant(settings);
     await expect(dialog.getByRole('region', { name: '修改预览', exact: true })).toContainText('缓慢推近木盒');
@@ -170,7 +170,7 @@ test('restores a saved suggestion after reopening and rejects applying it after 
     await expect(dialog.getByRole('region', { name: '修改预览', exact: true })).toContainText('缓慢推近木盒');
     await expect(dialog.getByRole('button', { name: '应用到任务草稿', exact: true })).toBeEnabled(); expect(source.prompts).toHaveLength(2);
     await dialog.getByRole('button', { name: '关闭', exact: true }).click(); await expect(dialog).toHaveCount(0);
-    await settings.getByRole('button', { name: '取消', exact: true }).click(); await expect(settings).toHaveCount(0);
+    await settings.getByRole('button', { name: '关闭对话框', exact: true }).click(); await expect(settings).toHaveCount(0);
     await page.getByRole('button', { name: '制作记录', exact: true }).click();
     await page.getByRole('combobox', { name: '记录来源', exact: true }).selectOption('workflow-assistant');
     await page.locator('.run-card').filter({ hasText: changed.title }).first().getByRole('button', { name: '查看步骤', exact: true }).click();

@@ -25,7 +25,7 @@ async function fixture(options: Partial<RuntimeOptions> = {}) {
   return { runtime, project, directory };
 }
 async function workflow(runtime: ReturnType<typeof createRuntime>, projectId: string, nodes: WorkflowNode[], edges: { id: string; source: string; target: string; condition?: string }[] = [], stages?: WorkflowStage[]) {
-  return projectSchema.parse(await runtime.dispatch('workflow.save', { projectId, workflow: { id: 'inspector-flow', version: 1, name: '步骤详情验收', production: { mode: 'native-video', referenceMode: 'none', soundPrompt: '', subtitleMode: 'off' }, nodes, edges, stages } }));
+  return projectSchema.parse(await runtime.dispatch('project.update', { projectId, patch: { workflow: { id: 'inspector-flow', version: 1, name: '步骤详情验收', production: { mode: 'native-video', referenceMode: 'none', soundPrompt: '', subtitleMode: 'off' }, nodes, edges, stages } } }));
 }
 async function start(runtime: ReturnType<typeof createRuntime>, projectId: string) {
   const run = runSchema.parse(await runtime.dispatch('run.start', { projectId })); await runtime.waitForIdle(); return run;
@@ -38,7 +38,7 @@ it('projects frozen model generation tasks instead of later configuration or loc
   const { runtime, project } = await fixture({ provider: async () => { calls++; throw new Error('controlled generation boundary'); } });
   const ids: Record<string, string> = {};
   for (const kind of ['text', 'image', 'video'] as const) ids[kind] = modelSchema.parse(await runtime.dispatch('model.save', { model: { name: kind, provider: 'openai-compatible', baseUrl: 'http://127.0.0.1:1', model: 'frozen-progress', connectionType: kind, capabilities: [kind] } })).id;
-  const configured = projectSchema.parse(await runtime.dispatch('workflow.save', { projectId: project.id, workflow: { ...project.workflow, production: { ...project.workflow.production, referenceMode: 'generate', textModelId: ids.text, imageModelId: ids.image, videoModelId: ids.video } } }));
+  const configured = projectSchema.parse(await runtime.dispatch('project.update', { projectId: project.id, patch: { workflow: { ...project.workflow, production: { ...project.workflow.production, referenceMode: 'generate', textModelId: ids.text, imageModelId: ids.image, videoModelId: ids.video } } } }));
   const run = await start(runtime, project.id);
   const before = await inspect(runtime, run.id);
   expect(before.workflowId).toBe('native-video');
@@ -232,8 +232,10 @@ it('applies an earlier image output after unrelated project edits while preservi
 });
 
 async function videoApplication(automatic = false) {
+  const entered = Promise.withResolvers<void>(), release = Promise.withResolvers<void>();
   const { runtime, project } = await fixture({ executeActivity: async ({ project, node, dataDirectory }) => {
     if (node.id !== 'video') return {};
+    if (!automatic) { entered.resolve(); await release.promise; }
     const bytes = fixtureNativeVideo(), path = join(dataDirectory, 'generated.mp4'); await writeFile(path, bytes);
     return { assets: [assetSchema.parse({ id: 'generated-video', projectId: project.id, shotId: 'target', name: '模型生成的视频', kind: 'video', durationUs: 1_000_000, path, mimeType: 'video/mp4', size: bytes.length, sha256: createHash('sha256').update(bytes).digest('hex'), version: 1, createdAt: new Date().toISOString(), provenance: 'test provider' })] };
   } });
@@ -243,8 +245,16 @@ async function videoApplication(automatic = false) {
     { id: 'removed', title: '可以移除的其他镜头', narration: '', visualPrompt: '', durationUs: 2_000_000 },
   ] } });
   const model = modelSchema.parse(await runtime.dispatch('model.save', { model: { name: '视频应用夹具', provider: 'openai-compatible', baseUrl: 'http://127.0.0.1:1', model: 'fixture', connectionType: 'video', capabilities: ['video'] } }));
-  const baseline = await workflow(runtime, project.id, [workflowNodeSchema.parse({ id: 'video', kind: 'animation', label: '镜头视频生成', modelId: model.id }), ...(automatic ? [workflowNodeSchema.parse({ id: 'prepare', kind: 'animation', label: '剪辑准备', config: { operation: 'prepare-edit' } })] : [])], automatic ? [{ id: 'video-prepare', source: 'video', target: 'prepare' }] : []);
-  const run = await start(runtime, project.id); expect((await inspect(runtime, run.id)).run.status).toBe('succeeded');
+  const configured = await workflow(runtime, project.id, [workflowNodeSchema.parse({ id: 'video', kind: 'animation', label: '镜头视频生成', modelId: model.id })]);
+  const run = runSchema.parse(await runtime.dispatch('run.start', { projectId: project.id }));
+  if (!automatic) {
+    try {
+      await entered.promise;
+      await runtime.dispatch('project.update', { projectId: project.id, revision: configured.revision, patch: { title: '生成期间的修改' } });
+    } finally { release.resolve(); }
+  }
+  await runtime.waitForIdle(); expect((await inspect(runtime, run.id)).run.status).toBe('succeeded');
+  const baseline = automatic ? configured : projectSchema.parse(await runtime.dispatch('project.update', { projectId: project.id, patch: { title: configured.title } }));
   return { runtime, baseline, run };
 }
 

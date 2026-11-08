@@ -57,12 +57,12 @@ it('keeps explicit model edits from the workflow editor when unified defaults ch
   const directory = await mkdtemp(join(tmpdir(), 'vq-native-binding-')); directories.push(directory);
   const runtime = createRuntime({ dataDirectory: directory, seed: false }); runtimes.add(runtime);
   let project = projectSchema.parse(await runtime.dispatch('project.create', { title: '独立模型覆盖' }));
-  project = projectSchema.parse(await runtime.dispatch('workflow.save', { projectId: project.id, revision: project.revision, workflow: { ...project.workflow, production: { ...project.workflow.production!, textModelId: 'shared', videoModelId: 'video' } } }));
-  project = projectSchema.parse(await runtime.dispatch('workflow.save', { projectId: project.id, revision: project.revision, workflow: { ...project.workflow, nodes: project.workflow.nodes.map(node => node.id === 'style' ? { ...node, modelId: 'explicit' } : node) } }));
+  project = projectSchema.parse(await runtime.dispatch('project.update', { projectId: project.id, revision: project.revision, patch: { workflow: { ...project.workflow, production: { ...project.workflow.production!, textModelId: 'shared', videoModelId: 'video' } } } }));
+  project = projectSchema.parse(await runtime.dispatch('project.update', { projectId: project.id, revision: project.revision, patch: { workflow: { ...project.workflow, nodes: project.workflow.nodes.map(node => node.id === 'style' ? { ...node, modelId: 'explicit' } : node) } } }));
   expect(project.workflow.nodes.find(node => node.id === 'style')).toMatchObject({ modelId: 'explicit', config: { modelOverride: true } });
-  project = projectSchema.parse(await runtime.dispatch('workflow.save', { projectId: project.id, revision: project.revision, workflow: { ...project.workflow, production: { ...project.workflow.production!, textModelId: 'next-shared' } } }));
+  project = projectSchema.parse(await runtime.dispatch('project.update', { projectId: project.id, revision: project.revision, patch: { workflow: { ...project.workflow, production: { ...project.workflow.production!, textModelId: 'next-shared' } } } }));
   expect(project.workflow.nodes.find(node => node.id === 'style')?.modelId).toBe('explicit'); expect(project.workflow.nodes.find(node => node.id === 'script')?.modelId).toBe('next-shared');
-  project = projectSchema.parse(await runtime.dispatch('workflow.save', { projectId: project.id, revision: project.revision, workflow: { ...project.workflow, nodes: project.workflow.nodes.map(node => node.id === 'style' ? { ...node, config: { ...node.config, modelOverride: false } } : node) } }));
+  project = projectSchema.parse(await runtime.dispatch('project.update', { projectId: project.id, revision: project.revision, patch: { workflow: { ...project.workflow, nodes: project.workflow.nodes.map(node => node.id === 'style' ? { ...node, config: { ...node.config, modelOverride: false } } : node) } } }));
   expect(project.workflow.nodes.find(node => node.id === 'style')).toMatchObject({ modelId: 'next-shared', config: { modelOverride: false } });
 });
 
@@ -89,7 +89,7 @@ async function fixture(audio = true, failpoint?: RuntimeOptions['failpoint']) {
   const project = projectSchema.parse(await runtime.dispatch('project.create', { title: '视频制作', brief: '讲述雨水', profile: { width: 160, height: 90, frameRate: { numerator: 30, denominator: 1 } } }));
   const text = modelSchema.parse(await runtime.dispatch('model.save', { model: { name: '文本夹具', provider: 'ollama', model: 'text', connectionType: 'text', capabilities: ['text'], baseUrl } }));
   const video = modelSchema.parse(await runtime.dispatch('model.save', { model: { name: '视频夹具', provider: 'seedance', model: 'custom-video-endpoint', connectionType: 'video', capabilities: ['video'], baseUrl } }));
-  const configured = projectSchema.parse(await runtime.dispatch('workflow.save', { projectId: project.id, revision: project.revision, workflow: resolveProductionWorkflow({ ...project.workflow, production: { ...project.workflow.production!, textModelId: text.id, videoModelId: video.id } }) }));
+  const configured = projectSchema.parse(await runtime.dispatch('project.update', { projectId: project.id, revision: project.revision, patch: { workflow: resolveProductionWorkflow({ ...project.workflow, production: { ...project.workflow.production!, textModelId: text.id, videoModelId: video.id } }) } }));
   return { runtime, options, configured, received, counts: () => ({ submissions, textCalls }), current: async (target = runtime) => (await target.dispatch('project.get', { projectId: project.id }) as { project: ProjectDocument }).project };
 }
 

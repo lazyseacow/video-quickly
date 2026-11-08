@@ -38,7 +38,11 @@ for (const viewport of [{ width: 1536, height: 960 }, { width: 1024, height: 720
     }
 
     const zoom = page.getByRole('slider', { name: '时间轴缩放', exact: true });
+    await expect(zoom).toBeInViewport({ ratio: 1 });
+    await expect(page.locator('.timeline-zoom-value')).toBeInViewport({ ratio: 1 });
+    expect(await page.locator('.timeline-toolbar').evaluate(element => element.scrollWidth - element.clientWidth)).toBeLessThanOrEqual(1);
     await zoom.focus(); await zoom.press('End');
+    await expect(zoom).toHaveAttribute('aria-valuetext', '500%');
     const timeline = page.locator('.timeline-scroll');
     await expect.poll(() => timeline.evaluate(element => element.scrollWidth > element.clientWidth)).toBe(true);
     await timeline.hover(); await page.mouse.wheel(400, 0);

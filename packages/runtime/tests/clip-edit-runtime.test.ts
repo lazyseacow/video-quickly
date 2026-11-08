@@ -1,14 +1,10 @@
-import Database from 'better-sqlite3';
-import { createHash } from 'node:crypto';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, expect, it } from 'vitest';
-import { DEFAULT_AUDIO_PROCESSING, projectSchema, type AssetRecord, type JsonValue, type ModelProfile, type ProjectDocument, type ProjectSummary, type ShotCandidate } from '@video-quickly/contracts';
+import { DEFAULT_AUDIO_PROCESSING, projectSchema, type AssetRecord, type ModelProfile, type ProjectDocument } from '@video-quickly/contracts';
 import { deleteShotRanges, resolveShotSpans, restoreShotRanges } from '../../video/src/clip-edits';
 import { createRuntime, type RuntimeOptions } from '../src';
-import { DocumentStore, openDatabase, WORKSPACE_MIGRATIONS } from '../src/database';
-import { migrateDatabase } from '../src/migrations';
 
 const directories: string[] = [], runtimes = new Set<ReturnType<typeof createRuntime>>();
 afterEach(async () => { await Promise.all([...runtimes].map(runtime => runtime.close())); runtimes.clear(); await Promise.all(directories.splice(0).map(path => rm(path, { recursive: true, force: true }))); });
@@ -72,7 +68,7 @@ it('keeps human timing, captions and DSP through ordinary script apply and ignor
     audioAssetId: 'injected-audio', videoAssetId: 'injected-video', audioProcessing: { ...DEFAULT_AUDIO_PROCESSING, gainDb: 18 }, captionTrack: { timeBase: 'scene', alignment: 'estimated', cues: [] }, clipEdit: { planId: 'injected-plan', inUs: 0, restoreInUs: 0, restoreDurationUs: 1_000_000 } }] }) });
   const project = projectSchema.parse(await runtime.dispatch('project.update', { projectId: initial.id, revision: initial.revision, patch: { shots: initial.shots.map(shot => ({ ...shot, audioProcessing: { ...DEFAULT_AUDIO_PROCESSING, gainDb: 3 } })) } }));
   const model = await runtime.dispatch('model.save', { model: { name: '隔离文字边界', provider: 'openai-compatible', baseUrl: 'http://unused.invalid', model: 'isolated', connectionType: 'text', capabilities: ['text'], parameters: {} } }) as ModelProfile;
-  await runtime.dispatch('workflow.save', { projectId: project.id, revision: project.revision, workflow: { ...project.workflow, nodes: project.workflow.nodes.map(node => node.kind === 'script' ? { ...node, modelId: model.id } : node) } });
+  await runtime.dispatch('project.update', { projectId: project.id, revision: project.revision, patch: { workflow: { ...project.workflow, nodes: project.workflow.nodes.map(node => node.kind === 'script' ? { ...node, modelId: model.id } : node) } } });
   const before = (await runtime.dispatch('project.get', { projectId: project.id }) as { project: ProjectDocument }).project;
   const run = await runtime.dispatch('run.start', { projectId: project.id, nodeId: 'script' }) as { id: string }; await runtime.waitForIdle();
   const applied = projectSchema.parse(await runtime.dispatch('node.apply', { runId: run.id, nodeId: 'script', revision: before.revision }));

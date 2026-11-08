@@ -8,7 +8,7 @@ import { afterEach, expect, it } from 'vitest';
 import { createNativeVideoWorkflow, firstFrameAtUs, DEFAULT_AUDIO_MIX_SETTINGS, DEFAULT_AUDIO_PROCESSING, DEFAULT_CAPTION_STYLE, DEFAULT_VIDEO_PROFILE, projectSchema, shotSchema, timeAtFrame, type AssetRecord, type ProjectDocument } from '@video-quickly/contracts';
 import { captureClipEditSource } from '../src/clip-edits.js';
 import { detectAudioSilence, prepareAudioMix, readAudioLevelWindow } from '../src/audio-mix.js';
-import { probeMedia, renderProject, runMedia } from '../src/node.js';
+import { renderProject, runMedia } from '../src/node.js';
 
 const ffmpeg = process.env.VIDEO_QUICKLY_FFMPEG ?? 'ffmpeg';
 const ffprobe = process.env.VIDEO_QUICKLY_FFPROBE ?? join(dirname(ffmpeg), process.platform === 'win32' ? 'ffprobe.exe' : 'ffprobe');

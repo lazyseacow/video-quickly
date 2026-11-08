@@ -1,6 +1,6 @@
 import { lazy, Suspense, useCallback, useEffect, useId, useLayoutEffect, useRef, useState } from 'react';
 import { ChevronLeft, ChevronRight } from 'lucide-react';
-import { applyWorkflowProposal, productionSettingsSchema, resolveProductionWorkflow, supportsPromptExperiment, videoProfileSchema, type AssetRecord, type ProductionSettings, type ProjectDocument, type RunSummary, type WorkflowDefinition, type WorkflowNode } from '@video-quickly/contracts';
+import { applyWorkflowProposal, productionEditingStep, productionSettingsSchema, resolveProductionWorkflow, supportsProductionAgent, supportsPromptExperiment, videoProfileSchema, type AssetRecord, type ProductionSettings, type ProjectDocument, type RunSummary, type WorkflowDefinition, type WorkflowNode, type WorkflowStage } from '@video-quickly/contracts';
 import type { WorkspaceView, StepOutputSelection } from '../lib/types';
 import type { PlanningControls } from '../lib/planning-edits';
 import type { ProductionProjectSettings } from '../lib/stage-configuration-draft';
@@ -27,11 +27,11 @@ const steps = [{ id: 'planning', label: '创作要求' }, { id: 'materials', lab
 type ConfigurationStep = typeof steps[number]['id'];
 export interface ProductionConfiguration { nodes: WorkflowNode[]; production: ProductionSettings; project: ProductionProjectSettings; execution: WorkflowDefinition['execution']; }
 
-export default function ProductionSettingsDialog({ project, projectId, projectRevision, workflow, workspace, run, version, usedEntityKeys = [], initialStage = 'planning', initialNodeId, initialTab, flatRecords, pendingConfiguration, configurationError, onSave, onDiscardPending, onClose, onOpenOutput, onOpenCandidate, onOpenTool, onOpenAdvanced, onSectionChange, onImportReferenceAudio, planning }: {
+export default function ProductionSettingsDialog({ project, projectId, projectRevision, workflow, workspace, run, version, usedEntityKeys = [], initialStage = 'planning', initialNodeId, initialTab, flatRecords, recordStages, pendingConfiguration, configurationError, onSave, onDiscardPending, onClose, onOpenOutput, onOpenCandidate, onOpenTool, onOpenAdvanced, onSectionChange, onImportReferenceAudio, planning }: {
   project: Pick<ProjectDocument, 'brief' | 'style' | 'profile' | 'creativeContext'>; workflow: WorkflowDefinition; workspace: WorkspaceView; run?: RunSummary; version: number; usedEntityKeys?: string[];
   projectId?: string; projectRevision?: number; onOpenCandidate?(shotId: string): void;
   planning?: PlanningControls;
-  initialStage?: string; initialNodeId?: string; initialTab?: 'settings' | 'run'; flatRecords?: boolean; pendingConfiguration?: boolean; configurationError?: string;
+  initialStage?: string; initialNodeId?: string; initialTab?: 'settings' | 'run'; flatRecords?: boolean; recordStages?: WorkflowStage[]; pendingConfiguration?: boolean; configurationError?: string;
   onSave: (value: ProductionConfiguration) => Promise<boolean>;
   onDiscardPending?: () => Promise<boolean>; onClose: () => void; onOpenOutput: (value: StepOutputSelection) => void;
   onOpenTool: (action: ProjectSettingsAction) => void; onSectionChange?: (section: string) => void;
@@ -85,11 +85,12 @@ export default function ProductionSettingsDialog({ project, projectId, projectRe
   const active = Boolean(run && ['queued', 'running', 'waiting_review', 'waiting_external', 'retry_scheduled'].includes(run.status));
   const resolved = resolveProductionWorkflow({ ...workflow, nodes, production: settings, execution });
   const assistantNode = resolved.nodes.find(node => node.id === assistantNodeId);
-  const stages = resolved.stages ?? resolved.nodes.map(node => ({ id: node.id, label: node.label, description: node.description, nodeIds: [node.id] }));
+  const stages = recordStages ?? resolved.stages ?? resolved.nodes.map(node => ({ id: node.id, label: node.label, description: node.description, nodeIds: [node.id] }));
   const selectedStage = stages.find(item => item.id === runStage) ?? stages[0];
   const stepIndex = steps.findIndex(item => item.id === step);
   const modelName = (modelId?: string) => workspace.models.find(model => model.id === modelId)?.name ?? '未选择';
   const textModel = workspace.models.find(model => model.id === settings.textModelId);
+  const hasEditingStep = Boolean(productionEditingStep(resolved));
   const toolNames = { series: '系列模板', saveSeries: '保存系列模板', music: '背景音乐', caption: '字幕样式', workflow: '高级编排' };
 
   function updateSettings(patch: Partial<ProductionSettings>) { setSettings(value => ({ ...value, ...patch })); setError(''); }
@@ -150,10 +151,13 @@ export default function ProductionSettingsDialog({ project, projectId, projectRe
           <Field key={`${node.id}-prompt`} className="production-settings__task-prompt" label={`${node.label}补充要求`}><textarea value={node.prompt} rows={3} onChange={event => updateNode(node, { prompt: event.target.value })} /></Field>
         </div>
         <div className="production-settings__task-actions">
-          {projectId && projectRevision && supportsPromptExperiment(node) && <Button onClick={() => setPromptNode(node)}>预览与实验提示词</Button>}
-          {projectId && projectRevision && <Button onClick={() => setAssistantNodeId(node.id)}>对话修改任务</Button>}
-          <Button aria-expanded={alternativesId === node.id} onClick={() => setAlternativesId(current => current === node.id ? undefined : node.id)}>查看替代模型</Button>
-          <details key={`${node.id}-skills`} className="production-settings__task-skills"><summary>{node.label} Skill · 已选 {node.skillIds.length} 个</summary><SkillPicker skills={workspace.skills} groups={workspace.skillGroups} value={node.skillIds} onChange={skillIds => updateNode(node, { skillIds })} label={`${node.label} Skill`} /></details>
+          {projectId && projectRevision && supportsPromptExperiment(node) && <Button variant="ghost" onClick={() => setPromptNode(node)}>预览与实验提示词</Button>}
+          {projectId && projectRevision && <Button variant="ghost" onClick={() => setAssistantNodeId(node.id)}>对话修改任务</Button>}
+          <Button variant="ghost" aria-expanded={alternativesId === node.id} onClick={() => setAlternativesId(current => current === node.id ? undefined : node.id)}>查看替代模型</Button>
+          <details key={`${node.id}-skills`} className="production-settings__task-skills">
+            <summary>{node.label} Skill<span> · 已选 {node.skillIds.length} 个</span></summary>
+            <SkillPicker label={`${node.label} Skill`} showLegend={false} skills={workspace.skills} groups={workspace.skillGroups} value={node.skillIds} onChange={skillIds => updateNode(node, { skillIds })} />
+          </details>
         </div>
         {alternativesId === node.id && <Suspense fallback={<p role="status">正在读取模型建议…</p>}><ModelAlternatives key={node.id} node={node} models={workspace.models} runId={run?.id} version={version} failure={run ? { error: run.error, runStatus: run.status, queueOwned: Boolean(run.productionQueueId), trial: run.purpose === 'prompt-trial' } : undefined} onSelect={modelId => updateNode(node, { modelId, config: { ...node.config, modelBinding: 'default', modelOverride: true } })} /></Suspense>}
         {node.kind === 'agent' && <><p className="field__hint">Skill 可多选；留空由 Agent 按任务自动选择，选定后仅使用所选 Skill。</p><ToolBindings node={node} onChange={value => updateNode(node, { config: value.config })} /></>}
@@ -204,15 +208,10 @@ export default function ProductionSettingsDialog({ project, projectId, projectRe
             {advanced({ id: 'planning', label: '创作要求', nodeIds: resolved.nodes.filter(node => stepGuidance(node).capability === 'text').map(node => node.id) })}
           </section>
           <section data-production-step="materials" hidden={step !== 'materials'} aria-label="模型与素材" tabIndex={-1}>
-            <div className="production-settings__models production-settings__models--mode">
-              <Field label="制作方式"><Select value={settings.executionMode} aria-describedby={settings.executionMode === 'agent' ? `${id}-agent-help` : undefined} onChange={event => updateSettings({ executionMode: event.target.value === 'agent' ? 'agent' : 'workflow' })}><option value="workflow">按流程制作</option><option value="agent">Video Agent 自主制作</option></Select></Field>
+            <div className="production-settings__models">
               {modelField('文本模型', settings.textModelId, workspace.models.filter(model => model.enabled && model.capabilities.includes('text')), value => updateSettings({ textModelId: value }))}
               {modelField('视频模型', settings.videoModelId, workspace.models.filter(model => model.enabled && model.capabilities.includes('video')), value => updateSettings({ videoModelId: value }))}
             </div>
-            {settings.executionMode === 'agent' && <><p id={`${id}-agent-help`} className="production-settings__agent-help">Agent 按任务选择能力，生成素材并完成导出。文本模型需支持工具调用，Skill 脚本需单独启用。</p>
-              <details className="production-settings__advanced production-settings__agent-capabilities"><summary>Agent 任务能力 · {settings.agentSkillIds.length ? `${settings.agentSkillIds.length} 个 Skill` : 'Skill 自动选择'} · {settings.agentMcpServerIds.length ? `${settings.agentMcpServerIds.length} 个工具连接` : '工具自动选择'}</summary><p className="production-settings__agent-help">Skill 与工具连接分别设置，均可多选。某类留空时由 Agent 自动发现并选择合适能力；选定后仅使用该类已勾选且启用的能力。</p><SkillPicker label="Agent 任务使用的 Skill" skills={workspace.skills} groups={workspace.skillGroups} value={settings.agentSkillIds} onChange={agentSkillIds => updateSettings({ agentSkillIds })} /><ToolConnectionPicker label="Agent 任务使用的工具连接" value={settings.agentMcpServerIds} onChange={agentMcpServerIds => updateSettings({ agentMcpServerIds })} /></details>
-            </>}
-            {settings.executionMode === 'agent' && textModel && (!textModel.capabilities.includes('tools') || textModel.provider === 'ollama') && <Notice>{textModel.provider === 'ollama' ? '本地模型的 Agent 制作需通过支持工具调用的 OpenAI 兼容服务接入，请更换文本模型连接。' : '当前文本模型未开启工具调用能力，请选择支持工具调用的模型后开始 Agent 制作。'}</Notice>}
             <div className="production-settings__models">
               <Field label="参考素材"><Select value={settings.referenceMode} onChange={event => updateSettings({ referenceMode: event.target.value as ProductionSettings['referenceMode'] })}><option value="none">直接文生视频</option><option value="existing">使用已有参考图</option><option value="generate">先生成参考图</option></Select></Field>
               {settings.referenceMode === 'generate' && modelField('图片模型', settings.imageModelId, workspace.models.filter(model => model.enabled && model.capabilities.includes('image')), value => updateSettings({ imageModelId: value }))}
@@ -220,30 +219,36 @@ export default function ProductionSettingsDialog({ project, projectId, projectRe
             <ReferenceAudioPicker assets={workspace.assets} value={settings.referenceAudioAssetIds ?? []} onChange={referenceAudioAssetIds => updateSettings({ referenceAudioAssetIds })} onImport={importReferenceAudio} disabled={Boolean(pending)} />
             <GenerationConcurrencySettings workflow={resolved} models={workspace.models} onChange={setExecution} />
             {advanced({ id: 'materials', label: '模型与素材', nodeIds: resolved.nodes.filter(node => stepGuidance(node).capability && stepGuidance(node).capability !== 'text').map(node => node.id) })}
-            <details className="production-settings__advanced"><summary>高级编排</summary><Button onClick={openAdvanced}>打开高级编排</Button></details>
+            <div className="production-settings__advanced-options">
+              {hasEditingStep && <details className="production-settings__agent-capabilities">
+                <summary>Agent 协作能力 · {settings.agentSkillIds.length ? `${settings.agentSkillIds.length} 个 Skill` : 'Skill 自动选择'} · {settings.agentMcpServerIds.length ? `${settings.agentMcpServerIds.length} 个工具连接` : '工具自动选择'}</summary>
+                <p className="production-settings__agent-help">{textModel && !supportsProductionAgent(textModel) ? '当前文本模型使用常规剪辑步骤。支持工具调用的文本模型可在剪辑阶段使用 Agent。' : 'Agent 可在剪辑阶段按需补充素材、调整镜头。Skill 脚本需单独启用。'}</p>
+                <SkillPicker label="Agent 协作使用的 Skill" skills={workspace.skills} groups={workspace.skillGroups} value={settings.agentSkillIds} onChange={agentSkillIds => updateSettings({ agentSkillIds })} />
+                <ToolConnectionPicker label="Agent 协作使用的工具连接" value={settings.agentMcpServerIds} onChange={agentMcpServerIds => updateSettings({ agentMcpServerIds })} />
+              </details>}
+              <Button static variant="ghost" className="button-full production-settings__advanced-link" aria-label="打开高级编排" onClick={openAdvanced}>高级编排<ChevronRight size={16} strokeWidth={1.5} aria-hidden="true" /></Button>
+            </div>
           </section>
           <section data-production-step="delivery" hidden={step !== 'delivery'} aria-label="声音与成片" tabIndex={-1}>
             <Field label="声音要求"><textarea value={settings.soundPrompt} onChange={event => updateSettings({ soundPrompt: event.target.value })} rows={3} placeholder="语言、说话方式、环境音与音乐…" /></Field>
             <div className="production-settings__delivery-options">
               <Field label="字幕"><Select value={settings.subtitleMode} onChange={event => updateSettings({ subtitleMode: event.target.value === 'script' ? 'script' : 'off' })}><option value="off">关闭</option><option value="script">显示分镜文本（预估时间）</option></Select></Field>
-              <VideoSettings mode="production" profile={fields.profile} onChange={profile => setFields(current => ({ ...current, profile }))} />
+              <VideoSettings mode="delivery" profile={fields.profile} onChange={profile => setFields(current => ({ ...current, profile }))} />
             </div>
             <ProjectSettingsActions items={['music', 'caption']} onAction={requestTool} />
           </section>
           {step === 'review' && <section data-production-step="review" aria-label="确认保存" className="production-settings__review" tabIndex={-1}>
             {requestedTool && <Notice>保存设置后将打开{toolNames[requestedTool]}。<Button static onClick={() => setRequestedTool(undefined)}>仅保存设置</Button></Notice>}
-            {settings.executionMode === 'agent' && <Notice>Agent 任务使用的 Skill：{settings.agentSkillIds.length ? settings.agentSkillIds.map(id => workspace.skills.find(skill => skill.id === id)?.name ?? '不可用的 Skill').join('、') : '自动选择'}；工具连接：{settings.agentMcpServerIds.length ? `已选择 ${settings.agentMcpServerIds.length} 个` : '自动选择'}。</Notice>}
             <section><header><h3>创作要求</h3><Button static variant="ghost" aria-label="修改创作要求" onClick={() => selectStep('planning', true)}>修改</Button></header><dl><div><dt>创作要求</dt><dd>{fields.brief.trim() || '尚未填写'}</dd></div><div><dt>视觉风格</dt><dd>{fields.style.trim() || '沿用默认风格'}</dd></div><div><dt>项目角色池</dt><dd>{fields.creativeContext?.characterIds.length ? `已选择 ${fields.creativeContext.characterIds.length} 个角色` : '未选择'}</dd></div>{fields.creativeContext?.continuity && <div><dt>连续性要求</dt><dd>{fields.creativeContext.continuity}</dd></div>}{Boolean(fields.creativeContext?.entities.length) && <div><dt>文字设定</dt><dd>{fields.creativeContext?.entities.map(entity => entity.name).join('、')}</dd></div>}</dl></section>
-            <section><header><h3>模型与素材</h3><Button static variant="ghost" aria-label="修改模型与素材" onClick={() => selectStep('materials', true)}>修改</Button></header><dl><div><dt>制作方式</dt><dd>{settings.executionMode === 'agent' ? 'Video Agent 自主制作' : '按流程制作'}</dd></div><div><dt>文本模型</dt><dd>{modelName(settings.textModelId)}</dd></div><div><dt>视频模型</dt><dd>{modelName(settings.videoModelId)}</dd></div><div><dt>参考素材</dt><dd>{{ none: '直接文生视频', existing: '使用已有参考图', generate: '先生成参考图' }[settings.referenceMode]}</dd></div>{settings.referenceMode === 'generate' && <div><dt>图片模型</dt><dd>{modelName(settings.imageModelId)}</dd></div>}<div><dt>参考音频</dt><dd>{settings.referenceAudioAssetIds?.length ? `已选择 ${settings.referenceAudioAssetIds.length} 段` : '未添加'}</dd></div><div><dt>镜头同时处理数</dt><dd>{execution?.maxConcurrentShots ?? 1}</dd></div><div><dt>模型并发上限</dt><dd>{Object.entries(execution?.modelLimits ?? {}).map(([modelId, limit]) => `${modelName(modelId)}：${limit}`).join('；') || '跟随镜头并发'}</dd></div></dl></section>
+            <section><header><h3>模型与素材</h3><Button static variant="ghost" aria-label="修改模型与素材" onClick={() => selectStep('materials', true)}>修改</Button></header><dl><div><dt>文本模型</dt><dd>{modelName(settings.textModelId)}</dd></div><div><dt>视频模型</dt><dd>{modelName(settings.videoModelId)}</dd></div><div><dt>参考素材</dt><dd>{{ none: '直接文生视频', existing: '使用已有参考图', generate: '先生成参考图' }[settings.referenceMode]}</dd></div>{settings.referenceMode === 'generate' && <div><dt>图片模型</dt><dd>{modelName(settings.imageModelId)}</dd></div>}<div><dt>参考音频</dt><dd>{settings.referenceAudioAssetIds?.length ? `已选择 ${settings.referenceAudioAssetIds.length} 段` : '未添加'}</dd></div><div><dt>镜头同时处理数</dt><dd>{execution?.maxConcurrentShots ?? 1}</dd></div><div><dt>模型并发上限</dt><dd>{Object.entries(execution?.modelLimits ?? {}).map(([modelId, limit]) => `${modelName(modelId)}：${limit}`).join('；') || '跟随镜头并发'}</dd></div>{hasEditingStep && (settings.agentSkillIds.length > 0 || settings.agentMcpServerIds.length > 0) && <div><dt>Agent 协作能力</dt><dd>{settings.agentSkillIds.length ? `${settings.agentSkillIds.length} 个 Skill` : 'Skill 自动选择'} · {settings.agentMcpServerIds.length ? `${settings.agentMcpServerIds.length} 个工具连接` : '工具自动选择'}</dd></div>}</dl></section>
             <section><header><h3>声音与成片</h3><Button static variant="ghost" aria-label="修改声音与成片" onClick={() => selectStep('delivery', true)}>修改</Button></header><dl><div><dt>声音要求</dt><dd>{settings.soundPrompt.trim() || '跟随分镜内容'}</dd></div><div><dt>成片规格</dt><dd>{fields.profile.width} × {fields.profile.height} · {Number((fields.profile.frameRate.numerator / fields.profile.frameRate.denominator).toFixed(2))} fps</dd></div><div><dt>字幕</dt><dd>{settings.subtitleMode === 'off' ? '关闭' : '显示分镜文本（预估时间）'}</dd></div></dl></section>
           </section>}
         </div></fieldset>
       </form>}
     </div>
     <div className={`dialog__footer${records ? '' : ' production-settings__footer'}`}>{records ? <div ref={setRunActionsTarget} className="production-settings__record-actions" /> : <>
-      <Button onClick={close}>取消</Button>
-      <p className="production-settings__position" role="status">第 {stepIndex + 1} 步，共 {steps.length} 步</p>
-      <div className="production-settings__navigation">{stepIndex > 0 && <Button disabled={Boolean(pending)} onClick={() => selectStep(steps[stepIndex - 1].id, true)}><ChevronLeft size={14} aria-hidden="true" />上一步</Button>}{step === 'review' ? <Button variant="primary" busy={pending === 'save'} disabled={Boolean(pending || configurationError)} onClick={() => void submit()}>{requestedTool ? '保存并打开' : active ? '保存待用配置' : '保存设置'}</Button> : <Button variant="primary" disabled={Boolean(pending || configurationError)} onClick={next}>下一步<ChevronRight size={14} aria-hidden="true" /></Button>}</div>
+      {stepIndex > 0 && <Button variant="ghost" disabled={Boolean(pending)} onClick={() => selectStep(steps[stepIndex - 1].id, true)}><ChevronLeft size={14} aria-hidden="true" />上一步</Button>}
+      {step === 'review' ? <Button variant="primary" busy={pending === 'save'} disabled={Boolean(pending || configurationError)} onClick={() => void submit()}>{requestedTool ? '保存并打开' : active ? '保存待用配置' : '保存设置'}</Button> : <Button variant="primary" disabled={Boolean(pending || configurationError)} onClick={next}>下一步<ChevronRight size={14} aria-hidden="true" /></Button>}
     </>}</div>
     {records && <ToastNotice toast={notice} onDismiss={() => setNotice(undefined)} />}
     {promptNode && projectId && projectRevision && <Suspense fallback={<p role="status">正在打开提示词实验…</p>}><PromptWorkbench projectId={projectId} projectRevision={projectRevision} node={promptNode} context={{ ...fields, production: settings }} models={workspace.models} skills={workspace.skills} groups={workspace.skillGroups} version={version} onClose={() => setPromptNode(undefined)} onApplyPrompt={value => { updateNode(promptNode, { prompt: value.prompt, promptBindings: value.promptBindings, promptTemplate: value.promptTemplate }); }} onOpenOutput={onOpenOutput} onOpenCandidate={onOpenCandidate} /></Suspense>}

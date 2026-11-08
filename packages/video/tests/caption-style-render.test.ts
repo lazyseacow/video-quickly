@@ -49,9 +49,9 @@ it.skipIf(!mediaAvailable)('burns inherited and per-shot font/color/opacity/posi
     const timeline = JSON.parse(await readFile(result.timelinePath, 'utf8')); expect(timeline.captionLayouts[0].layout.style.fontId).toBe('sans'); expect(timeline.captionLayouts[1].layout.style.fontId).toBe('serif'); expect(timeline.captionLayouts[0].fontName).not.toBe(timeline.captionLayouts[1].fontName);
     const measure = createCanvas(width, height).getContext('2d');
     const resolved = project.shots.map(shot => ({ ...shot, captionStyle: effectiveCaptionStyle(project, shot) }));
-    expect(await readFile(result.subtitlePath, 'utf8')).toBe(createTimedSrt(resolved, (text, shot) => { const layout = resolveCaptionLayout(width, height, shot.captionStyle, { template: Boolean(shot.sceneTemplate) }); measure.font = layout.font; return captionPages(text, line => measure.measureText(line).width, layout.textWidth, layout.maxLines); }));
+    expect(await readFile(result.subtitlePath, 'utf8')).toBe(createTimedSrt(resolved, (text, shot) => { const layout = resolveCaptionLayout(width, height, shot.captionStyle); measure.font = layout.font; return captionPages(text, line => measure.measureText(line).width, layout.textWidth, layout.maxLines); }));
     for (const [index, frame, test] of [[0, 15, 'green'], [1, 75, 'yellow']] as const) {
-      const shot = resolved[index], layout = resolveCaptionLayout(width, height, shot.captionStyle, { template: Boolean(shot.sceneTemplate) });
+      const shot = resolved[index], layout = resolveCaptionLayout(width, height, shot.captionStyle);
       const encoded = await framePixels(result.videoPath, frame, `${width}-${test}`), preview = createCanvas(width, height), image = createCanvas(640, 360);
       image.getContext('2d').fillStyle = '#0000FF'; image.getContext('2d').fillRect(0, 0, 640, 360);
       const localTime = timeAtFrame(frame - index * 60, rate);
@@ -92,7 +92,7 @@ it.skipIf(!mediaAvailable)('burns inherited and per-shot font/color/opacity/posi
       const legacy = shotSchema.parse({ id: 'legacy', title: ' ', narration: 'Legacy caption', visualPrompt: '', durationUs: 1_000_000, sourceInUs: 0, videoAssetId: 'video', audioAssetId: 'voice', animation: { transition: 'cut' } });
       const mixed = await renderProject({ project: { ...project, captionStyle: undefined, shots: [{ ...left, captionStyle: inherited }, right, legacy] }, assets, outputDirectory, ffmpegPath: ffmpeg, ffprobePath: ffprobe });
       const legacyPixels = await framePixels(mixed.videoPath, 135, 'mixed-legacy');
-      const layout = resolveCaptionLayout(width, height, undefined, {}), box = captionBox(layout, 1);
+      const layout = resolveCaptionLayout(width, height), box = captionBox(layout, 1);
       const preview = createCanvas(width, height), image = createCanvas(width, height);
       image.getContext('2d').fillStyle = '#0000FF'; image.getContext('2d').fillRect(0, 0, width, height);
       drawSceneFrame(preview as unknown as HTMLCanvasElement, { ...legacy, profile, shotIndex: 2, image: image as unknown as CanvasImageSource }, 500_000);

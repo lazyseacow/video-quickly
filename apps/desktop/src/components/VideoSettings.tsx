@@ -1,5 +1,5 @@
-import { useState } from 'react';
-import { ASPECT_RATIO_PRESETS, FRAME_RATE_PRESETS, formatFrameRate, videoProfileSchema, type VideoProfile } from '@video-quickly/contracts';
+import { useEffect, useRef, useState } from 'react';
+import { ASPECT_RATIO_PRESETS, DEFAULT_VIDEO_PROFILE, FRAME_RATE_PRESETS, formatFrameRate, videoProfileSchema, type VideoProfile } from '@video-quickly/contracts';
 import { ArrowLeftRight, LockKeyhole, Maximize2, UnlockKeyhole } from 'lucide-react';
 import { Field, IconButton, Select } from './Primitives';
 
@@ -7,9 +7,9 @@ const even = (value: number) => Math.max(64, Math.round(value / 2) * 2);
 const frameRateOptions = FRAME_RATE_PRESETS.filter(rate => rate.label === '30' || rate.label === '60');
 const creationAspectRatios = ASPECT_RATIO_PRESETS.filter(item => item.label !== '4:5' && item.label !== '21:9');
 
-export default function VideoSettings({ profile, onChange, compact = false, mode = 'edit' }: { profile: VideoProfile; onChange: (profile: VideoProfile) => void; compact?: boolean; mode?: 'edit' | 'creation' | 'production' }) {
+export default function VideoSettings({ profile, onChange, compact = false, mode = 'edit' }: { profile: VideoProfile; onChange: (profile: VideoProfile) => void; compact?: boolean; mode?: 'edit' | 'creation' | 'delivery' }) {
   const creating = mode === 'creation';
-  const production = mode === 'production';
+  const delivery = mode === 'delivery';
   const aspectRatios = creating ? creationAspectRatios : ASPECT_RATIO_PRESETS;
   const [locked, setLocked] = useState(true);
   const ratio = profile.width / profile.height;
@@ -18,15 +18,22 @@ export default function VideoSettings({ profile, onChange, compact = false, mode
   const resolutionPreset = [720, 1080, 1440, 2160].includes(shortSide) ? shortSide.toString() : 'custom';
   const fpsPreset = frameRateOptions.find(item => item.numerator === profile.frameRate.numerator && item.denominator === profile.frameRate.denominator);
   const validation = videoProfileSchema.safeParse(profile);
+  const lastValidProfile = useRef(DEFAULT_VIDEO_PROFILE);
+  useEffect(() => { if (validation.success) lastValidProfile.current = profile; }, [profile, validation.success]);
+  const resizeProfile = validation.success ? profile : lastValidProfile.current;
+  const resizeRatio = resizeProfile.width / resizeProfile.height;
+  const issue = validation.success ? undefined : validation.error.issues[0];
+  const dimension = issue?.path[0];
+  const error = dimension === 'width' ? '宽度须为 64 至 7680 之间的偶数。' : dimension === 'height' ? '高度须为 64 至 7680 之间的偶数。' : issue?.message;
   function setDimension(key: 'width' | 'height', value: number) {
     const updated = { ...profile, [key]: value };
     if (locked && value > 0) {
-      if (key === 'width') updated.height = even(value / ratio);
-      else updated.width = even(value * ratio);
+      if (key === 'width') updated.height = even(value / resizeRatio);
+      else updated.width = even(value * resizeRatio);
     }
     onChange(updated);
   }
-  function setResolution(value: number, selectedRatio = ratio) {
+  function setResolution(value: number, selectedRatio = resizeRatio) {
     onChange({ ...profile, width: even(selectedRatio >= 1 ? value * selectedRatio : value), height: even(selectedRatio >= 1 ? value : value / selectedRatio) });
   }
   const detailFields = <>
@@ -41,12 +48,12 @@ export default function VideoSettings({ profile, onChange, compact = false, mode
   </>;
   return <div className={compact ? 'video-settings video-settings--compact' : 'video-settings'}>
     <div className="field-row">
-      <Field label="画面比例"><Select aria-label="画面比例" value={ratioPreset} onChange={event => { const selected = aspectRatios.find(item => item.label === event.target.value); if (selected) setResolution(shortSide, selected.width / selected.height); }}>{!creating && (!production || ratioPreset === 'custom') && <option value="custom" disabled={production}>{production ? '自定义比例 · 当前' : '自定义'}</option>}{aspectRatios.map(item => <option key={item.label} value={item.label}>{item.label}{item.label === '9:16' ? ' · 竖屏' : item.label === '16:9' ? ' · 横屏' : ''}</option>)}</Select></Field>
-      <Field label="分辨率"><Select aria-label="分辨率" value={resolutionPreset} onChange={event => { if (event.target.value !== 'custom') setResolution(Number(event.target.value)); }}>{!creating && (!production || resolutionPreset === 'custom') && <option key={production ? `${profile.width}x${profile.height}` : 'custom'} value="custom" disabled={production}>{production ? `${profile.width} × ${profile.height} · 当前` : '自定义'}</option>}<option value="720">720p</option><option value="1080">1080p</option><option value="1440">1440p</option><option value="2160">2160p · 4K</option></Select></Field>
+      <Field label="画面比例"><Select aria-label="画面比例" value={ratioPreset} onChange={event => { const selected = aspectRatios.find(item => item.label === event.target.value); if (selected) setResolution(Math.min(resizeProfile.width, resizeProfile.height), selected.width / selected.height); }}>{!creating && (!delivery || ratioPreset === 'custom') && <option value="custom" disabled={delivery}>{delivery ? '自定义比例 · 当前' : '自定义'}</option>}{aspectRatios.map(item => <option key={item.label} value={item.label}>{item.label}{item.label === '9:16' ? ' · 竖屏' : item.label === '16:9' ? ' · 横屏' : ''}</option>)}</Select></Field>
+      <Field label="分辨率"><Select aria-label="分辨率" value={resolutionPreset} onChange={event => { if (event.target.value !== 'custom') setResolution(Number(event.target.value)); }}>{!creating && (!delivery || resolutionPreset === 'custom') && <option key={delivery ? `${profile.width}x${profile.height}` : 'custom'} value="custom" disabled={delivery}>{delivery ? `${profile.width} × ${profile.height} · 当前` : '自定义'}</option>}<option value="720">720p</option><option value="1080">1080p</option><option value="1440">1440p</option><option value="2160">2160p · 4K</option></Select></Field>
     </div>
-    {production ? <details className="video-settings__advanced" onInvalidCapture={event => { event.currentTarget.open = true; }}><summary><span>更多成片设置</span><small>{formatFrameRate(profile.frameRate)} fps · {profile.fitMode === 'cover' ? '裁剪填满' : profile.fitMode === 'blur' ? '模糊背景' : '完整显示'}</small></summary>{detailFields}</details> : detailFields}
-    {!compact && !production && <Field label="预览质量"><Select aria-label="预览质量" value={profile.previewScale} onChange={event => onChange({ ...profile, previewScale: Number(event.target.value) })}><option value="0.25">1/4 · 流畅</option><option value="0.5">1/2 · 平衡</option><option value="1">原始分辨率</option></Select></Field>}
-    {!validation.success && <p role="alert" className="field-error">{validation.error.issues[0]?.message}</p>}
-    {!creating && !production && <div className="spec-summary"><Maximize2 size={17} /><div><strong>{profile.width} × {profile.height}</strong><small>{formatFrameRate(profile.frameRate)} fps · {ratioPreset === 'custom' ? '自定义比例' : ratioPreset}</small></div></div>}
+    {delivery ? <details className="video-settings__advanced" onInvalidCapture={event => { event.currentTarget.open = true; }}><summary><span>更多成片设置</span><small>{formatFrameRate(profile.frameRate)} fps · {profile.fitMode === 'cover' ? '裁剪填满' : profile.fitMode === 'blur' ? '模糊背景' : '完整显示'}</small></summary><div className="video-settings__detail-fields">{detailFields}</div></details> : detailFields}
+    {!compact && !delivery && <Field label="预览质量"><Select aria-label="预览质量" value={profile.previewScale} onChange={event => onChange({ ...profile, previewScale: Number(event.target.value) })}><option value="0.25">1/4 · 流畅</option><option value="0.5">1/2 · 平衡</option><option value="1">原始分辨率</option></Select></Field>}
+    {error && <p role="alert" className="field-error">{error}</p>}
+    {!creating && !delivery && <div className="spec-summary"><Maximize2 size={17} /><div><strong>{profile.width} × {profile.height}</strong><small>{formatFrameRate(profile.frameRate)} fps · {ratioPreset === 'custom' ? '自定义比例' : ratioPreset}</small></div></div>}
   </div>;
 }

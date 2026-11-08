@@ -3,8 +3,8 @@ import { readFile, stat } from 'node:fs/promises';
 import { characterProfileSchema, characterReferencePrompt, creativeReferenceAssetIds, type AssetRecord, type CharacterProfile, type CreativeContext, type Shot } from '@video-quickly/contracts';
 
 export const MAX_CHARACTER_REFERENCE_BYTES = 20 * 1024 * 1024;
-export const MAX_CHARACTER_REFERENCE_TOTAL_BYTES = 64 * 1024 * 1024;
-export interface CharacterReferenceImage { assetId: string; mimeType: string; dataUrl: string }
+const MAX_CHARACTER_REFERENCE_TOTAL_BYTES = 64 * 1024 * 1024;
+interface CharacterReferenceImage { assetId: string; mimeType: string; dataUrl: string }
 export interface ResolvedCharacterReferences { characters: CharacterProfile[]; prompt: string; images: CharacterReferenceImage[] }
 export interface CharacterReferenceInput { shot: Pick<Shot, 'characterIds' | 'creativeEntityKeys'>; project?: { creativeContext?: CreativeContext | null }; characters?: CharacterProfile[]; assets: AssetRecord[] }
 

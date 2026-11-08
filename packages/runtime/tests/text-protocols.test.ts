@@ -181,10 +181,10 @@ for (const { protocol, reportUsage } of [{ protocol: 'responses', reportUsage: t
       return { id: `msg-${calls.length}`, type: 'message', role: 'assistant', model: 'fixture', content: first ? [{ type: 'tool_use', id: 'call-project', name: 'read_project_snapshot', input: {} }] : [{ type: 'text', text: '已读取固定项目快照。' }], stop_reason: first ? 'tool_use' : 'end_turn', stop_sequence: null, usage: anthropicUsage };
     });
     const directory = await mkdtemp(join(tmpdir(), 'vq-text-protocol-')); directories.push(directory);
-    const runtime = createRuntime({ dataDirectory: directory }); runtimes.push(runtime);
+    const runtime = createRuntime({ dataDirectory: directory, seed: true }); runtimes.push(runtime);
     const initial = await runtime.dispatch('workspace.snapshot') as WorkspaceSnapshot;
     const selected = await runtime.dispatch('model.save', { model: { name: `Agent ${protocol}`, connectionType: 'text', provider: 'openai-compatible', textProtocol: protocol, baseUrl, model: 'fixture', capabilities: ['text'] } }) as ModelProfile;
-    await runtime.dispatch('workflow.save', { projectId: initial.projects[0].id, workflow: { id: 'native-api', version: 1, name: 'native API', production: { mode: 'native-video', referenceMode: 'none', soundPrompt: '', subtitleMode: 'off' }, nodes: [workflowNodeSchema.parse({ id: 'agent', kind: 'agent', label: 'Agent', modelId: selected.id })], edges: [] } });
+    await runtime.dispatch('project.update', { projectId: initial.projects[0].id, patch: { workflow: { id: 'native-api', version: 1, name: 'native API', production: { mode: 'native-video', referenceMode: 'none', soundPrompt: '', subtitleMode: 'off' }, nodes: [workflowNodeSchema.parse({ id: 'agent', kind: 'agent', label: 'Agent', modelId: selected.id })], edges: [] } } });
     const run = await runtime.dispatch('run.start', { projectId: initial.projects[0].id }) as RunRecord; await runtime.waitForIdle();
     const after = await runtime.dispatch('workspace.snapshot') as WorkspaceSnapshot;
     expect(after.runs[0].error).toBeUndefined(); expect(after.runs[0].status).toBe('succeeded'); expect(calls).toHaveLength(2);

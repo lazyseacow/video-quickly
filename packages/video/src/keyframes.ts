@@ -9,6 +9,7 @@ export function motionLocalTimeUs(shot: ClipTimingShot, context: ClipEditContext
     if (sceneUs >= span.sceneInUs && sceneUs < span.sceneInUs + span.durationUs) return span.outputStartUs + sceneUs - span.sceneInUs;
     if (span === spans.at(-1) && sceneUs === span.sceneInUs + span.durationUs) return shot.durationUs;
   }
+  return undefined;
 }
 
 function ease(frame: MotionKeyframe, progress: number): number {

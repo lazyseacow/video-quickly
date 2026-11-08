@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import type Database from 'better-sqlite3';
 import { z } from 'zod';
-import { createNativeVideoWorkflow, episodeSchema, pageInputSchema, projectSchema, validateCreativeReferences, workDefaultsSchema, workSchema, type ProjectDocument, type StoryWork } from '@video-quickly/contracts';
+import { createNativeVideoWorkflow, episodeSchema, pageInputSchema, projectSchema, validateCreativeReferences, workSchema, type ProjectDocument, type StoryWork } from '@video-quickly/contracts';
 import { fingerprint } from './activities.js';
 import { DocumentStore } from './database.js';
 
@@ -101,7 +101,7 @@ export function createWorkLibrary({ database, store, project, saveProject, valid
             const value = editableProject(reference);
             if (value.episode?.workId !== work.id || value.archived) throw new Error('请选择作品中可编辑的分集。');
             const next = { ...value, ...Object.fromEntries(input.fields.filter(field => field !== 'production').map(field => [field, work.defaults[field]])), episode: { ...value.episode, defaultsRevision: work.revision },
-              ...(input.fields.includes('production') ? { workflow: { ...value.workflow, version: value.workflow.version + 1, production: { ...value.workflow.production, ...work.defaults.production } } } : {}) };
+              ...(input.fields.includes('production') ? { workflow: { ...value.workflow, production: { ...value.workflow.production, ...work.defaults.production } } } : {}) };
             validateCreativeReferences(next); return next;
           });
           return values.map(value => saveProject(value));

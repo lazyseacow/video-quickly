@@ -1,10 +1,10 @@
 import { createHash } from 'node:crypto';
 import { lstat, open, realpath } from 'node:fs/promises';
-import { basename, extname, isAbsolute, join, relative, resolve } from 'node:path';
+import { basename, extname, isAbsolute, relative, resolve } from 'node:path';
 import { z } from 'zod';
 import {
   skillGroupSchema, skillImportJobSchema, skillImportSourceSchema,
-  type SkillGroup, type SkillImportJob, type SkillImportSource, type SkillPackage,
+  type SkillGroup, type SkillImportJob, type SkillImportSource, type SkillPackage, type WorkflowNode,
 } from '@video-quickly/contracts';
 import type { DocumentStore } from './database.js';
 import { importSkills } from './skills.js';
@@ -41,12 +41,12 @@ export function createSkillLibrary({ store, directory, changed, logger }: { stor
     saveJob({ ...job, status: 'interrupted', error: '上次导入已中断，可重试。' });
   }
 
-  async function importSource(source: SkillImportSource, name?: string, signal?: AbortSignal, onProgress?: (completed: number, total: number) => void) {
+  async function importSource(source: SkillImportSource, name: string | undefined, signal: AbortSignal, onProgress: (completed: number, total: number) => void) {
     const origin = sourceGroup(source);
     importing.set(origin.identity, (importing.get(origin.identity) ?? 0) + 1);
     try {
       const skills = await importSkills(source, directory, { signal, onProgress });
-      signal?.throwIfAborted();
+      signal.throwIfAborted();
       if (new Set(skills.map(skill => skill.name)).size !== skills.length) throw new Error('导入来源包含同名 Skill，请分别提供对应目录。');
       const id = `skill-group-${createHash('sha256').update(origin.identity).digest('hex').slice(0, 20)}`;
       return store.database.transaction(() => {
@@ -121,6 +121,19 @@ export function createSkillLibrary({ store, directory, changed, logger }: { stor
     if (new Set(skills.map(skill => skill.name)).size !== skills.length) throw new Error('选用了同名 Skill 的多个版本，请保留需要的版本。');
     return skills;
   }
+  function configuredSkills(ids: string[], allowUnavailable?: boolean) {
+    return allowUnavailable ? [...new Set(ids)].flatMap(id => {
+      const skill = store.get<SkillPackage>('skill', id);
+      return skill ? [skill] : [];
+    }) : resolveSkills(ids);
+  }
+  function automaticSkills() {
+    const latest = new Map<string, SkillPackage>();
+    for (const skill of store.list<SkillPackage>('skill')) {
+      if (skill.enabled && (latest.get(skill.name)?.importedAt ?? '') <= skill.importedAt) latest.set(skill.name, skill);
+    }
+    return [...latest.values()];
+  }
   async function readResource(skillId: string, path: string, limit?: number) {
     const skill = store.get<SkillPackage>('skill', skillId);
     if (!skill || !skill.resources.includes(path)) throw new Error('Skill 资源不存在。');
@@ -139,29 +152,33 @@ export function createSkillLibrary({ store, directory, changed, logger }: { stor
     } finally { await handle.close(); }
   }
 
+  async function expandSkills(selected: SkillPackage[]) {
+    let remaining = 64_000;
+    const result: SkillPackage[] = [];
+    for (const skill of selected) {
+      if (!skill.enabled) { result.push(skill); continue; }
+      const contents: Record<string, string> = {};
+      for (const path of skill.resources.filter(path => !path.startsWith('scripts/') && readableExtensions.has(extname(path).toLowerCase()) && skill.instructions.includes(path))) {
+        if (remaining <= 0) { contents[path] = '本资源未展开，可在 Skill 工作室查看。'; continue; }
+        const { content, truncated } = await readResource(skill.id, path, Math.min(remaining, 8_000) * 4);
+        const limit = Math.min(remaining, 8_000), excerpt = content.slice(0, limit);
+        contents[path] = excerpt + (truncated || excerpt.length < content.length ? '\n[本资源后续内容未展开，可在 Skill 工作室查看。]' : '');
+        remaining -= excerpt.length;
+      }
+      result.push(Object.keys(contents).length ? { ...skill, referenceContents: contents } : skill);
+    }
+    return result;
+  }
   return {
     groups, jobs, resolveSkills,
-    async prepare(ids: string[], options: { allowUnavailable?: boolean } = {}) {
-      let remaining = 64_000;
-      const result: SkillPackage[] = [];
-      const selected = options.allowUnavailable ? [...new Set(ids)].flatMap(id => { const skill = store.get<SkillPackage>('skill', id); return skill ? [skill] : []; }) : resolveSkills(ids);
-      for (const skill of selected) {
-        if (!skill.enabled) { result.push(skill); continue; }
-        const contents: Record<string, string> = {};
-        for (const path of skill.resources.filter(path => !path.startsWith('scripts/') && readableExtensions.has(extname(path).toLowerCase()) && skill.instructions.includes(path))) {
-          if (remaining <= 0) { contents[path] = '本资源未展开，可在 Skill 工作室查看。'; continue; }
-          const { content, truncated } = await readResource(skill.id, path, Math.min(remaining, 8_000) * 4);
-          const limit = Math.min(remaining, 8_000), excerpt = content.slice(0, limit);
-          contents[path] = excerpt + (truncated || excerpt.length < content.length ? '\n[本资源后续内容未展开，可在 Skill 工作室查看。]' : '');
-          remaining -= excerpt.length;
-        }
-        result.push(Object.keys(contents).length ? { ...skill, referenceContents: contents } : skill);
-      }
-      return result;
+    prepare(ids: string[], options: { allowUnavailable?: boolean } = {}) {
+      return expandSkills(configuredSkills(ids, options.allowUnavailable));
     },
-    async import(source: SkillImportSource) {
-      const result = await importSource(source); changed();
-      return result.skills.length === 1 ? result.skills[0] : result;
+    async prepareForNodes(nodes: WorkflowNode[], options: { allowUnavailable?: boolean } = {}) {
+      const automatic = nodes.some(node => node.kind === 'agent' && !node.skillIds.length) ? automaticSkills() : undefined;
+      const explicit = nodes.flatMap(node => configuredSkills(node.skillIds, options.allowUnavailable));
+      const selected = [...new Map([...explicit, ...(automatic ?? [])].map(skill => [skill.id, skill])).values()];
+      return { skills: await expandSkills(selected), ...(automatic ? { automaticSkillIds: automatic.map(skill => skill.id) } : {}) };
     },
     readResource,
     dispatch(method: string, params: unknown) {
@@ -179,7 +196,6 @@ export function createSkillLibrary({ store, directory, changed, logger }: { stor
         schedule(job); return job;
       }
       if (method === 'skill.import.get') return getJob(z.object({ id: z.string().uuid() }).parse(params).id);
-      if (method === 'skill.import.list') return jobs();
       if (method === 'skill.import.retry') {
         const job = getJob(z.object({ id: z.string().uuid() }).parse(params).id);
         if (active.has(job.id)) return job;

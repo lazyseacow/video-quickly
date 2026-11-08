@@ -62,7 +62,7 @@ for (const viewport of [{ width: 1536, height: 960, theme: 'dark' }, { width: 10
     await prop.getByLabel('设定名称', { exact: true }).fill('银色笔记本电脑');
     await prop.getByLabel('固定特征', { exact: true }).fill('银色外壳，屏幕朝向主角');
     await dialog.getByRole('button', { name: '下一步', exact: true }).click();
-    await expect(dialog.getByRole('combobox', { name: '制作方式', exact: true })).toBeFocused();
+    await expect(dialog.getByRole('combobox', { name: '文本模型', exact: true })).toBeFocused();
     await dialog.getByRole('button', { name: '上一步', exact: true }).click();
     await expect(dialog.getByLabel('创作要求', { exact: true })).toBeFocused();
     await expect(prop.getByLabel('固定特征', { exact: true })).toHaveValue('银色外壳，屏幕朝向主角');
@@ -88,7 +88,7 @@ for (const viewport of [{ width: 1536, height: 960, theme: 'dark' }, { width: 10
     await entities.locator(':scope > summary').click(); await scene.locator(':scope > details > summary').click();
     await scene.getByRole('button', { name: '移除场景设定 1', exact: true }).click();
     await expect(dialog.getByRole('button', { name: '添加人物设定', exact: true })).toBeFocused();
-    await dialog.getByRole('button', { name: '取消', exact: true }).click(); await expect(dialog).toHaveCount(0);
+    await dialog.getByRole('button', { name: '关闭对话框', exact: true }).click(); await expect(dialog).toHaveCount(0);
     expect((await source.saved()).creativeContext?.entities).toHaveLength(2);
     await expect(page.locator('vite-error-overlay')).toHaveCount(0); expect(errors).toEqual([]);
   });

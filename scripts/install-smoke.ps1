@@ -27,7 +27,6 @@ foreach ($taskDirectory in @($taskRoamingRoot, $taskLocalRoot)) {
   if (-not $taskInformation.PSIsContainer -or ($taskInformation.Attributes -band [IO.FileAttributes]::ReparsePoint)) { throw '验收数据根目录必须是普通目录' }
 }
 $taskEvidence = Join-Path $taskRoot 'vq-installed-fixture.json'
-$taskDesktop = $null
 function Invoke-Installer([string]$path, [string]$extra, [string]$version) {
   $taskSetup = Start-Process -FilePath $path -ArgumentList "/S $extra /D=$taskInstall" -WindowStyle Hidden -PassThru -Wait
   if ($taskSetup.ExitCode -ne 0) { throw "安装失败：$($taskSetup.ExitCode)" }
@@ -36,7 +35,7 @@ function Invoke-Installer([string]$path, [string]$extra, [string]$version) {
   if ([regex]::Match($installedVersion, '^\d+\.\d+\.\d+').Value -ne $version) { throw "安装后的真实产品版本不匹配：$installedVersion" }
 }
 function Invoke-InstalledRuntime([string]$mode) {
-  node scripts/installed-runtime-smoke.mjs $mode $taskInstall $taskData $taskEvidence
+  node --import tsx scripts/installed-runtime-smoke.mjs $mode $taskInstall $taskData $taskEvidence
   if ($LASTEXITCODE -ne 0) { throw "安装后运行时验收失败：$mode" }
 }
 function Test-NativeLaunch {
@@ -140,7 +139,6 @@ try {
   $taskReportPath = '.generated/install-smoke.json'
   $taskReport | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $taskReportPath -Encoding utf8
 } finally {
-  if ($null -ne $taskDesktop -and -not $taskDesktop.HasExited) { Stop-Process -Id $taskDesktop.Id }
   foreach ($taskDirectory in $taskOwnedRoots) {
     foreach ($taskProtected in $taskProtectedDirectories) { Assert-FixtureDirectory $taskProtected }
     Assert-FixtureDirectory $taskDirectory

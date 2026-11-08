@@ -46,7 +46,7 @@ function frameLocation(file: string, line: string, column: string): string {
   return `${identity}:${line}:${column}`;
 }
 
-export function safeLogMethod(value: unknown): string {
+function safeLogMethod(value: unknown): string {
   if (value === 'skill.import.retry' || value === 'skill.uninstall' || value === 'skill.group.uninstall') return value;
   if (typeof value !== 'string' || value.length > 100) return 'unknown';
   const parts = value.split('.');

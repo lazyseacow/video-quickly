@@ -1,4 +1,4 @@
-import { getModelConnectionType, requestModelParameters, textProtocols, validateModelParameters, type JsonValue, type ModelDiscovery, type ModelProfile, type ProviderUsage } from '@video-quickly/contracts';
+import { getModelConnectionType, requestModelParameters, textProtocols, type JsonValue, type ModelDiscovery, type ModelProfile, type ProviderUsage } from '@video-quickly/contracts';
 
 export type ModelRequestPhase = 'prepare' | 'send' | 'headers' | 'read' | 'parse' | 'validate';
 

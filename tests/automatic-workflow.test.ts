@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, expect, it, vi } from 'vitest';
@@ -47,9 +47,9 @@ async function fixture(extra: Partial<RuntimeOptions> = {}) {
   const model = await runtime.dispatch('model.save', { model: { name: '本地测试边界', provider: 'ollama', baseUrl: 'http://127.0.0.1:1', model: 'fixture', connectionType: 'text', capabilities: ['text'] } }) as { id: string };
   const image = await runtime.dispatch('model.save', { model: { name: '参考图片边界', provider: 'openai-compatible', connectionType: 'image', capabilities: ['image'], baseUrl: 'http://127.0.0.1:1', model: 'fixture-image' } }) as { id: string };
   const video = await runtime.dispatch('model.save', { model: { name: '视频边界', provider: 'openai-compatible', connectionType: 'video', capabilities: ['video'], baseUrl: 'http://127.0.0.1:1', model: 'fixture-video', parameters: {  } } }) as { id: string };
-  const project = projectSchema.parse(await runtime.dispatch('workflow.save', { projectId: created.id, revision: created.revision, workflow: {
+  const project = projectSchema.parse(await runtime.dispatch('project.update', { projectId: created.id, revision: created.revision, patch: { workflow: {
     ...createNativeVideoWorkflow(), production: { ...createNativeVideoWorkflow().production, textModelId: model.id, imageModelId: image.id, videoModelId: video.id, referenceMode: 'generate' }, nodes: createNativeVideoWorkflow().nodes.map(node => ['brief', 'style', 'script'].includes(node.kind) ? { ...node, modelId: model.id } : node),
-  } }));
+  } } }));
   return { runtime, directory, project, provider, media, options };
 }
 
@@ -65,10 +65,65 @@ it('automatically chains all seven tasks, forwards generated text and media, and
   expect((await runtime.dispatch('run.get', { runId: run.id }) as { events?: { type: string }[] }).events?.some(event => event.type === 'review.waiting')).not.toBe(true);
 });
 
+it('publishes generated video and its storyboard before export despite a save with unchanged content', async () => {
+  const { runtime, project, media } = await fixture();
+  const videoStarted = Promise.withResolvers<void>(), resumeVideo = Promise.withResolvers<void>();
+  const exportStarted = Promise.withResolvers<void>(), resumeExport = Promise.withResolvers<void>();
+  const executeMedia = media.getMockImplementation()!;
+  media.mockImplementation(async context => {
+    if (context.node.id === 'video') { videoStarted.resolve(); await resumeVideo.promise; }
+    if (context.node.kind === 'export') { exportStarted.resolve(); await resumeExport.promise; }
+    return executeMedia(context);
+  });
+  const run = runSchema.parse(await runtime.dispatch('run.start', { projectId: project.id }));
+  let revisionAtVideo = 0;
+  try {
+    await videoStarted.promise;
+    const resaved = projectSchema.parse(await runtime.dispatch('project.update', { projectId: project.id, revision: project.revision, patch: { title: project.title } }));
+    expect(resaved.revision).toBeGreaterThan(project.revision);
+    resumeVideo.resolve(); await exportStarted.promise;
+    const published = await current(runtime, project.id);
+    expect(published).toMatchObject({ revision: resaved.revision + 1, shots: [{ assetId: 'generated-image', videoAssetId: 'generated-video' }] });
+    revisionAtVideo = published.revision;
+  } finally { resumeVideo.resolve(); resumeExport.resolve(); }
+  await runtime.waitForIdle();
+  expect(await current(runtime, project.id)).toMatchObject({ revision: revisionAtVideo });
+  expect(await runtime.dispatch('run.get', { runId: run.id })).toMatchObject({ status: 'succeeded' });
+});
+
+it('can apply a saved video step with its missing storyboard when the project is back to its original content', async () => {
+  const { runtime, directory, project, media } = await fixture();
+  const videoStarted = Promise.withResolvers<void>(), resumeVideo = Promise.withResolvers<void>();
+  const executeMedia = media.getMockImplementation()!;
+  media.mockImplementation(async context => {
+    if (context.node.id === 'video') { videoStarted.resolve(); await resumeVideo.promise; }
+    return executeMedia(context);
+  });
+  const run = runSchema.parse(await runtime.dispatch('run.start', { projectId: project.id }));
+  try {
+    await videoStarted.promise;
+    await runtime.dispatch('project.update', { projectId: project.id, revision: project.revision, patch: { title: '制作期间修改的标题' } });
+  } finally { resumeVideo.resolve(); }
+  await runtime.waitForIdle();
+  const edited = await current(runtime, project.id);
+  expect(edited).toMatchObject({ title: '制作期间修改的标题', shots: [] });
+  await expect(runtime.dispatch('node.apply', { runId: run.id, nodeId: 'video', revision: edited.revision })).rejects.toThrow();
+  const restored = projectSchema.parse(await runtime.dispatch('project.update', { projectId: project.id, revision: edited.revision, patch: { title: project.title } }));
+  const request = { runId: run.id, nodeId: 'video', revision: restored.revision };
+  const reference = join(directory, 'image.fixture'), bytes = await readFile(reference);
+  await writeFile(reference, Buffer.alloc(bytes.length));
+  await expect(runtime.dispatch('node.apply', request)).rejects.toThrow('素材校验失败');
+  expect(await current(runtime, project.id)).toEqual(restored);
+  await writeFile(reference, bytes);
+  const applied = projectSchema.parse(await runtime.dispatch('node.apply', request));
+  expect(applied).toMatchObject({ revision: restored.revision + 1, shots: [{ title: '水滴的旅程', assetId: 'generated-image', videoAssetId: 'generated-video' }] });
+  expect(media.mock.calls.filter(([context]) => context.node.id === 'video')).toHaveLength(1);
+});
+
 it('continues after a committed media result across reopening without regenerating earlier steps', async () => {
   let interrupted = false;
   const { runtime, project, provider, media, options } = await fixture({ failpoint(point, activityId) {
-    if (!interrupted && point === 'after-commit' && activityId === 'assets') { interrupted = true; throw new SimulatedProcessExit(); }
+    if (!interrupted && point === 'after-commit' && activityId === 'video') { interrupted = true; throw new SimulatedProcessExit(); }
   } });
   const run = runSchema.parse(await runtime.dispatch('run.start', { projectId: project.id })); await runtime.waitForIdle();
   await runtime.close(); runtimes.delete(runtime);
@@ -76,17 +131,17 @@ it('continues after a committed media result across reopening without regenerati
   await recovered.dispatch('run.resume', { runId: run.id }); await recovered.waitForIdle();
   expect(runSchema.parse(await recovered.dispatch('run.get', { runId: run.id })).status).toBe('succeeded');
   expect(provider).toHaveBeenCalledTimes(3); expect(media.mock.calls.map(([context]) => context.node.kind)).toEqual(['assets', 'animation', 'animation', 'export']);
-  expect((await current(recovered, project.id)).shots[0].videoAssetId).toBe('generated-video');
+  expect(await current(recovered, project.id)).toMatchObject({ revision: project.revision + 1, shots: [{ videoAssetId: 'generated-video' }] });
 });
 
 it('saves a complete production workflow whose only top-level node calls a multi-step subflow', async () => {
   const { runtime, project } = await fixture();
   const nodes = project.workflow.nodes.filter(node => ['brief', 'style'].includes(node.kind));
-  const configured = projectSchema.parse(await runtime.dispatch('workflow.save', { projectId: project.id, revision: project.revision, workflow: {
+  const configured = projectSchema.parse(await runtime.dispatch('project.update', { projectId: project.id, revision: project.revision, patch: { workflow: {
     id: 'subflow-production', name: '完整子流程制作', version: 1,
     production: { mode: 'native-video', referenceMode: 'none', soundPrompt: '', subtitleMode: 'off' }, nodes: [{ id: 'production', kind: 'subflow', label: '自动制作', subflow: { id: 'planning', version: 1, inputs: {} } }], edges: [],
     subflows: [{ id: 'planning', name: '生成简报与风格', version: 1, inputs: [], outputs: [], nodes, edges: [{ id: 'bs', source: 'brief', target: 'style' }] }],
-  } }));
+  } } }));
   const run = runSchema.parse(await runtime.dispatch('run.start', { projectId: project.id })); await runtime.waitForIdle();
   const inspection = runInspectionSchema.parse(await runtime.dispatch('run.inspect', { runId: run.id }));
   expect(inspection.run.status, inspection.run.error).toBe('succeeded');
@@ -97,9 +152,9 @@ it('preserves edits made during production while retaining the complete generate
   let entered!: () => void, release!: () => void;
   const started = new Promise<void>(resolve => { entered = resolve; }), gate = new Promise<void>(resolve => { release = resolve; });
   const { runtime, project } = await fixture({ provider: async () => { entered(); await gate; return '新的风格'; } });
-  const configured = projectSchema.parse(await runtime.dispatch('workflow.save', { projectId: project.id, revision: project.revision, workflow: {
+  const configured = projectSchema.parse(await runtime.dispatch('project.update', { projectId: project.id, revision: project.revision, patch: { workflow: {
     ...project.workflow, nodes: project.workflow.nodes.filter(node => ['brief', 'style'].includes(node.kind)), edges: [{ id: 'bs', source: 'brief', target: 'style' }], stages: undefined,
-  } }));
+  } } }));
   const run = runSchema.parse(await runtime.dispatch('run.start', { projectId: project.id })); await started;
   const edited = projectSchema.parse(await runtime.dispatch('project.update', { projectId: project.id, revision: configured.revision, patch: { title: '制作期间修改的标题' } }));
   release(); await runtime.waitForIdle();

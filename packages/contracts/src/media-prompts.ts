@@ -8,7 +8,7 @@ export function characterReferencePrompt(selected: CharacterProfile[], reference
   return ['角色一致性要求：', ...selected.map(profile => `角色「${profile.name}」：${profile.description || '保持同一角色身份。'}${profile.referenceAssetIds.length ? `\n参考图：${profile.referenceAssetIds.map(id => `图片 ${referenceIds.indexOf(id) + 1}`).join('、')}。保留参考图中的人物外观、服装和辨识特征。` : ''}`)].join('\n');
 }
 
-export function creativeReferencePrompt(project: Pick<ProjectDocument, 'creativeContext'>, shot: Pick<Shot, 'creativeEntityKeys'>, referenceIds: readonly string[]): string {
+function creativeReferencePrompt(project: Pick<ProjectDocument, 'creativeContext'>, shot: Pick<Shot, 'creativeEntityKeys'>, referenceIds: readonly string[]): string {
   const selected = new Set(shot.creativeEntityKeys ?? []);
   return (project.creativeContext?.entities ?? []).filter(entity => selected.has(entity.key) && entity.referenceAssetIds?.length).map(entity => `${entity.kind === 'scene' ? '场景' : '道具'}「${entity.name}」参考图：${(entity.referenceAssetIds ?? []).map(id => `图片 ${referenceIds.indexOf(id) + 1}`).join('、')}。保持参考图中的${entity.kind === 'scene' ? '空间布局、建筑与光线' : '形状、颜色与材质'}，同时遵循文字设定。`).join('\n');
 }

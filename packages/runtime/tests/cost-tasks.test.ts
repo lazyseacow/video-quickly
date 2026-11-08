@@ -2,7 +2,7 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, expect, it } from 'vitest';
-import { costSummarySchema, costTaskDetailSchema, costTaskSchema, recordPageSchema, type ModelProfile, type UsageRecord } from '@video-quickly/contracts';
+import { costSummarySchema, costTaskDetailSchema, costTaskSchema, recordPageSchema, type ModelProfile } from '@video-quickly/contracts';
 import { createCostLedger } from '../src/costs';
 import { DocumentStore, openDatabase } from '../src/database';
 

@@ -8,11 +8,16 @@ import { validateExecutionModel } from '../packages/runtime/src/execution-model'
 
 const directories: string[] = [], runtimes: ReturnType<typeof createRuntime>[] = [];
 afterEach(async () => { await Promise.all(runtimes.splice(0).map(runtime => runtime.close())); await Promise.all(directories.splice(0).map(directory => rm(directory, { recursive: true, force: true }))); });
-async function fixture(seed = false) {
+async function fixture(seed?: boolean) {
   const directory = await mkdtemp(join(tmpdir(), 'vq-native-contracts-')); directories.push(directory);
   const runtime = createRuntime({ dataDirectory: directory, seed }); runtimes.push(runtime); return runtime;
 }
 const base = { name: '隔离模型', provider: 'openai-compatible', model: 'fixture', baseUrl: 'http://127.0.0.1:1/v1' };
+
+it('opens a new workspace without a default project or sample assets', async () => {
+  const runtime = await fixture();
+  expect(await runtime.dispatch('workspace.snapshot')).toMatchObject({ projects: [], assets: [], runs: [] });
+});
 
 it('exposes three explicit model types and rejects audio capabilities, providers and tasks', () => {
   expect(modelConnectionTypes.map(type => type.id)).toEqual(['text', 'image', 'video']);

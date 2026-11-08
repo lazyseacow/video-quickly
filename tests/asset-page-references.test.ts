@@ -27,7 +27,7 @@ async function fixture(count: number) {
 }
 
 describe('asset-page character references', () => {
-  it('checks a full page against current and archived characters in one query', async () => {
+  it('checks project and character references for a full page with one query per source', async () => {
     const { database, runtime, assets, save } = await fixture(100);
     await save('当前角色', [assets[0].id]);
     const archived = await save('已归档角色', [assets[99].id]);
@@ -37,8 +37,17 @@ describe('asset-page character references', () => {
       const page = assetsPageSchema.parse(await runtime.dispatch('asset.list', {}));
       expect(page.items).toHaveLength(100); expect(page.nextCursor).toBeNull();
       expect(page.items.filter(asset => asset.inUse).map(asset => asset.id)).toEqual([assets[99].id, assets[0].id]);
-      const queries = prepared.mock.calls.map(([sql]) => sql).filter(sql => sql.includes("json_each(profile.body, '$.referenceAssetIds')"));
-      expect(queries).toHaveLength(1);
+      const queries = prepared.mock.calls.map(([sql]) => sql);
+      const projectQueries = queries.filter(sql => sql.includes('project_asset_references'));
+      expect(projectQueries).toHaveLength(1);
+      expect(queries.filter(sql => sql.includes("json_each(profile.body, '$.referenceAssetIds')"))).toHaveLength(1);
+      const plan = database.prepare(`EXPLAIN QUERY PLAN ${projectQueries[0]}`).all({ limit: 101 }) as { detail: string }[];
+      expect(plan.some(row => row.detail.includes('USING INDEX documents_active_assets'))).toBe(true);
+      expect(plan.some(row => row.detail.includes('USE TEMP B-TREE'))).toBe(false);
+      const derivationQueries = queries.filter(sql => sql.includes('$.derivation.sourceAssetId'));
+      expect(derivationQueries).toHaveLength(1);
+      const derivationPlan = database.prepare(`EXPLAIN QUERY PLAN ${derivationQueries[0]}`).all(JSON.stringify(assets.map(asset => asset.id))) as { detail: string }[];
+      expect(derivationPlan.some(row => row.detail.includes('USING INDEX documents_active_asset_derivations'))).toBe(true);
     } finally { prepared.mockRestore(); }
   });
 

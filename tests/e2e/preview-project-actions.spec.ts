@@ -13,7 +13,7 @@ for (const viewport of [{ width: 1536, height: 960, theme: 'dark' }, { width: 39
   const project = await rpc<ProjectDocument>(request, 'project.update', { projectId: created.id, revision: created.revision, patch: { shots: [{ id: 'preview-shot', title: '预览镜头', narration: '', visualPrompt: '', durationUs: 1_000_000 }] } });
   const writes: string[] = [], errors: string[] = [];
   page.on('pageerror', error => errors.push(error.message));
-  page.on('request', request => { if (request.url().endsWith('/__desktop_rpc')) { const method = request.postDataJSON()?.method; if (['project.update', 'workflow.save', 'run.start', 'render.export'].includes(method)) writes.push(method); } });
+  page.on('request', request => { if (request.url().endsWith('/__desktop_rpc')) { const method = request.postDataJSON()?.method; if (['project.update', 'run.start', 'render.export'].includes(method)) writes.push(method); } });
   await page.setViewportSize(viewport); await page.addInitScript(theme => localStorage.setItem('vq-theme', theme), viewport.theme);
   await page.goto('/'); await openProjectFromList(page, project.title);
   const controls = page.locator('.preview-controls'), quality = controls.getByRole('combobox', { name: '预览质量', exact: true }), canvas = page.locator('.preview-frame canvas');

@@ -2,7 +2,7 @@ import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { cpus, platform, release, tmpdir, totalmem } from 'node:os';
-import { join, resolve } from 'node:path';
+import { join, relative, resolve } from 'node:path';
 import { performance } from 'node:perf_hooks';
 import { createRuntime } from '../packages/runtime/src/index';
 import { DocumentStore, openDatabase } from '../packages/runtime/src/database';
@@ -12,16 +12,43 @@ import { selectShot } from '../apps/desktop/src/lib/shot-selection';
 import { projectSchema, type ProjectDetail } from '@video-quickly/contracts';
 
 const sourceRoot = resolve(import.meta.dirname, '..');
-const sourceFiles = ['scripts/benchmark-workspace.ts', 'tests/fixtures/large-workspace.ts', 'packages/runtime/src/index.ts', 'packages/runtime/src/read-models.ts', 'packages/runtime/src/characters.ts', 'apps/desktop/src/lib/project-edits.ts', 'apps/desktop/src/lib/shot-selection.ts'];
+const sourceFiles = [
+  relative(sourceRoot, import.meta.filename),
+  'tests/fixtures/large-workspace.ts',
+  'packages/runtime/src/index.ts',
+  'packages/runtime/src/database.ts',
+  'packages/runtime/src/read-models.ts',
+  'packages/runtime/src/characters.ts',
+  'packages/runtime/src/image-tools.ts',
+  'apps/desktop/src/lib/project-edits.ts',
+  'apps/desktop/src/lib/shot-selection.ts',
+];
 const source = {
   head: execFileSync('git', ['rev-parse', 'HEAD'], { cwd: sourceRoot, encoding: 'utf8' }).trim(),
   dirty: Boolean(execFileSync('git', ['status', '--porcelain'], { cwd: sourceRoot, encoding: 'utf8' }).trim()),
   sha256: Object.fromEntries(await Promise.all(sourceFiles.map(async file => [file, createHash('sha256').update(await readFile(join(sourceRoot, file))).digest('hex')]))),
 };
 const results = [];
+type Runtime = ReturnType<typeof createRuntime>;
+
+async function measure(runtime: Runtime, method: string, params: unknown = {}, count = 20, warmup = 0) {
+  const samples: number[] = [];
+  let bytes = 0;
+  for (let index = 0; index < warmup + count; index++) {
+    const start = performance.now();
+    const serialized = JSON.stringify(await runtime.dispatch(method, params));
+    const elapsed = performance.now() - start;
+    if (index >= warmup) {
+      samples.push(elapsed);
+      bytes = Buffer.byteLength(serialized);
+    }
+  }
+  return summarize(samples, bytes);
+}
+
 for (const shots of [10, 50, 200, 1000]) {
   const directory = await mkdtemp(join(tmpdir(), 'vq-workspace-benchmark-'));
-  let runtime: ReturnType<typeof createRuntime> | undefined;
+  let runtime: Runtime | undefined;
   try {
     const database = openDatabase(directory);
     const project = seedLargeWorkspace(new DocumentStore(database), shots);
@@ -30,17 +57,6 @@ for (const shots of [10, 50, 200, 1000]) {
     runtime = createRuntime({ dataDirectory: directory, seed: false });
     const openMs = performance.now() - start;
     const instance = runtime;
-    async function measure(method: string, params = {}, count = 20) {
-      const samples = [];
-      let bytes = 0;
-      for (let index = 0; index < count; index++) {
-        const start = performance.now();
-        const value = await instance.dispatch(method, params);
-        const serialized = JSON.stringify(value);
-        samples.push(performance.now() - start); bytes = Buffer.byteLength(serialized);
-      }
-      return summarize(samples, bytes);
-    }
     const detail = await instance.dispatch('project.get', { projectId: project.id }) as ProjectDetail;
     let saved = project;
     async function measureEditorSave() {
@@ -83,10 +99,10 @@ for (const shots of [10, 50, 200, 1000]) {
     editing.sort((left, right) => left - right);
     const metrics = {
       shots, assets: 1000, runs: 200, events: 20000, preview: project.profile, runtimeOpenMs: round(openMs),
-      summary: await measure('workspace.summary'), project: await measure('project.get', { projectId: project.id }),
-      refresh: await measure('project.get', { projectId: project.id, revision: detail.revision, assetsVersion: detail.assetsVersion }),
-      historyPage: await measure('run.events', { runId: `${project.id}-run-0` }),
-      assetPage: await measure('asset.list'), legacySnapshot: await measure('workspace.snapshot', {}, 5),
+      summary: await measure(instance, 'workspace.summary'), project: await measure(instance, 'project.get', { projectId: project.id }),
+      refresh: await measure(instance, 'project.get', { projectId: project.id, revision: detail.revision, assetsVersion: detail.assetsVersion }),
+      historyPage: await measure(instance, 'run.events', { runId: `${project.id}-run-0` }),
+      assetPage: await measure(instance, 'asset.list'), legacySnapshot: await measure(instance, 'workspace.snapshot', {}, 5),
       editorSave: await measureEditorSave(),
       selectionToggle: measureSelectionToggle(),
       editCommand: { p50Ms: round(editing[50]), p95Ms: round(editing[95]), draftBytes: Buffer.byteLength(JSON.stringify(editor.state)), undoSteps: editor.state.undo.length },
@@ -95,8 +111,32 @@ for (const shots of [10, 50, 200, 1000]) {
     results.push(metrics);
   } finally { await runtime?.close(); await rm(directory, { recursive: true, force: true }); }
 }
+
+async function measureLargeLibrary() {
+  const assets = 20_000, runs = 3_000;
+  const directory = await mkdtemp(join(tmpdir(), 'vq-library-benchmark-'));
+  let runtime: Runtime | undefined;
+  try {
+    const database = openDatabase(directory);
+    let before: number;
+    try {
+      const project = seedLargeWorkspace(new DocumentStore(database), 10, { assets, runs, eventsPerRun: 0 });
+      const row = database.prepare<[id: string], { rowid: number }>("SELECT rowid FROM documents WHERE kind = 'asset' AND id = ?").get(`${project.id}-asset-${assets / 2}`);
+      if (!row) throw new Error('素材基准缺少中段游标。');
+      before = row.rowid;
+    } finally { database.close(); }
+    runtime = createRuntime({ dataDirectory: directory, seed: false });
+    return {
+      assets, runs,
+      firstPage: await measure(runtime, 'asset.list', { kind: 'image' }, 20, 5),
+      cursorPage: await measure(runtime, 'asset.list', { kind: 'image', before }, 20, 5),
+    };
+  } finally { await runtime?.close(); await rm(directory, { recursive: true, force: true }); }
+}
+
+const assetLibrary = await measureLargeLibrary();
 console.log(JSON.stringify({ source, machine: { platform: platform(), architecture: process.arch, release: release(), cpu: cpus()[0]?.model, memoryGiB: round(totalmem() / 1024 ** 3), node: process.version }, measuredAt: new Date().toISOString(),
-  sampling: { scope: 'Runtime dispatch plus JSON serialization; no IPC, UI or media decoding', reads: { warmup: 0, count: 20, legacySnapshotCount: 5 }, editorSave: { warmup: 5, count: 20, patchPreparationAndReplyValidationTimed: false }, selectionToggle: { warmup: 5, count: 20, scope: 'selectShot only; deselect the primary in a fully selected group, fixed input per sample' } }, results }, null, 2));
+  sampling: { scope: 'Runtime dispatch plus JSON serialization; no IPC, UI or media decoding', reads: { warmup: 0, count: 20, legacySnapshotCount: 5 }, assetLibrary: { warmup: 5, count: 20, pageSize: 100 }, editorSave: { warmup: 5, count: 20, patchPreparationAndReplyValidationTimed: false }, selectionToggle: { warmup: 5, count: 20, scope: 'selectShot only; deselect the primary in a fully selected group, fixed input per sample' } }, results, assetLibrary }, null, 2));
 function round(value: number) { return Math.round(value * 100) / 100; }
 function summarize(samples: number[], bytes?: number) {
   const sorted = [...samples].sort((left, right) => left - right);

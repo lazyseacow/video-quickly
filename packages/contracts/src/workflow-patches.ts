@@ -11,7 +11,6 @@ export const workflowProposalSchema = z.object({
   baseline: z.lazy(() => workflowNodeSchema), patch: workflowNodePatchSchema,
   summary: z.string().trim().min(1).max(2000),
 }).strict();
-export type WorkflowNodePatch = z.infer<typeof workflowNodePatchSchema>;
 export type WorkflowProposal = z.infer<typeof workflowProposalSchema>;
 export const workflowAssistantContextSchema = z.object({
   projectId: z.string().min(1), projectRevision: z.number().int().positive(), baseline: z.lazy(() => workflowNodeSchema),

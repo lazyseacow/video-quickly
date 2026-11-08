@@ -1,12 +1,12 @@
 .timeline { container: timeline / inline-size; background: var(--surface); border-top: 1px solid var(--border); min-width: 0; overflow: hidden; display: flex; flex-direction: column; }
-.timeline-toolbar { height: calc(var(--control-hit-size) + var(--space-2) * 2); padding: 0 var(--space-3); display: flex; align-items: center; gap: var(--space-2); flex-shrink: 0; border-bottom: 1px solid var(--border); overflow-x: auto; scrollbar-width: none; }
+.timeline-toolbar { min-height: calc(var(--control-hit-size) + var(--space-2) * 2); padding: var(--space-1) var(--space-3); display: flex; flex-wrap: wrap; align-items: center; align-content: center; gap: var(--space-1) var(--space-2); flex-shrink: 0; border-bottom: 1px solid var(--border); }
 .timeline-heading { display: flex; align-items: baseline; gap: var(--space-2); white-space: nowrap; flex-shrink: 0; }
 .timeline-heading h2 { font-size: var(--text-size-caption); font-weight: var(--font-weight-emphasis); }
 .timeline-summary { font-size: var(--text-size-badge); color: var(--text-subtle); font-variant-numeric: tabular-nums; }
 .timeline-selection-count { font-size: var(--text-size-badge); color: var(--text-secondary); font-variant-numeric: tabular-nums; white-space: nowrap; }
-.timeline-toolbar .timeline-bulk-button { height: var(--control-hit-size); min-height: var(--control-hit-size); padding: 0 var(--space-3); margin: 0 var(--space-2); font-size: var(--text-size-micro); white-space: nowrap; flex-shrink: 0; }
+.timeline-toolbar .timeline-bulk-button { height: var(--control-hit-size); min-height: var(--control-hit-size); padding: 0 var(--space-3); margin-inline: var(--space-1); font-size: var(--text-size-micro); white-space: nowrap; flex-shrink: 0; }
 .timeline-edit-actions, .timeline-view-actions { display: flex; align-items: center; flex-shrink: 0; }
-.timeline-edit-actions { border-left: 1px solid var(--border); padding-left: var(--space-2); }
+.timeline-edit-actions { max-width: 100%; flex-wrap: wrap; border-left: 1px solid var(--border); padding-left: var(--space-2); }
 .timeline-view-actions { margin-left: auto; gap: var(--space-tight); }
 .timeline-toolbar .icon-button { min-width: 40px; height: 40px; border-radius: var(--radius-pill); }
 .timeline-toolbar .timeline-zoom { width: 72px; min-height: 40px; margin: 0 var(--space-1); }
@@ -69,10 +69,10 @@
 .playhead { position: absolute; top: 0; bottom: 0; width: 100%; pointer-events: none; }
 .playhead::after { content: ''; position: absolute; inset: 10px auto 0 0; width: 1px; background: var(--timeline-playhead); }
 .playhead::before { content: ''; display: block; width: 12px; height: 12px; position: absolute; top: 0; left: -5.5px; background: var(--timeline-playhead); clip-path: polygon(0 0, 100% 0, 100% 58%, 50% 100%, 0 58%); }
-@container timeline (max-width: 850px) { .timeline-summary { display: none; } .timeline-toolbar { gap: var(--space-2); } }
-@container timeline (max-width: 760px) { .timeline-readout { display: none; } }
-@container timeline (max-width: 640px) { .timeline-toolbar .timeline-zoom-step { display: none; } .timeline-body { grid-template-columns: 88px minmax(0, 1fr); } .track-header { padding: var(--space-2); gap: var(--space-1) var(--space-2); } .track-header-ruler { padding: 0 var(--space-2); } }
-@container timeline (max-width: 460px) { .timeline-heading h2, .timeline-zoom-value { display: none; } .timeline-toolbar { padding: 0 var(--space-2); gap: var(--space-1); } .timeline-edit-actions { border: 0; padding: 0; } .timeline-toolbar .timeline-zoom { width: 52px; } }
+@container timeline (max-width: 1050px) { .timeline-toolbar .timeline-zoom-step { display: none; } }
+@container timeline (max-width: 850px) { .timeline-summary, .timeline-readout { display: none; } .timeline-toolbar { padding-inline: var(--space-2); column-gap: var(--space-1); } }
+@container timeline (max-width: 640px) { .timeline-body { grid-template-columns: 88px minmax(0, 1fr); } .track-header { padding: var(--space-2); gap: var(--space-1) var(--space-2); } .track-header-ruler { padding: 0 var(--space-2); } }
+@container timeline (max-width: 460px) { .timeline-edit-actions { border: 0; padding: 0; } .timeline-toolbar .timeline-zoom { width: 52px; } }
 
 .timeline-clip__select { display: flex; flex-direction: column; width: 100%; height: 100%; min-width: 0; border: 0; padding: 0; background: transparent; color: inherit; text-align: left; touch-action: none; user-select: none; cursor: grab; }
 .timeline-clip__select:active { cursor: grabbing; }

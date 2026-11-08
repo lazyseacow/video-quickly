@@ -138,6 +138,18 @@ select.select:disabled {
     cursor: not-allowed;
   }
 
+  select.select:not([multiple]):not([size]) option.select-empty-option {
+    background: transparent;
+    color: var(--text-secondary);
+    font-weight: inherit;
+    opacity: 1;
+    cursor: default;
+  }
+
+  select.select:not([multiple]):not([size]) option.select-empty-option::checkmark {
+    display: none;
+  }
+
   @media (prefers-reduced-motion: reduce) {
     select.select:not([multiple]):not([size])::picker-icon {
       transition: none;

@@ -1,5 +1,4 @@
 import { captionStyleSchema, DEFAULT_CAPTION_STYLE, type CaptionStyle } from '@video-quickly/contracts';
-import { citationFooterTop } from './citations.js';
 
 export const CAPTION_FONT_CATALOG = {
   sans: { label: '无衬线', families: ['Microsoft YaHei', 'Hiragino Sans GB', 'PingFang SC', 'Noto Sans CJK SC', 'Arial', 'DejaVu Sans', 'sans-serif'] },
@@ -22,11 +21,11 @@ export function safeCaptionStyle(value?: CaptionStyle | null): CaptionStyle | un
   return parsed.success ? parsed.data : { ...DEFAULT_CAPTION_STYLE };
 }
 
-export function captionGeometry(width: number, height: number, referenceFooter = false): { fontSize: number; lines: number; bottom: number } {
+export function captionGeometry(width: number, height: number): { fontSize: number; lines: number; bottom: number } {
   return {
-    fontSize: Math.max(referenceFooter ? 4 : 12, Math.min(width * .027, height * .047)),
+    fontSize: Math.max(12, Math.min(width * .027, height * .047)),
     lines: height > width ? 3 : 2,
-    bottom: referenceFooter ? Math.min(height * .9, citationFooterTop(width, height) - Math.max(2, height * .01)) : height * .9,
+    bottom: height * .9,
   };
 }
 
@@ -37,8 +36,8 @@ export interface CaptionLayout {
   top: number; bottom: number; diagramTop: number; diagramBottom: number;
 }
 
-export function resolveCaptionLayout(width: number, height: number, value?: CaptionStyle | null, options: { referenceFooter?: boolean; template?: boolean } = {}): CaptionLayout {
-  const style = safeCaptionStyle(value), geometry = captionGeometry(width, height, options.referenceFooter);
+export function resolveCaptionLayout(width: number, height: number, value?: CaptionStyle | null): CaptionLayout {
+  const style = safeCaptionStyle(value), geometry = captionGeometry(width, height);
   const maxLines = style?.maxLines ?? geometry.lines, position = style?.position ?? 'bottom', top = height * .235, bottom = geometry.bottom, gap = height * .025;
   const available = position === 'top' ? bottom - top - gap * 2 - 1 : bottom - height * .255 - gap - 1;
   const fontSize = style ? Math.max(1, Math.min(Math.min(width, height) * style.fontSizeRatio, available / (maxLines * 1.55 + 1))) : geometry.fontSize;

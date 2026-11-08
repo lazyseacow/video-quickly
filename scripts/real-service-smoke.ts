@@ -81,7 +81,7 @@ export async function main(args = process.argv.slice(2)) {
     if (!item.id) {
       // A hard exit after run.start committed but before its return was recorded
       // must recover that run, not create another billable operation.
-      const committed = await committedPhaseRun(runtime.dispatch, evidence.projectId!, phase, nodeId, item.revision);
+      const committed = await committedPhaseRun(runtime.dispatch, evidence.projectId!, nodeId, item.revision);
       if (committed) item.id = committed;
       else { item.id = runSchema.parse(await start(item.revision)).id; newlyStarted = true; }
       await persist();

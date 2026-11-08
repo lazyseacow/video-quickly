@@ -126,6 +126,32 @@ test('opens the shared workbench from the existing Skill studio and saves prompt
   } finally { await source.close(); }
 });
 
+test('retries the selected experiment project after a read failure without reopening the launcher', async ({ page, request }, info) => {
+  const project = await rpc<ProjectDocument>(request, 'project.create', { title: '提示词任务读取恢复' });
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  await page.setViewportSize({ width: 600, height: 760 });
+  await page.goto('/'); await page.getByRole('button', { name: 'Skill 工作室', exact: true }).click();
+  let failures = 1;
+  await page.route('**/__desktop_rpc', async route => {
+    const input = route.request().postDataJSON();
+    if (input.method === 'project.get' && input.params.projectId === project.id && failures-- > 0) return route.fulfill({ status: 503, json: { error: '实验任务暂时无法读取' } });
+    await route.continue();
+  });
+  await page.getByRole('button', { name: '提示词实验与模板', exact: true }).click();
+  const launcher = page.getByRole('dialog', { name: '选择提示词实验任务', exact: true });
+  await launcher.getByLabel('实验项目', { exact: true }).selectOption(project.id);
+  await expect(launcher.getByRole('alert')).toContainText('实验任务暂时无法读取');
+  await expect(launcher.getByLabel('实验任务', { exact: true })).toBeDisabled();
+  await expect(launcher.getByLabel('实验任务', { exact: true }).locator('selectedcontent')).toHaveText('任务读取失败');
+  await expect(launcher.getByRole('button', { name: '打开提示词实验', exact: true })).toBeDisabled();
+  await page.screenshot({ path: info.outputPath('prompt-launcher-read-failed.png') });
+  await launcher.getByRole('button', { name: '重试读取实验任务', exact: true }).click();
+  await expect(launcher.getByLabel('实验项目', { exact: true })).toHaveValue(project.id);
+  await expect(launcher.getByLabel('实验任务', { exact: true })).toBeEnabled();
+  await launcher.getByRole('button', { name: '打开提示词实验', exact: true }).click();
+  await expect(page.getByRole('dialog', { name: '提示词实验', exact: true })).toBeVisible();
+});
+
 test('preserves the project when a trial is canceled and exposes experiment history separately', async ({ page, request }) => {
   const source = await fixture(request, true);
   try {

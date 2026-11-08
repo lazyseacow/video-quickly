@@ -33,6 +33,39 @@ async function previewImage(dialog: Locator) { await showSettingsPreview(dialog)
 async function redPixels(canvas: Locator) { return canvas.evaluate((element: HTMLCanvasElement) => { const pixels = element.getContext('2d')!.getImageData(0, 0, element.width, element.height).data; let count = 0; for (let index = 0; index < pixels.length; index += 4) if (pixels[index] > 240 && pixels[index + 1] < 30 && pixels[index + 2] < 30 && pixels[index + 3] > 240) count++; return count; }); }
 async function applySeriesDialog(page: Page, templateId: string) { await projectSettings(page); await (await projectSettingAction(page, '应用系列模板', {exact: true})).click(); await page.getByRole('dialog', { name: '制作设置', exact: true }).getByRole('button', { name: '保存并打开', exact: true }).click(); const dialog = page.getByRole('dialog', { name: '应用系列模板', exact: true }); await (await settingField(dialog, '选择系列模板')).selectOption(templateId); await expect(dialog.locator('.series-settings-summary')).toBeVisible(); return dialog; }
 
+test('retries an initially failed template read and offers a reload only when a newer snapshot is available', async ({ page, request }, info) => {
+  const project = await fixture(request, '系列模板读取恢复');
+  const template = await rpc<SeriesTemplate>(request, 'seriesTemplate.save', { template: { name: '读取恢复的系列模板', description: '', settings: { style: '最初的系列风格', captionStyle: DEFAULT_CAPTION_STYLE, scenePreset: null } } });
+  let failed = false;
+  await page.route('**/__desktop_rpc', async route => {
+    const { method, params } = route.request().postDataJSON();
+    if (method !== 'seriesTemplate.get' || params.templateId !== template.id || failed) return route.continue();
+    failed = true;
+    await route.fulfill({ status: 503, json: { error: '本次模板设置读取失败' } });
+  });
+  await openProject(page, project.title);
+  await projectSettings(page);
+  await (await projectSettingAction(page, '应用系列模板', { exact: true })).click();
+  await page.getByRole('dialog', { name: '制作设置', exact: true }).getByRole('button', { name: '保存并打开', exact: true }).click();
+  const dialog = page.getByRole('dialog', { name: '应用系列模板', exact: true });
+  await dialog.getByLabel('选择系列模板', { exact: true }).selectOption(template.id);
+  await expect(dialog.getByRole('alert')).toContainText('本次模板设置读取失败');
+  await page.screenshot({ path: info.outputPath('template-initial-read-failure.png') });
+  await expect(dialog.getByRole('button', { name: '重试所选模板', exact: true })).toBeVisible({ timeout: 2000 });
+  await dialog.getByRole('button', { name: '重试所选模板', exact: true }).click();
+  await expect(dialog.locator('.series-settings-summary')).toContainText('最初的系列风格');
+  await expect(dialog.getByRole('button', { name: '重试所选模板', exact: true })).toHaveCount(0);
+  await rpc(request, 'seriesTemplate.save', { template: { ...template, settings: { ...template.settings, style: '更新后的系列风格' } } });
+  const reload = dialog.getByRole('button', { name: '载入最新设置', exact: true });
+  await expect(reload).toBeVisible();
+  await expect(dialog.locator('.series-settings-summary')).toContainText('最初的系列风格');
+  await reload.click();
+  await expect(dialog.locator('.series-settings-summary')).toContainText('更新后的系列风格');
+  await expect(reload).toHaveCount(0);
+  await dialog.getByRole('button', { name: '取消', exact: true }).click();
+  expect(await saved(request, project.id)).toEqual(project);
+});
+
 test('previews project caption styles and cancels without saving', async ({ page, request }, info) => {
   const errors = observe(page), project = await fixture(request, '项目字幕样式预览取消验收'); await openProject(page, project.title); const dialog = await styleDialog(page, 'project'); await expect(dialog.locator('.caption-style-preview canvas')).toBeVisible(); const before = await previewImage(dialog);
   await (await settingField(dialog, '文字颜色')).fill('#ff0000'); await (await settingField(dialog, '字幕位置')).selectOption('top'); await (await settingField(dialog, '字幕字体')).selectOption('serif'); await (await settingField(dialog, '字幕字重')).selectOption('700'); await (await settingField(dialog, '字号（短边百分比）')).fill('6.5'); await (await settingField(dialog, '背景不透明度（%）')).fill('25'); await (await settingField(dialog, '字幕背景颜色')).fill('#102030'); await (await settingField(dialog, '最大字幕行数')).selectOption('3'); await expect.poll(() => previewImage(dialog)).not.toBe(before); await snapshot(page, dialog, info.outputPath('caption-style-project-dark.png')); await dialog.getByRole('button', { name: '取消', exact: true }).click(); expect(await saved(request, project.id)).toEqual(project);
@@ -62,7 +95,11 @@ test('saves only reusable series settings, supports library paging and archive r
 
 test('applies the displayed snapshot and optional scopes without replacing authored content or locked overrides', async ({ page, request }, info) => {
   const errors = observe(page), project = await fixture(request, '系列设置应用范围验收'); const settingsA: SeriesSettings = { style: '预览确认的系列风格', captionStyle: { ...DEFAULT_CAPTION_STYLE, textColor: '#aa2244', position: 'top' }, scenePreset: { kind: 'comparison', palette: 'amber', motion: 'none' } }; let template = await rpc<SeriesTemplate>(request, 'seriesTemplate.save', { template: { name: '范围与快照系列', description: '', settings: settingsA } }); await openProject(page, project.title); let dialog = await applySeriesDialog(page, template.id); await expect((await settingControl(dialog, 'checkbox', { name: '清除未锁定镜头字幕覆盖', exact: true }))).not.toBeChecked(); await expect((await settingControl(dialog, 'checkbox', { name: '更新现有模板镜头配色与动效', exact: true }))).not.toBeChecked();
-  const settingsB: SeriesSettings = { style: '后来修改的系列风格', captionStyle: { ...DEFAULT_CAPTION_STYLE, textColor: '#1155aa' }, scenePreset: { kind: 'bar-chart', palette: 'blue', motion: 'reveal' } }; template = await rpc<SeriesTemplate>(request, 'seriesTemplate.save', { template: { ...template, settings: settingsB } }); await expect(dialog.locator('.series-apply__version').first()).toContainText('修订 1'); await expect(dialog.locator('.series-settings-summary')).toContainText(settingsA.style); await snapshot(page, dialog, info.outputPath('series-apply-scopes-dark.png')); await dialog.getByRole('button', { name: '应用已预览的系列设置', exact: true }).click(); await expect(dialog).toHaveCount(0); const first = await saved(request, project.id); expect(first).toMatchObject(settingsA); expect(first.shots).toEqual(project.shots); expect(first.claims).toEqual(project.claims);
+  const previewRevision = template.revision;
+  const settingsB: SeriesSettings = { style: '后来修改的系列风格', captionStyle: { ...DEFAULT_CAPTION_STYLE, textColor: '#1155aa' }, scenePreset: { kind: 'bar-chart', palette: 'blue', motion: 'reveal' } };
+  template = await rpc<SeriesTemplate>(request, 'seriesTemplate.save', { template: { ...template, settings: settingsB } });
+  await expect(dialog.getByText(`模板库已有更新，当前预览为修订 ${previewRevision}。`, { exact: true })).toBeVisible();
+  await expect(dialog.locator('.series-settings-summary')).toContainText(settingsA.style); await snapshot(page, dialog, info.outputPath('series-apply-scopes-dark.png')); await dialog.getByRole('button', { name: '应用已预览的系列设置', exact: true }).click(); await expect(dialog).toHaveCount(0); const first = await saved(request, project.id); expect(first).toMatchObject(settingsA); expect(first.shots).toEqual(project.shots); expect(first.claims).toEqual(project.claims);
   dialog = await applySeriesDialog(page, template.id); await expect(dialog.locator('.series-settings-summary')).toContainText(settingsB.style); for (const label of ['应用系列风格文字', '应用项目字幕样式', '应用新镜头画面预设']) await (await settingControl(dialog, 'checkbox', { name: label, exact: true })).uncheck(); for (const label of ['清除未锁定镜头字幕覆盖', '更新现有模板镜头配色与动效']) await (await settingControl(dialog, 'checkbox', { name: label, exact: true })).check(); await dialog.getByRole('button', { name: '应用已预览的系列设置', exact: true }).click(); await expect(dialog).toHaveCount(0); const scoped = await saved(request, project.id); expect(scoped).toMatchObject(settingsA); expect(scoped.shots[0].captionStyle).toBeNull(); expect(scoped.shots[1].captionStyle).toBeNull(); expect(scoped.shots[2]).toEqual(project.shots[2]); for (let index = 0; index < 2; index++) expect(scoped.shots[index]).toEqual({ ...project.shots[index], captionStyle: null, sceneTemplate: { ...project.shots[index].sceneTemplate!, palette: 'blue', motion: 'reveal' } }); expect(scoped.shots[1].sceneTemplate).toMatchObject({ kind: 'bar-chart', heading: '不能复制的真实观测', bars: [{ label: '实际甲', value: 12 }, { label: '实际乙', value: 34 }] });
   await page.getByRole('button', { name: '撤销', exact: true }).click(); await expect.poll(async () => (await saved(request, project.id)).shots).toEqual(first.shots); await page.getByRole('button', { name: '重做', exact: true }).click(); await expect.poll(async () => (await saved(request, project.id)).shots).toEqual(scoped.shots); await page.reload(); await openProjectFromList(page, project.title); await page.getByRole('button', { name: '添加镜头', exact: true }).click(); await expect.poll(async () => (await saved(request, project.id)).shots.length).toBe(4); const added = (await saved(request, project.id)).shots[3]; expect(added.sceneTemplate).toMatchObject({ kind: 'comparison', palette: 'amber', motion: 'none' }); expect(added.sceneTemplate?.heading).toContain('示例'); expect(added.narration).toBe(''); expect(added.claimIds).toEqual([]); expect(added.assetId).toBeUndefined(); expect(added.audioAssetId).toBeUndefined(); await healthy(page, errors);
 });

@@ -14,7 +14,7 @@ async function rpc<T>(request: APIRequestContext, method: string, params: unknow
 async function saved(request: APIRequestContext, projectId: string) { return (await rpc<{ project: ProjectDocument }>(request, 'project.get', { projectId })).project; }
 function observe(page: Page) {
   const writes: string[] = [], errors: string[] = [];
-  page.on('request', request => { if (request.url().endsWith('/__desktop_rpc')) { const method = request.postDataJSON()?.method; if (['project.create', 'project.update', 'workflow.save', 'run.start', 'render.export'].includes(method)) writes.push(method); } });
+  page.on('request', request => { if (request.url().endsWith('/__desktop_rpc')) { const method = request.postDataJSON()?.method; if (['project.create', 'project.update', 'run.start', 'render.export'].includes(method)) writes.push(method); } });
   page.on('pageerror', error => errors.push(error.message)); page.on('console', entry => { if (entry.type() === 'error') errors.push(entry.text()); }); return { writes, errors };
 }
 async function openCreation(page: Page, title: string) {
@@ -96,7 +96,8 @@ test('preserves existing 30fps data and keeps complete frame-rate and dimension 
   const edited = await saved(request, project.id); expect(edited.profile).toEqual(project.profile); expect(edited.shots).toEqual(project.shots);
   await closeProjectSettings(page); await page.getByRole('button', { name: '导出', exact: true }).click(); const exporter = page.getByRole('dialog', { name: '导出视频', exact: true });
   await expect(await settingField(exporter, '视频帧率')).toHaveValue('30'); await expect(await settingField(exporter, '视频宽度')).toHaveValue('800'); await expect(await settingField(exporter, '视频高度')).toHaveValue('1000');
-  for (const value of ['custom', '4:5', '21:9']) await expect(exporter.getByLabel('画面比例', { exact: true }).locator(`option[value="${value}"]`)).toHaveCount(1);
-  await expect(exporter.locator('.spec-summary')).toBeVisible(); await page.screenshot({ path: info.outputPath('existing-profile-export-controls.png') });
-  await exporter.getByRole('button', { name: '关闭', exact: true }).click(); expect(await saved(request, project.id)).toEqual(edited); expect(observed.writes).toEqual(['project.update', 'project.update']); expect(observed.errors).toEqual([]);
+  for (const value of ['4:5', '21:9']) await expect(exporter.getByLabel('画面比例', { exact: true }).locator(`option[value="${value}"]`)).toHaveCount(1);
+  await expect(exporter.getByLabel('分辨率', { exact: true }).locator('option:checked')).toHaveText('800 × 1000 · 当前');
+  await expect(exporter.locator('.export-dialog__preview figcaption')).toContainText('800 × 1000 · 30 fps'); await page.screenshot({ path: info.outputPath('existing-profile-export-controls.png') });
+  await exporter.getByRole('button', { name: '关闭对话框', exact: true }).click(); expect(await saved(request, project.id)).toEqual(edited); expect(observed.writes).toEqual(['project.update', 'project.update']); expect(observed.errors).toEqual([]);
 });

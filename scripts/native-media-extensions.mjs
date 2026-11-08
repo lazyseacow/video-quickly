@@ -90,7 +90,9 @@ export async function verifyNativeMediaExtensions({ page, rpc, openProject, fixt
     const exported = await editor.locator('.editor-project-export__path code').textContent(), manifest = JSON.parse(await readFile(join(exported, 'manifest.json'), 'utf8'));
     assert.equal(manifest.output, 'handoff-only'); assert.equal(manifest.compatibility.desktopImportVerified, false); assert.equal(manifest.files.some(file => file.path === 'draft_info.json'), false);
     assert.ok(manifest.files.some(file => file.path === 'media/picture.mp4')); assert.ok(manifest.files.some(file => file.path === 'media/mix.wav'));
-    await page.screenshot({ path: join(artifacts, 'desktop-editor-handoff.png') }); await editor.getByRole('button', { name: '关闭', exact: true }).click(); await output.getByRole('button', { name: '关闭', exact: true }).click();
+    await page.screenshot({ path: join(artifacts, 'desktop-editor-handoff.png') });
+    await editor.getByRole('button', { name: '关闭', exact: true }).click(); await expect(editor).toHaveCount(0);
+    await output.getByRole('button', { name: '关闭对话框', exact: true }).click(); await expect(output).toHaveCount(0);
     assert.deepEqual(await current(), project); checks.nativeEditorHandoff = true; completed = true;
   } finally {
     server.closeAllConnections(); await new Promise(resolve => server.close(() => resolve()));

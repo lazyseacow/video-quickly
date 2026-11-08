@@ -84,7 +84,7 @@ it('retains existing character bindings through an ordinary script to image pipe
   const { runtime, project, model, profiles, requests } = await fixture();
   const single = projectSchema.parse(await runtime.dispatch('project.update', { projectId: project.id, revision: project.revision, patch: { shots: [project.shots[0]] } }));
   const text = await runtime.dispatch('model.save', { model: { ...model, id: undefined, name: '文字角色模型', model: 'text-fixture', connectionType: 'text', capabilities: ['text'], pricing: null } }) as ModelProfile;
-  await runtime.dispatch('workflow.save', { projectId: project.id, workflow: { id: 'character-pipeline', version: 1, name: '角色连贯性', production: { mode: 'native-video', referenceMode: 'none', soundPrompt: '', subtitleMode: 'off' }, nodes: [workflowNodeSchema.parse({ id: 'script', kind: 'script', label: '脚本', modelId: text.id }), workflowNodeSchema.parse({ id: 'assets', kind: 'assets', label: '图片', modelId: model.id })], edges: [{ id: 'next', source: 'script', target: 'assets' }] } });
+  await runtime.dispatch('project.update', { projectId: project.id, patch: { workflow: { id: 'character-pipeline', version: 1, name: '角色连贯性', production: { mode: 'native-video', referenceMode: 'none', soundPrompt: '', subtitleMode: 'off' }, nodes: [workflowNodeSchema.parse({ id: 'script', kind: 'script', label: '脚本', modelId: text.id }), workflowNodeSchema.parse({ id: 'assets', kind: 'assets', label: '图片', modelId: model.id })], edges: [{ id: 'next', source: 'script', target: 'assets' }] } } });
   const run = await runtime.dispatch('run.start', { projectId: single.id }) as RunRecord; await runtime.waitForIdle();
   const snapshot = await runtime.dispatch('workspace.snapshot') as WorkspaceSnapshot;
   expect(snapshot.runs.find(record => record.id === run.id)?.status).toBe('succeeded');
@@ -110,7 +110,6 @@ it('backs up distinct same-named candidate files and restores character IDs with
 
 it('rejects unknown character associations in project and single-shot save APIs without changing revision', async () => {
   const { runtime, project } = await fixture();
-  await expect(runtime.dispatch('project.saveShot', { projectId: project.id, revision: project.revision, shot: { ...project.shots[0], characterIds: ['missing-character'] } })).rejects.toThrow('角色不存在');
   await expect(runtime.dispatch('project.update', { projectId: project.id, revision: project.revision, patch: { shots: [{ ...project.shots[0], characterIds: ['missing-character'] }] } })).rejects.toThrow('角色不存在');
   expect((await runtime.dispatch('project.get', { projectId: project.id }) as { project: ProjectDocument }).project).toEqual(project);
 });

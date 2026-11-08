@@ -30,7 +30,7 @@ it.each(['max_tokens', 'max_completion_tokens'] as const)('forwards configured %
   const runtime = createRuntime({ dataDirectory: directory, seed: false, ffmpegPath: '/unused-for-agent-review' }); runtimes.push(runtime);
   const project = projectSchema.parse(await runtime.dispatch('project.create', { title: 'Agent参数审查' }));
   const model = await runtime.dispatch('model.save', { model: { name: '审查夹具', provider: 'openai-compatible', baseUrl: `http://127.0.0.1:${address.port}/v1`, model: 'fixture', connectionType: 'text', capabilities: ['text', 'tools'], parameters: { [tokenParameter]: 73, temperature: .2, top_p: .91 } } }) as ModelProfile;
-  await runtime.dispatch('workflow.save', { projectId: project.id, workflow: { id: 'review', name: '参数审查', version: 1, production: { mode: 'native-video', referenceMode: 'none', soundPrompt: '', subtitleMode: 'off' }, nodes: [workflowNodeSchema.parse({ id: 'agent', kind: 'agent', label: 'Agent', modelId: model.id })], edges: [] } });
+  await runtime.dispatch('project.update', { projectId: project.id, patch: { workflow: { id: 'review', name: '参数审查', version: 1, production: { mode: 'native-video', referenceMode: 'none', soundPrompt: '', subtitleMode: 'off' }, nodes: [workflowNodeSchema.parse({ id: 'agent', kind: 'agent', label: 'Agent', modelId: model.id })], edges: [] } } });
   const run = await runtime.dispatch('run.start', { projectId: project.id }) as RunRecord;
   await runtime.waitForIdle();
   expect(await runtime.dispatch('run.get', { runId: run.id })).toMatchObject({ status: 'succeeded' });
@@ -76,7 +76,7 @@ it('keeps existing shot character bindings through an ordinary script-to-image w
   const project = projectSchema.parse(await runtime.dispatch('project.update', { projectId: original.id, revision: original.revision, patch: { shots: [{ id: 'same-shot', title: '原镜头', narration: '原旁白', visualPrompt: '原画面', durationUs: 1_000_000, characterIds: [character.id] }] } }));
   const text = await runtime.dispatch('model.save', { model: { name: '脚本夹具', provider: 'openai-compatible', baseUrl: 'http://127.0.0.1:9/v1', model: 'fixture-text', connectionType: 'text', capabilities: ['text'] } }) as ModelProfile;
   const image = await runtime.dispatch('model.save', { model: { name: '图片夹具', provider: 'openai-compatible', baseUrl: 'http://127.0.0.1:9/v1', model: 'fixture-image', connectionType: 'image', capabilities: ['image'] } }) as ModelProfile;
-  await runtime.dispatch('workflow.save', { projectId: project.id, workflow: { id: 'roles', name: '普通角色流程', version: 1, production: { mode: 'native-video', referenceMode: 'none', soundPrompt: '', subtitleMode: 'off' }, nodes: [workflowNodeSchema.parse({ id: 'script', kind: 'script', label: '脚本', modelId: text.id }), workflowNodeSchema.parse({ id: 'assets', kind: 'assets', label: '图片', modelId: image.id })], edges: [{ id: 'edge', source: 'script', target: 'assets' }] } });
+  await runtime.dispatch('project.update', { projectId: project.id, patch: { workflow: { id: 'roles', name: '普通角色流程', version: 1, production: { mode: 'native-video', referenceMode: 'none', soundPrompt: '', subtitleMode: 'off' }, nodes: [workflowNodeSchema.parse({ id: 'script', kind: 'script', label: '脚本', modelId: text.id }), workflowNodeSchema.parse({ id: 'assets', kind: 'assets', label: '图片', modelId: image.id })], edges: [{ id: 'edge', source: 'script', target: 'assets' }] } } });
   const run = await runtime.dispatch('run.start', { projectId: project.id }) as RunRecord;
   await runtime.waitForIdle(); expect(await runtime.dispatch('run.get', { runId: run.id })).toMatchObject({ status: 'succeeded' });
   expect(seenCharacterIds).toEqual([character.id]); expect(seenCharacters).toEqual([character]);
@@ -94,7 +94,7 @@ it('rejects an ordinary generated result after a referenced global character cha
   const original = projectSchema.parse(await runtime.dispatch('project.create', { title: '普通结果角色保护' }));
   await runtime.dispatch('project.update', { projectId: original.id, revision: original.revision, patch: { shots: [{ id: 'same-shot', title: '原镜头', narration: '', visualPrompt: '', durationUs: 1_000_000, characterIds: [character.id] }] } });
   const model = await runtime.dispatch('model.save', { model: { name: '图片夹具', provider: 'openai-compatible', baseUrl: 'http://127.0.0.1:9/v1', model: 'fixture', connectionType: 'image', capabilities: ['image'] } }) as ModelProfile;
-  await runtime.dispatch('workflow.save', { projectId: original.id, workflow: { id: 'image', name: '图片', version: 1, production: { mode: 'native-video', referenceMode: 'none', soundPrompt: '', subtitleMode: 'off' }, nodes: [workflowNodeSchema.parse({ id: 'assets', kind: 'assets', label: '图片', modelId: model.id })], edges: [] } });
+  await runtime.dispatch('project.update', { projectId: original.id, patch: { workflow: { id: 'image', name: '图片', version: 1, production: { mode: 'native-video', referenceMode: 'none', soundPrompt: '', subtitleMode: 'off' }, nodes: [workflowNodeSchema.parse({ id: 'assets', kind: 'assets', label: '图片', modelId: model.id })], edges: [] } } });
   const before = await runtime.dispatch('project.get', { projectId: original.id }) as { project: unknown };
   const project = projectSchema.parse(before.project);
   const run = await runtime.dispatch('run.start', { projectId: original.id }) as RunRecord;
@@ -113,7 +113,7 @@ it.each(['after-dispatch', 'after-result', 'after-commit'] as const)('keeps one 
   } }); runtimes.push(first);
   const project = projectSchema.parse(await first.dispatch('project.create', { title: '费用恢复检查' }));
   const model = await first.dispatch('model.save', { model: { name: '用量夹具', provider: 'openai-compatible', baseUrl: 'http://127.0.0.1:9/v1', model: 'fixture', connectionType: 'text', capabilities: ['text'], pricing: { currency: 'USD', inputPerMillionTokens: 2, outputPerMillionTokens: 8 } } }) as ModelProfile;
-  await first.dispatch('workflow.save', { projectId: project.id, workflow: { id: 'cost-review', name: '费用恢复', version: 1, production: { mode: 'native-video', referenceMode: 'none', soundPrompt: '', subtitleMode: 'off' }, nodes: [workflowNodeSchema.parse({ id: 'brief', kind: 'brief', label: '简报', modelId: model.id })], edges: [] } });
+  await first.dispatch('project.update', { projectId: project.id, patch: { workflow: { id: 'cost-review', name: '费用恢复', version: 1, production: { mode: 'native-video', referenceMode: 'none', soundPrompt: '', subtitleMode: 'off' }, nodes: [workflowNodeSchema.parse({ id: 'brief', kind: 'brief', label: '简报', modelId: model.id })], edges: [] } } });
   const run = await first.dispatch('run.start', { projectId: project.id }) as RunRecord;
   await first.waitForIdle(); expect(interrupted).toBe(true);
   await first.close(); runtimes.splice(runtimes.indexOf(first), 1);

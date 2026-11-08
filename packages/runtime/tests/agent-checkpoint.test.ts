@@ -33,7 +33,7 @@ it('resumes the Agent conversation after a durable tool result without reintrodu
   } });
   const project = projectSchema.parse(await first.dispatch('project.create', { title: 'Agent 持久会话恢复' }));
   const model = modelSchema.parse(await first.dispatch('model.save', { model: { name: 'fixture', provider: 'openai-compatible', baseUrl: `http://127.0.0.1:${address.port}/v1`, model: 'fixture', connectionType: 'text', capabilities: ['text', 'tools'] } }));
-  await first.dispatch('workflow.save', { projectId: project.id, revision: project.revision, workflow: { ...project.workflow, nodes: [workflowNodeSchema.parse({ id: 'agent', kind: 'agent', label: 'Agent', modelId: model.id, prompt: '读取项目再交付结果。' })], edges: [] } });
+  await first.dispatch('project.update', { projectId: project.id, revision: project.revision, patch: { workflow: { ...project.workflow, nodes: [workflowNodeSchema.parse({ id: 'agent', kind: 'agent', label: 'Agent', modelId: model.id, prompt: '读取项目再交付结果。' })], edges: [] } } });
   const run = runSchema.parse(await first.dispatch('run.start', { projectId: project.id })); await first.waitForIdle();
   expect(crashed).toBe(true); expect(requests).toHaveLength(1);
   await first.close();

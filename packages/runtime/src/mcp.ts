@@ -5,10 +5,10 @@ import { mcpServerSchema, type MCPServer } from '@video-quickly/contracts';
 export { mcpServerSchema };
 export type McpServer = MCPServer;
 
-export async function connectMcp(server: McpServer, secret?: string) {
+export async function connectMcp(server: McpServer, secret?: string, outputDirectory?: string) {
   const client = new Client({ name: 'video-quickly', version: '0.1.0' }, { capabilities: {} });
   const transport = server.transport === 'stdio'
-    ? new StdioClientTransport({ command: server.command!, args: server.args, stderr: 'pipe', env: { ...(process.env.PATH ? { PATH: process.env.PATH } : {}), ...(process.env.SystemRoot ? { SystemRoot: process.env.SystemRoot } : {}), ...(process.env.TEMP ? { TEMP: process.env.TEMP } : {}), ...(secret && server.credentialEnvName ? { [server.credentialEnvName]: secret } : {}) } })
+    ? new StdioClientTransport({ command: server.command!, args: server.args, stderr: 'pipe', env: { ...(process.env.PATH ? { PATH: process.env.PATH } : {}), ...(process.env.SystemRoot ? { SystemRoot: process.env.SystemRoot } : {}), ...(process.env.TEMP ? { TEMP: process.env.TEMP } : {}), ...(secret && server.credentialEnvName ? { [server.credentialEnvName]: secret } : {}), ...(outputDirectory ? { VIDEO_QUICKLY_TOOL_OUTPUT_DIR: outputDirectory } : {}) } })
     : new StreamableHTTPClientTransport(new URL(server.url!), { requestInit: secret ? { headers: { Authorization: `Bearer ${secret}` } } : undefined });
   // Servers can print sensitive diagnostics. Drain without forwarding or storing
   // them so a full stderr pipe cannot stall protocol messages.

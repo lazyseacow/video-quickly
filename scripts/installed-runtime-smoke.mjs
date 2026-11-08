@@ -2,7 +2,7 @@ import { spawn } from 'node:child_process';
 import { createInterface } from 'node:readline';
 import { createRequire } from 'node:module';
 import { readFile, writeFile } from 'node:fs/promises';
-import { dirname, join, resolve } from 'node:path';
+import { join, resolve } from 'node:path';
 import assert from 'node:assert/strict';
 function fixtureSecretCall(method, params, values) {
   if (method === 'host.secret.set') { values.set(params.key, params.value); return null; }
@@ -18,10 +18,15 @@ if (!['prepare', 'verify', 'inspect'].includes(mode) || !installDirectory || !da
 const sidecar = process.platform === 'darwin' ? resolve(installDirectory, 'Contents/Resources/sidecar') : resolve(installDirectory, 'resources', 'sidecar');
 const extension = process.platform === 'win32' ? '.exe' : '';
 if (mode === 'inspect') {
+  const { WORKSPACE_MIGRATIONS } = await import('../packages/runtime/src/database.ts');
+  const expectedVersion = WORKSPACE_MIGRATIONS.at(-1)?.version;
   const require = createRequire(join(sidecar, 'package.json'));
   const Database = require('better-sqlite3');
   const db = new Database(join(dataDirectory, 'workspace.sqlite'), { readonly: true });
-  try { assert.equal(db.pragma('user_version', { simple: true }), 19); assert.equal(db.pragma('quick_check', { simple: true }), 'ok'); } finally { db.close(); }
+  try {
+    assert.equal(db.pragma('user_version', { simple: true }), expectedVersion);
+    assert.equal(db.pragma('quick_check', { simple: true }), 'ok');
+  } finally { db.close(); }
   console.log('原生客户端已完成数据库迁移');
   process.exit(0);
 }
@@ -86,7 +91,7 @@ try {
       assert.equal(original.status, 'succeeded'); assert.equal(original.activities.length, 1);
       assert.equal((await runAt(saved.runId, 'succeeded')).activities.length, 1);
     const exporter = await rpc('project.create', { title: '安装后导出', profile: { width: 320, height: 180, frameRate: { numerator: 30, denominator: 1 }, fitMode: 'contain', previewScale: .5 } });
-    await rpc('project.saveShot', { projectId: exporter.id, shot: { id: 'installed-shot', title: '安装后的实际画面', narration: '安装后的本地小样', visualPrompt: '', durationUs: 500_000 } });
+    await rpc('project.update', { projectId: exporter.id, revision: exporter.revision, patch: { shots: [{ id: 'installed-shot', title: '安装后的实际画面', narration: '安装后的本地小样', visualPrompt: '', durationUs: 500_000 }] } });
     const exported = await rpc('render.export', { projectId: exporter.id });
     await runAt(exported.runId, 'succeeded');
   }

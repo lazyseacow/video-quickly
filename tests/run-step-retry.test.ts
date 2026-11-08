@@ -27,7 +27,7 @@ async function fixture(extra: Partial<RuntimeOptions> = {}, final = false, neste
   const production = { mode: 'native-video', referenceMode: 'none', soundPrompt: '', subtitleMode: 'off' };
   const template = nested ? await runtime.dispatch('workflowTemplate.save', { name: '重试子流程', workflow: { id: 'nested', name: 'nested', version: 1, production, nodes: [nodes[2], workflowNodeSchema.parse({ id: 'tail', kind: 'animation', label: '子流程后续', config: { operation: 'prepare-edit' } })], edges: [{ id: 'next', source: 'assets', target: 'tail' }] } }) as WorkflowTemplate : undefined;
   if (template) nodes[2] = workflowNodeSchema.parse({ id: 'call', kind: 'subflow', label: '子流程', subflow: { id: template.id, version: 1, inputs: {} } });
-  const project = projectSchema.parse(await runtime.dispatch('workflow.save', { projectId: created.id, workflow: { id: 'retry-flow', version: 1, name: '重试验收', production, nodes, edges: nodes.slice(1).map((node, index) => ({ id: `edge-${index}`, source: nodes[index].id, target: node.id })), ...(template ? { subflows: [template.definition] } : {}) } }));
+  const project = projectSchema.parse(await runtime.dispatch('project.update', { projectId: created.id, patch: { workflow: { id: 'retry-flow', version: 1, name: '重试验收', production, nodes, edges: nodes.slice(1).map((node, index) => ({ id: `edge-${index}`, source: nodes[index].id, target: node.id })), ...(template ? { subflows: [template.definition] } : {}) } } }));
   const started = runSchema.parse(await runtime.dispatch('run.start', { projectId: project.id })); await runtime.waitForIdle();
   return { runtime, directory, options, project, model, run: started, provider, media, fail: (count = 1) => { failures = count; } };
 }
@@ -151,9 +151,27 @@ it('rejects missing checkpoints without inventing upstream completion', async ()
   await expect(retry(f.runtime, f.run.id)).rejects.toThrow(); expect(f.media).toHaveBeenCalledTimes(1);
 });
 
-it('rejects a retry while another run owns the project', async () => {
+it('rejects retry and resume while another run owns the project', async () => {
   const f = await fixture();
   const db = openDatabase(f.directory), store = new DocumentStore(db);
   store.put('run', 'other-active-run', { ...f.run, id: 'other-active-run', status: 'running' }); db.close();
-  await expect(retry(f.runtime, f.run.id)).rejects.toThrow('未完成'); expect(f.media).toHaveBeenCalledTimes(1);
+  await expect(retry(f.runtime, f.run.id)).rejects.toThrow('未完成');
+  await expect(f.runtime.dispatch('run.resume', { runId: f.run.id })).rejects.toThrow('未完成');
+  expect(f.media).toHaveBeenCalledTimes(1);
+});
+
+it('reserves the project before either of two simultaneous resumes can start', async () => {
+  const f = await fixture(), otherId = 'other-interrupted-run';
+  const db = openDatabase(f.directory), store = new DocumentStore(db);
+  try {
+    store.put('run-snapshot', otherId, store.get('run-snapshot', f.run.id));
+    store.put('run', otherId, { ...f.run, id: otherId, status: 'failed' });
+  } finally { db.close(); }
+  const [first, other] = await Promise.allSettled([
+    f.runtime.dispatch('run.resume', { runId: f.run.id }),
+    f.runtime.dispatch('run.resume', { runId: otherId }),
+  ]);
+  expect(first.status).toBe('fulfilled');
+  expect(other).toMatchObject({ status: 'rejected', reason: expect.objectContaining({ message: expect.stringContaining('未完成') }) });
+  await f.runtime.waitForIdle();
 });

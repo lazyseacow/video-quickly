@@ -22,7 +22,7 @@ test('saves all four stages once, preserves subtitles off and completes video wi
     expect((await saved(request, source.project.id)).shots[0].audioProcessing).toMatchObject({ version: 2, videoAudio: { enabled: true } });
     expect(source.requests.filter(value => value.generate_audio === true)).toHaveLength(1); expect(errors).toEqual([]); await expect(page.locator('vite-error-overlay')).toHaveCount(0);
     await page.screenshot({ path: info.outputPath('native-production-complete.png') });
-    await page.getByRole('button', { name: '打开步骤：镜头视频生成', exact: true }).click(); await page.getByRole('dialog', { name: '本次制作', exact: true }).getByRole('navigation', { name: '本次制作步骤', exact: true }).getByRole('button', { name: /剪辑与运镜准备/ }).click();
+    await page.getByRole('button', { name: '打开阶段：素材与配音', exact: true }).click(); await page.getByRole('dialog', { name: '本次制作', exact: true }).getByRole('navigation', { name: '本次制作步骤', exact: true }).getByRole('button', { name: /剪辑与运镜准备/ }).click();
     dialog = page.getByRole('dialog', { name: '本次制作', exact: true }); await expect(dialog).toBeVisible();
     await expect(dialog.getByRole('navigation', { name: '本次制作步骤', exact: true }).getByRole('button', { name: /剪辑与运镜准备/ })).toHaveAttribute('aria-current', 'step');
     await expect(dialog.getByRole('navigation', { name: '本次制作步骤', exact: true })).toContainText('剪辑与运镜准备');
@@ -31,7 +31,7 @@ test('saves all four stages once, preserves subtitles off and completes video wi
     await rpc(request, 'run.start', { projectId: source.project.id, nodeId: 'script' });
     await expect.poll(async () => (await latest(request, source.project.id))?.status, { timeout: 30_000 }).toBe('succeeded');
     await page.reload(); await openProjectFromList(page, source.project.title);
-    await page.getByRole('button', { name: '打开步骤：分镜生成', exact: true }).click(); await page.getByRole('dialog', { name: '本次制作', exact: true }).getByRole('navigation', { name: '本次制作步骤', exact: true }).getByRole('button', { name: /剪辑与运镜准备/ }).click();
+    await page.getByRole('button', { name: '打开阶段：策划与分镜', exact: true }).click(); await page.getByRole('dialog', { name: '本次制作', exact: true }).getByRole('navigation', { name: '本次制作步骤', exact: true }).getByRole('button', { name: /剪辑与运镜准备/ }).click();
     await expect(dialog).toContainText('这次制作未包含此步骤');
     await expect(dialog.getByRole('button', { name: '查看制作设置', exact: true })).toHaveCount(0);
   } finally { await source.close(); }

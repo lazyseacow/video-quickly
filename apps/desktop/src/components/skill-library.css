@@ -1,9 +1,10 @@
 .skill-picker { min-width: 0; border: 0; padding: 0; margin: var(--space-3) 0; }
+details > summary + .skill-picker { margin-block: 0 var(--space-2); }
 .skill-picker > legend { font-size: var(--text-size-label); font-weight: var(--font-weight-medium); padding: 0; margin-bottom: var(--space-2); }
 .skill-picker__toolbar { display: flex; align-items: center; flex-wrap: wrap; gap: var(--space-2); margin-bottom: var(--space-2); }
 .skill-picker__toolbar input { flex: 1; min-width: 0; }
 .skill-picker__groups { max-height: 36vh; overflow: auto; overscroll-behavior: contain; }
-.skill-picker__group { border-bottom: 1px solid var(--border); }
+.skill-picker__group + .skill-picker__group { border-top: 1px solid var(--border); }
 .skill-picker__group[open] > summary .skill-picker__chevron { transform: rotate(90deg); }
 .skill-picker__group > summary { display: flex; align-items: center; justify-content: space-between; gap: var(--space-2); cursor: pointer; padding-block: var(--space-1); }
 .skill-picker__group > summary > span { min-width: 0; display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); font-size: var(--text-size-label); font-weight: var(--font-weight-medium); }
@@ -20,20 +21,28 @@
 .skill-import-record > span { display: grid; min-width: 0; gap: var(--space-1); }
 .skill-import-record strong { font-size: var(--text-size-label); font-weight: var(--font-weight-medium); }
 .skill-import-record small { color: var(--text-secondary); font-size: var(--text-size-caption); line-height: var(--line-height-body); overflow-wrap: anywhere; }
-.skill-studio-groups { min-width: 0; }
-.skill-studio-group { margin-bottom: var(--space-6); }
-.skill-studio-group__heading { display: flex; align-items: center; justify-content: space-between; gap: var(--space-3); margin-bottom: var(--space-3); }
-.skill-studio-group__heading > div { min-width: 0; }
-.skill-studio-group__heading h2 { margin: 0 0 var(--space-1); font-size: var(--text-size-title); font-weight: var(--font-weight-medium); overflow-wrap: anywhere; }
-.skill-studio-group__heading .tiny-meta { overflow-wrap: anywhere; }
-.skill-studio-group__heading { flex-wrap: wrap; }
+.skill-studio-groups { container: skill-studio / inline-size; min-width: 0; }
+.skill-studio-group { padding-block: var(--space-2); }
+.skill-studio-group + .skill-studio-group { border-top: 1px solid var(--border); }
+.skill-studio-group__heading { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: var(--space-2) var(--space-3); }
+.skill-studio-group__identity { min-width: 0; max-width: 100%; }
+.button.skill-studio-group__toggle { max-width: 100%; min-height: var(--control-hit-size); justify-content: flex-start; padding: var(--space-1) var(--space-2); border-radius: var(--radius-small); color: var(--text); font-size: var(--text-size-title); font-weight: var(--font-weight-medium); text-align: start; white-space: normal; }
+.skill-studio-group__toggle[aria-expanded='true'] > svg { transform: rotate(90deg); }
+.skill-studio-group__label { display: flex; align-items: baseline; flex-wrap: wrap; min-width: 0; gap: var(--space-1) var(--space-2); overflow-wrap: anywhere; }
+.skill-studio-group__identity > .tiny-meta { padding-inline-start: var(--space-8); overflow-wrap: anywhere; }
 .skill-studio-group__actions { display: flex; flex-wrap: wrap; gap: var(--space-2); align-items: center; }
+.skill-studio-group__cards { margin-top: var(--space-3); }
+.skill-studio-group__cards > :last-child { margin-bottom: 0; }
 .list-card.skill-card { display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: start; }
+.skill-card .list-card__body h3 { overflow-wrap: anywhere; }
 .skill-card .list-card__actions { grid-column: 2; justify-content: flex-end; flex-wrap: wrap; }
 .skill-card--disabled .list-card__body h3 { color: var(--text-secondary); }
 .skill-card .skill-toggle { min-inline-size: calc(var(--space-6) * 4); }
+@container skill-studio (min-width: 720px) {
+  .list-card.skill-card { grid-template-columns: auto minmax(0, 1fr) auto; }
+  .skill-card .list-card__actions { grid-column: 3; min-height: var(--control-hit-size); }
+}
 .skill-resource-preview { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 40vh; overflow: auto; padding: var(--space-3); background: var(--surface); border-radius: var(--radius-small); font-size: var(--text-size-caption); line-height: var(--line-height-prose); }
-.skill-import-history { margin-bottom: var(--space-4); }
 @media (max-width: 700px) {
   .skill-import-status { padding-inline: var(--space-3); }
   .skill-picker__toolbar { align-items: stretch; }

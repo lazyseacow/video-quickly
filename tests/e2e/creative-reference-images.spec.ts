@@ -65,7 +65,7 @@ for (const viewport of [{ width: 1536, height: 960, theme: 'dark', name: 'deskto
       await scene.locator(':scope > details > summary').click();
       await scene.locator('.creative-reference-picker__disclosure > summary').click(); references = scene.getByRole('group', { name: '场景参考图（最多 4 张）', exact: true });
       const imported = references.getByRole('checkbox', { name: /新增花园图-/ }); await expect(imported).toBeChecked(); await imported.focus(); await page.keyboard.press('Space'); await expect(imported).not.toBeChecked();
-      await dialog.getByRole('button', { name: '取消', exact: true }).click(); await expect(dialog).toHaveCount(0);
+      await dialog.getByRole('button', { name: '关闭对话框', exact: true }).click(); await expect(dialog).toHaveCount(0);
       expect((await source.current()).creativeContext?.entities[0].referenceAssetIds).toHaveLength(2);
       await expect(page.locator('vite-error-overlay')).toHaveCount(0); expect(errors).toEqual([]); expect(consoleErrors).toEqual([]);
     } finally { await source.cleanup(); }

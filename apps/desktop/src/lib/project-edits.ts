@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { barChartSceneTemplateSchema, clipEditPlanSchema, clipEditSourceSchema, comparisonSceneTemplateSchema, musicClipSchema, processSceneTemplateSchema, projectSchema, shotSchema, videoProfileSchema, workflowNodeSchema, workflowSchema, type ProjectDocument, type Shot } from '@video-quickly/contracts';
+import { barChartSceneTemplateSchema, clipEditPlanSchema, clipEditSourceSchema, comparisonSceneTemplateSchema, musicClipSchema, processSceneTemplateSchema, projectSchema, sameJsonContent as sameContent, shotSchema, videoProfileSchema, workflowNodeSchema, workflowSchema, type ProjectDocument, type Shot } from '@video-quickly/contracts';
 
 // Preserve unfinished input, including values the commit schema will reject.
 const draftComparisonSide = comparisonSceneTemplateSchema.shape.left.extend({ title: z.string(), points: z.array(z.string()).min(1).max(5) });
@@ -11,7 +11,7 @@ const draftSceneTemplateSchema = z.discriminatedUnion('kind', [
 const draftShotSchema = shotSchema.extend({ title: z.string(), narration: z.string(), visualPrompt: z.string(), durationUs: z.number().finite(), sceneTemplate: draftSceneTemplateSchema.optional() });
 const draftProfileSchema = videoProfileSchema.extend({ width: z.number().finite(), height: z.number().finite(), frameRate: z.object({ numerator: z.number().finite(), denominator: z.number().finite() }) });
 const draftWorkflowSchema = workflowSchema.extend({ nodes: z.array(workflowNodeSchema.extend({ label: z.string() })).max(100) });
-export const editContentSchema = projectSchema.pick({ title: true, brief: true, profile: true, style: true, creativeContext: true, claims: true, shots: true, musicClips: true, researchSources: true, referenceDisplay: true, captionStyle: true, scenePreset: true, audioMix: true, clipEditSources: true, clipEditPlans: true }).extend({ creativeContext: projectSchema.shape.creativeContext.default(null), title: z.string(), brief: z.string(), profile: draftProfileSchema, shots: z.array(draftShotSchema), workflow: draftWorkflowSchema, musicClips: z.array(musicClipSchema).default([]), researchSources: projectSchema.shape.researchSources.unwrap().default([]), referenceDisplay: projectSchema.shape.referenceDisplay.unwrap().default('hidden'), captionStyle: projectSchema.shape.captionStyle.default(null), scenePreset: projectSchema.shape.scenePreset.default(null), audioMix: projectSchema.shape.audioMix.default(null), clipEditSources: projectSchema.shape.clipEditSources.unwrap().default([]), clipEditPlans: projectSchema.shape.clipEditPlans.unwrap().default([]) });
+const editContentSchema = projectSchema.pick({ title: true, brief: true, profile: true, style: true, creativeContext: true, claims: true, shots: true, musicClips: true, researchSources: true, referenceDisplay: true, captionStyle: true, scenePreset: true, audioMix: true, clipEditSources: true, clipEditPlans: true }).extend({ creativeContext: projectSchema.shape.creativeContext.default(null), title: z.string(), brief: z.string(), profile: draftProfileSchema, shots: z.array(draftShotSchema), workflow: draftWorkflowSchema, musicClips: z.array(musicClipSchema).default([]), researchSources: projectSchema.shape.researchSources.unwrap().default([]), referenceDisplay: projectSchema.shape.referenceDisplay.unwrap().default('hidden'), captionStyle: projectSchema.shape.captionStyle.default(null), scenePreset: projectSchema.shape.scenePreset.default(null), audioMix: projectSchema.shape.audioMix.default(null), clipEditSources: projectSchema.shape.clipEditSources.unwrap().default([]), clipEditPlans: projectSchema.shape.clipEditPlans.unwrap().default([]) });
 export type EditContent = z.infer<typeof editContentSchema>;
 const shotPatchSchema = z.object({ put: z.array(draftShotSchema), remove: z.array(z.string()), order: z.array(z.string()).optional() });
 const workflowPatchSchema = z.object({
@@ -31,7 +31,6 @@ const commandSchema = z.object({ label: z.string(), before: editPatchSchema, aft
   for (const key of Object.keys(before) as Array<keyof typeof before>) if (Object.hasOwn(after, key) && sameContent(before[key], after[key])) { delete before[key]; delete after[key]; }
   return { ...command, before, after };
 });
-type EditCommand = z.infer<typeof commandSchema>;
 const savedEditFields = {
   projectId: z.string(), revision: z.number().int().positive(),
   undo: z.array(commandSchema).max(50), redo: z.array(commandSchema).max(50), selectedShotId: z.string().optional(),
@@ -40,16 +39,9 @@ const currentSavedEditsSchema = z.object({ ...savedEditFields, version: z.litera
 export const savedEditsSchema = currentSavedEditsSchema;
 export type SavedEdits = z.infer<typeof savedEditsSchema>;
 type EditorState = z.infer<typeof currentSavedEditsSchema> & { conflict?: ProjectDocument; recovered: boolean; busy: boolean };
-export type EditConflict = { path: string; label: string; local: unknown; remote: unknown };
+type EditConflict = { path: string; label: string; local: unknown; remote: unknown };
 const keys = ['title', 'brief', 'profile', 'style', 'creativeContext', 'claims', 'musicClips', 'researchSources', 'referenceDisplay', 'captionStyle', 'scenePreset', 'audioMix'] as const;
-export function sameContent(left: unknown, right: unknown): boolean {
-  if (left === right) return true;
-  if (Array.isArray(left) && Array.isArray(right)) return left.length === right.length && left.every((value, index) => sameContent(value, right[index]));
-  if (!isObject(left) || !isObject(right)) return false;
-  const leftKeys = Object.keys(left).filter(key => left[key] !== undefined);
-  const rightKeys = Object.keys(right).filter(key => right[key] !== undefined);
-  return leftKeys.length === rightKeys.length && leftKeys.every(key => Object.hasOwn(right, key) && sameContent(left[key], right[key]));
-}
+export { sameContent };
 export function editContent(project: ProjectDocument): EditContent {
   return { title: project.title, brief: project.brief, profile: project.profile, style: project.style, creativeContext: project.creativeContext ?? null, claims: project.claims, shots: project.shots, workflow: project.workflow, musicClips: project.musicClips ?? [], researchSources: project.researchSources ?? [], referenceDisplay: project.referenceDisplay ?? 'hidden', captionStyle: project.captionStyle ?? null, scenePreset: project.scenePreset ?? null, audioMix: project.audioMix ?? null, clipEditSources: project.clipEditSources ?? [], clipEditPlans: project.clipEditPlans ?? [] };
 }

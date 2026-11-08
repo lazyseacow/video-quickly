@@ -10,7 +10,7 @@ const timestamp = () => new Date().toISOString();
 const reason = (error: unknown) => (error instanceof Error ? error.message : String(error)).slice(0, 1500);
 export function createProductionQueue({ database, store, project, work, busy, createRun, resumeRun, cancelRun, runConflict, changed }: {
   database: Database.Database; store: DocumentStore; project(id: string): ProjectDocument; work(id: string): StoryWork;
-  busy(projectId: string, exceptItemId?: string): boolean; createRun(item: ProductionQueueItem): Promise<RunRecord>;
+  busy(projectId: string, exceptItemId?: string, exceptRunId?: string): boolean; createRun(item: ProductionQueueItem, queueRevision: number): Promise<RunRecord>;
   resumeRun(runId: string): void; cancelRun(runId: string): Promise<unknown>; runConflict(runId: string): boolean; changed(): void;
 }) {
   let stopped = false, dirty = false, task: Promise<void> | undefined;
@@ -39,10 +39,12 @@ export function createProductionQueue({ database, store, project, work, busy, cr
     store.put('production-queue-item', next.id, next); changed(); return next;
   }
   function requireRevision(value: { revision: number }, revision: number) { if (value.revision !== revision) throw new Error('生产队列已变化，请刷新后重试。'); }
-  function block(value: ProductionQueueItem, error: string, status: 'needs_attention' | 'failed' | 'canceled' = 'needs_attention') {
+  function block(value: ProductionQueueItem, error: string, status: 'needs_attention' | 'failed' | 'canceled' = 'needs_attention', dispatchQueueRevision?: number) {
     database.transaction(() => {
-      updateItem(value, { status, error });
-      const queue = get(value.queueId);
+      const latest = item(value.id), queue = get(value.queueId);
+      if (latest.revision !== value.revision) return;
+      if (dispatchQueueRevision !== undefined && (queue.revision !== dispatchQueueRevision || queue.status !== 'running' || latest.status !== 'queued')) return;
+      updateItem(latest, { status: queue.status === 'canceled' ? 'canceled' : status, error });
       if (queue.status !== 'canceled') updateQueue(queue, { status: 'needs_attention', error });
     })();
   }
@@ -70,8 +72,8 @@ export function createProductionQueue({ database, store, project, work, busy, cr
         const current = project(next.projectId);
         if (work(queue.workId).archived || current.archived || current.episode?.workId !== queue.workId) throw new Error('作品或分集不可用，请恢复并核对分集关联。');
         if (current.revision !== next.projectRevision) throw new Error('排队后项目已修改，请核对并刷新此项输入。');
-        await createRun(next);
-      } catch (error) { block(item(next.id), reason(error)); }
+        await createRun(next, queue.revision);
+      } catch (error) { block(next, reason(error), 'needs_attention', queue.revision); }
       return;
     }
   }
@@ -85,8 +87,9 @@ export function createProductionQueue({ database, store, project, work, busy, cr
     const row = database.prepare("SELECT body FROM documents WHERE kind = 'production-queue-item' AND json_extract(body, '$.projectId') = ? AND json_extract(body, '$.status') IN ('queued','running','needs_attention','failed') AND id <> ? LIMIT 1").get(projectId, exceptItemId) as { body: string } | undefined;
     return row ? productionQueueItemSchema.parse(JSON.parse(row.body)) : undefined;
   }
-  function claim(expected: ProductionQueueItem, runId: string) {
+  function claim(expected: ProductionQueueItem, queueRevision: number, runId: string) {
     const value = item(expected.id), queue = get(value.queueId); requireRevision(value, expected.revision);
+    requireRevision(queue, queueRevision);
     const current = project(value.projectId);
     if (queue.status !== 'running' || value.status !== 'queued' || value.runId || running() || items(queue.id).find(value => !terminal.has(value.status))?.id !== value.id) throw new Error('排队项已变化或暂停，未创建新的制作。');
     if (current.revision !== value.projectRevision || current.archived || current.episode?.workId !== queue.workId || work(queue.workId).archived) throw new Error('分集输入已变化，请重新核对排队项。');
@@ -98,12 +101,21 @@ export function createProductionQueue({ database, store, project, work, busy, cr
     database.transaction(() => {
       const latest = item(value.id); requireRevision(latest, value.revision);
       if (get(latest.queueId).status === 'canceled' || terminal.has(latest.status) || running() && running()!.id !== latest.id) throw new Error('队列已取消或另一个分集正在制作，请稍后处理。');
-      if (busy(latest.projectId, latest.id) && !['queued','waiting_external','retry_scheduled'].includes(run.status)) throw new Error('项目存在其他未完成制作，请先处理。');
+      if (busy(latest.projectId, latest.id, run.id)) throw new Error('项目存在其他未完成制作，请先处理。');
       updateItem(latest, { status: 'running', error: undefined });
       updateQueue(get(latest.queueId), { status: 'running', error: undefined });
     })();
     resumeRun(run.id); notify(); return get(value.queueId);
   }
+  // Older dispatchers could write an active reservation back after cancellation.
+  database.transaction(() => {
+    const rows = database.prepare(`
+      SELECT i.body FROM documents i JOIN documents q ON q.kind = 'production-queue' AND q.id = json_extract(i.body, '$.queueId')
+      WHERE i.kind = 'production-queue-item' AND json_extract(q.body, '$.status') = 'canceled'
+        AND json_extract(i.body, '$.status') IN ('queued', 'needs_attention', 'failed')
+    `).all() as { body: string }[];
+    for (const row of rows) updateItem(productionQueueItemSchema.parse(JSON.parse(row.body)), { status: 'canceled', error: undefined });
+  })();
   notify();
   return {
     notify, claim, activeForProject,

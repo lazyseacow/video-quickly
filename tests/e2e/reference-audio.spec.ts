@@ -53,7 +53,7 @@ for (const scenario of [
     dialog = await open(page, configured); await productionStep(dialog, '模型与素材');
     await expect(dialog.getByRole('list', { name: '已选参考音频', exact: true })).toContainText(scenario.file);
     await dialog.getByRole('button', { name: `移除参考音频：${scenario.file}`, exact: true }).click(); await expect(dialog.getByRole('list', { name: '已选参考音频', exact: true })).toHaveCount(0);
-    await dialog.getByRole('button', { name: '取消', exact: true }).click(); await expect(dialog).toHaveCount(0);
+    await dialog.getByRole('button', { name: '关闭对话框', exact: true }).click(); await expect(dialog).toHaveCount(0);
     expect((await saved(request, project.id)).workflow.production.referenceAudioAssetIds).toEqual(ids);
     dialog = await open(page, configured);
     await saveAndStartProduction(dialog); await expect(dialog).toHaveCount(0);

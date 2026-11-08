@@ -1,10 +1,11 @@
 import { randomUUID, createHash } from 'node:crypto';
 import { createReadStream } from 'node:fs';
 import { mkdir, stat } from 'node:fs/promises';
-import { isAbsolute, join, relative, resolve } from 'node:path';
+import { isAbsolute, relative, resolve } from 'node:path';
 import { z } from 'zod';
 import { audioLevelWindowSchema, audioMixJobSchema, preparedAudioMixSchema, projectSchema, silenceDetectionSchema, usesVideoAudio, workflowSchema, type AssetRecord, type AudioLevelWindow, type AudioMixJob, type AudioMixPrepareResult, type PreparedAudioMix, type ProjectDocument, type SilenceDetection } from '@video-quickly/contracts';
 import type { DocumentStore } from './database.js';
+import { usesFullAudioSource } from '@video-quickly/video/audio';
 
 export interface AudioMixCallbacks {
   projectionKey(project: ProjectDocument, assets: readonly AssetRecord[]): string;
@@ -19,7 +20,7 @@ export async function audioFileHash(path: string, signal?: AbortSignal): Promise
 }
 
 /** Audio jobs retain timing and DSP, never research text, prompts or full subtitle tracks. */
-export function compactAudioProject(project: ProjectDocument): ProjectDocument {
+function compactAudioProject(project: ProjectDocument): ProjectDocument {
   const planIds = new Set(project.shots.flatMap(shot => shot.clipEdit ? [shot.clipEdit.planId] : []));
   const plans = (project.clipEditPlans ?? []).filter(plan => planIds.has(plan.id)), sourceIds = new Set(plans.map(plan => plan.sourceId));
   return { ...project, title: '声音试听', brief: '', style: '', claims: [], researchSources: undefined, referenceDisplay: undefined,
@@ -92,8 +93,8 @@ export function createAudioPreview(options: {
   function verifyMapping(result: PreparedAudioMix, project: ProjectDocument, key: string) {
     if (result.key !== key) throw new Error('试听缓存与请求快照不匹配。');
     if (!result.shotDurations || result.shotDurations.length !== project.shots.length || result.shotDurations.some((value, index) => {
-      const shot = project.shots[index], legacy = Boolean(shot.audioAssetId && !shot.clipEdit && shot.sourceInUs === undefined && shot.audioInUs === undefined);
-      return value.shotId !== shot.id || (legacy ? value.durationUs < shot.durationUs : value.durationUs !== shot.durationUs);
+      const shot = project.shots[index], fullRecording = Boolean(shot.audioAssetId) && usesFullAudioSource(shot);
+      return value.shotId !== shot.id || (fullRecording ? value.durationUs < shot.durationUs : value.durationUs !== shot.durationUs);
     }) || result.shotDurations.reduce((sum, value) => sum + value.durationUs, 0) !== result.durationUs) throw new Error('试听缓存缺少准确的镜头时间映射。');
   }
   function start() {

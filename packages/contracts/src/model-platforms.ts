@@ -1,6 +1,6 @@
 import type { ModelCapability, ModelConnectionType, ModelPlatform, ModelProfile } from './index.js';
 
-export interface ModelPlatformPreset {
+interface ModelPlatformPreset {
   id: ModelPlatform;
   label: string;
   provider: ModelProfile['provider'];

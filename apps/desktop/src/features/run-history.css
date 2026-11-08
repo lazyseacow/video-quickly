@@ -1,8 +1,7 @@
 .page-toolbar.run-history-filters { justify-content: flex-start; align-items: flex-end; flex-wrap: wrap; }
-.run-history-filters > .run-history-filter { width: 240px; max-width: 100%; min-width: 0; margin: 0; }
+.run-history-filters > .run-history-filter { flex: 1 1 min(100%, 160px); min-width: 0; margin: 0; }
 .run-history-filters > .button { margin-left: auto; }
-@media (max-width: 900px) {
-  .page-toolbar.run-history-filters { align-items: stretch; }
-  .run-history-filters > .run-history-filter { width: 100%; }
+@media (max-width: 650px) {
+  .page-toolbar.run-history-filters { flex-direction: row; }
   .run-history-filters > .button { margin-left: 0; }
 }

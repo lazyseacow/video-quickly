@@ -12,10 +12,10 @@ it('automatically chains tasks and rejects the removed review endpoint without s
   try {
     const project = projectSchema.parse(await runtime.dispatch('project.create', { title: '自动串接旧流程' }));
     const model = modelSchema.parse(await runtime.dispatch('model.save', { model: { name: '隔离文本连接', provider: 'openai-compatible', baseUrl: 'https://example.invalid/v1', model: 'fixture', connectionType: 'text', capabilities: ['text'] } }));
-    await runtime.dispatch('workflow.save', { projectId: project.id, revision: project.revision, workflow: { ...project.workflow, id: 'identity-custom-review',
+    await runtime.dispatch('project.update', { projectId: project.id, revision: project.revision, patch: { workflow: { ...project.workflow, id: 'identity-custom-review',
       nodes: ['style', 'script'].map(kind => workflowNodeSchema.parse({ id: kind, kind, label: kind, modelId: model.id, requiresReview: true })),
       edges: [{ id: 'next', source: 'style', target: 'script' }],
-    } });
+    } } });
     const started = runSchema.parse(await runtime.dispatch('run.start', { projectId: project.id }));
     const current = async () => runSchema.parse(await runtime.dispatch('run.get', { runId: started.id }));
     await runtime.waitForIdle(); const completed = await current(), costs = await runtime.dispatch('cost.summary', { projectId: project.id });

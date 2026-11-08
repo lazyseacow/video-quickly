@@ -3,6 +3,7 @@ import { Film, Maximize, Minimize, Pause, Play, SkipBack, SkipForward, Volume2, 
 import { frameAtTime, timeAtFrame, type AssetRecord, type PreparedAudioMix, type ProjectDocument, type Shot, usesVideoAudio } from '@video-quickly/contracts';
 import { type TimelineClip } from '@video-quickly/video';
 import { PlaybackClock, usePlayback } from '../lib/playback';
+import { desktopBridge } from '../lib/desktop';
 import { beginGuideAction } from '../lib/guide-actions';
 import { Button, EmptyState, IconButton, Notice, Select, formatTime } from './Primitives';
 import { TimelinePreview } from './TimelinePreview';
@@ -23,6 +24,7 @@ export default memo(function PlaybackPreview({ project, draft, assets, timeline,
   const [muted, setMuted] = useState(false);
   const [volume, setVolume] = useState(1);
   const [fullscreen, setFullscreen] = useState(false);
+  const pendingFullscreenExit = useRef<symbol | undefined>(undefined);
   const [controlsVisible, setControlsVisible] = useState(true);
   const hideControls = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const hoveringControls = useRef(false);
@@ -51,15 +53,33 @@ export default memo(function PlaybackPreview({ project, draft, assets, timeline,
   }
   useEffect(() => { revealControls(); return () => clearTimeout(hideControls.current); }, [playing]);
   useEffect(() => {
-    const update = () => setFullscreen(document.fullscreenElement === player.current);
+    const update = () => {
+      const ownsFullscreen = Boolean(player.current && document.fullscreenElement === player.current);
+      if (!ownsFullscreen) pendingFullscreenExit.current = undefined;
+      setFullscreen(ownsFullscreen);
+    };
     document.addEventListener('fullscreenchange', update);
     return () => document.removeEventListener('fullscreenchange', update);
   }, []);
-  async function toggleFullscreen() {
+  async function toggleFullscreen(exiting = document.fullscreenElement === player.current) {
+    const element = player.current;
+    if (!element || pendingFullscreenExit.current || exiting !== (document.fullscreenElement === element)) return;
+    const exit = exiting ? Symbol() : undefined;
+    if (exit) pendingFullscreenExit.current = exit;
+    const isCurrentExit = () => pendingFullscreenExit.current === exit && player.current === element && document.fullscreenElement === element;
     try {
-      if (document.fullscreenElement === player.current) await document.exitFullscreen();
-      else await player.current?.requestFullscreen();
-    } catch { onError('无法切换全屏预览，请重试。', true); }
+      if (!exit) {
+        await element.requestFullscreen();
+        return;
+      }
+      const waitForNativeEntry = desktopBridge()?.waitForNativeFullscreenEntry;
+      if (waitForNativeEntry) await waitForNativeEntry();
+      if (isCurrentExit()) await document.exitFullscreen();
+    } catch {
+      if (exit ? isCurrentExit() : player.current === element) onError('无法切换全屏预览，请重试。', true);
+    } finally {
+      if (exit && pendingFullscreenExit.current === exit) pendingFullscreenExit.current = undefined;
+    }
   }
   function toggleMuted() {
     if (!volume) { setVolume(1); setMuted(false); }
@@ -120,7 +140,7 @@ export default memo(function PlaybackPreview({ project, draft, assets, timeline,
         <span className="timecode"><b>{formatTime(timeUs)}</b><span> / {formatTime(totalUs)}</span></span>
         <div className="preview-volume"><IconButton label={project.musicClips?.length || includesVideoAudio ? silent ? '开启预览声音' : '静音预览声音' : silent ? '开启旁白声音' : '静音旁白'} aria-pressed={silent} onClick={toggleMuted}>{silent ? <VolumeX size={17} /> : <Volume2 size={17} />}</IconButton><input type="range" aria-label="预览音量" aria-valuetext={`${Math.round((silent ? 0 : volume) * 100)}%`} min={0} max={1} step={0.05} value={silent ? 0 : volume} onChange={event => { setVolume(event.target.valueAsNumber); setMuted(false); }} /></div>
         <label className="preview-quality-control"><span className="preview-quality-label">清晰度</span><Select className="preview-quality" aria-label="预览质量" title="预览清晰度" value={previewScale} onChange={event => { const value = Number(event.target.value); setQuality(value); localStorage.setItem('vq-preview-scale', String(value)); }}><option value="0.25">流畅</option><option value="0.5">平衡</option><option value="1">原画</option></Select></label>
-        <IconButton label={fullscreen ? '退出全屏预览' : '全屏预览'} aria-pressed={fullscreen} disabled={!document.fullscreenEnabled} onClick={() => void toggleFullscreen()}>{fullscreen ? <Minimize size={17} /> : <Maximize size={17} />}</IconButton>
+        <IconButton label={fullscreen ? '退出全屏预览' : '全屏预览'} aria-pressed={fullscreen} disabled={!document.fullscreenEnabled} onClick={() => void toggleFullscreen(fullscreen)}>{fullscreen ? <Minimize size={17} /> : <Maximize size={17} />}</IconButton>
       </div>
     </div>
   </section>;

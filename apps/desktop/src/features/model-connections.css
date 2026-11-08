@@ -9,7 +9,6 @@
 .model-type-choice small { color: var(--text-secondary); font-size: var(--text-size-caption); line-height: var(--line-height-body); }
 .model-connection-type { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); margin-bottom: var(--space-5); color: var(--text-secondary); font-size: var(--text-size-caption); }
 .model-connection-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); column-gap: var(--space-3); }
-.model-connection-fields__wide { grid-column: 1 / -1; }
 .model-discovery { margin-top: var(--space-5); }
 .model-discovery .field { margin-bottom: var(--space-2); }
 .model-connection-dialog input[aria-invalid="true"] { border-color: var(--danger); }

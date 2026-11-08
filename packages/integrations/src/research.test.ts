@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, expect, it } from 'vitest';
 import { projectSchema, DEFAULT_VIDEO_PROFILE, createNativeVideoWorkflow } from '@video-quickly/contracts';
-import { parseResearchResult, readResearchSource, searchWikipedia, selectResearchPassages } from './research.js';
+import { parseResearchResult, readResearchSource, selectResearchPassages } from './research.js';
 import { chineseResearchPdf, researchPdf } from '../../../tests/research-fixtures.js';
 
 const directories: string[] = [], servers: Server[] = [];
@@ -37,20 +37,20 @@ it('extracts native Chinese CID text and a surrogate pair from a real PDF before
   expect(quote.length).toBe(Array.from(quote).length + 1);
 }, 20_000);
 
-it('performs actual HTTP search and separately captures the real page body with bounded reads and safe redirects', async () => {
+it('captures the real page body with bounded reads and safe redirects', async () => {
   const requests: string[] = [];
   const server = createServer((request, response) => {
     requests.push(request.url ?? '');
-    if (request.url?.startsWith('/w/api.php')) { response.setHeader('content-type', 'application/json'); response.end(JSON.stringify({ query: { search: [{ title: '造纸', pageid: 42, snippet: '<span class="searchmatch">造纸</span>的搜索摘要' }] } })); }
-    else if (request.url === '/redirect') { response.writeHead(302, { location: '/document' }); response.end(); }
+    if (request.url === '/redirect') { response.writeHead(302, { location: '/document' }); response.end(); }
     else if (request.url === '/document') { response.setHeader('content-type', 'text/html; charset=utf-8'); response.end('<html><title>真实页面 &amp; 原文</title><body><nav>菜单</nav><main><p>页面真实证据🙂。</p><script>不可作为正文</script><p>第二段。</p></main></body></html>'); }
     else if (request.url === '/huge') { response.setHeader('content-type', 'text/plain'); response.write('x'.repeat(2 * 1024 * 1024)); response.end('over limit'); }
     else if (request.url === '/badredirect') { response.writeHead(302, { location: 'file:///etc/passwd' }); response.end(); }
     else { response.setHeader('content-type', 'application/octet-stream'); response.end('binary'); }
   }); servers.push(server); await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
   const address = server.address(); if (!address || typeof address === 'string') throw new Error('测试服务地址无效'); const origin = `http://127.0.0.1:${address.port}`;
-  const hits = await searchWikipedia({ query: '造纸', language: 'zh', limit: 1 }, origin); expect(hits).toEqual([{ title: '造纸', pageId: 42, snippet: '造纸的搜索摘要', url: 'https://zh.wikipedia.org/?curid=42' }]); expect(requests[0]).toContain('list=search'); expect(decodeURIComponent(requests[0])).toContain('造纸');
-  const source = await readResearchSource({ url: `${origin}/redirect` }); expect(source.url).toBe(`${origin}/document`); expect(source.title).toBe('真实页面 & 原文'); expect(source.content).toContain('页面真实证据🙂。'); expect(source.content).not.toContain('不可作为正文'); expect(source.content).not.toContain('搜索摘要');
+  const source = await readResearchSource({ url: `${origin}/redirect` });
+  expect(requests).toEqual(['/redirect', '/document']);
+  expect(source.url).toBe(`${origin}/document`); expect(source.title).toBe('真实页面 & 原文'); expect(source.content).toContain('页面真实证据🙂。'); expect(source.content).not.toContain('不可作为正文');
   await expect(readResearchSource({ url: `${origin}/huge` })).rejects.toThrow('2 MB'); await expect(readResearchSource({ url: `${origin}/badredirect` })).rejects.toThrow('HTTP'); await expect(readResearchSource({ url: `${origin}/binary` })).rejects.toThrow('可读取');
 });
 

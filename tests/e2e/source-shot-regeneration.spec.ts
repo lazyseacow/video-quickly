@@ -19,7 +19,7 @@ for (const viewport of [{ width: 1536, height: 960, theme: 'dark', shotCount: 3 
       const original = await saved(request, source.project.id), generationCount = source.requests.length;
       const edited = await rpc<ProjectDocument>(request, 'project.update', { projectId: original.id, revision: original.revision, patch: { brief: '后来修改的项目简报', style: '后来修改的项目风格', shots: original.shots.map((shot, index) => index === 0 ? { ...shot, narration: '其他镜头的新旁白' } : shot) } });
       await rpc<ModelProfile>(request, 'model.save', { model: { ...source.video, model: 'changed-for-next-production', name: '下一次制作使用的视频模型' } });
-      await page.getByRole('button', { name: '打开步骤：镜头视频生成', exact: true }).click();
+      await page.getByRole('button', { name: '打开阶段：素材与配音', exact: true }).click();
       const results = page.getByRole('dialog', { name: '本次制作', exact: true });
       await results.getByRole('navigation', { name: '本次制作步骤', exact: true }).getByRole('button', { name: /镜头视频生成/ }).click();
       await expect(results.getByRole('button', { name: /^重新生成镜头/ })).toHaveCount(viewport.shotCount);

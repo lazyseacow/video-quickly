@@ -125,7 +125,7 @@ async function discoverSkillDirectories(root: string, depth = 0): Promise<string
   return result;
 }
 
-export async function importSkillDirectory(source: string, dataDirectory: string): Promise<SkillPackage> {
+async function importSkillDirectory(source: string, dataDirectory: string): Promise<SkillPackage> {
   const sourceRoot = resolve(source);
   const sourceInfo = await lstat(sourceRoot);
   if (!sourceInfo.isDirectory() || sourceInfo.isSymbolicLink()) throw new Error('请选择包含 SKILL.md 的本地目录。');

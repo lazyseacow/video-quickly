@@ -120,7 +120,7 @@ test('keeps generated results editable with undo and rejects reapplying them aft
     const original = await createProject(request, '产物应用历史验收');
     const model = await rpc(request, 'model.save', { model: { name: '隔离的分镜服务', provider: 'openai-compatible', baseUrl: `http://127.0.0.1:${address.port}/v1`, model: 'fixture', connectionType: 'text', capabilities: ['text'] } });
     const workflow = { ...original.workflow, nodes: original.workflow.nodes.map((node: ProjectDocument['workflow']['nodes'][number]) => node.kind === 'script' ? { ...node, modelId: model.id, config: { ...node.config, modelOverride: true } } : node) };
-    const project = await rpc(request, 'workflow.save', { projectId: original.id, revision: original.revision, workflow });
+    const project = await rpc(request, 'project.update', { projectId: original.id, revision: original.revision, patch: { workflow } });
     const run = await rpc(request, 'run.start', { projectId: project.id, nodeId: 'script' });
     await expect.poll(async () => (await rpc(request, 'run.get', { runId: run.id })).status, { timeout: 30_000 }).toBe('succeeded');
     await rpc(request, 'node.apply', { runId: run.id, nodeId: 'script', revision: project.revision });

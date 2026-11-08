@@ -55,7 +55,7 @@ export function sourceDurationsKey(shots: readonly Shot[], assets: readonly Asse
   return JSON.stringify(sourceIds(shots).map(id => { const asset = byId.get(id); return asset ? [id, asset.kind, asset.version, asset.sha256, asset.path, asset.active] : [id, 'missing']; }));
 }
 
-export async function readSourceDurations(shots: readonly Shot[], assets: readonly AssetRecord[], signal: AbortSignal): Promise<Record<string, number>> {
+async function readSourceDurations(shots: readonly Shot[], assets: readonly AssetRecord[], signal: AbortSignal): Promise<Record<string, number>> {
   const byId = new Map(assets.map(asset => [asset.id, asset])), ids = sourceIds(shots);
   const result: Record<string, number> = {};
   let next = 0;

@@ -1,8 +1,18 @@
-import type { MusicClip, Shot } from '@video-quickly/contracts';
+import type { AssetRecord, MusicClip, Shot } from '@video-quickly/contracts';
 import { clipSourceOutUs, resolveShotTime, type ClipEditContext } from './clip-edits.js';
 
 export type MediaSourceOffsets = Pick<Shot, 'sourceInUs' | 'audioInUs' | 'videoInUs'> & Partial<Pick<Shot, 'clipEdit' | 'durationUs' | 'sceneTemplate' | 'audioProcessing' | 'videoAssetId'>>;
 export interface SourceDurations { audioDurationUs?: number; videoDurationUs?: number }
+
+export function usesFullAudioSource(shot: Pick<Shot, 'clipEdit' | 'sourceInUs' | 'audioInUs'>): boolean {
+  return !shot.clipEdit && shot.sourceInUs === undefined && shot.audioInUs === undefined;
+}
+
+export function audioAsset(id: string, projectId: string, assets: readonly AssetRecord[], label = '音频', kind: 'audio' | 'video' = 'audio'): AssetRecord {
+  const asset = assets.find(value => value.id === id);
+  if (!asset || asset.kind !== kind || !asset.active || (asset.projectId !== undefined && asset.projectId !== projectId)) throw new Error(`${label}必须引用当前项目或共享素材库中的有效${kind === 'video' ? '视频' : '音频'}。`);
+  return asset;
+}
 
 export function mediaSourceInUs(shot: MediaSourceOffsets, kind: 'audio' | 'video', context: ClipEditContext = {}): number {
   if (shot.clipEdit) { const resolved = resolveShotTime({ ...shot, durationUs: shot.durationUs ?? 1 }, context, 0); return kind === 'audio' ? resolved.audioUs : resolved.videoUs; }

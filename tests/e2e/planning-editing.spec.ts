@@ -13,12 +13,13 @@ async function openWorkbench(page: Page, project: ProjectDocument) {
 async function prepared(page: Page, request: APIRequestContext, info: TestInfo) {
   const source = await fixture(request, info, false, 2);
   try {
-    await rpc(request, 'workflow.save', { projectId: source.project.id, workflow: { ...source.project.workflow, production: { ...source.project.workflow.production!, textModelId: source.models[0].id, videoModelId: source.video.id } } });
+    await rpc(request, 'project.update', { projectId: source.project.id, patch: { workflow: { ...source.project.workflow, production: { ...source.project.workflow.production!, textModelId: source.models[0].id, videoModelId: source.video.id } } } });
     await rpc(request, 'run.start', { projectId: source.project.id });
     await expect.poll(async () => (await latest(request, source.project.id))?.status, { timeout: 30000 }).toBe('succeeded');
     await openWorkbench(page, source.project);
-    await page.getByRole('button', { name: '打开步骤：简报生成', exact: true }).click();
+    await page.getByRole('button', { name: '打开阶段：策划与分镜', exact: true }).click();
     const dialog = page.getByRole('dialog', { name: '本次制作', exact: true });
+    await dialog.getByRole('navigation', { name: '本次制作步骤' }).getByRole('button', { name: /简报生成/ }).click();
     await expect(dialog.getByRole('button', { name: '编辑创意简报', exact: true })).toBeVisible();
     return { source, dialog, run: (await latest(request, source.project.id))! };
   } catch (error) { await source.close(); throw error; }
@@ -77,7 +78,8 @@ for (const { width, theme } of [{ width: 1536, theme: 'dark' }, { width: 1024, t
       expect((await saved(request, source.project.id)).brief).toBe(brief);
       await page.getByRole('button', { name: '重做', exact: true }).click(); await expect.poll(async () => (await saved(request, source.project.id)).shots).toEqual(modified.shots);
       await openWorkbench(page, source.project);
-      await page.getByRole('button', { name: '打开步骤：简报生成', exact: true }).click();
+      await page.getByRole('button', { name: '打开阶段：策划与分镜', exact: true }).click();
+      await dialog.getByRole('navigation', { name: '本次制作步骤' }).getByRole('button', { name: /简报生成/ }).click();
       await expect(dialog.getByRole('heading', { name: '修改后的创作主题', exact: true })).toBeVisible();
       const currentFrozen = await Promise.all(source.project.workflow.nodes.filter(node => ['brief', 'style', 'script'].includes(node.kind)).map(node => rpc(request, 'run.step.payload', { runId: run.id, nodeId: node.id, kind: 'output' })));
       expect(currentFrozen).toEqual(frozen); expect(source.requests.length).toBe(calls); expect(methods).not.toContain('run.step.versions');
@@ -147,10 +149,10 @@ test('disables planning editing while the current production is active', async (
   const source = await fixture(request, info, true);
   let runId = '';
   try {
-    await rpc(request, 'workflow.save', { projectId: source.project.id, workflow: { ...source.project.workflow, production: { ...source.project.workflow.production!, textModelId: source.models[0].id, videoModelId: source.video.id } } });
+    await rpc(request, 'project.update', { projectId: source.project.id, patch: { workflow: { ...source.project.workflow, production: { ...source.project.workflow.production!, textModelId: source.models[0].id, videoModelId: source.video.id } } } });
     const run = await rpc<{ id: string }>(request, 'run.start', { projectId: source.project.id }); runId = run.id; await source.pending;
     await openWorkbench(page, source.project);
-    await page.getByRole('button', { name: '打开步骤：简报生成', exact: true }).click();
+    await page.getByRole('button', { name: '打开阶段：策划与分镜', exact: true }).click();
     const dialog = page.getByRole('dialog', { name: '本次制作', exact: true });
     await expect(dialog.getByRole('tablist', { name: '步骤详情视图', exact: true })).toHaveCount(0);
     await expect(dialog.getByRole('button', { name: '编辑创意简报', exact: true })).toBeDisabled();

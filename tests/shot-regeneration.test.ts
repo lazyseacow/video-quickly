@@ -87,7 +87,7 @@ it('generates only the selected existing-media shot and applies an image while p
 
 it('uses the template model and only the selected script fields, rejecting multi-shot output', async () => {
   const { runtime, project: initial, models, requests, state, script } = await fixture();
-  await runtime.dispatch('workflow.save', { projectId: initial.id, workflow: { ...initial.workflow, nodes: initial.workflow.nodes.map(node => node.kind === 'script' ? { ...node, modelId: models.script.id, prompt: '保留模板约束', config: { marker: 'kept' } } : node) } });
+  await runtime.dispatch('project.update', { projectId: initial.id, patch: { workflow: { ...initial.workflow, nodes: initial.workflow.nodes.map(node => node.kind === 'script' ? { ...node, modelId: models.script.id, prompt: '保留模板约束', config: { marker: 'kept' } } : node) } } });
   const project = await current(runtime, initial.id);
   await regenerate(runtime, project, 'script', undefined, '写得简洁');
   const candidate = (await candidates(runtime, project)).items[0];

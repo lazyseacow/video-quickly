@@ -58,6 +58,19 @@ it('creates a same-size alpha mask and rejects out-of-bounds or opaque masks', a
   await expect(validateEditMask(source.png, source)).rejects.toThrow('透明');
   await expect(validateEditMask(bytes, { width: 6, height: 3 })).rejects.toThrow('尺寸');
 });
+it('restores only missing grid results after a tile is removed and reuses valid siblings', async () => {
+  const { runtime, asset } = await setup();
+  const input = { assetId: asset.id, rows: 2, columns: 2 };
+  const original = assetSchema.array().parse(await runtime.dispatch('image.cutGrid', input));
+  await runtime.dispatch('asset.delete', { assetId: original[0].id });
+  await rm(original[0].path);
+  const [first, concurrent] = await Promise.all([runtime.dispatch('image.cutGrid', input), runtime.dispatch('image.cutGrid', input)]);
+  const restored = assetSchema.array().parse(first);
+  expect(concurrent).toEqual(restored);
+  expect(restored.slice(1)).toEqual(original.slice(1));
+  expect(restored[0]).toMatchObject({ active: true, sha256: original[0].sha256, derivation: original[0].derivation });
+  expect(sha(await readFile(restored[0].path))).toBe(original[0].sha256);
+});
 it('exports and restores grid lineage using format 8 and refuses older-format provenance', async () => {
   const { runtime, asset, directory } = await setup();
   const [tile] = assetSchema.array().parse(await runtime.dispatch('image.cutGrid', { assetId: asset.id, rows: 1, columns: 2 }));

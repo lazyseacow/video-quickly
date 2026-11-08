@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
 import { audioLevelWindowSchema, audioMixSettingsSchema, audioProcessingSchema, usesVideoAudio, DEFAULT_AUDIO_MIX_SETTINGS, DEFAULT_AUDIO_PROCESSING, preparedAudioMixSchema, silenceDetectionSchema, type AssetRecord, type AudioLevelWindow, type PreparedAudioMix, type ProjectDocument, type Shot, type SilenceDetection } from '@video-quickly/contracts';
 import { clipEditSource, resolveShotSpans } from './clip-edits.js';
+import { audioAsset, usesFullAudioSource } from './audio.js';
 import { audioMixProjection, AUDIO_MIX_ALGORITHM } from './audio-projection.js';
 import { probeMedia, runMedia, runMediaCapture } from './media-process.js';
 
@@ -17,12 +18,6 @@ const mixDuration = (project: Pick<ProjectDocument, 'shots'>) => project.shots.r
 export interface PrepareAudioMixOptions {
   project: ProjectDocument; assets: readonly AssetRecord[]; outputDirectory: string;
   ffmpegPath?: string; ffprobePath?: string; signal?: AbortSignal; onProgress?: (value: number) => void;
-}
-
-function audioAsset(id: string, projectId: string, assets: readonly AssetRecord[], label = '音频', kind: 'audio' | 'video' = 'audio'): AssetRecord {
-  const asset = assets.find(value => value.id === id);
-  if (!asset || asset.kind !== kind || !asset.active || (asset.projectId !== undefined && asset.projectId !== projectId)) throw new Error(`${label}必须引用当前项目或共享素材库中的有效${kind === 'video' ? '视频' : '音频'}。`);
-  return asset;
 }
 
 export function audioMixProjectionKey(project: ProjectDocument, assets: readonly AssetRecord[]): string { return digest(audioMixProjection(project, assets)); }
@@ -44,7 +39,7 @@ export async function resolveAudioProject(options: PrepareAudioMixOptions): Prom
   const shots: Shot[] = [];
   for (const shot of options.project.shots) {
     let durationUs = shot.durationUs;
-    if (shot.audioAssetId && !shot.clipEdit && shot.sourceInUs === undefined && shot.audioInUs === undefined) {
+    if (shot.audioAssetId && usesFullAudioSource(shot)) {
       const asset = audioAsset(shot.audioAssetId, options.project.id, options.assets);
       let duration = durations.get(asset.id);
       if (duration === undefined) {

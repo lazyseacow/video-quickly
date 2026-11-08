@@ -20,7 +20,7 @@ it('reconnects the actual Node runtime once and preserves project data and the a
   const controller = own({ command: process.execPath, args: ['--import', 'tsx', resolve('packages/runtime/src/main.ts'), '--data-dir', path], cwd: resolve('.'), onEvent: (event: unknown) => events.push(event) });
   expect(await controller.start()).toMatchObject({ state: 'ready', generation: 1 });
   const project = await controller.request('project.create', { title: 'Electron工作区重启恢复', templateId: 'history-handdrawn' });
-  await controller.request('workflow.save', { projectId: project.id, revision: project.revision, workflow: { ...project.workflow, id: 'controller-custom-review', nodes: project.workflow.nodes.map((node: { id: string }) => node.id === 'style' ? { ...node, requiresReview: true, config: {} } : node) } });
+  await controller.request('project.update', { projectId: project.id, revision: project.revision, patch: { workflow: { ...project.workflow, id: 'controller-custom-review', nodes: project.workflow.nodes.map((node: { id: string }) => node.id === 'style' ? { ...node, requiresReview: true, config: {} } : node) } } });
   const run = await controller.request('run.start', { projectId: project.id, nodeId: 'style' });
   await expect.poll(async () => (await controller.request('run.inspect', { runId: run.id })).run.status, { timeout: 15_000 }).toBe('succeeded');
   const before = await controller.request('run.activities', { runId: run.id });

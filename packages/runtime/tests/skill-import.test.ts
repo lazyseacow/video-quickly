@@ -3,8 +3,9 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { strToU8, zipSync } from 'fflate';
-import { skillImportResultSchema, skillSchema, type WorkspaceSnapshot } from '@video-quickly/contracts';
+import { type WorkspaceSnapshot } from '@video-quickly/contracts';
 import { createRuntime } from '../src/index.js';
+import { importSkillFixture } from '../../../tests/fixtures/import-skill';
 
 const directories: string[] = [];
 const runtimes: ReturnType<typeof createRuntime>[] = [];
@@ -40,8 +41,7 @@ describe('Skill repository import', () => {
       const root = join(path, 'skills', name); await mkdir(root, { recursive: true });
       await writeFile(join(root, 'SKILL.md'), `---\nname: ${name}\ndescription: 创作方法\n---\n使用对应方法完成当前任务。`);
     }
-    const result = skillImportResultSchema.parse(await runtime.dispatch('skill.import', { path }));
-    if (!('skills' in result)) throw new Error('Expected a Skill group');
+    const result = await importSkillFixture(runtime.dispatch, { path });
     expect(result.skills.map(skill => skill.name)).toEqual(['visual-style', 'writing']);
     expect(result.group.name).toBe('local-collection');
   });
@@ -50,8 +50,7 @@ describe('Skill repository import', () => {
     const path = join(directory, 'repository.zip');
     await writeFile(path, repositoryZip());
 
-    const batch = skillImportResultSchema.parse(await runtime.dispatch('skill.import', { path }));
-    if (!('skills' in batch)) throw new Error('Expected a Skill group');
+    const batch = await importSkillFixture(runtime.dispatch, { path });
     expect(batch.skills.map(skill => skill.name)).toEqual(['drama-storyboard', 'drama-write']);
     expect(batch.group.name).toBe('repository');
     expect(batch.group.skillIds).toEqual(batch.skills.map(skill => skill.id));
@@ -63,7 +62,7 @@ describe('Skill repository import', () => {
     expect(snapshot.skills).toHaveLength(2);
     expect(snapshot.skillGroups).toEqual([batch.group]);
     expect(await readdir(join(directory, 'imports'))).toEqual([]);
-    await expect(runtime.dispatch('skill.import', { path, skillPath: '../skills/write' })).rejects.toThrow('所选 Skill');
+    await expect(importSkillFixture(runtime.dispatch, { path, skillPath: '../skills/write' })).rejects.toThrow('所选 Skill');
   });
 
   it('imports a specific GitHub Skill directory from a repository with more than 500 files', async () => {
@@ -74,7 +73,7 @@ describe('Skill repository import', () => {
       return new Response(repositoryZip(), { status: 200 });
     });
     const url = 'https://github.com/fixture/drama/tree/main/skills/write';
-    const skill = skillSchema.parse(await runtime.dispatch('skill.import', { url }));
+    const skill = (await importSkillFixture(runtime.dispatch, { url })).skills[0];
     expect(skill.name).toBe('drama-write');
     expect(skill.source).toBe(url);
     expect(requests).toEqual(['https://codeload.github.com/fixture/drama/zip/refs/heads/main']);
@@ -90,8 +89,7 @@ describe('Skill repository import', () => {
         ? Response.json({ default_branch: 'main' })
         : new Response(repositoryZip(), { status: 200 });
     });
-    const result = skillImportResultSchema.parse(await runtime.dispatch('skill.import', { url: 'https://github.com/fixture/drama.git' }));
-    if (!('skills' in result)) throw new Error('Expected a Skill group');
+    const result = await importSkillFixture(runtime.dispatch, { url: 'https://github.com/fixture/drama.git' });
     expect(result.skills).toHaveLength(2); expect(result.group.name).toBe('drama');
     expect(requests).toEqual(['https://api.github.com/repos/fixture/drama', 'https://codeload.github.com/fixture/drama/zip/refs/heads/main']);
   });
@@ -103,7 +101,7 @@ describe('Skill repository import', () => {
       'write/SKILL.md': strToU8('---\nname: drama-write\ndescription: 写作方法\n---\n生成剧本。'),
       ...Object.fromEntries(Array.from({ length: 500 }, (_, index) => [`write/references/${index}.md`, strToU8('resource')])),
     }));
-    await expect(runtime.dispatch('skill.import', { path })).rejects.toThrow('500');
+    await expect(importSkillFixture(runtime.dispatch, { path })).rejects.toThrow('500');
     expect((await runtime.dispatch('workspace.snapshot') as WorkspaceSnapshot).skills).toHaveLength(0);
   });
 });

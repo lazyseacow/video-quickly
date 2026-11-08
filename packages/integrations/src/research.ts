@@ -4,20 +4,19 @@ import { basename, extname } from 'node:path';
 import { fork } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { z } from 'zod';
-import { researchResultSchema, researchSearchResultSchema, researchSourceSchema, type Claim, type ProjectDocument, type ResearchResult, type ResearchSource } from '@video-quickly/contracts';
+import { researchResultSchema, researchSourceSchema, type Claim, type ProjectDocument, type ResearchResult, type ResearchSource } from '@video-quickly/contracts';
 
 const MAX_FILE_BYTES = 10 * 1024 * 1024;
 const MAX_RESPONSE_BYTES = 2 * 1024 * 1024;
-export const researchReadInputSchema = z.object({ text: z.string().optional(), path: z.string().min(1).optional(), url: z.string().url().optional(), title: z.string().min(1).max(500).optional() })
+const researchReadInputSchema = z.object({ text: z.string().optional(), path: z.string().min(1).optional(), url: z.string().url().optional(), title: z.string().min(1).max(500).optional() })
   .refine(value => [value.text, value.path, value.url].filter(item => item !== undefined).length === 1, '请只选择粘贴正文、文件或网址中的一种。');
-export const researchSearchInputSchema = z.object({ query: z.string().trim().min(1).max(500), language: z.enum(['zh', 'en']).default('zh'), limit: z.number().int().min(1).max(10).default(5) });
 
 function checkedUrl(raw: string) {
   const url = new URL(raw);
   if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password) throw new Error('资料地址须为不含账号密码的 HTTP 或 HTTPS 地址。');
   return url;
 }
-async function readResponse(response: Response) {
+export async function readResponse(response: Response) {
   if (!response.ok) { await response.body?.cancel(); throw new Error(`资料服务返回 HTTP ${response.status}，请检查地址或稍后重试。`); }
   if (Number(response.headers.get('content-length')) > MAX_RESPONSE_BYTES) { await response.body?.cancel(); throw new Error('网络资料超过 2 MB，请保存摘录后导入。'); }
   if (!response.body) throw new Error('资料服务未返回正文。');
@@ -40,7 +39,7 @@ async function fetchDocument(raw: string) {
   }
   throw new Error('资料网址重定向过多。');
 }
-function decodeEntities(text: string) {
+export function decodeEntities(text: string) {
   const named: Record<string, string> = { amp: '&', lt: '<', gt: '>', quot: '"', apos: "'", nbsp: ' ' };
   return text.replace(/&(#x[0-9a-f]+|#\d+|amp|lt|gt|quot|apos|nbsp);/gi, (whole, key: string) => {
     if (!key.startsWith('#')) return named[key.toLowerCase()] ?? whole;
@@ -56,16 +55,101 @@ function plainText(bytes: Uint8Array) {
   try { return new TextDecoder('utf-8', { fatal: true }).decode(bytes).replace(/^\uFEFF/, '').replace(/\r\n?/g, '\n'); }
   catch { throw new Error('资料不是有效的 UTF-8 文本，请另存为 UTF-8 后导入。'); }
 }
-async function pdfText(bytes: Uint8Array) {
+
+const githubTrendingPeriods = { daily: '日榜', weekly: '周榜', monthly: '月榜' } as const;
+const githubTrendingFallbacks = { daily: ['weekly', 'monthly'], weekly: ['monthly', 'daily'], monthly: ['weekly', 'daily'] } as const;
+type GithubTrendingPeriod = keyof typeof githubTrendingPeriods;
+export interface GithubTrendingRequest { count: number; period?: GithubTrendingPeriod }
+interface GithubTrendingSource {
+  sourceUrl: string;
+  period: typeof githubTrendingPeriods[GithubTrendingPeriod];
+  capturedAt: string;
+}
+export interface GithubTrendingRanking extends GithubTrendingSource {
+  requestedCount?: number;
+  requestedPeriod?: GithubTrendingSource['period'];
+  repositories: { rank: number; name: string; description: string; source?: GithubTrendingSource; readme?: { url: string; excerpt: string } }[];
+}
+
+export async function readGithubTrending(request: GithubTrendingRequest, signal: AbortSignal): Promise<GithubTrendingRanking> {
+  const deadline = AbortSignal.any([signal, AbortSignal.timeout(20_000)]);
+  async function readPage(period: GithubTrendingPeriod) {
+    const url = new URL('https://github.com/trending');
+    if (period !== 'daily') url.searchParams.set('since', period);
+    let html: string;
+    try {
+      const pageSignal = AbortSignal.any([deadline, AbortSignal.timeout(5_000)]);
+      const response = await fetch(url, { redirect: 'error', signal: pageSignal, headers: { Accept: 'text/html' } });
+      html = plainText(await readResponse(response));
+    } catch {
+      signal.throwIfAborted();
+      return undefined;
+    }
+    const entries: GithubTrendingRanking['repositories'] = [];
+    let rank = 0;
+    for (const [, card] of html.matchAll(/<article\b[^>]*\sclass=["'][^"']*\bBox-row\b[^"']*["'][^>]*>([^]*?)<\/article>/gi)) {
+      rank++;
+      const heading = card.match(/<h2\b[^>]*>([^]*?)<\/h2>/i)?.[1];
+      const name = heading?.match(/<a\b[^>]*\shref=["']\/([a-z\d][a-z\d-]*\/[a-z\d_.-]+)["']/i)?.[1];
+      if (!name) continue;
+      const description = htmlText(card.match(/<p\b[^>]*>([^]*?)<\/p>/i)?.[1] ?? '').slice(0, 500);
+      entries.push({ rank, name, description });
+    }
+    return { source: { sourceUrl: url.href, period: githubTrendingPeriods[period], capturedAt: new Date().toISOString() }, entries };
+  }
+
+  const preferred = request.period ?? 'daily';
+  const repositories: GithubTrendingRanking['repositories'] = [];
+  const seen = new Set<string>();
+  let primary: GithubTrendingSource | undefined;
+  for (const period of [preferred, ...githubTrendingFallbacks[preferred]]) {
+    const page = await readPage(period);
+    if (!page?.entries.length) continue;
+    primary ??= page.source;
+    for (const repo of page.entries) {
+      const name = repo.name.toLowerCase();
+      if (seen.has(name)) continue;
+      seen.add(name);
+      repositories.push(page.source === primary ? repo : { ...repo, source: page.source });
+      if (repositories.length === request.count) break;
+    }
+    if (repositories.length === request.count) break;
+  }
+  signal.throwIfAborted();
+  if (!primary) throw new Error('暂未读到 GitHub Trending 的榜单项目。请在来源恢复后继续原制作。');
+
+  const readmeDeadline = AbortSignal.any([deadline, AbortSignal.timeout(5_000)]);
+  const described = await Promise.all(repositories.map(async repo => {
+    if (repo.description) return repo;
+    const url = `https://api.github.com/repos/${repo.name}/readme`;
+    try {
+      const response = await fetch(url, { redirect: 'error', signal: readmeDeadline, headers: { Accept: 'application/vnd.github.raw+json' } });
+      const excerpt = plainText(await readResponse(response)).trim().slice(0, 1_500);
+      return excerpt ? { ...repo, readme: { url, excerpt } } : repo;
+    } catch {
+      // The ranking is still usable when the repository has no accessible introduction.
+      signal.throwIfAborted();
+      return repo;
+    }
+  }));
+  signal.throwIfAborted();
+  return { ...primary, requestedCount: request.count, requestedPeriod: githubTrendingPeriods[preferred], repositories: described };
+}
+
+async function pdfText(bytes: Uint8Array, signal?: AbortSignal) {
+  signal?.throwIfAborted();
   const child = fork(fileURLToPath(new URL('./pdf-process.mjs', import.meta.url)), [], { execPath: process.execPath, execArgv: [], serialization: 'advanced', windowsHide: true, stdio: ['ignore', 'pipe', 'pipe', 'ipc'] });
   // Third-party diagnostics must not enter the JSON-RPC stdout protocol.
   child.stdout!.pipe(process.stderr, { end: false });
   child.stderr!.pipe(process.stderr, { end: false });
   let timeout: ReturnType<typeof setTimeout> | undefined;
+  let abort: (() => void) | undefined;
   try {
     return await new Promise<string>((resolve, reject) => {
       let content: string | undefined, failure: Error | undefined, terminating = false;
       const fail = (error: Error) => { failure ??= error; if (!terminating) { terminating = true; child.kill('SIGKILL'); } };
+      abort = () => fail(new Error('网页资料读取已中断。'));
+      signal?.addEventListener('abort', abort, { once: true });
       timeout = setTimeout(() => fail(new Error('PDF 解析超过 20 秒，请拆分需要的页段后重试。')), 20_000);
       child.once('message', (message: unknown) => {
         if (message && typeof message === 'object' && 'content' in message && typeof message.content === 'string') content = message.content;
@@ -81,6 +165,7 @@ async function pdfText(bytes: Uint8Array) {
       child.send(Uint8Array.from(bytes), error => { if (error) fail(error); });
     });
   } finally {
+    if (abort) signal?.removeEventListener('abort', abort);
     clearTimeout(timeout);
     child.stdout!.unpipe(process.stderr);
     child.stderr!.unpipe(process.stderr);
@@ -90,6 +175,23 @@ function capturedSource(content: string, metadata: Omit<ResearchSource, 'id' | '
   if (!content.trim()) throw new Error('资料没有可读取的正文，请粘贴原文或换用可访问的页面。');
   if (content.length > 100_000) throw new Error('资料正文超过 100,000 字符，请选择需要的摘录或拆分资料。');
   return researchSourceSchema.parse({ ...metadata, id: randomUUID(), content, sha256: createHash('sha256').update(content).digest('hex'), capturedAt: new Date().toISOString() });
+}
+
+async function extractWebDocument(bytes: Uint8Array, type: string, signal?: AbortSignal) {
+  if (type === 'application/pdf') return { content: await pdfText(bytes, signal) };
+  if (type === 'text/html' || type === 'application/xhtml+xml') {
+    const html = plainText(bytes);
+    return { content: htmlText(html), title: htmlText(html.match(/<title\b[^>]*>([^]*?)<\/title>/i)?.[1] ?? '').slice(0, 500) || undefined };
+  }
+  if (['text/plain', 'text/markdown'].includes(type)) return { content: plainText(bytes) };
+  throw new Error('该网址没有返回可读取的文本、HTML 或 PDF，请粘贴实际原文。');
+}
+
+export async function captureWebResearchSource(response: Response, url: string, signal: AbortSignal): Promise<ResearchSource> {
+  const type = response.headers.get('content-type')?.split(';')[0].trim().toLowerCase() ?? '';
+  const { title, content } = await extractWebDocument(await readResponse(response), type, signal);
+  signal.throwIfAborted();
+  return capturedSource(content.slice(0, 100_000), { kind: 'url', url, title: title ?? new URL(url).hostname });
 }
 
 export async function readResearchSource(raw: unknown): Promise<ResearchSource> {
@@ -115,25 +217,12 @@ export async function readResearchSource(raw: unknown): Promise<ResearchSource> 
     return capturedSource(page.extract, { kind: 'url', title: input.title ?? page.title, url: final.toString() });
   }
   const fetched = await fetchDocument(url.toString());
-  let content: string, title = input.title;
-  if (fetched.type === 'application/pdf') content = await pdfText(fetched.bytes);
-  else if (fetched.type === 'text/html' || fetched.type === 'application/xhtml+xml') {
-    const html = plainText(fetched.bytes); title ??= htmlText(html.match(/<title\b[^>]*>([^]*?)<\/title>/i)?.[1] ?? '').slice(0, 500) || undefined; content = htmlText(html);
-  } else if (['text/plain', 'text/markdown'].includes(fetched.type)) content = plainText(fetched.bytes);
-  else throw new Error('该网址没有返回可读取的文本、HTML 或 PDF，请粘贴实际原文。');
-  return capturedSource(content, { kind: 'url', title: title ?? new URL(fetched.url).hostname, url: fetched.url });
-}
-
-export async function searchWikipedia(raw: unknown, origin?: string) {
-  const input = researchSearchInputSchema.parse(raw), endpoint = new URL('/w/api.php', origin ?? `https://${input.language}.wikipedia.org`);
-  endpoint.search = new URLSearchParams({ action: 'query', list: 'search', srsearch: input.query, srlimit: String(input.limit), srprop: 'snippet', srnamespace: '0', utf8: '1', format: 'json', formatversion: '2' }).toString();
-  const response = await fetchDocument(endpoint.toString());
-  const data = z.object({ query: z.object({ search: z.array(z.object({ title: z.string(), pageid: z.number().int().positive(), snippet: z.string() })) }) }).parse(JSON.parse(response.bytes.toString('utf8')));
-  return data.query.search.slice(0, input.limit).map(item => researchSearchResultSchema.parse({ title: item.title, pageId: item.pageid, snippet: htmlText(item.snippet), url: `https://${input.language}.wikipedia.org/?curid=${item.pageid}` }));
+  const { content, title } = await extractWebDocument(fetched.bytes, fetched.type);
+  return capturedSource(content, { kind: 'url', title: input.title ?? title ?? new URL(fetched.url).hostname, url: fetched.url });
 }
 
 export interface ResearchPassages { sources: ResearchSource[]; usedRanges: ResearchResult['usedRanges']; passages: Array<{ sourceId: string; startOffset: number; endOffset: number; content: string }>; warnings: string[] }
-export function selectResearchPassages(project: ProjectDocument, sourceIds?: string[], instruction = ''): ResearchPassages {
+export function selectResearchPassages(project: Pick<ProjectDocument, 'researchSources' | 'brief'>, sourceIds?: string[], instruction = ''): ResearchPassages {
   const all = project.researchSources ?? [], sources = sourceIds ? sourceIds.map(id => { const source = all.find(source => source.id === id); if (!source) throw new Error('所选资料已移除，请重新选择。'); return source; }) : all;
   if (!sources.length) throw new Error('请先导入实际资料，再整理证据候选。');
   if (new Set(sources.map(source => source.id)).size !== sources.length) throw new Error('所选资料不能重复。');

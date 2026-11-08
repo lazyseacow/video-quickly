@@ -1,7 +1,8 @@
 import { expect, test } from '@playwright/test';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { skillImportResultSchema, type ProjectDocument } from '@video-quickly/contracts';
+import type { ProjectDocument } from '@video-quickly/contracts';
+import { importSkillFixture } from '../fixtures/import-skill';
 import { productionFixture, productionStep, openProduction, pickProductionModel, saveProduction } from './production-settings';
 import { fixture, latest, rpc, saved } from './native-video-fixture';
 import { openProjectFromList } from './workspace-navigation';
@@ -23,7 +24,7 @@ for (const viewport of [{ width: 1536, height: 960, theme: 'dark' }, { width: 60
   await productionStep(dialog, '模型与素材');
   await dialog.getByRole('region', { name: '生成并发', exact: true }).scrollIntoViewIfNeeded();
   await page.screenshot({ path: info.outputPath('normal-concurrency-settings.png') });
-  await dialog.locator('summary').filter({ hasText: /^高级编排$/ }).click(); await dialog.getByRole('button', { name: '打开高级编排', exact: true }).click();
+  await dialog.getByRole('button', { name: '打开高级编排', exact: true }).click();
   await expect(dialog).toContainText('保存设置后将打开高级编排');
   expect((await source.saved()).workflow.execution).toBeUndefined();
   await dialog.getByRole('button', { name: '保存并打开', exact: true }).click(); await expect(dialog).toHaveCount(0);
@@ -49,7 +50,7 @@ test('persists pending concurrency across reload while the active production kee
   test.setTimeout(60_000);
   const source = await fixture(request, info, true);
   try {
-    let project = await rpc<ProjectDocument>(request, 'workflow.save', { projectId: source.project.id, workflow: { ...source.project.workflow, production: { ...source.project.workflow.production, textModelId: source.models[0].id, videoModelId: source.video.id } } });
+    let project = await rpc<ProjectDocument>(request, 'project.update', { projectId: source.project.id, patch: { workflow: { ...source.project.workflow, production: { ...source.project.workflow.production, textModelId: source.models[0].id, videoModelId: source.video.id } } } });
     const run = await rpc<{ id: string; snapshotDigest: string }>(request, 'run.start', { projectId: project.id }); await source.pending;
     let dialog = await openProduction(page, project); await productionStep(dialog, '模型与素材');
     await dialog.getByLabel('镜头同时处理数', { exact: true }).selectOption('3'); await dialog.getByLabel(`${source.video.name} 并发上限`, { exact: true }).selectOption('2');
@@ -59,7 +60,7 @@ test('persists pending concurrency across reload while the active production kee
     await page.reload(); await openProjectFromList(page, project.title); await page.getByRole('button', { name: '制作设置', exact: true }).click();
     dialog = page.getByRole('dialog', { name: '制作设置', exact: true }); await expect(dialog).toContainText('已保存待用配置'); await productionStep(dialog, '模型与素材');
     await expect(dialog.getByLabel('镜头同时处理数', { exact: true })).toHaveValue('3'); await expect(dialog.getByLabel(`${source.video.name} 并发上限`, { exact: true })).toHaveValue('2');
-    await dialog.getByRole('button', { name: '取消', exact: true }).click();
+    await dialog.getByRole('button', { name: '关闭对话框', exact: true }).click();
     source.release(); await expect.poll(async () => (await latest(request, project.id))?.status, { timeout: 30000 }).toBe('succeeded');
     expect((await saved(request, project.id)).workflow.execution).toBeUndefined();
     await page.getByRole('button', { name: '开始制作', exact: true }).click();
@@ -90,8 +91,7 @@ for (const viewport of [{ width: 1536, height: 960, theme: 'dark' }, { width: 10
     const directory = join(skillDirectory, name); await mkdir(directory, { recursive: true });
     await writeFile(join(directory, 'SKILL.md'), `---\nname: ${name}\ndescription: 高级任务布局验收\n---\n保持当前任务的创作要求。`);
   }
-  const imported = skillImportResultSchema.parse(await rpc(request, 'skill.import', { path: skillDirectory }));
-  if (!('skills' in imported)) throw new Error('Expected a populated Skill group.');
+  const imported = await importSkillFixture((method, params) => rpc(request, method, params), { path: skillDirectory });
   const dialog = await openProduction(page, source.project);
   page.on('request', request => {
     if (!request.url().endsWith('/__desktop_rpc') || request.method() !== 'POST') return;

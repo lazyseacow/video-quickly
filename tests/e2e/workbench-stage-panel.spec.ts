@@ -1,7 +1,7 @@
 import { expect, test } from '@playwright/test';
 import { openProduction, pickProductionModel, productionFixture, productionStep, saveProduction } from './production-settings';
 
-const generationLabels = ['简报生成', '风格与角色生成', '分镜生成', '镜头视频生成'];
+const stageLabels = ['策划与分镜', '素材与配音', '剪辑与动画', '审阅与导出'];
 const configurationSteps = ['创作要求', '模型与素材', '声音与成片', '确认保存'];
 
 for (const viewport of [{ width: 1536, height: 960, theme: 'dark' }, { width: 1024, height: 720, theme: 'light' }, { width: 390, height: 844, theme: 'light' }]) {
@@ -19,6 +19,8 @@ for (const viewport of [{ width: 1536, height: 960, theme: 'dark' }, { width: 10
     await expect(dialog.getByRole('button', { name: '保存设置', exact: true })).toHaveCount(0);
     await expect(dialog.getByRole('button', { name: '保存并开始制作', exact: true })).toHaveCount(0);
     await expect(dialog.getByRole('button', { name: '本次制作', exact: true })).toHaveCount(0);
+    const footer = dialog.locator('.production-settings__footer');
+    await expect(footer.getByRole('button')).toHaveText(['下一步']);
     await expect(dialog.locator('.dialog__surface')).toHaveCSS('opacity', '1');
     const content = dialog.locator('.production-settings__content');
     if (viewport.width >= 1024) expect(await content.evaluate(element => element.scrollHeight - element.clientHeight)).toBeLessThanOrEqual(1);
@@ -30,7 +32,7 @@ for (const viewport of [{ width: 1536, height: 960, theme: 'dark' }, { width: 10
     await dialog.getByLabel('参考素材', { exact: true }).selectOption('generate'); await pickProductionModel(dialog, '图片模型', source.image);
     if (viewport.width >= 1024) {
       expect(await content.evaluate(element => element.scrollHeight - element.clientHeight)).toBeLessThanOrEqual(1);
-      await expect(dialog.locator('.production-settings__advanced > summary').filter({ hasText: /^高级编排$/ })).toBeInViewport({ ratio: 1 });
+      await expect(dialog.getByRole('button', { name: '打开高级编排', exact: true })).toBeInViewport({ ratio: 1 });
     }
     await expect(dialog.getByRole('button', { name: '下一步', exact: true })).toBeInViewport();
     await page.screenshot({ path: info.outputPath('configuration-models-' + viewport.width + '.png') });
@@ -40,18 +42,20 @@ for (const viewport of [{ width: 1536, height: 960, theme: 'dark' }, { width: 10
     if (viewport.width >= 1024) expect(await content.evaluate(element => element.scrollHeight - element.clientHeight)).toBeLessThanOrEqual(1);
     await page.screenshot({ path: info.outputPath('configuration-delivery-' + viewport.width + '.png') });
     await productionStep(dialog, '确认保存');
+    await expect(footer.getByRole('button')).toHaveText(['上一步', '保存设置']);
     await expect(dialog.getByRole('button', { name: '保存设置', exact: true })).toBeInViewport({ ratio: 1 });
     if (viewport.width >= 1024) expect(await content.evaluate(element => element.scrollHeight - element.clientHeight)).toBeLessThanOrEqual(1);
     await page.screenshot({ path: info.outputPath('configuration-review-' + viewport.width + '.png') });
-    await page.keyboard.press('Escape'); await expect(dialog).toHaveCount(0);
+    const close = dialog.getByRole('button', { name: '关闭对话框', exact: true });
+    await close.focus(); await close.press('Enter'); await expect(dialog).toHaveCount(0);
     const entry = page.getByRole('button', { name: '制作设置', exact: true });
     await expect(entry).toHaveCount(1); await expect(entry).toBeFocused();
     await expect(page.getByRole('button', { name: '打开制作设置', exact: true })).toHaveCount(0);
     await expect(page.getByRole('button', { name: '填写创意简报', exact: true })).toHaveCount(0);
-    const progress = page.getByRole('list', { name: '模型生成进度', exact: true });
-    await expect(progress.locator('.workbench-guide__step-copy > strong')).toHaveText(generationLabels);
-    for (const label of generationLabels) {
-      const trigger = progress.getByRole('button', { name: `打开步骤：${label}`, exact: true });
+    const progress = page.getByRole('list', { name: '制作阶段进度', exact: true });
+    await expect(progress.locator('.workbench-guide__step-copy > strong')).toHaveText(stageLabels);
+    for (const label of stageLabels) {
+      const trigger = progress.getByRole('button', { name: `打开阶段：${label}`, exact: true });
       await trigger.focus(); await trigger.press('Enter');
       const records = page.getByRole('dialog', { name: '本次制作', exact: true });
       await expect(records).toBeVisible(); await expect(records.getByRole('tablist', { name: '制作阶段记录', exact: true })).toHaveCount(0);
@@ -108,15 +112,14 @@ test('fills steps without saving and commits all configuration once from the fin
 test('keeps model search focused across the first frame after changing configuration steps', async ({ page, request }) => {
   await page.emulateMedia({ reducedMotion: 'reduce' });
   const source = await productionFixture(request), dialog = await openProduction(page, source.project);
-  const brief = dialog.getByLabel('创作要求', { exact: true }), mode = dialog.getByRole('combobox', { name: '制作方式', exact: true });
+  const brief = dialog.getByLabel('创作要求', { exact: true }), model = dialog.getByRole('combobox', { name: '文本模型', exact: true });
   const next = dialog.getByRole('button', { name: '下一步', exact: true });
   await expect(brief).toBeFocused();
   await page.clock.install({ time: new Date('2026-06-15T12:00:00Z') }); await page.clock.pauseAt(new Date('2026-06-15T12:00:01Z'));
-  await next.focus(); await next.press('Enter'); await page.clock.runFor(32); await expect(mode).toBeFocused();
+  await next.focus(); await next.press('Enter'); await page.clock.runFor(32); await expect(model).toBeFocused();
   const previous = dialog.getByRole('button', { name: '上一步', exact: true });
   await previous.focus(); await previous.press('Enter'); await page.clock.runFor(32); await expect(brief).toBeFocused();
   await next.focus(); await next.press('Enter');
-  const model = dialog.getByRole('combobox', { name: '文本模型', exact: true });
   await model.fill(source.text.name); await expect(dialog.getByRole('option', { name: source.text.name, exact: true })).toBeVisible();
   // Hold the first RAF until typing has begun, reproducing a delayed step focus
   // without delaying the renderer or changing the Combobox's own behavior.

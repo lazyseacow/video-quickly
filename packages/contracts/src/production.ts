@@ -1,12 +1,11 @@
 import { z } from 'zod';
-import type { WorkflowDefinition, WorkflowNode } from './index.js';
+import type { ModelProfile, WorkflowDefinition, WorkflowNode } from './index.js';
 
 export const MAX_REFERENCE_AUDIO_BYTES = 15_000_000;
 export const MAX_REFERENCE_AUDIOS = 10;
 
 export const productionSettingsSchema = z.object({
   mode: z.literal('native-video'),
-  executionMode: z.enum(['workflow', 'agent']).default('workflow'),
   agentSkillIds: z.array(z.string().min(1)).default([]),
   agentMcpServerIds: z.array(z.string().min(1)).default([]),
   textModelId: z.string().min(1).optional(), videoModelId: z.string().min(1).optional(), imageModelId: z.string().min(1).optional(),
@@ -16,6 +15,14 @@ export const productionSettingsSchema = z.object({
   subtitleMode: z.enum(['off', 'script']).default('off'),
 });
 export type ProductionSettings = z.infer<typeof productionSettingsSchema>;
+
+export function supportsProductionAgent(model: Pick<ModelProfile, 'enabled' | 'capabilities' | 'provider'> | undefined): boolean {
+  return Boolean(model?.enabled && model.provider === 'openai-compatible' && model.capabilities.includes('text') && model.capabilities.includes('tools'));
+}
+
+export function productionEditingStep(workflow: WorkflowDefinition): WorkflowNode | undefined {
+  return workflow.id === 'native-video' ? workflow.nodes.find(node => node.id === 'animation' && node.kind === 'animation' && node.config.operation === 'prepare-edit') : undefined;
+}
 
 /** Resolve defaults before recording a run; the recorded nodes remain self-contained. */
 export function resolveProductionWorkflow(workflow: WorkflowDefinition): WorkflowDefinition {

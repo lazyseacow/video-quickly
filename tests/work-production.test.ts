@@ -1,11 +1,12 @@
 import { randomUUID } from 'node:crypto';
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { afterEach, expect, it } from 'vitest';
-import { characterProfileSchema, modelSchema, productionQueueDetailSchema, productionQueueEnqueueResultSchema, projectSchema, projectSummarySchema, runInspectionSchema, runSchema, workDefaultsSchema, workSchema, workflowNodeSchema, type ProjectDocument, type ProductionQueue, type StoryWork } from '@video-quickly/contracts';
+import { characterProfileSchema, modelSchema, productionQueueDetailSchema, productionQueueEnqueueResultSchema, productionQueueSchema, projectSchema, projectSummarySchema, runInspectionSchema, runSchema, workDefaultsSchema, workSchema, workflowNodeSchema, type ProjectDocument, type ProductionQueue, type StoryWork } from '@video-quickly/contracts';
 import { createRuntime, SimulatedProcessExit, type RuntimeOptions } from '../packages/runtime/src/index';
 import { openDatabase, DocumentStore } from '../packages/runtime/src/database';
+import { importSkillFixture } from './fixtures/import-skill';
 
 const directories: string[] = [], runtimes: ReturnType<typeof createRuntime>[] = [], releases: Array<() => void> = [];
 afterEach(async () => { releases.splice(0).forEach(release => release()); await Promise.all(runtimes.splice(0).map(runtime => runtime.close())); await Promise.all(directories.splice(0).map(path => rm(path, { force: true, recursive: true }))); });
@@ -69,6 +70,25 @@ it('creates episodes atomically and idempotently, projects their membership and 
   const invalid = [{ projectId: source.projects[1].id, revision: source.projects[1].revision }, { projectId: source.projects[2].id, revision: 999 }];
   await expect(source.runtime.dispatch('work.defaults.apply', { workId: next.id, revision: next.revision, projects: invalid })).rejects.toThrow('分集项目已修改');
   expect((await current(source.projects[1].id)).style).toBe('作品水彩');
+});
+
+it('increments the episode workflow version only when applied production defaults change', async () => {
+  const { runtime, work, projects: [project] } = await fixture();
+  const applyProduction = async (source: StoryWork, target: ProjectDocument) => {
+    const [saved] = projectSchema.array().parse(await runtime.dispatch('work.defaults.apply', {
+      workId: source.id, revision: source.revision, projects: [{ projectId: target.id, revision: target.revision }], fields: ['production'],
+    }));
+    return saved;
+  };
+  const unchanged = await applyProduction(work, project);
+  expect(unchanged.workflow.version).toBe(project.workflow.version);
+  const nextWork = workSchema.parse(await runtime.dispatch('work.save', {
+    ...work, defaults: { ...work.defaults, production: { ...work.defaults.production, subtitleMode: 'script' } },
+  }));
+  const changed = await applyProduction(nextWork, unchanged);
+  expect(changed.workflow.version).toBe(unchanged.workflow.version + 1);
+  expect(changed.workflow.production.subtitleMode).toBe('script');
+  expect((await applyProduction(nextWork, changed)).workflow.version).toBe(changed.workflow.version);
 });
 
 it('reserves episode numbers including archived projects and keeps an imported episode independent with its provenance', async () => {
@@ -158,6 +178,62 @@ it('cancels future items separately from the active run and prevents restarting 
   await source.runtime.dispatch('productionQueue.stopCurrent', { itemId: canceled.items[0].id, revision: canceled.items[0].revision }); release(); await source.runtime.waitForIdle();
   const finished = await detail(source.runtime, active.queue.id); expect(finished.items[0].status).toBe('canceled'); expect(calls).toBe(1);
   await expect(source.runtime.dispatch('run.resume', { runId: finished.items[0].runId })).rejects.toThrow();
+});
+
+it.each(['pause', 'cancel'] as const)('honors %s while the next episode is still preparing its snapshot', async action => {
+  const source = await fixture(), { runtime } = source;
+  const folder = join(source.directory, 'source-skill'); await mkdir(folder);
+  await writeFile(join(folder, 'SKILL.md'), '---\nname: queue-reference\ndescription: 夹具\n---\n参阅 notes.md。');
+  await writeFile(join(folder, 'notes.md'), '制作要求');
+  const skill = (await importSkillFixture(runtime.dispatch, { path: folder })).skills[0];
+  const project = source.projects[0];
+  const updated = projectSchema.parse(await runtime.dispatch('project.update', { projectId: project.id, revision: project.revision,
+    patch: { workflow: { ...project.workflow, nodes: project.workflow.nodes.map(node => ({ ...node, skillIds: [skill.id] })) } } }));
+  const { result } = await enqueue(source, [updated]);
+  const started = productionQueueSchema.parse(await runtime.dispatch('productionQueue.start', { queueId: result.queue!.id, revision: result.queue!.revision }));
+  await runtime.dispatch('productionQueue.' + action, { queueId: started.id, revision: started.revision }); await runtime.waitForIdle();
+  const final = await detail(runtime, started.id);
+  expect(final.queue.status).toBe(action === 'pause' ? 'paused' : 'canceled');
+  expect(final.items[0]).toMatchObject({ status: action === 'pause' ? 'queued' : 'canceled' });
+  expect(final.items[0].runId).toBeUndefined(); expect(source.calls).toEqual([]);
+  if (action === 'cancel') expect((await enqueue(source, [updated])).result.queue?.status).toBe('paused');
+  else {
+    await start(runtime, final.queue); await runtime.waitForIdle();
+    expect((await detail(runtime, started.id)).queue.status).toBe('succeeded');
+  }
+});
+
+it('releases a stranded reservation left by an older canceled queue when the workspace reopens', async () => {
+  const source = await fixture(), { result } = await enqueue(source, [source.projects[0]]);
+  const queue = result.queue!, item = result.items[0];
+  await source.runtime.close(); runtimes.splice(runtimes.indexOf(source.runtime), 1);
+  const database = openDatabase(source.directory), store = new DocumentStore(database);
+  try {
+    store.put('production-queue', queue.id, { ...queue, status: 'canceled' });
+    store.put('production-queue-item', item.id, { ...item, status: 'needs_attention', error: '生产队列已变化' });
+  } finally { database.close(); }
+  const runtime = createRuntime(source.options); runtimes.push(runtime); await runtime.waitForIdle();
+  expect((await detail(runtime, queue.id)).items[0].status).toBe('canceled');
+  expect((await enqueue({ ...source, runtime }, [source.projects[0]])).result.queue?.status).toBe('paused');
+});
+
+it('captures a fresh snapshot if a paused queue is restarted before preparation ends', async () => {
+  const used: string[] = [];
+  const source = await fixture({ provider: async ({ model }) => { used.push(model.model); return '完成'; } }), { runtime } = source;
+  const folder = join(source.directory, 'restart-skill'); await mkdir(folder);
+  await writeFile(join(folder, 'SKILL.md'), '---\nname: restart-reference\ndescription: 夹具\n---\n参阅 notes.md。');
+  await writeFile(join(folder, 'notes.md'), '制作要求');
+  const skill = (await importSkillFixture(runtime.dispatch, { path: folder })).skills[0];
+  const project = source.projects[0];
+  const updated = projectSchema.parse(await runtime.dispatch('project.update', { projectId: project.id, revision: project.revision,
+    patch: { workflow: { ...project.workflow, nodes: project.workflow.nodes.map(node => ({ ...node, skillIds: [skill.id] })) } } }));
+  const { result } = await enqueue(source, [updated]);
+  const started = productionQueueSchema.parse(await runtime.dispatch('productionQueue.start', { queueId: result.queue!.id, revision: result.queue!.revision }));
+  const paused = productionQueueSchema.parse(await runtime.dispatch('productionQueue.pause', { queueId: started.id, revision: started.revision }));
+  await runtime.dispatch('model.save', { model: { ...source.model, model: 'updated-model' } });
+  await start(runtime, paused); await runtime.waitForIdle();
+  expect((await detail(runtime, started.id)).queue.status).toBe('succeeded');
+  expect(used).toEqual(['updated-model', 'updated-model']);
 });
 
 it('protects characters used by work defaults and retains ordinary independent projects', async () => {

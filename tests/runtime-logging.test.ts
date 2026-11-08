@@ -45,7 +45,7 @@ async function logs(directory: string) {
 }
 async function workflow(runtime: ReturnType<typeof createRuntime>, modelId?: string, label = '本地步骤') {
   const project = projectSchema.parse(await runtime.dispatch('project.create', { title: 'private-project-title', brief: 'private-project-brief' }));
-  await runtime.dispatch('workflow.save', { projectId: project.id, workflow: { id: 'logging-fixture', version: 1, name: 'private-workflow-name', production: { mode: 'native-video', referenceMode: 'none', soundPrompt: '', subtitleMode: 'off' }, nodes: [workflowNodeSchema.parse({ id: 'brief', kind: 'brief', label, modelId, prompt: 'private-node-prompt' })], edges: [] } });
+  await runtime.dispatch('project.update', { projectId: project.id, patch: { workflow: { id: 'logging-fixture', version: 1, name: 'private-workflow-name', production: { mode: 'native-video', referenceMode: 'none', soundPrompt: '', subtitleMode: 'off' }, nodes: [workflowNodeSchema.parse({ id: 'brief', kind: 'brief', label, modelId, prompt: 'private-node-prompt' })], edges: [] } } });
   return project;
 }
 

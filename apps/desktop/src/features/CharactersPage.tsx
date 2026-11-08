@@ -17,6 +17,8 @@ export default function CharactersPage({ workspace, action }: { workspace: Works
   const confirm = useConfirmation();
   const [archived, setArchived] = useState(false);
   const library = useRecordPage('character.list', { archived, limit: 20 }, workspace.version, characterPage);
+  const characters = library.stale ? [] : library.items;
+  const loading = !characters.length && !library.error && (library.busy || !library.hasLoaded);
   const [editing, setEditing] = useState<CharacterProfile | 'new'>();
   const [error, setError] = useState('');
   async function changeArchive(character: CharacterProfile) {
@@ -25,12 +27,13 @@ export default function CharactersPage({ workspace, action }: { workspace: Works
     try { await rpc(archived ? 'character.restore' : 'character.archive', { characterId: character.id, revision: character.revision }); library.refresh(); }
     catch (error) { setError(error instanceof Error ? error.message : String(error)); }
   }
-  return <div className="content-page"><div className="page-heading"><div><h1>角色参考库</h1><p>管理可复用的角色设定与参考图。</p></div><Button aria-label="新建角色" variant="primary" onClick={() => setEditing('new')}><Plus size={16} />新建</Button></div>
-    <div className="page-toolbar"><div className="tabs"><button aria-label="可用角色" type="button" className={!archived ? 'active' : ''} onClick={() => setArchived(false)}>可用</button><button type="button" className={archived ? 'active' : ''} onClick={() => setArchived(true)}>已归档</button></div></div>
-    {(library.error || error) && <Notice kind="error">{library.error || error}</Notice>}
-    <div className="character-cards">{library.items.map(character => <article className="character-card" key={character.id}><CharacterThumbnail character={character} /><div className="character-card__body"><h3>{character.name}</h3><p>{character.description || '尚未填写角色设定'}</p><span className="tiny-meta">{character.referenceAssetIds.length} 张参考图 · 修订 {character.revision}</span><div className="character-card__actions"><Button aria-label="编辑角色" onClick={() => setEditing(character)}>编辑</Button><IconButton label={`${archived ? '恢复' : '归档'}角色：${character.name}`} onClick={() => void changeArchive(character)}>{archived ? <RotateCcw size={15} /> : <Trash2 size={15} />}</IconButton></div></div></article>)}</div>
-    {!library.items.length && !library.busy && !library.error && <EmptyState icon={<Users size={25} />} title={archived ? '没有归档角色' : '建立你的角色参考'} description="设置外形、服饰与性格，最多添加 4 张公共参考图。" />}
-    {library.nextCursor !== null && <Button aria-label="加载更多角色" busy={library.loadingMore} disabled={!library.canLoadMore} onClick={() => void library.loadMore()}><ChevronDown size={15} />加载更多</Button>}
+  return <div className="content-page"><div className="page-heading"><h1>角色参考库</h1><Button variant="primary" onClick={() => setEditing('new')}><Plus size={16} />新建角色</Button></div>
+    <div className="page-toolbar"><div className="tabs"><button aria-label="可用角色" aria-pressed={!archived} type="button" className={!archived ? 'active' : ''} onClick={() => setArchived(false)}>可用</button><button aria-pressed={archived} type="button" className={archived ? 'active' : ''} onClick={() => setArchived(true)}>已归档</button></div></div>
+    {library.error ? <Notice kind="error">{library.error}<Button aria-label="重试读取角色" onClick={library.refresh}>重试</Button></Notice> : error && <Notice kind="error">{error}</Notice>}
+    {loading && <p role="status" className="muted">正在读取角色…</p>}
+    <div className="character-cards">{characters.map(character => <article className="character-card" key={character.id}><CharacterThumbnail character={character} /><div className="character-card__body"><h3>{character.name}</h3><p>{character.description || '尚未填写角色设定'}</p><span className="tiny-meta">{character.referenceAssetIds.length} 张参考图 · 修订 {character.revision}</span><div className="character-card__actions"><Button aria-label="编辑角色" onClick={() => setEditing(character)}>编辑</Button><IconButton label={`${archived ? '恢复' : '归档'}角色：${character.name}`} onClick={() => void changeArchive(character)}>{archived ? <RotateCcw size={15} /> : <Trash2 size={15} />}</IconButton></div></div></article>)}</div>
+    {!characters.length && !loading && !library.error && <EmptyState icon={<Users size={25} />} title={archived ? '没有归档角色' : '还没有角色参考'} description={archived ? '归档的角色可在这里恢复。' : '添加角色设定和参考图，供不同项目复用。'} />}
+    {!library.stale && library.nextCursor !== null && <Button aria-label="加载更多角色" busy={library.loadingMore} disabled={!library.canLoadMore} onClick={() => void library.loadMore()}><ChevronDown size={15} />加载更多</Button>}
     {editing && <CharacterEditor character={editing === 'new' ? undefined : editing} version={workspace.version} action={action} onClose={() => setEditing(undefined)} onSaved={() => { setEditing(undefined); library.refresh(); }} />}
   </div>;
 }

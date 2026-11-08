@@ -28,11 +28,9 @@ export interface RenderOptions {
 }
 export interface RenderResult { videoPath: string; coverPath: string; subtitlePath: string; timelinePath: string; warnings: string[] }
 
-function subtitleStyle(width:number,height: number, referenceFooter=false): string {
-  const geometry=captionGeometry(width,height,referenceFooter);
-  // libass otherwise assumes a 384×288 script, scaling pixel-based footer margins differently per format.
-  const coordinates=referenceFooter?`PlayResX=${width},PlayResY=${height},WrapStyle=2,`:'';
-  return `${coordinates}FontName=Microsoft YaHei,FontSize=${Math.round(geometry.fontSize)},PrimaryColour=&H00F1F6FB,OutlineColour=&H00304028,BorderStyle=3,Outline=2,Shadow=0,MarginV=${Math.round(referenceFooter?height-geometry.bottom+2:height*.075)},Alignment=2`;
+function subtitleStyle(width:number,height: number): string {
+  const geometry=captionGeometry(width,height);
+  return `FontName=Microsoft YaHei,FontSize=${Math.round(geometry.fontSize)},PrimaryColour=&H00F1F6FB,OutlineColour=&H00304028,BorderStyle=3,Outline=2,Shadow=0,MarginV=${Math.round(height*.075)},Alignment=2`;
 }
 
 async function encodeCanvasShot(scene: SceneFrame & {durationUs:number}, path: string, ffmpeg: string, schedule: RenderClipSchedule, options: RenderOptions, readImage?: () => Promise<CanvasImageSource>): Promise<void> {
@@ -118,7 +116,7 @@ export async function renderProject(options: RenderOptions): Promise<RenderResul
   const warnings: string[] = [...mix.warnings];
   const schedule = createRenderSchedule(shots, profile.frameRate);
   const visualClips = createTransitionTimeline(shots, profile.frameRate).clips;
-  const captionLayoutFor=(shot:Shot)=>resolveCaptionLayout(profile.width,profile.height,shot.captionStyle,{template:Boolean(shot.sceneTemplate)});
+  const captionLayoutFor=(shot:Shot)=>resolveCaptionLayout(profile.width,profile.height,shot.captionStyle);
   const captionFontFor=(shot:Shot)=>selectCaptionFont(shot.captionStyle?.fontId??'sans',name=>GlobalFonts.has(name));
   const segments:string[]=[];
   for(let index=0;index<shots.length;index++){
@@ -178,7 +176,7 @@ export async function renderProject(options: RenderOptions): Promise<RenderResul
   const subtitleCanvas=createCanvas(profile.width,profile.height);const captionContext=subtitleCanvas.getContext('2d');
   const subtitlePath=join(options.outputDirectory,'subtitles.srt');
   const pages=(text:string,shot:Pick<Shot,'captionStyle'|'sceneTemplate'>)=>{
-    const layout=resolveCaptionLayout(profile.width,profile.height,shot.captionStyle,{template:Boolean(shot.sceneTemplate)});
+    const layout=resolveCaptionLayout(profile.width,profile.height,shot.captionStyle);
     captionContext.font=layout.font;
     return captionPages(text,value=>captionContext.measureText(value).width,layout.textWidth,layout.maxLines);
   };

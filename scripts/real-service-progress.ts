@@ -3,7 +3,7 @@ import { recordPageSchema, runInspectionSchema, runSummarySchema } from '@video-
 type Dispatch = (method: string, params: unknown) => Promise<unknown>;
 
 /** Locate the committed run when its start response was lost before evidence was flushed. */
-export async function committedPhaseRun(dispatch: Dispatch, projectId: string, phase: string, nodeId: string, revision: number) {
+export async function committedPhaseRun(dispatch: Dispatch, projectId: string, nodeId: string, revision: number) {
   const matches: string[] = []; let before: number | undefined;
   for (;;) {
     const page = recordPageSchema(runSummarySchema).parse(await dispatch('run.list', { projectId, before, limit: 100 }));

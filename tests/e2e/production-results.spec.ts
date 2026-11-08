@@ -18,13 +18,14 @@ const style = '## 视觉风格\n采用**柔和蓝色**的漫画画面。\n\n### 
 async function produced(page: Page, request: APIRequestContext, info: TestInfo) {
   const source = await fixture(request, info, false, 1, { brief, style });
   try {
-    await rpc(request, 'workflow.save', { projectId: source.project.id, workflow: { ...source.project.workflow, production: { ...source.project.workflow.production!, textModelId: source.models[0].id, videoModelId: source.video.id } } });
+    await rpc(request, 'project.update', { projectId: source.project.id, patch: { workflow: { ...source.project.workflow, production: { ...source.project.workflow.production!, textModelId: source.models[0].id, videoModelId: source.video.id } } } });
     await rpc(request, 'run.start', { projectId: source.project.id });
     await expect.poll(async () => (await latest(request, source.project.id))?.status, { timeout: 30000 }).toBe('succeeded');
-    await open(page, source.project).then(dialog => dialog.getByRole('button', { name: '取消', exact: true }).click());
-    const trigger = page.getByRole('button', { name: '打开步骤：简报生成', exact: true });
+    await open(page, source.project).then(dialog => dialog.getByRole('button', { name: '关闭对话框', exact: true }).click());
+    const trigger = page.getByRole('button', { name: '打开阶段：策划与分镜', exact: true });
     await trigger.click();
     const dialog = page.getByRole('dialog', { name: '本次制作', exact: true });
+    await dialog.getByRole('navigation', { name: '本次制作步骤' }).getByRole('button', { name: /简报生成/ }).click();
     await expect(dialog.getByRole('heading', { name: '职场人如何用 AI 提效', exact: true })).toBeVisible();
     return { source, dialog, trigger };
   } catch (error) { await source.close(); throw error; }

@@ -88,7 +88,7 @@ test('keeps pending production settings on cancel and discards them only after c
     await settings.getByRole('button', { name: '放弃待用配置', exact: true }).click(); await confirmAction(page, '确认放弃'); await expect(settings).toHaveCount(0);
     await page.getByRole('button', { name: '制作设置', exact: true }).click(); await productionStep(settings, '创作要求');
     await expect(settings.getByLabel('视觉风格', { exact: true })).toHaveValue(original); await expect(settings.getByRole('button', { name: '放弃待用配置', exact: true })).toHaveCount(0);
-    await settings.getByRole('button', { name: '取消', exact: true }).click();
+    await settings.getByRole('button', { name: '关闭对话框', exact: true }).click();
   } finally { await source.close(); }
 });
 

@@ -35,7 +35,7 @@ for (const annotations of ['missing', 'null', 'present'] as const) it(`continues
   const runtime = createRuntime({ dataDirectory: directory, seed: false }); runtimes.push(runtime);
   const created = projectSchema.parse(await runtime.dispatch('project.create', { title: 'Responses 实际工具循环' }));
   const model = modelSchema.parse(await runtime.dispatch('model.save', { model: { name: 'Responses fixture', provider: 'openai-compatible', baseUrl: `http://127.0.0.1:${address.port}/v1`, model: 'fixture', textProtocol: 'responses', connectionType: 'text', capabilities: ['text', 'tools'] } }));
-  await runtime.dispatch('workflow.save', { projectId: created.id, revision: created.revision, workflow: { ...created.workflow, id: 'responses-agent', nodes: [workflowNodeSchema.parse({ id: 'agent', kind: 'agent', label: 'Responses Agent', modelId: model.id, prompt: '读取项目并返回实际结果。' })], edges: [] } });
+  await runtime.dispatch('project.update', { projectId: created.id, revision: created.revision, patch: { workflow: { ...created.workflow, id: 'responses-agent', nodes: [workflowNodeSchema.parse({ id: 'agent', kind: 'agent', label: 'Responses Agent', modelId: model.id, prompt: '读取项目并返回实际结果。' })], edges: [] } } });
   const run = runSchema.parse(await runtime.dispatch('run.start', { projectId: created.id })); await runtime.waitForIdle();
   const completed = runSchema.parse(await runtime.dispatch('run.get', { runId: run.id }));
   expect(completed.status, completed.error).toBe('succeeded'); expect(calls).toBe(2); expect(sawToolOutput).toBe(true);

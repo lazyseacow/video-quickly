@@ -3,21 +3,17 @@ import { captionAtTime, projectCaptionCues, type CaptionClip, type CaptionPages 
 import { mediaSourceInUs } from './audio.js';
 import { clipEditSource, resolveShotTime, sourceCaptionTrack, type ClipEditContext } from './clip-edits.js';
 import { drawSceneTemplate } from './scene-templates.js';
-import { drawCitationOverlay, type CitationOverlay } from './citations.js';
 import { captionBox, resolveCaptionLayout, safeCaptionStyle } from './caption-layout.js';
 import { sampleMotion } from './keyframes.js';
-export { sampleMotion, motionSceneTimeUs, motionLocalTimeUs, type MotionPose } from './keyframes.js';
-export { TRANSITION_DURATION_US, FFMPEG_TRANSITIONS, createTransitionTimeline, sampleTransition, transitionPaddingFrames, wipeLeftIncomingStartX, type TransitionKind, type TransitionClip, type TransitionTimeline, type TransitionSample } from './transitions.js';
-export { createRenderSchedule, type RenderClipSchedule } from './render-schedule.js';
-export { captionAtTime, createEstimatedCaptionTrack, projectCaptionCues, replaceVisibleCaptionCues, splitCaptionText, type CaptionClip, type CaptionPages } from './captions.js';
-export { commonSourceOutUs, mediaSourceInUs, musicPlaybackAtTime, type MediaSourceOffsets, type MusicPlayback, type SourceDurations } from './audio.js';
-export { captureClipEditSource, clipEditPlan, clipEditSource, clipEditTotalUs, clipSourceOutUs, deleteShotRanges, replaceShotMedia, resolveShotAtTime, resolveShotSpans, resolveShotTime, restoreShotRanges, sliceClipPlan, sourceCaptionTrack, type ClipEditContext, type ClipEditDocument, type ClipEditIdFactory, type ClipRange, type ClipTimingShot, type ResolvedClipSpan, type ResolvedShotTime } from './clip-edits.js';
-export { drawSceneTemplate } from './scene-templates.js';
-export { createCitationManifest, citationOverlayForShot, citationFooterTop, drawCitationOverlay, type CitationManifest, type CitationReference, type CitationEvidence, type CitationOverlay } from './citations.js';
-export { CAPTION_FONT_CATALOG, captionFontFamily, selectCaptionFont, safeCaptionStyle, captionGeometry, resolveCaptionLayout, captionBox, type CaptionLayout } from './caption-layout.js';
+export { sampleMotion, motionSceneTimeUs, motionLocalTimeUs } from './keyframes.js';
+export { createTransitionTimeline, sampleTransition, wipeLeftIncomingStartX } from './transitions.js';
+export { captionAtTime, createEstimatedCaptionTrack, projectCaptionCues, replaceVisibleCaptionCues, splitCaptionText } from './captions.js';
+export { mediaSourceInUs } from './audio.js';
+export { clipEditSource, sourceCaptionTrack, type ClipEditContext } from './clip-edits.js';
+export { captionFontFamily, selectCaptionFont, safeCaptionStyle, captionGeometry, resolveCaptionLayout, captionBox } from './caption-layout.js';
 
 export interface TimelineClip { shotId: string; index: number; startUs: number; durationUs: number; endUs: number }
-export interface SceneFrame { title: string; narration: string; shotIndex: number; sceneIndex?: number; sceneTemplate?: Shot['sceneTemplate']; captionStyle?: CaptionStyle | null; citation?: CitationOverlay; referenceFooter?: boolean; profile: VideoProfile; durationUs?: number; sourceInUs?: number; audioInUs?: number; videoInUs?: number; sceneInUs?: number; sceneDurationUs?: number; captionTrack?: Shot['captionTrack']; clipEdit?: Shot['clipEdit']; clipEditContext?: ClipEditContext; animation?: Shot['animation']; image?: CanvasImageSource; label?: string; sample?: boolean }
+export interface SceneFrame { title: string; narration: string; shotIndex: number; sceneIndex?: number; sceneTemplate?: Shot['sceneTemplate']; captionStyle?: CaptionStyle | null; profile: VideoProfile; durationUs?: number; sourceInUs?: number; audioInUs?: number; videoInUs?: number; sceneInUs?: number; sceneDurationUs?: number; captionTrack?: Shot['captionTrack']; clipEdit?: Shot['clipEdit']; clipEditContext?: ClipEditContext; animation?: Shot['animation']; image?: CanvasImageSource; label?: string; sample?: boolean }
 
 export function buildTimeline(shots: ReadonlyArray<Pick<Shot, 'id' | 'durationUs'>>): TimelineClip[] {
   let cursor = 0;
@@ -134,7 +130,7 @@ function scholar(ctx: CanvasRenderingContext2D, x: number, y: number, scale: num
 function drawCaptions(ctx: CanvasRenderingContext2D, scene: SceneFrame, width: number, height: number, timeUs: number) {
   if (!sourceCaptionTrack(scene, scene.clipEditContext) && !scene.narration.trim()) return;
   ctx.save(); ctx.textAlign='center'; ctx.textBaseline='alphabetic';
-  const layout=resolveCaptionLayout(width,height,scene.captionStyle,{referenceFooter:scene.referenceFooter??Boolean(scene.citation),template:Boolean(scene.sceneTemplate)});
+  const layout=resolveCaptionLayout(width,height,scene.captionStyle);
   ctx.font=layout.font;
   const pages:CaptionPages=text=>captionPages(text,value=>ctx.measureText(value).width,layout.textWidth,layout.maxLines);
   const durationUs=scene.durationUs??8_000_000;
@@ -169,9 +165,10 @@ export function drawSceneFrame(canvas: HTMLCanvasElement, scene: SceneFrame, tim
   const progress=Math.min(1,Math.max(0,sceneUs/(scene.sceneDurationUs??source?.original.sceneDurationUs??source?.original.durationUs??scene.durationUs??8_000_000)));
   const pose = sampleMotion(scene.animation, sceneUs, scene.sceneDurationUs ?? source?.original.sceneDurationUs ?? source?.original.durationUs ?? scene.durationUs ?? 8_000_000);
   if(scene.sceneTemplate){
-    const layout=resolveCaptionLayout(width,height,scene.captionStyle,{referenceFooter:scene.referenceFooter??Boolean(scene.citation),template:true});
+    const layout=resolveCaptionLayout(width,height,scene.captionStyle);
     drawSceneTemplate(canvas,scene.sceneTemplate,progress,{fontSize:layout.fontSize,lines:layout.maxLines,bottom:layout.bottom,diagramTop:layout.diagramTop,diagramBottom:layout.diagramBottom},scene.animation?.keyframes?.length ? pose : undefined);
-    if(options.captions !== false)drawCaptions(ctx,scene,width,height,timeUs);drawCitationOverlay(canvas,scene.citation);return;
+    if(options.captions !== false)drawCaptions(ctx,scene,width,height,timeUs);
+    return;
   }
   if (!options.mediaOnly) {
   const shotIndex = scene.sceneIndex ?? source?.original.sceneIndex ?? scene.shotIndex;
@@ -238,38 +235,4 @@ export function drawSceneFrame(canvas: HTMLCanvasElement, scene: SceneFrame, tim
   }
   if(options.captions !== false)drawCaptions(ctx,scene,width,height,timeUs);
   ctx.restore();
-  drawCitationOverlay(canvas,scene.citation);
-}
-
-export interface FrameSink {
-  start(profile: VideoProfile, totalFrames: number): Promise<void>;
-  write(frame: Uint8Array, frameIndex: number): Promise<void>;
-  finish(): Promise<string>;
-  abort(): Promise<void>;
-}
-
-export async function exportCanvasVideo(
-  scenes: ReadonlyArray<SceneFrame & { durationUs: number }>,
-  sink: FrameSink,
-  options: { signal?: AbortSignal; onProgress?: (value: number) => void } = {},
-): Promise<string> {
-  if(!scenes.length)throw new Error('至少需要一个镜头');
-  const profile=scenes[0].profile;
-  const timeline=buildTimeline(scenes.map((scene,index)=>({id:String(index),durationUs:scene.durationUs})));
-  const totalFrames=frameCount(timeline.at(-1)!.endUs,profile.frameRate);
-  const canvas=document.createElement('canvas');canvas.width=profile.width;canvas.height=profile.height;
-  const context=canvas.getContext('2d',{willReadFrequently:true});if(!context)throw new Error('无法创建导出画布');
-  await sink.start(profile,totalFrames);
-  try{
-    for(let frame=0;frame<totalFrames;frame++){
-      if(options.signal?.aborted)throw new DOMException('导出已取消','AbortError');
-      const timeUs=frameTimeUs(frame,profile.frameRate);
-      const clip=timeline.find(clip=>timeUs<clip.endUs)??timeline.at(-1)!;
-      drawSceneFrame(canvas,scenes[clip.index],timeUs-clip.startUs);
-      await sink.write(new Uint8Array(context.getImageData(0,0,canvas.width,canvas.height).data.buffer),frame);
-      options.onProgress?.((frame+1)/totalFrames);
-      if(frame%6===0)await new Promise<void>(resolve=>setTimeout(resolve,0));
-    }
-    return await sink.finish();
-  }catch(error){await sink.abort();throw error;}
 }

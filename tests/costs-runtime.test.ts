@@ -39,7 +39,7 @@ async function fixture(provider: ModelProfile['provider'] = 'openai-compatible',
   const runtime = open(directory, options);
   const project = projectSchema.parse(await runtime.dispatch('project.create', { title: '费用追踪' }));
   const model = await runtime.dispatch('model.save', { model: { name: '费用模型', provider, baseUrl: `http://127.0.0.1:${address.port}${provider === 'ollama' ? '' : '/v1'}`, model: 'metered-model', connectionType: 'text', capabilities: ['text'], parameters: provider === 'ollama' ? { options: { temperature: .3, num_predict: 12 } } : { temperature: .2, private_fixture: 'not-for-the-cost-ledger' }, pricing: { currency: 'USD', inputPerMillionTokens: 2, outputPerMillionTokens: 8 } } }) as ModelProfile;
-  await runtime.dispatch('workflow.save', { projectId: project.id, workflow: { id: 'metered', version: 1, name: '费用夹具', production: { mode: 'native-video', referenceMode: 'none', soundPrompt: '', subtitleMode: 'off' }, nodes: [workflowNodeSchema.parse({ id: 'brief', kind: 'brief', label: '简报', modelId: model.id })], edges: [] } });
+  await runtime.dispatch('project.update', { projectId: project.id, patch: { workflow: { id: 'metered', version: 1, name: '费用夹具', production: { mode: 'native-video', referenceMode: 'none', soundPrompt: '', subtitleMode: 'off' }, nodes: [workflowNodeSchema.parse({ id: 'brief', kind: 'brief', label: '简报', modelId: model.id })], edges: [] } } });
   const start = async () => { const run = await runtime.dispatch('run.start', { projectId: project.id }) as RunRecord; await runtime.waitForIdle(); return run; };
   return { runtime, directory, project, model, state, start, received };
 }

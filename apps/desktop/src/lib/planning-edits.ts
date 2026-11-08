@@ -4,7 +4,7 @@ import { sameContent, type EditContent } from './project-edits';
 export type PlanningSection = 'brief' | 'style' | 'script';
 export type PlanningProject = Pick<ProjectDocument, 'brief' | 'style' | 'creativeContext' | 'shots'>;
 export const planningLabels = { brief: '创意简报', style: '风格与角色', script: '旁白与分镜' };
-export const planningShotFields = ['title', 'narration', 'visualPrompt', 'soundPrompt'] as const;
+const planningShotFields = ['title', 'narration', 'visualPrompt', 'soundPrompt'] as const;
 export type PlanningShot = Pick<Shot, 'id' | typeof planningShotFields[number]>;
 export type PlanningChange = { kind: 'brief'; text: string } | { kind: 'style'; text: string; creativeContext: CreativeContext | null } | { kind: 'script'; shots: PlanningShot[] };
 export interface PlanningControls { project: PlanningProject; onEdit(section: PlanningSection): void; disabledReason?: string }

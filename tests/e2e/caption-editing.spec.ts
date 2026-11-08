@@ -50,7 +50,9 @@ async function downloadSrt(page: Page) {
   const download = await pending; const path = await download.path();
   if (!path) throw new Error('字幕下载未产生文件');
   const text = await readFile(path, 'utf8');
-  await dialog.getByRole('button', { name: '关闭', exact: true }).click(); return text;
+  await dialog.getByRole('button', { name: '关闭对话框', exact: true }).click();
+  await expect(dialog).toHaveCount(0);
+  return text;
 }
 
 test('edits estimated captions through the production dialog as one undo command and restores them after reload', async ({ page, request }, info) => {

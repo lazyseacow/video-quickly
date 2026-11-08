@@ -4,7 +4,7 @@ import './settings-sections.css';
 
 export interface SettingsSection { id: string; label: string; icon?: LucideIcon; content: ReactNode }
 
-export default function SettingsSections({ sections, preview, notice, intro, value, onValueChange, layout = 'sidebar', label = '设置分区' }: { sections: readonly SettingsSection[]; preview?: ReactNode; notice?: ReactNode; intro?: ReactNode; value?: string; onValueChange?: (value: string) => void; layout?: 'sidebar' | 'tabs'; label?: string }) {
+export default function SettingsSections({ sections, preview, previewLabel = '实时预览', notice, intro, value, onValueChange, layout = 'sidebar', label = '设置分区' }: { sections: readonly SettingsSection[]; preview?: ReactNode; previewLabel?: string; notice?: ReactNode; intro?: ReactNode; value?: string; onValueChange?: (value: string) => void; layout?: 'sidebar' | 'tabs'; label?: string }) {
   const id = useId();
   const [localValue, setLocalValue] = useState(sections[0]?.id ?? '');
   const selected = value ?? localValue;
@@ -35,6 +35,6 @@ export default function SettingsSections({ sections, preview, notice, intro, val
       buttons[next].click(); buttons[next].focus(); buttons[next].scrollIntoView({ block: 'nearest', inline: 'nearest' });
     }}>{sections.map(({ id: key, label: title, icon: Icon }) => <button key={key} type="button" role="tab" id={`${id}-tab-${key}`} aria-controls={`${id}-panel-${key}`} aria-selected={active === key} tabIndex={active === key ? 0 : -1} onClick={() => setSelected(key)}>{Icon && <Icon size={16} aria-hidden="true" />}<span>{title}</span></button>)}</div>
     <div className="settings-sections__content" ref={content}>{intro}{sections.map(section => <section key={section.id} role="tabpanel" id={`${id}-panel-${section.id}`} aria-labelledby={`${id}-tab-${section.id}`} data-settings-section={section.id} hidden={active !== section.id}>{section.content}</section>)}{notice && <div className="settings-sections__notice">{notice}</div>}</div>
-    {preview && <aside className={`settings-sections__preview ${previewOpen ? 'settings-sections__preview--open' : ''}`} aria-label="实时预览"><h3>实时预览</h3><button type="button" className="settings-sections__preview-toggle" aria-expanded={previewOpen} aria-controls={`${id}-preview`} onClick={() => setPreviewOpen(value => !value)}>实时预览<ChevronDown size={16} aria-hidden="true" /></button><div id={`${id}-preview`} className="settings-sections__preview-body">{preview}</div></aside>}
+    {preview && <aside className={`settings-sections__preview ${previewOpen ? 'settings-sections__preview--open' : ''}`} aria-label={previewLabel}><h3>{previewLabel}</h3><button type="button" className="settings-sections__preview-toggle" aria-expanded={previewOpen} aria-controls={`${id}-preview`} onClick={() => setPreviewOpen(value => !value)}>{previewLabel}<ChevronDown size={16} aria-hidden="true" /></button><div id={`${id}-preview`} className="settings-sections__preview-body">{preview}</div></aside>}
   </div>;
 }

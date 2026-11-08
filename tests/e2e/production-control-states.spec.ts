@@ -98,7 +98,7 @@ for (const scenario of scenarios) test(`keeps control corners consistent across 
   for (const label of ['视频宽度', '视频高度', '视频帧率', '素材适配']) await fieldStates(page, dialog, dialog.getByLabel(label, { exact: true }), radius);
   await page.screenshot({ path: info.outputPath('output-control-states.png') });
   expect(await dialog.evaluate(element => element.scrollWidth <= element.clientWidth + 1)).toBe(true);
-  await dialog.getByRole('button', { name: '取消', exact: true }).click(); await expect(dialog).toHaveCount(0);
+  await dialog.getByRole('button', { name: '关闭对话框', exact: true }).click(); await expect(dialog).toHaveCount(0);
   expect((await source.saved()).revision).toBe(source.project.revision);
   await expect(page.locator('vite-error-overlay')).toHaveCount(0); expect(errors).toEqual([]);
 });

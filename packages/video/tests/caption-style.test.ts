@@ -8,11 +8,11 @@ import { splitShot } from '../src/editing.js';
 const style: CaptionStyle = { ...DEFAULT_CAPTION_STYLE, fontSizeRatio: .05, textColor: '#00FF00', backgroundColor: '#112233' };
 const rate = { numerator: 30_000, denominator: 1001 };
 const shot = () => shotSchema.parse({ id: 'styled', title: 'Styled', narration: '', visualPrompt: '', durationUs: 4_000_000, captionTrack: { timeBase: 'scene', alignment: 'manual', cues: [{ id: 'original', startUs: 0, endUs: 4_000_000, text: '字幕风格 ABCDEFG' }] } });
-function frame(value: CaptionStyle | undefined, options: { width?: number; height?: number; text?: string; template?: boolean; referenceFooter?: boolean } = {}) {
+function frame(value: CaptionStyle | undefined, options: { width?: number; height?: number; text?: string; template?: boolean } = {}) {
   const width = options.width ?? 640, height = options.height ?? 360, canvas = createCanvas(width, height), image = createCanvas(width, height);
   image.getContext('2d').fillStyle = '#ffffff'; image.getContext('2d').fillRect(0, 0, width, height);
   const original = { title: '', narration: '', durationUs: 4_000_000, captionTrack: { timeBase: 'scene' as const, alignment: 'manual' as const, cues: [{ id: 'original', startUs: 0, endUs: 4_000_000, text: options.text ?? '字幕风格 ABCDEFG' }] } };
-  drawSceneFrame(canvas as unknown as HTMLCanvasElement, { ...original, captionStyle: value, sceneTemplate: options.template ? { ...createSceneTemplate('comparison'), motion: 'none' } : undefined, image: image as unknown as CanvasImageSource, referenceFooter: options.referenceFooter, shotIndex: 0, profile: { ...DEFAULT_VIDEO_PROFILE, width, height } }, 1_000_000);
+  drawSceneFrame(canvas as unknown as HTMLCanvasElement, { ...original, captionStyle: value, sceneTemplate: options.template ? { ...createSceneTemplate('comparison'), motion: 'none' } : undefined, image: image as unknown as CanvasImageSource, shotIndex: 0, profile: { ...DEFAULT_VIDEO_PROFILE, width, height } }, 1_000_000);
   return canvas;
 }
 
@@ -39,9 +39,9 @@ it('uses controlled host font families and renders distinct serif, bold, colors 
   expect(pixel(.5)[0]).toBeGreaterThan(120); expect(pixel(.5)[0]).toBeLessThan(150);
 });
 
-it.each([[640, 360], [360, 640], [480, 480], [64, 64]])('keeps top and bottom reading pages, diagram content and reference footer apart at %i×%i', (width, height) => {
+it.each([[640, 360], [360, 640], [480, 480], [64, 64]])('keeps caption reading pages clear of diagram content at %i×%i', (width, height) => {
   for (const position of ['top', 'bottom'] as const) {
-    const value = { ...style, position, fontSizeRatio: .09, maxLines: 3 } as const, layout = resolveCaptionLayout(width, height, value, { template: true, referenceFooter: true });
+    const value = { ...style, position, fontSizeRatio: .09, maxLines: 3 } as const, layout = resolveCaptionLayout(width, height, value);
     const box = captionBox(layout, layout.maxLines);
     if (position === 'top') expect(box.y + box.height).toBeLessThan(layout.diagramTop);
     else expect(layout.diagramBottom).toBeLessThan(box.y);
@@ -50,7 +50,7 @@ it.each([[640, 360], [360, 640], [480, 480], [64, 64]])('keeps top and bottom re
     const ctx = createCanvas(width, height).getContext('2d'); ctx.font = layout.font;
     const pages = captionPages(text, line => ctx.measureText(line).width, layout.textWidth, layout.maxLines);
     expect(pages.length).toBeGreaterThan(1); expect(pages.every(page => page.length <= value.maxLines)).toBe(true); expect(pages.flat().join('')).toBe(text);
-    expect(() => frame(value, { width, height, text, template: true, referenceFooter: true })).not.toThrow();
+    expect(() => frame(value, { width, height, text, template: true })).not.toThrow();
   }
 });
 

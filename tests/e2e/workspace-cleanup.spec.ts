@@ -17,15 +17,18 @@ async function expectCleanChrome(page: Page) {
 
 test('keeps one page heading and functional guidance after removing repeated desktop chrome and slogans', async ({ page, request }, info) => {
   const errors = observe(page); await page.goto('/'); await expect(page.getByRole('navigation', { name: '主导航', exact: true })).toBeVisible(); await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark');
-  const removed = ['从一个想法开始，把每个镜头打磨成自己的作品。', '收集画面、旁白与参考资料，把值得保留的素材带到下一次创作。', '把熟悉的创作方法带进工作流，让每个步骤遵循你的规范。'];
+  const removed = ['从一个想法开始，把每个镜头打磨成自己的作品。', '收集画面、旁白与参考资料，把值得保留的素材带到下一次创作。', '把熟悉的创作方法带进工作流，让每个步骤遵循你的规范。', '配置文本、图片和视频模型。'];
   for (const name of ['我的项目', '素材库', 'Skill 工作室', '模型连接']) {
     await page.getByRole('button', { name, exact: true }).click(); await expect(page.getByRole('heading', { level: 1, name, exact: true })).toBeVisible(); await expect(page.getByRole('heading', { level: 1 })).toHaveCount(1); await expectCleanChrome(page);
     for (const text of removed) await expect(page.getByText(text, { exact: true })).toHaveCount(0);
     if (name === 'Skill 工作室') {
-      await expect(page.getByRole('heading', { name: '一个 Skill，一套创作方法', exact: true })).toHaveCount(0); await expect(page.getByRole('heading', { level: 2, name: '工具连接', exact: true })).toBeVisible(); await expect(page.getByText(/任务固定所选指令和已展开的引用资源/)).toBeVisible(); await expect(page.getByText(/工具需要单独启用/)).toBeVisible();
+      await expect(page.getByRole('heading', { name: '一个 Skill，一套创作方法', exact: true })).toHaveCount(0);
+      await expect(page.getByText(/任务固定所选指令和已展开的引用资源/)).toHaveCount(0);
+      await expect(page.getByRole('heading', { level: 2, name: '工具连接', exact: true })).toBeVisible();
+      await expect(page.getByRole('button', { name: '导入 Skill', exact: true })).toHaveCount(1);
+      await expect(page.getByRole('button', { name: '添加工具连接', exact: true })).toHaveCount(1);
     }
     if (name === '模型连接') {
-      await expect(page.getByText('配置文本、图片和视频模型。', { exact: true })).toBeVisible();
       const types = page.getByRole('group', { name: '模型类型筛选', exact: true });
       for (const type of ['文本模型', '图片模型', '视频模型']) await expect(types.getByRole('button', { name: type, exact: true })).toBeEnabled();
       const model = await addModelConnection(page);

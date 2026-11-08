@@ -1,5 +1,6 @@
 import { expect, test, type Locator } from '@playwright/test';
-import type { ProjectDocument } from '@video-quickly/contracts';
+import { writeFile } from 'node:fs/promises';
+import type { AssetRecord, ProjectDocument } from '@video-quickly/contracts';
 import { openCosts } from './workspace-settings';
 
 for (const { width, theme } of [
@@ -41,13 +42,8 @@ for (const { width, theme } of [
   await expect(page.locator('.project-card')).toContainText(project.title);
   await inspect('projects', toolbar()); await search.fill('');
   await page.getByRole('button', { name: '作品与分集', exact: true }).click();
-  const archived = page.getByRole('checkbox', { name: '已归档作品', exact: true });
-  await archived.check(); await expect(archived).toBeChecked(); await inspect('works', toolbar());
-  const checkboxOffset = await archived.evaluate(element => {
-    const checkbox = element.getBoundingClientRect(), label = element.closest('label')!.getBoundingClientRect();
-    return Math.abs(checkbox.y + checkbox.height / 2 - label.y - label.height / 2);
-  });
-  expect.soft(checkboxOffset, 'works: checkbox and label alignment').toBeLessThanOrEqual(1);
+  const archived = page.getByRole('group', { name: '作品筛选', exact: true }).getByRole('button', { name: '已归档', exact: true });
+  await archived.click(); await expect(archived).toHaveAttribute('aria-pressed', 'true'); await inspect('works', toolbar());
   for (const [pageName, buttonName, artifact] of [
     ['模型连接', '视频模型', 'models'], ['素材库', '音频', 'assets'],
     ['角色参考库', '已归档', 'characters'], ['系列模板', '已归档模板', 'templates'],
@@ -74,4 +70,88 @@ for (const { width, theme } of [
   await info.attach('filter-layout-measurements', { body: JSON.stringify(measurements, null, 2), contentType: 'application/json' });
   await expect(page).toHaveTitle(/Video Quickly/);
   await expect(page.locator('vite-error-overlay')).toHaveCount(0); expect(errors).toEqual([]);
+});
+
+test('recovers from project search misses and distinguishes loading, failed and empty asset filters', async ({ page, request }) => {
+  const title = 'Library Search Fixture';
+  const response = await request.post('/__desktop_rpc', { data: { method: 'project.create', params: { title } } });
+  expect((await response.json()).result.title).toBe(title);
+  await page.goto('/');
+  await page.getByRole('button', { name: '我的项目', exact: true }).click();
+  const search = page.getByLabel('搜索项目', { exact: true });
+  await search.fill('  library search fixture  ');
+  await expect(page.getByRole('heading', { name: title, exact: true })).toBeVisible();
+  await search.fill('不会匹配任何项目的关键词');
+  await expect(page.getByText('没有匹配的项目', { exact: true })).toBeVisible();
+  await page.getByRole('button', { name: '清除搜索', exact: true }).click();
+  await expect(search).toHaveValue('');
+  await expect(search).toBeFocused();
+  await expect(page.getByRole('heading', { name: title, exact: true })).toBeVisible();
+
+  let rejectFirstRead!: () => void;
+  const pendingRead = new Promise<void>(resolve => { rejectFirstRead = resolve; });
+  let attempts = 0;
+  await page.route('**/__desktop_rpc', async route => {
+    const { method, params } = route.request().postDataJSON();
+    if (method !== 'asset.list' || params.kind !== 'audio') return route.continue();
+    if (++attempts === 1) {
+      await pendingRead;
+      return route.fulfill({ status: 503, json: { error: '素材读取暂时失败' } });
+    }
+    return route.fulfill({ json: { result: { items: [], nextCursor: null } } });
+  });
+  await page.getByRole('button', { name: '素材库', exact: true }).click();
+  await expect(page.locator('.asset-card').first()).toBeVisible();
+  await page.getByRole('button', { name: '音频', exact: true }).click();
+  try {
+    await expect(page.getByText('正在读取素材…', { exact: true })).toHaveAttribute('role', 'status');
+    await expect(page.locator('.asset-card')).toHaveCount(0);
+    await expect(page.getByText('没有此类素材', { exact: true })).toHaveCount(0);
+  } finally { rejectFirstRead(); }
+  await expect(page.getByRole('alert')).toContainText('素材读取暂时失败');
+  await expect(page.getByText('没有此类素材', { exact: true })).toHaveCount(0);
+  await page.getByRole('button', { name: '重试读取素材', exact: true }).click();
+  await expect(page.getByText('没有此类素材', { exact: true })).toBeVisible();
+  await page.getByRole('button', { name: '查看全部素材', exact: true }).click();
+  await expect(page.getByRole('button', { name: '全部', exact: true, pressed: true })).toBeFocused();
+  await expect(page.locator('.asset-card').first()).toBeVisible();
+});
+
+test('retries shot selection in place and disables an empty project before applying a real asset', async ({ page, request }, info) => {
+  async function rpc<T>(method: string, params: unknown): Promise<T> {
+    const response = await request.post('/__desktop_rpc', { data: { method, params } });
+    const payload = await response.json(); expect(payload.error).toBeUndefined(); return payload.result;
+  }
+  const created = await rpc<ProjectDocument>('project.create', { title: '素材目标镜头读取恢复' });
+  const project = await rpc<ProjectDocument>('project.update', { projectId: created.id, revision: created.revision, patch: { shots: [{ id: 'apply-shot', title: '接收素材的镜头', narration: '', visualPrompt: '', durationUs: 1_000_000 }] } });
+  const empty = await rpc<ProjectDocument>('project.create', { title: '没有镜头的素材目标项目' });
+  const path = info.outputPath('apply-retry.svg');
+  await writeFile(path, '<svg xmlns="http://www.w3.org/2000/svg" width="160" height="90"><rect width="160" height="90" fill="#379269"/></svg>');
+  const asset = await rpc<AssetRecord>('asset.import', { path, kind: 'image' });
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  await page.setViewportSize({ width: 600, height: 760 });
+  await page.goto('/'); await page.getByRole('button', { name: '素材库', exact: true }).click();
+  await page.getByRole('button', { name: `将“${asset.name}”用于镜头`, exact: true }).click();
+  const dialog = page.getByRole('dialog', { name: '应用素材到镜头', exact: true });
+  await dialog.getByLabel('目标项目', { exact: true }).selectOption(empty.id);
+  await expect(dialog.getByLabel('目标镜头', { exact: true })).toBeDisabled();
+  await expect(dialog.getByLabel('目标镜头', { exact: true }).locator('option:checked')).toHaveText('暂无镜头');
+  await expect(dialog.getByLabel('目标镜头', { exact: true }).locator('selectedcontent')).toHaveText('暂无镜头');
+  let failures = 1;
+  await page.route('**/__desktop_rpc', async route => {
+    const input = route.request().postDataJSON();
+    if (input.method === 'project.get' && input.params.projectId === project.id && failures-- > 0) return route.fulfill({ status: 503, json: { error: '目标镜头暂时无法读取' } });
+    await route.continue();
+  });
+  await dialog.getByLabel('目标项目', { exact: true }).selectOption(project.id);
+  await expect(dialog.getByRole('alert')).toContainText('目标镜头暂时无法读取');
+  await expect(dialog.getByLabel('目标镜头', { exact: true }).locator('selectedcontent')).toHaveText('镜头读取失败');
+  await expect(dialog.getByRole('button', { name: '应用此版本', exact: true })).toBeDisabled();
+  await page.screenshot({ path: info.outputPath('asset-target-read-failed.png') });
+  await dialog.getByRole('button', { name: '重试读取目标镜头', exact: true }).click();
+  await expect(dialog.getByLabel('目标项目', { exact: true })).toHaveValue(project.id);
+  await expect(dialog.getByLabel('目标镜头', { exact: true })).toHaveValue('apply-shot');
+  await dialog.getByRole('button', { name: '应用此版本', exact: true }).click();
+  await expect(dialog).toHaveCount(0);
+  await expect.poll(async () => (await rpc<{ project: ProjectDocument }>('project.get', { projectId: project.id })).project.shots[0].assetId).toBe(asset.id);
 });

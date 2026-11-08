@@ -2,6 +2,7 @@ import { productionStep, saveAndStartProduction } from './production-settings';
 import { expect, test } from '@playwright/test';
 import type { RunSummary } from '@video-quickly/contracts';
 import { fixture, open, pick, latest, rpc, saved } from './native-video-fixture';
+import { openProjectFromList } from './workspace-navigation';
 
 for (const { width, theme } of [{ width: 1536, theme: 'dark' }, { width: 600, theme: 'light' }, { width: 390, theme: 'light' }]) test('shows concise storyboard, media and delivery outputs at ' + width + 'px', async ({ page, request }, info) => {
   const source = await fixture(request, info, false, 6), errors: string[] = [];
@@ -21,7 +22,7 @@ for (const { width, theme } of [{ width: 1536, theme: 'dark' }, { width: 600, th
     await expect(page.getByRole('button', { name: '镜头声音处理', exact: true })).toHaveCount(0);
     await expect(page.getByLabel('轨道信息', { exact: true })).not.toContainText('旁白');
     await expect(page.getByRole('checkbox', { name: '启用视频原声', exact: true })).toBeChecked();
-    await page.locator('.workbench-guide__step').filter({ hasText: '简报生成' }).click();
+    await page.getByRole('button', { name: '打开阶段：策划与分镜', exact: true }).click();
     const dialog = page.getByRole('dialog', { name: '本次制作', exact: true });
     const steps = dialog.getByRole('navigation', { name: '本次制作步骤', exact: true });
     await steps.getByRole('button', { name: /分镜生成/ }).click();
@@ -81,11 +82,14 @@ test('expands a long storyboard without losing the remaining shots', async ({ pa
   test.setTimeout(60_000);
   const source = await fixture(request, info, false, 21);
   try {
-    await rpc(request, 'workflow.save', { projectId: source.project.id, workflow: { ...source.project.workflow, production: { ...source.project.workflow.production!, textModelId: source.models[0].id, videoModelId: source.video.id } } });
+    await rpc(request, 'project.update', { projectId: source.project.id, patch: { workflow: { ...source.project.workflow, production: { ...source.project.workflow.production!, textModelId: source.models[0].id, videoModelId: source.video.id } } } });
     const script = source.project.workflow.nodes.find(node => node.kind === 'script')!;
     const run = await rpc<{ id: string }>(request, 'run.start', { projectId: source.project.id, nodeId: script.id });
     await expect.poll(async () => (await rpc<RunSummary>(request, 'run.get', { runId: run.id })).status, { timeout: 30_000 }).toBe('succeeded');
-    await open(page, source.project).then(dialog => dialog.getByRole('button', { name: '取消', exact: true }).click()); await page.getByRole('button', { name: '打开步骤：分镜生成', exact: true }).click(); const settings = page.getByRole('dialog', { name: '本次制作', exact: true });
+    await page.goto('/');
+    await openProjectFromList(page, source.project.title);
+    await page.getByRole('button', { name: '打开阶段：策划与分镜', exact: true }).click();
+    const settings = page.getByRole('dialog', { name: '本次制作', exact: true });
     const storyboard = settings.getByRole('region', { name: '分镜预览', exact: true });
     await expect(storyboard.locator('ol > li')).toHaveCount(20);
     await expect(storyboard).toContainText('21 个镜头');
@@ -101,12 +105,14 @@ for (const height of [960, 720]) test(`keeps the image preview in place while sc
   try {
     await page.setViewportSize({ width: 1536, height }); await page.emulateMedia({ reducedMotion: 'reduce' });
     const image = await rpc<{ id: string }>(request, 'model.save', { model: { name: '参考图夹具', provider: 'openai-compatible', connectionType: 'image', capabilities: ['image'], model: 'fixture-image', baseUrl: source.models[0].baseUrl } });
-    await rpc(request, 'workflow.save', { projectId: source.project.id, workflow: { ...source.project.workflow, production: { ...source.project.workflow.production!, textModelId: source.models[0].id, videoModelId: source.video.id, imageModelId: image.id, referenceMode: 'generate' } } });
+    await rpc(request, 'project.update', { projectId: source.project.id, patch: { workflow: { ...source.project.workflow, production: { ...source.project.workflow.production!, textModelId: source.models[0].id, videoModelId: source.video.id, imageModelId: image.id, referenceMode: 'generate' } } } });
     await rpc(request, 'run.start', { projectId: source.project.id });
     await expect.poll(async () => (await latest(request, source.project.id))?.status, { timeout: 30000 }).toBe('succeeded');
-    await open(page, source.project).then(dialog => dialog.getByRole('button', { name: '取消', exact: true }).click());
-    await page.getByRole('button', { name: '打开步骤：参考图生成', exact: true }).click();
+    await page.goto('/');
+    await openProjectFromList(page, source.project.title);
+    await page.getByRole('button', { name: '打开阶段：素材与配音', exact: true }).click();
     const dialog = page.getByRole('dialog', { name: '本次制作', exact: true }), output = dialog.locator('.step-result');
+    await dialog.getByRole('navigation', { name: '本次制作步骤' }).getByRole('button', { name: /参考图生成/ }).click();
     const thumbnails = output.getByRole('group', { name: '选择预览素材', exact: true }), preview = output.locator('.step-result__preview');
     await expect(dialog.getByRole('button', { name: '在项目中查看与应用', exact: true })).toHaveCount(0);
     await expect(thumbnails.getByRole('button', { name: /^预览/ })).toHaveCount(shotCount);

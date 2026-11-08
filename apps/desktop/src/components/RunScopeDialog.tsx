@@ -30,7 +30,6 @@ export default function RunScopeDialog({ projectId, nodeId, initialMode = 'downs
     <div className="dialog__body">
       {error && <Notice kind="error">{error}</Notice>}
       {read.error && <Notice kind="error">{read.error}</Notice>}
-      <p className="run-scope-intro">先核对将要运行的步骤。步骤会自动接续，执行后可在工作台查看进度和使用产物。</p>
       {parentRunId ? <p className="run-scope-intro">沿用原任务范围：{mode === 'node' ? '仅此步骤' : '此步骤及后续'}。</p> : <fieldset className="run-scope-options" disabled={busy}>
         <legend>执行方式</legend>
         <label className="field-inline"><input type="radio" name="run-scope-mode" checked={mode === 'node'} onChange={() => setMode('node')} />仅此步骤</label>
@@ -42,9 +41,16 @@ export default function RunScopeDialog({ projectId, nodeId, initialMode = 'downs
         {plan.blockedReason && <Notice>{plan.blockedReason}</Notice>}
         {plan.hasConditions && <Notice>条件分支显示全部可能受影响的步骤，实际按条件执行。</Notice>}
         <ol className="run-scope-steps" aria-label="将执行的步骤">{plan.steps.map((step, index) => <li key={step.id}><span className="run-scope-index">{index + 1}</span><div><strong>{step.label}</strong><small>{step.modelName ?? '本地处理'}</small></div>{step.kind === 'export' && <span className="run-scope-tag">导出文件</span>}</li>)}</ol>
-        {plan.boundary.length > 0 && <details className="run-scope-boundary"><summary><GitBranch size={14} aria-hidden="true" />沿用已保存的上游内容</summary><p>这些上游步骤不重新执行，相关输入取自已保存的项目。</p><ul>{plan.boundary.map((edge, index) => <li key={index}>{edge.targetLabel} ← {edge.sourceLabel}</li>)}</ul></details>}
+        {plan.boundary.length > 0 && <details className="run-scope-boundary">
+          <summary><GitBranch size={14} aria-hidden="true" />沿用已保存的上游内容</summary>
+          <ul>{plan.boundary.map((edge, index) => <li key={index}>{edge.targetLabel} ← {edge.sourceLabel}</li>)}</ul>
+        </details>}
       </>}
     </div>
-    <div className="dialog__footer"><Button onClick={onClose}>{busy ? '关闭' : '取消'}</Button><Button busy={read.busy} disabled={busy} onClick={read.refresh}><RefreshCw size={14} />重新预览</Button><Button aria-label="确认执行" variant="primary" busy={busy} disabled={!plan || Boolean(read.error || plan.blockedReason)} onClick={() => void start()}><Play size={14} />执行</Button></div>
+    <div className="dialog__footer">
+      {!busy && <Button variant="ghost" onClick={onClose}>取消</Button>}
+      {(error || read.error || plan?.blockedReason) && <Button busy={read.busy} disabled={busy} onClick={read.refresh}><RefreshCw size={14} aria-hidden="true" />重新预览</Button>}
+      <Button aria-label="确认执行" variant="primary" busy={busy} disabled={!plan || Boolean(read.error || plan.blockedReason)} onClick={() => void start()}><Play size={14} aria-hidden="true" />执行</Button>
+    </div>
   </Dialog>;
 }

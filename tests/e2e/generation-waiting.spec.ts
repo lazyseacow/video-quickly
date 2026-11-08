@@ -17,13 +17,13 @@ for (const kind of ['image', 'video'] as const) for (const viewport of [{ width:
       await page.setViewportSize(viewport); await page.emulateMedia({ reducedMotion: viewport.reducedMotion });
       await page.addInitScript(theme => localStorage.setItem('vq-theme', theme), viewport.theme);
       const image = modelSchema.parse(await rpc(request, 'model.save', { model: { name: '等待体验参考图', provider: 'openai-compatible', connectionType: 'image', capabilities: ['image'], model: 'fixture-image', baseUrl: source.models[0].baseUrl } }));
-      await rpc(request, 'workflow.save', { projectId: source.project.id, workflow: { ...source.project.workflow, production: { ...source.project.workflow.production, textModelId: source.models[0].id, videoModelId: source.video.id, imageModelId: image.id, referenceMode: 'generate' } } });
+      await rpc(request, 'project.update', { projectId: source.project.id, patch: { workflow: { ...source.project.workflow, production: { ...source.project.workflow.production, textModelId: source.models[0].id, videoModelId: source.video.id, imageModelId: image.id, referenceMode: 'generate' } } } });
       const run = await rpc<RunSummary>(request, 'run.start', { projectId: source.project.id });
-      const nodeId = kind === 'image' ? 'assets' : 'video', label = kind === 'image' ? '参考图生成' : '镜头视频生成';
+      const nodeId = kind === 'image' ? 'assets' : 'video';
       await blocked.pending;
       await expect.poll(async () => runInspectionSchema.parse(await rpc(request, 'run.inspect', { runId: run.id })).steps.find(step => step.id === nodeId)?.progress?.completed).toBe(1);
       await page.goto('/'); await openProjectFromList(page, source.project.title);
-      const trigger = page.getByRole('button', { name: `打开步骤：${label}`, exact: true });
+      const trigger = page.getByRole('button', { name: '打开阶段：素材与配音', exact: true });
       await expect(trigger).toContainText('1/3'); await expect(trigger.locator('.spin')).toBeVisible(); await trigger.click();
       const dialog = page.getByRole('dialog', { name: '本次制作', exact: true }), progress = dialog.getByRole('region', { name: '步骤进度', exact: true });
       await expect(dialog).toBeVisible(); await expect(progress).toContainText('1 / 3');
@@ -55,10 +55,10 @@ for (const kind of ['image', 'video'] as const) for (const viewport of [{ width:
 test('shows an indeterminate text wait and keeps the chosen step during background completion', async ({ page, request }, info) => {
   const source = await fixture(request, info, true);
   try {
-    await rpc(request, 'workflow.save', { projectId: source.project.id, workflow: { ...source.project.workflow, production: { ...source.project.workflow.production, textModelId: source.models[0].id, videoModelId: source.video.id } } });
+    await rpc(request, 'project.update', { projectId: source.project.id, patch: { workflow: { ...source.project.workflow, production: { ...source.project.workflow.production, textModelId: source.models[0].id, videoModelId: source.video.id } } } });
     await rpc(request, 'run.start', { projectId: source.project.id }); await source.pending;
     await page.goto('/'); await openProjectFromList(page, source.project.title);
-    await page.getByRole('button', { name: '打开步骤：简报生成', exact: true }).click();
+    await page.getByRole('button', { name: '打开阶段：策划与分镜', exact: true }).click();
     const dialog = page.getByRole('dialog', { name: '本次制作', exact: true }), progress = dialog.getByRole('region', { name: '步骤进度', exact: true });
     await expect(progress).toContainText('等待模型返回'); await expect(progress.getByRole('progressbar')).not.toHaveAttribute('aria-valuenow');
     await expect(dialog).not.toContainText('这个步骤尚未保存产物');
@@ -75,14 +75,14 @@ test('restores partial previews on reload and stops without submitting a second 
   const held = gate(); let submissions = 0;
   const source = await fixture(request, info, false, 2, { beforeReply: async (_body, path) => { if (path.includes('contents/generations/tasks') && ++submissions === 2) await held.pending; } });
   try {
-    await rpc(request, 'workflow.save', { projectId: source.project.id, workflow: { ...source.project.workflow, production: { ...source.project.workflow.production, textModelId: source.models[0].id, videoModelId: source.video.id } } });
+    await rpc(request, 'project.update', { projectId: source.project.id, patch: { workflow: { ...source.project.workflow, production: { ...source.project.workflow.production, textModelId: source.models[0].id, videoModelId: source.video.id } } } });
     const run = await rpc<RunSummary>(request, 'run.start', { projectId: source.project.id });
     await expect.poll(async () => runInspectionSchema.parse(await rpc(request, 'run.inspect', { runId: run.id })).steps.find(step => step.id === 'video')?.progress?.completed).toBe(1);
     await page.goto('/'); await openProjectFromList(page, source.project.title);
-    await page.getByRole('button', { name: '打开步骤：镜头视频生成', exact: true }).click();
+    await page.getByRole('button', { name: '打开阶段：素材与配音', exact: true }).click();
     const dialog = page.getByRole('dialog', { name: '本次制作', exact: true }); await expect(dialog.getByRole('region', { name: '步骤进度', exact: true })).toContainText('1 / 2');
     await page.reload(); await openProjectFromList(page, source.project.title);
-    await page.getByRole('button', { name: '打开步骤：镜头视频生成', exact: true }).click();
+    await page.getByRole('button', { name: '打开阶段：素材与配音', exact: true }).click();
     await expect(dialog.getByRole('region', { name: '步骤进度', exact: true })).toContainText('1 / 2');
     await expect(dialog.locator('[data-generation-state="completed"]')).toHaveCount(1);
     await dialog.getByRole('button', { name: '停止', exact: true }).click();
@@ -101,13 +101,13 @@ for (const viewport of [{ width: 1464, height: 895, theme: 'dark' }, { width: 10
     try {
       await page.setViewportSize(viewport); await page.emulateMedia({ reducedMotion: 'reduce' });
       await page.addInitScript(theme => localStorage.setItem('vq-theme', theme), viewport.theme);
-      await rpc(request, 'workflow.save', { projectId: source.project.id, workflow: { ...source.project.workflow,
+      await rpc(request, 'project.update', { projectId: source.project.id, patch: { workflow: { ...source.project.workflow,
         execution: { maxConcurrentShots: 2, modelLimits: { [source.video.id]: 2 } },
-        production: { ...source.project.workflow.production, textModelId: source.models[0].id, videoModelId: source.video.id } } });
+        production: { ...source.project.workflow.production, textModelId: source.models[0].id, videoModelId: source.video.id } } } });
       const run = await rpc<RunSummary>(request, 'run.start', { projectId: source.project.id });
       await submitted.pending; expect(submissions).toBe(2);
       await page.goto('/'); await openProjectFromList(page, source.project.title);
-      await page.getByRole('button', { name: '打开步骤：镜头视频生成', exact: true }).click();
+      await page.getByRole('button', { name: '打开阶段：素材与配音', exact: true }).click();
       const dialog = page.getByRole('dialog', { name: '本次制作', exact: true }), gallery = dialog.getByRole('group', { name: '选择预览素材', exact: true });
       const cards = gallery.locator('.step-result__media-card');
       await expect(cards).toHaveCount(6); await expect(gallery.locator('[data-skeleton]')).toHaveCount(6); await expect(gallery.locator('canvas')).toHaveCount(0);

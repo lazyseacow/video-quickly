@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { captionTrackSchema, shotSchema, timeAtFrame, type CaptionTrack, type ClipEditPlan, type Shot } from '@video-quickly/contracts';
+import { captionTrackSchema, shotSchema, timeAtFrame, type CaptionTrack, type Shot } from '@video-quickly/contracts';
 import { clipEditPlan, clipEditSource, clipEditTotalUs, clipSourceOutUs, deleteShotRanges, replaceShotMedia, resolveShotSpans, resolveShotTime, restoreShotRanges, sourceCaptionTrack, type ClipEditContext, type ClipEditIdFactory } from '../src/clip-edits.js';
 import { captionAtTime, projectCaptionCues, replaceVisibleCaptionCues } from '../src/captions.js';
 import { canSplitShot, minimumSourceInUs, splitShot, trimShot, trimShotInContext } from '../src/editing.js';

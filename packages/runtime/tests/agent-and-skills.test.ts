@@ -1,11 +1,13 @@
 import { createServer, type Server } from 'node:http';
-import { mkdtemp, mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { crc32 } from 'node:zlib';
 import { afterEach, describe, expect, it } from 'vitest';
 import { zipSync, strToU8 } from 'fflate';
 import { createRuntime, SimulatedProcessExit } from '../src/index.js';
 import { workflowNodeSchema, type ModelProfile, type RunRecord, type SkillPackage, type WorkspaceSnapshot } from '@video-quickly/contracts';
+import { importSkillFixture } from '../../../tests/fixtures/import-skill';
 
 const directories: string[] = [];
 const runtimes: ReturnType<typeof createRuntime>[] = [];
@@ -28,7 +30,7 @@ describe('Skill resources and tools', () => {
     });
     await writeFile(source, bytes);
     const runtime = createRuntime({ dataDirectory }); runtimes.push(runtime);
-    const skill = await runtime.dispatch('skill.import', { path: source }) as SkillPackage;
+    const skill = (await importSkillFixture(runtime.dispatch, { path: source })).skills[0];
     expect(skill.resources).toContain('references/guide.md');
     expect(skill.tools[0].enabled).toBe(false);
     const enabled = await runtime.dispatch('skill.tool.toggle', { skillId: skill.id, toolId: 'scripts/check.mjs', enabled: true }) as SkillPackage;
@@ -43,7 +45,7 @@ describe('Skill resources and tools', () => {
     const source = join(dataDirectory, 'fixture.zip');
     await writeFile(source, zipSync({ '../escape/SKILL.md': strToU8('---\nname: unsafe\ndescription: fixture\n---\n') }));
     const runtime = createRuntime({ dataDirectory }); runtimes.push(runtime);
-    await expect(runtime.dispatch('skill.import', { path: source })).rejects.toThrow('不安全路径');
+    await expect(importSkillFixture(runtime.dispatch, { path: source })).rejects.toThrow('不安全路径');
   });
 });
 
@@ -55,8 +57,8 @@ describe('Deep Agents integration', () => {
       'fixture/references/guide.md': strToU8('reference-marker: use the selected visual method'),
       'fixture/scripts/prepare.mjs': strToU8("import { appendFileSync } from 'node:fs'; let input=''; for await (const chunk of process.stdin) input += chunk; appendFileSync('invocations.txt','called\\n'); process.stdout.write('script-marker:' + input);"),
     }));
-    const runtime = createRuntime({ dataDirectory }); runtimes.push(runtime);
-    const skill = await runtime.dispatch('skill.import', { path: source }) as SkillPackage;
+    const runtime = createRuntime({ dataDirectory, seed: true }); runtimes.push(runtime);
+    const skill = (await importSkillFixture(runtime.dispatch, { path: source })).skills[0];
     await runtime.dispatch('skill.tool.toggle', { skillId: skill.id, toolId: 'scripts/prepare.mjs', enabled: true });
     let calls = 0, sawReference = false, sawScript = false;
     const server = createServer(async (request, response) => {
@@ -77,7 +79,7 @@ describe('Deep Agents integration', () => {
     const address = server.address(); if (!address || typeof address === 'string') throw new Error('测试服务未启动。');
     const initial = await runtime.dispatch('workspace.snapshot') as WorkspaceSnapshot;
     const model = await runtime.dispatch('model.save', { model: { name: 'fixture', provider: 'openai-compatible', baseUrl: `http://127.0.0.1:${address.port}/v1`, model: 'fixture', connectionType: 'text', capabilities: ['text', 'tools'] } }) as ModelProfile;
-    await runtime.dispatch('workflow.save', { projectId: initial.projects[0].id, workflow: { id: 'skill', version: 1, name: 'Skill fixture', production: { mode: 'native-video', referenceMode: 'none', soundPrompt: '', subtitleMode: 'off' }, nodes: [workflowNodeSchema.parse({ id: 'agent', kind: 'agent', label: 'Agent', modelId: model.id, skillIds: [skill.id] })], edges: [] } });
+    await runtime.dispatch('project.update', { projectId: initial.projects[0].id, patch: { workflow: { id: 'skill', version: 1, name: 'Skill fixture', production: { mode: 'native-video', referenceMode: 'none', soundPrompt: '', subtitleMode: 'off' }, nodes: [workflowNodeSchema.parse({ id: 'agent', kind: 'agent', label: 'Agent', modelId: model.id, skillIds: [skill.id] })], edges: [] } } });
     const run = await runtime.dispatch('run.start', { projectId: initial.projects[0].id }) as RunRecord;
     await runtime.waitForIdle();
     const after = await runtime.dispatch('workspace.snapshot') as WorkspaceSnapshot;
@@ -103,11 +105,11 @@ describe('Deep Agents integration', () => {
     servers.push(server);
     await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
     const address = server.address(); if (!address || typeof address === 'string') throw new Error('测试服务未启动。');
-    const runtime = createRuntime({ dataDirectory: await directory() }); runtimes.push(runtime);
+    const runtime = createRuntime({ dataDirectory: await directory(), seed: true }); runtimes.push(runtime);
     const initial = await runtime.dispatch('workspace.snapshot') as WorkspaceSnapshot;
     const model = await runtime.dispatch('model.save', { model: { name: 'Agent fixture', provider: 'openai-compatible', baseUrl: `http://127.0.0.1:${address.port}/v1`, model: 'fixture', connectionType: 'text', capabilities: ['text', 'tools'] } }) as ModelProfile;
     const agent = workflowNodeSchema.parse({ id: 'agent', kind: 'agent', label: 'Agent', modelId: model.id });
-    await runtime.dispatch('workflow.save', { projectId: initial.projects[0].id, workflow: { id: 'agent', version: 1, name: 'Agent fixture', production: { mode: 'native-video', referenceMode: 'none', soundPrompt: '', subtitleMode: 'off' }, nodes: [agent], edges: [] } });
+    await runtime.dispatch('project.update', { projectId: initial.projects[0].id, patch: { workflow: { id: 'agent', version: 1, name: 'Agent fixture', production: { mode: 'native-video', referenceMode: 'none', soundPrompt: '', subtitleMode: 'off' }, nodes: [agent], edges: [] } } });
     const run = await runtime.dispatch('run.start', { projectId: initial.projects[0].id }) as RunRecord;
     await runtime.waitForIdle();
     const snapshot = await runtime.dispatch('workspace.snapshot') as WorkspaceSnapshot;
@@ -128,20 +130,27 @@ describe('Deep Agents integration', () => {
 
   it('connects an enabled stdio MCP server and persists a real tool response', async () => {
     const dataDirectory = await directory();
-    const fixture = join(dataDirectory, 'mcp-fixture.mjs');
+    const fixture = join(dataDirectory, 'mcp-fixture.mjs'), image = join(dataDirectory, 'embedded.png');
+    const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aN1cAAAAASUVORK5CYII=', 'base64');
+    const text = Buffer.concat([Buffer.from('tEXtComment\0'), Buffer.alloc(800_000, 97)]);
+    const chunk = Buffer.alloc(text.length + 8);
+    chunk.writeUInt32BE(text.length - 4); text.copy(chunk, 4); chunk.writeUInt32BE(crc32(text), text.length + 4);
+    const bytes = Buffer.concat([png.subarray(0, 33), chunk, png.subarray(33)]);
+    await writeFile(image, bytes);
     await writeFile(fixture, `import { createInterface } from 'node:readline';
+import { readFileSync } from 'node:fs';
 const send = value => process.stdout.write(JSON.stringify(value) + '\\n');
 createInterface({ input: process.stdin }).on('line', line => {
   const message = JSON.parse(line); if (message.id === undefined) return;
   let result;
   if (message.method === 'initialize') result = { protocolVersion: '2025-06-18', capabilities: { tools: {} }, serverInfo: { name: 'fixture', version: '1.0.0' } };
   else if (message.method === 'tools/list') result = { tools: [{ name: 'echo', description: 'Return a fixture value', inputSchema: { type: 'object', properties: { value: { type: 'string' } }, required: ['value'] } }] };
-  else if (message.method === 'tools/call') result = { content: [{ type: 'text', text: 'mcp:' + message.params.arguments.value }, { type: 'image', mimeType: 'image/png', data: Buffer.alloc(800000, 1).toString('base64') }] };
+  else if (message.method === 'tools/call') result = { content: [{ type: 'text', text: 'mcp:' + message.params.arguments.value }, { type: 'image', mimeType: 'image/png', data: readFileSync(process.argv[2], 'base64') }] };
   else result = {};
   send({ jsonrpc: '2.0', id: message.id, result });
 });`);
-    const runtime = createRuntime({ dataDirectory }); runtimes.push(runtime);
-    const registered = await runtime.dispatch('tool.register', { server: { name: 'fixture', transport: 'stdio', command: process.execPath, args: [fixture], enabled: true } }) as { id: string };
+    const runtime = createRuntime({ dataDirectory, seed: true }); runtimes.push(runtime);
+    const registered = await runtime.dispatch('tool.register', { server: { name: 'fixture', transport: 'stdio', command: process.execPath, args: [fixture, image], enabled: true } }) as { id: string };
     const unavailable = await runtime.dispatch('tool.register', { server: { name: 'unused-unavailable', transport: 'stdio', command: join(dataDirectory, 'missing-tool'), enabled: true } }) as { id: string };
     const inspected = await runtime.dispatch('tool.inspect', { serverId: registered.id }) as { tools: Array<{ name: string }> };
     expect(inspected.tools[0].name).toBe('echo');
@@ -163,7 +172,7 @@ createInterface({ input: process.stdin }).on('line', line => {
     const initial = await runtime.dispatch('workspace.snapshot') as WorkspaceSnapshot;
     const model = await runtime.dispatch('model.save', { model: { name: 'fixture', provider: 'openai-compatible', baseUrl: `http://127.0.0.1:${address.port}/v1`, model: 'fixture', connectionType: 'text', capabilities: ['text', 'tools'] } }) as ModelProfile;
     const agent = workflowNodeSchema.parse({ id: 'agent', kind: 'agent', label: 'Agent', modelId: model.id, config: { mcpServerIds: [registered.id, unavailable.id] } });
-    await runtime.dispatch('workflow.save', { projectId: initial.projects[0].id, workflow: { id: 'mcp', version: 1, name: 'MCP fixture', production: { mode: 'native-video', referenceMode: 'none', soundPrompt: '', subtitleMode: 'off' }, nodes: [agent], edges: [] } });
+    await runtime.dispatch('project.update', { projectId: initial.projects[0].id, patch: { workflow: { id: 'mcp', version: 1, name: 'MCP fixture', production: { mode: 'native-video', referenceMode: 'none', soundPrompt: '', subtitleMode: 'off' }, nodes: [agent], edges: [] } } });
     const run = await runtime.dispatch('run.start', { projectId: initial.projects[0].id }) as RunRecord;
     await runtime.waitForIdle();
     const after = await runtime.dispatch('workspace.snapshot') as WorkspaceSnapshot;
@@ -174,7 +183,7 @@ createInterface({ input: process.stdin }).on('line', line => {
     const artifactDirectory = join(dataDirectory, 'tool-artifacts', run.id);
     const artifacts = await readdir(artifactDirectory);
     expect(artifacts).toHaveLength(1); expect(artifacts[0].endsWith('.png')).toBe(true);
-    expect(await readFile(join(artifactDirectory, artifacts[0]))).toEqual(Buffer.alloc(800000, 1));
+    expect(await readFile(join(artifactDirectory, artifacts[0]))).toEqual(bytes);
     await runtime.dispatch('run.replay', { runId: run.id }); expect(calls).toBe(4);
   }, 30_000);
 
@@ -189,10 +198,10 @@ createInterface({ input: process.stdin }).on('line', line => {
     servers.push(server); await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
     const address = server.address(); if (!address || typeof address === 'string') throw new Error('测试服务未启动。');
     const dataDirectory = await directory(); let crashed = false;
-    const first = createRuntime({ dataDirectory, failpoint(point, id) { if (!crashed && point === 'after-commit' && id.startsWith('agent:model:')) { crashed = true; throw new SimulatedProcessExit(); } } });
+    const first = createRuntime({ dataDirectory, seed: true, failpoint(point, id) { if (!crashed && point === 'after-commit' && id.startsWith('agent:model:')) { crashed = true; throw new SimulatedProcessExit(); } } });
     const initial = await first.dispatch('workspace.snapshot') as WorkspaceSnapshot;
     const model = await first.dispatch('model.save', { model: { name: 'fixture', provider: 'openai-compatible', baseUrl: `http://127.0.0.1:${address.port}/v1`, model: 'fixture', connectionType: 'text', capabilities: ['text', 'tools'] } }) as ModelProfile;
-    await first.dispatch('workflow.save', { projectId: initial.projects[0].id, workflow: { id: 'durable-agent', version: 1, name: 'durable Agent', production: { mode: 'native-video', referenceMode: 'none', soundPrompt: '', subtitleMode: 'off' }, nodes: [workflowNodeSchema.parse({ id: 'agent', kind: 'agent', label: 'Agent', modelId: model.id })], edges: [] } });
+    await first.dispatch('project.update', { projectId: initial.projects[0].id, patch: { workflow: { id: 'durable-agent', version: 1, name: 'durable Agent', production: { mode: 'native-video', referenceMode: 'none', soundPrompt: '', subtitleMode: 'off' }, nodes: [workflowNodeSchema.parse({ id: 'agent', kind: 'agent', label: 'Agent', modelId: model.id })], edges: [] } } });
     const run = await first.dispatch('run.start', { projectId: initial.projects[0].id }) as RunRecord;
     await first.waitForIdle();
     expect(calls).toBe(1);

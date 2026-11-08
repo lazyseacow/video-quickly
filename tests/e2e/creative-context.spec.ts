@@ -76,8 +76,9 @@ for (const viewport of [{ width: 1536, height: 960, theme: 'dark' }, { width: 39
       const restored = await openProduction(page, source.project);
       await expect(restored.getByRole('textbox', { name: '连续性要求', exact: true })).toHaveValue('同一个傍晚，蓝色服装保持不变');
       await expect(restored.getByRole('group', { name: '项目角色池', exact: true }).getByRole('checkbox', { name: source.profiles[0].name, exact: true })).toBeChecked();
-      await restored.getByRole('button', { name: '取消', exact: true }).click();
-      await expect(page.getByRole('button', { name: /分镜生成/, exact: false }).first()).toBeVisible();
+      await restored.getByRole('button', { name: '关闭对话框', exact: true }).click();
+      await expect(restored).toHaveCount(0);
+      await expect(page.getByRole('button', { name: '打开阶段：策划与分镜', exact: true })).toBeVisible();
       await expect(page.locator('vite-error-overlay')).toHaveCount(0); expect(errors).toEqual([]); expect(consoleErrors).toEqual([]);
     } finally { await source.cleanup(); }
   });
@@ -100,7 +101,7 @@ test('keeps a running role snapshot while saving and reopening a different pendi
     expect((await source.current()).creativeContext?.characterIds).toEqual([source.profiles[0].id]); expect(source.prompts).toHaveLength(1); expect(source.prompts[0]).toContain(source.profiles[0].name); expect(source.prompts[0]).not.toContain(source.profiles[1].name);
     dialog = await openProduction(page, source.project);
     await expect(dialog.getByRole('group', { name: '项目角色池', exact: true }).getByRole('checkbox', { name: source.profiles[1].name, exact: true })).toBeChecked();
-    await dialog.getByRole('button', { name: '取消', exact: true }).click();
+    await dialog.getByRole('button', { name: '关闭对话框', exact: true }).click();
     source.release(); await expect.poll(async () => (await rpc<RunSummary>(request, 'run.get', { runId: run.id })).status, { timeout: 30_000 }).toBe('succeeded');
     expect((await source.current()).creativeContext?.characterIds).toEqual([source.profiles[0].id]);
   } finally { await source.cleanup(); }

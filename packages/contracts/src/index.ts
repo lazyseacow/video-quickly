@@ -2,6 +2,7 @@ import { z } from 'zod';
 import { imageDerivationSchema } from './image-tools.js';
 export { imageRectangleSchema, imageDerivationSchema, imageEditInputSchema, imageGridRectangles, type ImageRectangle, type ImageEditInput } from './image-tools.js';
 export * from './workflow-patches.js';
+export { sameJsonContent } from './json-content.js';
 export * from './model-alternatives.js';
 import { sceneTemplateSchema } from './scene-templates.js';
 import { claimSchema, researchSourceSchema } from './research.js';
@@ -11,19 +12,19 @@ import { motionKeyframesSchema } from './keyframes.js';
 import { creativeContextSchema, creativeEntityKeysSchema } from './creative-context.js';
 export { creativeContextSchema, creativeEntitySchema, creativeEntityKeysSchema, creativeCharacterBindings, projectCharacterIds, validateCreativeReferences, shotCreativePrompt, creativeEntityLabels, creativeReferenceAssetIds, type CreativeContext, type CreativeEntity } from './creative-context.js';
 import { productionSettingsSchema, resolveProductionWorkflow } from './production.js';
-export { productionSettingsSchema, resolveProductionWorkflow, isVideoGenerationNode, isModelGenerationNode, captionsEnabled, MAX_REFERENCE_AUDIO_BYTES, MAX_REFERENCE_AUDIOS, type ProductionSettings } from './production.js';
+export { productionSettingsSchema, resolveProductionWorkflow, isVideoGenerationNode, isModelGenerationNode, captionsEnabled, productionEditingStep, supportsProductionAgent, MAX_REFERENCE_AUDIO_BYTES, MAX_REFERENCE_AUDIOS, type ProductionSettings } from './production.js';
 export * from './asset-recovery.js';
 export { skillPromptContext, appendSkillContext, supportsSkillScript } from './skill-context.js';
-export { motionKeyframeSchema, motionKeyframesSchema, motionEasingSchema, type MotionKeyframe, type MotionEasing } from './keyframes.js';
-export { modelPlatforms, getModelPlatform, platformForConnection, type ModelPlatformPreset } from './model-platforms.js';
+export { motionKeyframesSchema, type MotionKeyframe, type MotionEasing } from './keyframes.js';
+export { modelPlatforms, getModelPlatform, platformForConnection } from './model-platforms.js';
 export { textProtocols, mediaAdapters, getMediaAdapters } from './model-protocols.js';
 export { modelConnectionTypes, getModelConnectionType, getModelCapabilities, validateModelConnection } from './model-connections.js';
 export { providerReportedUsage, sumProviderUsage } from './provider-usage.js';
-export { audioProcessingSchema, audioMixSettingsSchema, videoAudioSettingsSchema, usesVideoAudio, DEFAULT_AUDIO_PROCESSING, DEFAULT_VIDEO_AUDIO, DEFAULT_AUDIO_MIX_SETTINGS, preparedAudioMixSchema, audioMixJobSchema, audioMixPrepareResultSchema, audioLevelWindowSchema, silenceDetectionSchema, type AudioProcessing, type VideoAudioSettings, type AudioMixSettings, type PreparedAudioMix, type AudioMixJob, type AudioMixPrepareResult, type AudioLevelWindow, type SilenceDetection } from './audio-processing.js';
-export { captionStyleSchema, DEFAULT_CAPTION_STYLE, effectiveCaptionStyle, scenePresetSchema, seriesSettingsSchema, seriesTemplateSchema, type CaptionStyle, type ScenePreset, type SeriesSettings, type SeriesTemplate } from './caption-style.js';
-export { claimSchema, claimEvidenceSchema, researchSourceSchema, researchResultSchema, researchSearchResultSchema, validateResearchContent, applyResearchClaims, type Claim, type ClaimEvidence, type ResearchSource, type ResearchResult, type ResearchSearchResult, type ShotClaims, type ResearchContent } from './research.js';
+export { audioProcessingSchema, audioMixSettingsSchema, usesVideoAudio, DEFAULT_AUDIO_PROCESSING, DEFAULT_AUDIO_MIX_SETTINGS, preparedAudioMixSchema, audioMixJobSchema, audioMixPrepareResultSchema, audioLevelWindowSchema, silenceDetectionSchema, type PreparedAudioMix, type AudioMixJob, type AudioMixPrepareResult, type AudioLevelWindow, type SilenceDetection } from './audio-processing.js';
+export { captionStyleSchema, DEFAULT_CAPTION_STYLE, effectiveCaptionStyle, seriesSettingsSchema, seriesTemplateSchema, type CaptionStyle, type ScenePreset, type SeriesSettings, type SeriesTemplate } from './caption-style.js';
+export { claimSchema, researchSourceSchema, researchResultSchema, validateResearchContent, applyResearchClaims, type Claim, type ResearchSource, type ResearchResult, type ShotClaims } from './research.js';
 export { sceneTemplateSchema, processSceneTemplateSchema, comparisonSceneTemplateSchema, barChartSceneTemplateSchema, createSceneTemplate, type SceneTemplate, type SceneTemplateKind } from './scene-templates.js';
-export { clipSourceAssetIds, validateClipEditContent, validateClipEditHistory, type ClipEditContent } from './clip-editing.js';
+export { clipSourceAssetIds, validateClipEditContent, validateClipEditHistory } from './clip-editing.js';
 
 // A fixed application message is safe to retain across the external-activity boundary.
 export class VideoGenerationError extends Error {
@@ -209,9 +210,8 @@ export const shotCandidateSchema = z.object({
 }).refine(value => value.baseline.id === value.shotId && value.shot.id === value.shotId, '候选与原始镜头编号须一致');
 export type ShotCandidate = z.infer<typeof shotCandidateSchema>;
 export { applyShotCandidate } from './shot-candidates.js';
-export { getModelParameterFields, modelParameterValue, withModelParameter, validateModelParameters, requestModelParameters, type ModelParameterField, type ModelParameterOperation } from './model-parameters.js';
+export { getModelParameterFields, modelParameterValue, withModelParameter, validateModelParameters, requestModelParameters } from './model-parameters.js';
 export const nodeKindSchema = z.enum(['brief', 'research', 'style', 'script', 'assets', 'animation', 'review', 'export', 'agent', 'condition', 'join', 'subflow']);
-export type NodeKind = z.infer<typeof nodeKindSchema>;
 export const workflowValueBindingSchema = z.union([
   z.object({ literal: jsonValueSchema }),
   z.object({ nodeId: z.string().min(1), path: z.array(z.string().min(1)).max(20).default([]) }),
@@ -267,7 +267,6 @@ export type PromptLibraryItem = z.infer<typeof promptLibraryItemSchema>;
 export type WorkflowDefinition = z.infer<typeof workflowSchema>;
 export type SubflowDefinition = z.infer<typeof subflowDefinitionSchema>;
 export type SubflowReference = z.infer<typeof subflowReferenceSchema>;
-export type WorkflowValueBinding = z.infer<typeof workflowValueBindingSchema>;
 export const workflowTemplateSchema = z.object({
   id: z.string().min(1), revision: z.number().int().positive(), definition: subflowDefinitionSchema, dependencies: z.array(subflowDefinitionSchema).max(100),
   archived: z.boolean(), createdAt: z.string(), updatedAt: z.string(),
@@ -290,11 +289,11 @@ export const projectSchema = z.object({
   createdAt: z.string(), updatedAt: z.string(), archived: z.boolean().default(false),
 });
 export type ProjectDocument = z.infer<typeof projectSchema>;
-export type Project = ProjectDocument;
 export const workDefaultsSchema = z.object({
   style: z.string().max(30000).default(''), creativeContext: creativeContextSchema.nullable().optional(),
   profile: videoProfileSchema.default(() => structuredClone(DEFAULT_VIDEO_PROFILE)),
-  production: productionSettingsSchema.omit({ referenceAudioAssetIds: true }).strict().default(() => productionSettingsSchema.parse({ mode: 'native-video' })),
+  production: productionSettingsSchema.omit({ referenceAudioAssetIds: true }).extend({ executionMode: z.enum(['workflow', 'agent']).optional() }).strict()
+    .transform(({ executionMode: _legacy, ...settings }) => settings).default(() => productionSettingsSchema.parse({ mode: 'native-video' })),
 });
 export const workSchema = z.object({
   id: z.string(), revision: z.number().int().positive(), title: z.string().trim().min(1).max(160), description: z.string().max(10000).default(''),
@@ -402,11 +401,6 @@ export const skillImportSourceSchema = z.object({
   path: z.string().trim().min(1).optional(), url: z.string().trim().url().optional(), skillPath: z.string().min(1).optional(),
 }).refine(value => Boolean(value.path) !== Boolean(value.url), '请选择目录、ZIP 文件或 GitHub 链接。');
 export type SkillImportSource = z.infer<typeof skillImportSourceSchema>;
-export const skillImportResultSchema = z.union([
-  skillSchema,
-  z.object({ skills: z.array(skillSchema).min(1), group: skillGroupSchema }),
-]);
-export type SkillImportResult = z.infer<typeof skillImportResultSchema>;
 export const skillImportJobSchema = z.object({
   id: z.string().uuid(), source: skillImportSourceSchema, groupName: z.string().optional(), groupId: z.string().optional(),
   status: z.enum(['queued', 'running', 'succeeded', 'failed', 'interrupted']),
@@ -431,7 +425,6 @@ export const mcpServerSchema = z.object({
 });
 export type MCPServer = z.infer<typeof mcpServerSchema>;
 export const runStatusSchema = z.enum(['queued', 'running', 'waiting_review', 'waiting_external', 'retry_scheduled', 'needs_attention', 'succeeded', 'failed', 'canceled']);
-export type RunStatus = z.infer<typeof runStatusSchema>;
 export const activitySchema = z.object({
   id: z.string(), runId: z.string(), nodeId: z.string(), shotId: z.string().optional(),
   status: z.enum(['prepared', 'submitted', 'completed', 'failed', 'unknown', 'canceled']),
@@ -484,7 +477,6 @@ export const costTaskSchema = z.object({
   createdAt: z.string(), updatedAt: z.string(), status: runStatusSchema.optional(), projectRevision: z.number().int().optional(), workflowVersion: z.number().int().optional(),
   runAvailable: z.boolean(), summary: costSummarySchema,
 });
-export type CostTask = z.infer<typeof costTaskSchema>;
 export const costTaskDetailSchema = costTaskSchema.extend({
   parentRunId: z.string().optional(),
   nodes: z.array(z.object({ id: z.string(), label: z.string() })),
@@ -575,6 +567,7 @@ export const runRecoverySchema = z.object({ review: z.boolean(), resume: z.boole
 export const runInspectionSchema = z.object({
   stages: z.array(workflowStageSchema).optional(),
   workflowId: z.string().optional(),
+  autonomousVideo: z.boolean().optional(),
   run: runSummarySchema, projectTitle: z.string(), snapshotAvailable: z.boolean(), checkpointAvailable: z.boolean(),
   steps: z.array(runStepSummarySchema).max(1000), recovery: runRecoverySchema,
   selected: z.object({
@@ -627,8 +620,6 @@ export const runtimeConnectionSchema = z.object({ state: z.enum(['ready', 'recon
 export type RuntimeConnection = z.infer<typeof runtimeConnectionSchema>;
 export const runtimeEventSchema = z.object({ type: z.enum(['workspace.changed', 'run.event', 'runtime.ready', 'runtime.connection']), data: jsonValueSchema.optional() });
 export type RuntimeEvent = z.infer<typeof runtimeEventSchema>;
-export type RpcRequest = { jsonrpc: '2.0'; id: string | number; method: string; params?: unknown };
-export type RpcResponse = { jsonrpc: '2.0'; id: string | number; result?: unknown; error?: { code: number; message: string } };
 
 export function createNativeVideoWorkflow(): WorkflowDefinition {
   const definitions: Array<Pick<WorkflowNode, 'id' | 'kind' | 'label' | 'description' | 'prompt' | 'config'>> = [

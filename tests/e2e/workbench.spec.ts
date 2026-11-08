@@ -65,7 +65,7 @@ test('dismisses success and error notifications after two seconds and restarts f
   await page.clock.install({ time });
   const created = await request.post('/__desktop_rpc', { data: { method: 'project.create', params: { title: '两秒提示验收' } } });
   const project = (await created.json()).result;
-  await request.post('/__desktop_rpc', { data: { method: 'project.saveShot', params: { projectId: project.id, shot: { id: 'timed-toast-shot', title: '计时验收镜头', narration: '', visualPrompt: '', durationUs: 1_000_000 } } } });
+  await request.post('/__desktop_rpc', { data: { method: 'project.update', params: { projectId: project.id, revision: project.revision, patch: { shots: [{ id: 'timed-toast-shot', title: '计时验收镜头', narration: '', visualPrompt: '', durationUs: 1_000_000 }] } } } });
   await openApp(page);
   await openProjectFromList(page, project.title);
   await expect(page.getByLabel('镜头标题', { exact: true })).toHaveValue('计时验收镜头');
@@ -121,7 +121,7 @@ for (const reducedMotion of ['no-preference', 'reduce'] as const) {
     const title = `动效交互验收 ${reducedMotion}`;
     const created = await request.post('/__desktop_rpc', { data: { method: 'project.create', params: { title } } });
     const project = (await created.json()).result;
-    await request.post('/__desktop_rpc', { data: { method: 'project.saveShot', params: { projectId: project.id, shot: { id: 'motion-shot', title: '动效验收镜头', narration: '', visualPrompt: '', durationUs: 3_000_000 } } } });
+    await request.post('/__desktop_rpc', { data: { method: 'project.update', params: { projectId: project.id, revision: project.revision, patch: { shots: [{ id: 'motion-shot', title: '动效验收镜头', narration: '', visualPrompt: '', durationUs: 3_000_000 }] } } } });
     await openApp(page);
     await openProjectFromList(page, title);
     await page.getByLabel('镜头标题', { exact: true }).fill('切换时保留的草稿');
@@ -197,7 +197,7 @@ for (const reducedMotion of ['no-preference', 'reduce'] as const) {
 test('preserves a draft across disconnect and reconnect without retrying a mutation', async ({ page, request }) => {
   const created = await request.post('/__desktop_rpc', { data: { method: 'project.create', params: { title: '执行组件重连验收' } } });
   const project = (await created.json()).result;
-  await request.post('/__desktop_rpc', { data: { method: 'project.saveShot', params: { projectId: project.id, shot: { id: 'reconnect-shot', title: '重连验证', narration: '', visualPrompt: '', durationUs: 1_000_000 } } } });
+  await request.post('/__desktop_rpc', { data: { method: 'project.update', params: { projectId: project.id, revision: project.revision, patch: { shots: [{ id: 'reconnect-shot', title: '重连验证', narration: '', visualPrompt: '', durationUs: 1_000_000 }] } } } });
   await openApp(page);
   await openProjectFromList(page, '执行组件重连验收');
   await expect(page.getByLabel('镜头标题', { exact: true })).toBeVisible();
@@ -446,7 +446,7 @@ test('exports an actual local MP4 from the asynchronous export dialog', async ({
   };
   const profile = { width: 320, height: 180, frameRate: { numerator: 30000, denominator: 1001 }, fitMode: 'contain', previewScale: 1 };
   const project = await rpc('project.create', { title: '本地导出验收', brief: '静音示例', profile });
-  await rpc('project.saveShot', { projectId: project.id, shot: { id: 'export-shot', title: '本地渲染检查', narration: '这是静音画面小样。', visualPrompt: '示例画面', durationUs: 700000, claimIds: [], locked: false, animation: { panX: 0, panY: 0, zoom: 1.02, transition: 'cut' } } });
+  await rpc('project.update', { projectId: project.id, revision: project.revision, patch: { shots: [{ id: 'export-shot', title: '本地渲染检查', narration: '这是静音画面小样。', visualPrompt: '示例画面', durationUs: 700000, claimIds: [], locked: false, animation: { panX: 0, panY: 0, zoom: 1.02, transition: 'cut' } }] } });
   await openApp(page);
   await page.getByRole('button', { name: '我的项目', exact: true }).click();
   const card = page.locator('.project-card').filter({ hasText: '本地导出验收' });
@@ -472,8 +472,12 @@ test('imports and versions a real Skill, and registers tools in disabled state',
   await dialog.getByRole('textbox', { name: '目录路径或 GitHub 链接', exact: true }).fill(resolve('.agents/skills/make-interfaces-feel-better'));
   await dialog.getByRole('button', { name: '导入', exact: true }).click();
   await expect(dialog).toHaveCount(0);
-  await expect(page.getByRole('heading', { name: 'make-interfaces-feel-better', exact: true })).toBeVisible();
-  await page.getByRole('button', { name: '查看“make-interfaces-feel-better”', exact: true }).click();
+  const group = page.getByRole('region', { name: 'Skill 分组“make-interfaces-feel-better”', exact: true });
+  const disclosure = group.getByRole('heading', { level: 2 }).getByRole('button');
+  await expect(disclosure).toHaveAttribute('aria-expanded', 'false');
+  await disclosure.click();
+  await expect(group.getByRole('heading', { name: 'make-interfaces-feel-better', exact: true })).toBeVisible();
+  await group.getByRole('button', { name: '查看“make-interfaces-feel-better”', exact: true }).click();
   const editor = page.getByRole('dialog', { name: 'make-interfaces-feel-better' });
   await expect(editor.getByLabel('Skill 指令')).toContainText('Details that make interfaces feel better');
   await editor.getByRole('button', { name: '关闭', exact: true }).click();

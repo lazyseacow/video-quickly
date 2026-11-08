@@ -31,7 +31,7 @@ async function fixture(request: APIRequestContext, protocol: 'chat-completions' 
     const model = await rpc<{ id: string }>(request, 'model.save', { model: { name: `校验文本 ${randomUUID()}`, provider: 'openai-compatible', textProtocol: protocol, baseUrl: `http://127.0.0.1:${address.port}/v1`, model: 'fixture', capabilities: ['text'], connectionType: 'text' } });
     const created = await rpc<ProjectDocument>(request, 'project.create', { title: `分镜校验 ${randomUUID().slice(0, 8)}`, brief: '生成办公故事' });
     const nodes = [{ id: 'brief', kind: 'brief', label: '创意简报', modelId: model.id }, { id: 'style', kind: 'style', label: '风格与角色', modelId: model.id }, { id: 'script', kind: 'script', label: '旁白与分镜', modelId: model.id }, { id: 'tail', kind: 'animation', label: '本地剪辑准备', config: { operation: 'prepare-edit' } }];
-    const project = await rpc<ProjectDocument>(request, 'workflow.save', { projectId: created.id, workflow: { id: 'native-video', name: '校验验收', version: 1, production: { mode: 'native-video', referenceMode: 'none', soundPrompt: '', subtitleMode: 'off' }, nodes, edges: nodes.slice(1).map((node, i) => ({ id: `edge-${i}`, source: nodes[i].id, target: node.id })) } });
+    const project = await rpc<ProjectDocument>(request, 'project.update', { projectId: created.id, patch: { workflow: { id: 'native-video', name: '校验验收', version: 1, production: { mode: 'native-video', referenceMode: 'none', soundPrompt: '', subtitleMode: 'off' }, nodes, edges: nodes.slice(1).map((node, i) => ({ id: `edge-${i}`, source: nodes[i].id, target: node.id })) } } });
     const run = await rpc<RunSummary>(request, 'run.start', { projectId: project.id });
     const inspect = () => rpc<RunInspection>(request, 'run.inspect', { runId: run.id });
     await expect.poll(async () => (await inspect()).run.status).toBe('failed');
@@ -47,7 +47,7 @@ for (const width of [1536, 390]) {
     try {
       const upstream = await Promise.all(['brief', 'style'].map(nodeId => rpc<RunStepPayload>(request, 'run.step.payload', { runId: source.run.id, nodeId, kind: 'output' })));
       await page.goto('/'); await openProjectFromList(page, source.project.title);
-      await page.getByRole('button', { name: '打开步骤：分镜生成', exact: true }).click();
+      await page.getByRole('button', { name: '打开阶段：策划与分镜', exact: true }).click();
       const dialog = page.getByRole('dialog', { name: '本次制作', exact: true }), retry = dialog.getByRole('button', { name: '重试此步骤', exact: true });
       await expect(retry).toBeEnabled(); await retry.click();
       await expect(dialog).toContainText('HTTP 400'); await expect(retry).toBeEnabled();
@@ -76,7 +76,7 @@ for (const width of [1536, 390]) {
     try {
       const upstream = await Promise.all(['brief', 'style'].map(nodeId => rpc<RunStepPayload>(request, 'run.step.payload', { runId: source.run.id, nodeId, kind: 'output' })));
       await page.goto('/'); await expect(page).toHaveTitle(/Video Quickly/); await openProjectFromList(page, source.project.title);
-      await page.getByRole('button', { name: '打开步骤：分镜生成', exact: true }).click();
+      await page.getByRole('button', { name: '打开阶段：策划与分镜', exact: true }).click();
       const dialog = page.getByRole('dialog', { name: '本次制作', exact: true });
       await dialog.getByRole('button', { name: '重试此步骤', exact: true }).click();
       await expect.poll(async () => (await source.inspect()).run.stepRetry?.status).toBe('completed');
@@ -100,7 +100,7 @@ for (const protocol of ['chat-completions', 'responses'] as const) for (const su
     const source = await fixture(request, protocol), field = protocol === 'responses' ? 'shots' : 'shots[0].narration';
     try {
       await page.goto('/'); await expect(page).toHaveTitle(/Video Quickly/); await expect(page.getByRole('navigation', { name: '主导航', exact: true })).toBeVisible();
-      if (surface === 'flat') { await openProjectFromList(page, source.project.title); await page.getByRole('button', { name: '打开步骤：分镜生成', exact: true }).click(); }
+      if (surface === 'flat') { await openProjectFromList(page, source.project.title); await page.getByRole('button', { name: '打开阶段：策划与分镜', exact: true }).click(); }
       else { await page.getByRole('button', { name: '制作记录', exact: true }).click(); await page.locator(`.run-card[data-run-id="${source.run.id}"]`).getByRole('button', { name: '查看步骤', exact: true }).click(); }
       const dialog = page.getByRole('dialog', { name: surface === 'flat' ? '本次制作' : '制作步骤详情', exact: true });
       const record = dialog.getByRole('region', { name: '模型返回记录', exact: true });

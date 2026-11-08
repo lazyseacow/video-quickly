@@ -1,14 +1,14 @@
 import { firstFrameAtUs, frameAtTime, shotSchema, timeAtFrame, type AssetRecord, type ProjectDocument, type Shot } from '@video-quickly/contracts';
 import { resolveShotSpans, type ClipEditContext } from '@video-quickly/video/clip-edits';
+import { usesFullAudioSource } from '@video-quickly/video/audio';
 
-const legacyRecordingClock = (shot: Shot) => Boolean(shot.audioAssetId && !shot.clipEdit && shot.sourceInUs === undefined && shot.audioInUs === undefined);
-
-export function keyframeEditScope(shot: Shot, context: ClipEditContext) {
-  return JSON.stringify([shot.animation, shot.durationUs, shot.sceneInUs, shot.sceneDurationUs, shot.assetId, shot.videoAssetId, shot.sceneTemplate, shot.clipEdit, legacyRecordingClock(shot) ? shot.audioAssetId : undefined, resolveShotSpans(shot, context)]);
+function keyframeEditScope(shot: Shot, context: ClipEditContext) {
+  const recordingId = shot.audioAssetId && usesFullAudioSource(shot) ? shot.audioAssetId : undefined;
+  return JSON.stringify([shot.animation, shot.durationUs, shot.sceneInUs, shot.sceneDurationUs, shot.assetId, shot.videoAssetId, shot.sceneTemplate, shot.clipEdit, recordingId, resolveShotSpans(shot, context)]);
 }
 
 export function keyframeAssetIds(shot: Shot) {
-  return [shot.sceneTemplate ? undefined : shot.videoAssetId ?? shot.assetId, legacyRecordingClock(shot) ? shot.audioAssetId : undefined].filter((value): value is string => Boolean(value));
+  return [shot.sceneTemplate ? undefined : shot.videoAssetId ?? shot.assetId, usesFullAudioSource(shot) ? shot.audioAssetId : undefined].filter((value): value is string => Boolean(value));
 }
 
 export function assertKeyframeAssets(shot: Shot, baseline: readonly AssetRecord[], current: readonly AssetRecord[]) {

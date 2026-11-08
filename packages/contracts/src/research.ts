@@ -18,7 +18,6 @@ export const claimEvidenceSchema = z.object({
   startOffset: z.number().int().nonnegative(), endOffset: z.number().int().positive(),
   quote: z.string().min(1).max(5_000), locator: z.string().max(1_000).optional(),
 }).refine(value => value.endOffset > value.startOffset, '证据摘录的结束位置须晚于开始位置');
-export type ClaimEvidence = z.infer<typeof claimEvidenceSchema>;
 export const claimSchema = z.object({
   id: z.string(), text: z.string(), source: z.string(), locator: z.string().default(''),
   status: z.enum(['pending', 'verified', 'disputed']).default('pending'),
@@ -37,10 +36,6 @@ export const researchResultSchema = z.object({
   text: z.string().max(30_000).optional(),
 });
 export type ResearchResult = z.infer<typeof researchResultSchema>;
-export const researchSearchResultSchema = z.object({
-  title: z.string(), url: httpUrlSchema, snippet: z.string(), pageId: z.number().int().positive(),
-});
-export type ResearchSearchResult = z.infer<typeof researchSearchResultSchema>;
 export type ShotClaims = { shotId: string; claimIds: string[] };
 export interface ResearchContent {
   claims: Claim[];

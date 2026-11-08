@@ -1,4 +1,4 @@
-import { useId, useRef, useState } from 'react';
+import { useEffect, useId, useRef, useState } from 'react';
 import { ChevronDown, Download, FolderOpen, PencilLine, RefreshCw, RotateCcw } from 'lucide-react';
 import { activitySchema, recordPageSchema, runDiagnosticsSchema, runEventSchema, runInspectionSchema, runStepPayloadSchema, type RunInspection, type RunStepSummary, type RunSummary } from '@video-quickly/contracts';
 import { Button, Dialog, Notice, Select, Status } from '../components/Primitives';
@@ -31,9 +31,11 @@ export default function RunInspector({ runId, initialNodeId, version, onClose, o
   const [pending, setPending] = useState('');
   const [error, setError] = useState('');
   const inFlight = useRef(false);
+  const navigation = useRef<HTMLElement>(null);
   const [diagnostic, setDiagnostic] = useState<ReturnType<typeof runDiagnosticsSchema.parse> & { url: string }>();
   const data = inspection.data;
   const selected = data?.steps.find(step => step.id === selectedId) ?? data?.steps.find(step => step.id === data.run.currentNodeId) ?? data?.steps[0];
+  useEffect(() => { navigation.current?.querySelector('[aria-current="step"]')?.scrollIntoView({ block: 'nearest', inline: 'nearest' }); }, [selected?.id]);
   async function perform(method: string, params: Record<string, unknown> = {}) {
     if (inFlight.current) return;
     inFlight.current = true;
@@ -55,9 +57,9 @@ export default function RunInspector({ runId, initialNodeId, version, onClose, o
         {data.recovery.reason && <Notice>{data.recovery.reason}</Notice>}
         {(!data.snapshotAvailable || !data.checkpointAvailable) && <Notice>{!data.snapshotAvailable ? '这次历史制作没有冻结流程，保留原始活动与日志供核对。' : '这次历史制作没有可验证的编排检查点；产物与日志按实际保存情况展示。'}</Notice>}
         {data.steps.length ? <div className="run-inspector__layout">
-          <nav className="run-inspector__steps" aria-label="冻结流程步骤">{data.steps.map((step, index) => <button type="button" key={step.id} aria-current={selected?.id === step.id ? 'step' : undefined} onClick={() => setSelectedId(step.id)}><span className="run-inspector__index">{index + 1}</span><span><strong>{step.label}</strong><StepStatus step={step} /></span>{step.outputAvailable && <span className="run-inspector__output-mark" aria-label="已保存产物" />}</button>)}</nav>
+          <nav ref={navigation} className="run-inspector__steps" aria-label="冻结流程步骤">{data.steps.map((step, index) => <button type="button" key={step.id} aria-current={selected?.id === step.id ? 'step' : undefined} onClick={() => setSelectedId(step.id)}><span className="run-inspector__index">{index + 1}</span><span><strong>{step.label}</strong><StepStatus step={step} /></span>{step.outputAvailable && <span className="run-inspector__output-mark" aria-label="已保存产物" />}</button>)}</nav>
           {selected && <StepDetail key={`${runId}:${selected.id}`} inspection={data} step={selected} version={version} onOpenOutput={onOpenOutput} retry={{ busy: pending === 'run.step.retry', disabled: Boolean(pending || inspection.error), onRetry: () => { setSelectedId(selected.id); void perform('run.step.retry', { nodeId: selected.id }); } }} />}
-        </div> : <RunLog runId={runId} version={version} />}
+        </div> : <div className="run-inspector__history"><RunLog runId={runId} version={version} /></div>}
       </>}
       {diagnostic && <div className="run-inspector__diagnostic" role="status"><span>诊断已导出 · {diagnostic.bytes.toLocaleString()} 字节</span><code>{diagnostic.path}</code>{nativeDesktop ? <Button aria-label="打开文件夹" onClick={() => void revealFile(diagnostic.path).catch(error => setError(String(error)))}><FolderOpen size={16} />打开文件夹</Button> : <a className="button" href={diagnostic.url} download>下载诊断文件</a>}</div>}
     </div>

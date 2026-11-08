@@ -98,7 +98,6 @@ export function resolveShotTime(shot: ClipTimingShot, context: ClipEditContext =
   }
   throw new Error('镜头剪辑窗口为空。');
 }
-export const resolveShotAtTime = resolveShotTime;
 
 export function captureClipEditSource(shot: Shot, assets: readonly Pick<AssetRecord, 'id' | 'sha256'>[], id: string): ClipEditSource {
   const { durationUs, sourceInUs, audioInUs, videoInUs, sceneInUs, sceneDurationUs, sceneIndex, captionTrack, assetId, audioAssetId, videoAssetId } = shot;

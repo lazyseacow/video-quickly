@@ -25,6 +25,8 @@ pnpm test:desktop --packaged
 
 `verify-macos-bundle.mjs` 证明执行组件是普通文件、架构正确、Node／媒体和原生依赖不链接开发机动态库，并在仅保留 `/usr/bin:/bin:/usr/sbin:/sbin` 的环境加载实际 SQLite／Canvas。原生模块的 `LC_ID_DYLIB` 是模块自身身份，不属于外部依赖；由 `otool -D` 单独识别，不以字符串前缀猜测跳过。报告为 `.generated/macos-portability.json`。
 
+`pnpm test:desktop --packaged --compact` 将实际应用窗口缩到系统允许的最小尺寸，分别记录窗口外框和内容区尺寸。专项检查覆盖制作设置的翻步和保存、执行范围的选择和提交、导出选项切换及真实 MP4 编码，并保留弹窗截图。
+
 ## 原生 CI 与安装验证
 
 [CI 配置](../.github/workflows/ci.yml) 使用 `macos-15` 执行 arm64 验收，`macos-15-intel` 执行 Intel x64 验收；工作流启动时再次核对 Node 的实际架构。两个 job 均执行类型、全部自动测试、全部浏览器流程、本地 HTTP 恢复、四组实际编码（含 4K）、生产 ZIP、包内 portability、独立打包 PDF 和真实 Electron 专项。

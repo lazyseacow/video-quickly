@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { createReadStream, existsSync } from 'node:fs';
-import { mkdir, readFile, writeFile, rename, stat } from 'node:fs/promises';
+import { mkdir, readFile, writeFile, rename } from 'node:fs/promises';
 import { dirname, extname, join, resolve } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { z } from 'zod';
@@ -14,7 +14,6 @@ import { resolveImageEdit } from './image-edit.js';
 import { appendSkillContext, type SkillPackage } from '@video-quickly/contracts';
 
 export { createWaveformReader } from './waveform.js';
-export { readResearchSource, searchWikipedia, selectResearchPassages, parseResearchResult } from './research.js';
 
 export interface MediaDiagnosticEvent {
   event: `media.${'queued' | 'started' | 'completed' | 'failed' | 'canceled' | 'reused' | 'receipt_loaded' | 'request_started' | 'request_completed' | 'request_failed' | 'status_received' | 'poll_started' | 'poll_completed' | 'poll_retry_scheduled' | 'poll_recovered' | 'download_started' | 'download_completed' | 'validation_started' | 'validation_completed' | 'render_started' | 'render_completed'}`;
@@ -84,6 +83,7 @@ const atPath = (value: unknown, path: unknown): unknown => typeof path === 'stri
 function generationStatus(value: unknown): MediaDiagnosticEvent['remoteStatus'] {
   if (['queued', 'pending', 'submitted'].includes(String(value))) return 'queued';
   if (['running', 'in_progress', 'processing', 'generating'].includes(String(value))) return 'generating';
+  return undefined;
 }
 
 async function boundedResponseBytes(response: Response, maximum = MAX_MEDIA_BYTES): Promise<Uint8Array> {

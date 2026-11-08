@@ -1,9 +1,11 @@
-import { expect, test, type Page } from '@playwright/test';
+import { expect, test, type Locator, type Page } from '@playwright/test';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { projectDetailSchema, skillImportResultSchema, workspaceSnapshotSchema } from '@video-quickly/contracts';
+import { projectDetailSchema, workspaceSnapshotSchema } from '@video-quickly/contracts';
+import { importSkillFixture } from '../fixtures/import-skill';
+import { rpc } from './native-video-fixture';
 import { saveProduction } from './production-settings';
 
 const { strToU8, zipSync } = createRequire(new URL('../../packages/runtime/package.json', import.meta.url))('fflate') as typeof import('../../packages/runtime/node_modules/fflate');
@@ -17,6 +19,12 @@ async function openImport(page: Page) {
   await page.getByRole('button', { name: 'Skill 工作室', exact: true }).click();
   await page.getByRole('button', { name: '导入 Skill', exact: true }).first().click();
   return page.getByRole('dialog', { name: '导入 Skill', exact: true });
+}
+function skillGroup(page: Page, name: string) {
+  return page.getByRole('region', { name: `Skill 分组“${name}”`, exact: true });
+}
+function groupDisclosure(group: Locator) {
+  return group.getByRole('heading', { level: 2 }).getByRole('button');
 }
 test.afterEach(async () => {
   await Promise.all(directories.splice(0).map(path => rm(path, { recursive: true, force: true })));
@@ -49,7 +57,10 @@ test('continues after closing the import dialog, groups every Skill and applies 
   release(); await completed;
   await page.reload();
   await page.getByRole('button', { name: 'Skill 工作室', exact: true }).click();
-  const group = page.getByRole('region', { name: 'Skill 分组“短剧方法验收”', exact: true });
+  const group = skillGroup(page, '短剧方法验收');
+  await expect(groupDisclosure(group)).toHaveAttribute('aria-expanded', 'false');
+  await expect(page.getByText(/^导入记录（/)).toHaveCount(0);
+  await groupDisclosure(group).press('Enter');
   await expect(group.getByRole('heading', { name: 'ui-drama-write', exact: true })).toBeVisible();
   await expect(group.getByRole('heading', { name: 'ui-drama-storyboard', exact: true })).toBeVisible();
   const snapshot = workspaceSnapshotSchema.parse((await (await request.post('/__desktop_rpc', { data: { method: 'workspace.snapshot', params: {} } })).json()).result);
@@ -103,11 +114,76 @@ test('retains a failed background import and retries into its group', async ({ p
   await expect(status.getByRole('alert')).toContainText('没有找到 SKILL.md');
   await writeFile(source, zipSync({ 'method/SKILL.md': strToU8('---\nname: ui-skill-retry\ndescription: 后台重试验收\n---\n生成剧本。') }));
   await status.getByRole('button', { name: '重试导入', exact: true }).click();
-  await expect(page.getByRole('heading', { name: 'ui-skill-retry', exact: true })).toBeVisible();
-  await expect(page.getByRole('region', { name: 'Skill 分组“导入重试验收”', exact: true })).toBeVisible();
+  const group = skillGroup(page, '导入重试验收');
+  await groupDisclosure(group).click();
+  await expect(group.getByRole('heading', { name: 'ui-skill-retry', exact: true })).toBeVisible();
   await page.reload();
   await page.getByRole('button', { name: 'Skill 工作室', exact: true }).click();
-  await expect(page.getByRole('heading', { name: 'ui-skill-retry', exact: true })).toBeVisible();
+  await groupDisclosure(group).click();
+  await expect(group.getByRole('heading', { name: 'ui-skill-retry', exact: true })).toBeVisible();
+});
+
+test('expands groups independently and restores their layout when clearing search', async ({ page, request }) => {
+  const directory = await sourceDirectory();
+  for (const [name, names] of [['折叠验收甲', ['ui-disclosure-write']], ['折叠验收乙', ['ui-disclosure-color', 'ui-disclosure-style']]] as const) {
+    const source = join(directory, name + '.zip');
+    await writeFile(source, zipSync(Object.fromEntries(names.map(skill => [
+      `methods/${skill}/SKILL.md`, strToU8(`---\nname: ${skill}\ndescription: 分组展开验收\n---\n保持项目设定。`),
+    ]))));
+    await importSkillFixture((method, params) => rpc(request, method, params), { path: source });
+  }
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Skill 工作室', exact: true }).click();
+  const first = skillGroup(page, '折叠验收甲'), second = skillGroup(page, '折叠验收乙');
+  const firstDisclosure = groupDisclosure(first), secondDisclosure = groupDisclosure(second);
+  const writing = first.getByRole('heading', { name: 'ui-disclosure-write', exact: true });
+  const color = second.getByRole('heading', { name: 'ui-disclosure-color', exact: true });
+  const style = second.getByRole('heading', { name: 'ui-disclosure-style', exact: true });
+  await expect(firstDisclosure).toHaveAttribute('aria-expanded', 'false');
+  await expect(writing).toBeHidden();
+  await expect(secondDisclosure).toHaveAttribute('aria-expanded', 'false');
+  const borders = await page.locator('.skill-studio-groups').evaluate(list => {
+    const groups = [...list.querySelectorAll('.skill-studio-group')];
+    const tools = list.nextElementSibling!;
+    const top = (element: Element) => parseFloat(getComputedStyle(element).borderTopWidth);
+    const bottom = (element: Element) => parseFloat(getComputedStyle(element).borderBottomWidth);
+    return [...groups.slice(1).map((group, index) => bottom(groups[index]) + top(group)), bottom(groups.at(-1)!) + top(tools)];
+  });
+  expect(borders).toEqual(borders.map(() => 1));
+  await firstDisclosure.press('Enter');
+  await secondDisclosure.press('Space');
+  await expect(writing).toBeVisible();
+  await expect(color).toBeVisible();
+  const card = first.locator('.skill-card');
+  const cardLayout = () => card.evaluate(element => {
+    const content = element.querySelector('.list-card__body')!.getBoundingClientRect();
+    const actions = element.querySelector('.list-card__actions')!.getBoundingClientRect();
+    return { beside: actions.left >= content.right, below: actions.top >= content.bottom };
+  });
+  await expect.poll(cardLayout).toMatchObject({ below: true });
+  await page.setViewportSize({ width: 1024, height: 720 });
+  await expect.poll(cardLayout).toMatchObject({ beside: true, below: false });
+  await page.setViewportSize({ width: 390, height: 844 });
+  expect(await page.locator('.page-body').evaluate(element => element.scrollWidth - element.clientWidth)).toBeLessThanOrEqual(1);
+  await secondDisclosure.click();
+  await expect(writing).toBeVisible();
+  await expect(color).toBeHidden();
+
+  const search = page.getByRole('searchbox', { name: '搜索 Skill 或分组', exact: true });
+  await search.fill('ui-disclosure-color');
+  await expect(first).toHaveCount(0);
+  await expect(color).toBeVisible();
+  await expect(style).toBeHidden();
+  await secondDisclosure.press('Enter');
+  await expect(color).toBeHidden();
+  await search.fill('折叠验收乙');
+  await expect(color).toBeVisible();
+  await expect(style).toBeVisible();
+  await search.clear();
+  await expect(writing).toBeVisible();
+  await expect(secondDisclosure).toHaveAttribute('aria-expanded', 'false');
+  await expect(color).toBeHidden();
 });
 
 test('shows persisted switch states, prevents repeated toggles and confirms individual and group uninstall', async ({ page, request }) => {
@@ -116,12 +192,13 @@ test('shows persisted switch states, prevents repeated toggles and confirms indi
     'methods/write/SKILL.md': strToU8('---\nname: ui-switch-write\ndescription: 写作方法状态验收\n---\n生成剧本。'),
     'methods/style/SKILL.md': strToU8('---\nname: ui-switch-style\ndescription: 风格方法状态验收\n---\n固定视觉风格。'),
   }));
-  const imported = skillImportResultSchema.parse((await (await request.post('/__desktop_rpc', { data: { method: 'skill.import', params: { path: source } } })).json()).result);
-  if (!('skills' in imported)) throw new Error('Expected a Skill group');
+  const imported = await importSkillFixture((method, params) => rpc(request, method, params), { path: source });
   const snapshot = async () => workspaceSnapshotSchema.parse((await (await request.post('/__desktop_rpc', { data: { method: 'workspace.snapshot', params: {} } })).json()).result);
   await page.goto('/');
   await page.getByRole('button', { name: 'Skill 工作室', exact: true }).click();
-  const group = page.getByRole('region', { name: 'Skill 分组“状态与卸载验收”', exact: true });
+  const group = skillGroup(page, '状态与卸载验收');
+  const disclosure = groupDisclosure(group);
+  await disclosure.click();
   const card = group.locator('.skill-card').filter({ has: page.getByRole('heading', { name: 'ui-switch-write', exact: true }) });
   const toggle = card.getByRole('switch', { name: '“ui-switch-write”启用状态', exact: true });
   await expect(toggle).toHaveAttribute('aria-checked', 'true'); await expect(toggle).toHaveText('已启用');
@@ -129,6 +206,7 @@ test('shows persisted switch states, prevents repeated toggles and confirms indi
   await expect(toggle).toHaveAttribute('aria-checked', 'false'); await expect(toggle).toHaveText('已停用');
   expect((await snapshot()).skills.find(skill => skill.name === 'ui-switch-write')?.enabled).toBe(false);
   await page.reload(); await page.getByRole('button', { name: 'Skill 工作室', exact: true }).click();
+  await disclosure.click();
   await expect(toggle).toHaveAttribute('aria-checked', 'false');
 
   let entered!: () => void, release!: () => void, requests = 0;
@@ -142,7 +220,11 @@ test('shows persisted switch states, prevents repeated toggles and confirms indi
   release();
   await expect(toggle).toHaveAttribute('aria-checked', 'true'); await expect(toggle).toBeEnabled(); expect(requests).toBe(1);
   await page.unroute('**/__desktop_rpc');
+  await disclosure.click();
   await group.getByRole('button', { name: '停用分组“状态与卸载验收”', exact: true }).click();
+  await expect(disclosure).toHaveAttribute('aria-expanded', 'false');
+  await expect(disclosure).toContainText('已启用 0 个');
+  await disclosure.click();
   await expect(group.getByRole('switch').first()).toHaveAttribute('aria-checked', 'false');
   await expect(group.getByRole('switch').last()).toHaveAttribute('aria-checked', 'false');
   await group.getByRole('button', { name: '启用分组“状态与卸载验收”', exact: true }).click();

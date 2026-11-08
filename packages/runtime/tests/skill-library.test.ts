@@ -4,8 +4,9 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, expect, it, vi } from 'vitest';
 import { strToU8, zipSync } from 'fflate';
-import { modelSchema, projectSchema, promptPreviewSchema, promptSessionSchema, runSchema, skillImportJobSchema, skillImportResultSchema, skillSchema, workflowNodeSchema, type WorkspaceSnapshot } from '@video-quickly/contracts';
+import { modelSchema, projectSchema, promptPreviewSchema, promptSessionSchema, runSchema, skillImportJobSchema, workflowNodeSchema, type WorkspaceSnapshot } from '@video-quickly/contracts';
 import { createRuntime, type RuntimeOptions } from '../src/index.js';
+import { importSkillFixture } from '../../../tests/fixtures/import-skill';
 
 const directories: string[] = [], runtimes: ReturnType<typeof createRuntime>[] = [];
 async function fixture(options: Partial<RuntimeOptions> = {}) {
@@ -69,7 +70,7 @@ it('publishes a group atomically, retries failures, and retains groups and recor
   const restored = await reopened.dispatch('workspace.snapshot') as WorkspaceSnapshot;
   expect(restored.skillGroups![0].name).toBe('统一创作方法');
   expect(restored.skillImports![0]).toMatchObject({ id: job.id, status: 'succeeded', completed: 2 });
-  await reopened.dispatch('skill.import', { path });
+  await importSkillFixture(reopened.dispatch, { path });
   const repeated = await reopened.dispatch('workspace.snapshot') as WorkspaceSnapshot;
   expect(repeated.skills).toHaveLength(2); expect(repeated.skillGroups).toHaveLength(1); expect(repeated.skillGroups![0].name).toBe('统一创作方法');
 });
@@ -94,13 +95,13 @@ it('applies creation selections to text tasks, sends referenced resources, and f
   const source = join(directory, 'method'); await mkdir(join(source, 'references'), { recursive: true });
   await writeFile(join(source, 'SKILL.md'), '---\nname: writing-method\ndescription: 写作规则\n---\n使用 references/guide.md 的叙事方法。');
   await writeFile(join(source, 'references/guide.md'), '旧版引用：场景必须有戏剧目标。');
-  const skill = skillSchema.parse(await runtime.dispatch('skill.import', { path: source }));
+  const skill = (await importSkillFixture(runtime.dispatch, { path: source })).skills[0];
   const project = projectSchema.parse(await runtime.dispatch('project.create', { title: '使用 Skill 的新任务', skillIds: [skill.id] }));
   expect(project.workflow.nodes.filter(node => ['brief', 'style', 'script'].includes(node.kind)).every(node => node.skillIds.includes(skill.id))).toBe(true);
   expect(project.workflow.nodes.filter(node => ['assets', 'animation', 'export'].includes(node.kind)).every(node => !node.skillIds.length)).toBe(true);
   const model = modelSchema.parse(await runtime.dispatch('model.save', { model: { name: 'fixture', provider: 'openai-compatible', baseUrl: 'http://127.0.0.1:1/v1', model: 'fixture', connectionType: 'text', capabilities: ['text'] } }));
   const node = workflowNodeSchema.parse({ id: 'brief', kind: 'brief', label: '简报', skillIds: [skill.id], modelId: model.id });
-  const saved = projectSchema.parse(await runtime.dispatch('workflow.save', { projectId: project.id, revision: project.revision, workflow: { ...project.workflow, nodes: [node], edges: [] } }));
+  const saved = projectSchema.parse(await runtime.dispatch('project.update', { projectId: project.id, revision: project.revision, patch: { workflow: { ...project.workflow, nodes: [node], edges: [] } } }));
   const draft = { projectId: project.id, projectRevision: saved.revision, node };
   const preview = promptPreviewSchema.parse(await runtime.dispatch('prompt.preview', draft));
   expect(preview.prompt).toContain('使用 references/guide.md 的叙事方法'); expect(preview.prompt).toContain('旧版引用：场景必须有戏剧目标');
@@ -128,8 +129,7 @@ it('applies creation selections to text tasks, sends referenced resources, and f
 it('persists individual and group enable states without changing Skill versions or tool permissions', async () => {
   const { runtime, directory } = await fixture(), path = join(directory, 'methods.zip');
   await writeFile(path, archive());
-  const result = skillImportResultSchema.parse(await runtime.dispatch('skill.import', { path }));
-  if (!('skills' in result)) throw new Error('Expected a Skill group');
+  const result = await importSkillFixture(runtime.dispatch, { path });
   await runtime.dispatch('skill.group.toggle', { id: result.group.id, enabled: false });
   expect((await runtime.dispatch('workspace.snapshot') as WorkspaceSnapshot).skills.every(skill => !skill.enabled)).toBe(true);
   const selected = result.skills[0];
@@ -145,9 +145,8 @@ it('uninstalls groups without removing shared Skills and cleans up membership fo
   const { runtime, directory } = await fixture(), first = join(directory, 'first.zip'), second = join(directory, 'second.zip');
   await writeFile(first, archive());
   await writeFile(second, zipSync({ 'style/SKILL.md': strToU8('---\nname: drama-style\ndescription: 风格方法\n---\n保持固定色彩。') }));
-  const batch = skillImportResultSchema.parse(await runtime.dispatch('skill.import', { path: first }));
-  if (!('skills' in batch)) throw new Error('Expected a Skill group');
-  const shared = skillSchema.parse(await runtime.dispatch('skill.import', { path: second }));
+  const batch = await importSkillFixture(runtime.dispatch, { path: first });
+  const shared = (await importSkillFixture(runtime.dispatch, { path: second })).skills[0];
   const exclusive = batch.skills.find(skill => skill.id !== shared.id)!;
   const removed = await runtime.dispatch('skill.group.uninstall', { id: batch.group.id });
   expect(removed).toEqual({ skillIds: [exclusive.id], groupIds: [batch.group.id], retainedSkillIds: [shared.id] });
@@ -158,7 +157,7 @@ it('uninstalls groups without removing shared Skills and cleans up membership fo
   snapshot = await runtime.dispatch('workspace.snapshot') as WorkspaceSnapshot;
   expect(snapshot.skills).toHaveLength(0); expect(snapshot.skillGroups).toHaveLength(0);
   expect(await runtime.dispatch('skill.uninstall', { skillId: shared.id })).toEqual({ skillIds: [], groupIds: [], retainedSkillIds: [] });
-  await runtime.dispatch('skill.import', { path: first });
+  await importSkillFixture(runtime.dispatch, { path: first });
   snapshot = await runtime.dispatch('workspace.snapshot') as WorkspaceSnapshot;
   expect(snapshot.skills).toHaveLength(2); expect(snapshot.skillGroups).toHaveLength(1);
 });
@@ -167,8 +166,7 @@ it('prevents an in-flight reimport from restoring a group during uninstall', asy
   const { runtime } = await fixture();
   const source = { url: 'https://github.com/fixture/drama.git' };
   const fetch = vi.spyOn(globalThis, 'fetch').mockImplementation(async input => String(input).startsWith('https://api.github.com/') ? Response.json({ default_branch: 'main' }) : new Response(archive()));
-  const result = skillImportResultSchema.parse(await runtime.dispatch('skill.import', source));
-  if (!('skills' in result)) throw new Error('Expected a Skill group');
+  const result = await importSkillFixture(runtime.dispatch, source);
   let release!: () => void;
   const gate = new Promise<void>(resolve => { release = resolve; });
   fetch.mockImplementation(async input => { if (String(input).startsWith('https://api.github.com/')) return Response.json({ default_branch: 'main' }); await gate; return new Response(archive()); });
@@ -189,11 +187,11 @@ it('allows an already-running task to finish from its snapshot after uninstall',
   const { runtime, directory } = await fixture({ provider });
   const source = join(directory, 'method'); await mkdir(source);
   await writeFile(join(source, 'SKILL.md'), '---\nname: active-method\ndescription: 运行中快照方法\n---\n沿用原来的创作规则。');
-  const skill = skillSchema.parse(await runtime.dispatch('skill.import', { path: source }));
+  const skill = (await importSkillFixture(runtime.dispatch, { path: source })).skills[0];
   const model = modelSchema.parse(await runtime.dispatch('model.save', { model: { name: 'fixture', provider: 'openai-compatible', baseUrl: 'http://127.0.0.1:1/v1', model: 'fixture', connectionType: 'text', capabilities: ['text'] } }));
   const project = projectSchema.parse(await runtime.dispatch('project.create', { title: '运行中卸载验收' }));
   const node = workflowNodeSchema.parse({ id: 'brief', kind: 'brief', label: '简报', modelId: model.id, skillIds: [skill.id] });
-  await runtime.dispatch('workflow.save', { projectId: project.id, revision: project.revision, workflow: { ...project.workflow, nodes: [node], edges: [] } });
+  await runtime.dispatch('project.update', { projectId: project.id, revision: project.revision, patch: { workflow: { ...project.workflow, nodes: [node], edges: [] } } });
   const run = runSchema.parse(await runtime.dispatch('run.start', { projectId: project.id }));
   try {
     await vi.waitFor(() => expect(provider).toHaveBeenCalledOnce());

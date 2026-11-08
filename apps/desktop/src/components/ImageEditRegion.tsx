@@ -5,17 +5,17 @@ import { getAssetUrl, rpc } from '../lib/client';
 import { Field, Notice } from './Primitives';
 import './image-tools.css';
 
-export default function ImageEditRegion({ asset, disabled, rectangle, onChange, onError }: { asset: AssetRecord; disabled: boolean; rectangle?: ImageRectangle; onChange(value: ImageRectangle | undefined): void; onError(value: string): void }) {
+export default function ImageEditRegion({ asset, disabled, rectangle, onChange }: { asset: AssetRecord; disabled: boolean; rectangle?: ImageRectangle; onChange(value: ImageRectangle | undefined): void }) {
   const [size, setSize] = useState<{ width: number; height: number }>(), [url, setUrl] = useState('');
   const [error, setError] = useState('');
   useEffect(() => {
-    let active = true; setSize(undefined); setError(''); onError('正在读取改图源图…');
+    let active = true; setSize(undefined); setError('');
     void Promise.all([rpc('image.dimensions', { assetId: asset.id }), getAssetUrl(asset.path)]).then(([value, url]) => {
       const size = z.object({ width: z.number().int().positive(), height: z.number().int().positive() }).parse(value);
-      if (active) { setSize(size); setUrl(url); onError(''); }
-    }).catch(failure => { if (active) { const message = failure instanceof Error ? failure.message : String(failure); setError(message); onError(message); } });
+      if (active) { setSize(size); setUrl(url); }
+    }).catch(failure => { if (active) setError(failure instanceof Error ? failure.message : String(failure)); });
     return () => { active = false; };
-  }, [asset.id, asset.path, onError]);
+  }, [asset.id, asset.path]);
   const toggle = (enabled: boolean) => onChange(enabled && size ? { x: Math.floor(size.width / 4), y: Math.floor(size.height / 4), width: Math.max(1, Math.floor(size.width / 2)), height: Math.max(1, Math.floor(size.height / 2)) } : undefined);
   return <div className="image-edit-region">
     {error && <Notice kind="error">{error}</Notice>}

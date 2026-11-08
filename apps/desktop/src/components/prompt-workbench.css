@@ -10,8 +10,6 @@
 .prompt-workbench .muted { color: var(--text-secondary); font-size: var(--text-size-caption); line-height: var(--line-height-body); }
 .prompt-workbench h3 { margin: 0 0 var(--space-3); }
 .prompt-workbench__actions, .prompt-workbench__run-meta { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); margin: var(--space-4) 0; }
-.prompt-workbench__skills { display: grid; gap: var(--space-2); margin: var(--space-4) 0; }
-.prompt-workbench__skills label { display: flex; align-items: center; gap: var(--space-2); }
 .prompt-workbench small { color: var(--text-secondary); }
 .prompt-variable { padding: var(--space-3) 0; border-bottom: 1px solid var(--border-subtle); display: grid; grid-template-columns: 1fr 1fr; align-items: end; gap: var(--space-2); }
 .prompt-variable .field { margin: 0; min-width: 0; }

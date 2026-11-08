@@ -28,7 +28,7 @@ export class AmbiguousActivityError extends Error {
   }
 }
 
-export class ActivityInputChangedError extends Error {
+class ActivityInputChangedError extends Error {
   constructor(activityId: string) {
     super(`活动 ${activityId} 的输入与运行快照不一致，请创建新的运行。`);
     this.name = 'ActivityInputChangedError';
@@ -36,6 +36,8 @@ export class ActivityInputChangedError extends Error {
 }
 
 export class SimulatedProcessExit extends Error {}
+
+export const AGENT_CONTINUATION_EXHAUSTED = '视频 Agent 已连续三次结束回复，但尚未完成与当前项目一致的成片导出。请查看制作记录中的工具结果后重试。';
 
 export class AgentCompletionError extends Error {
   constructor(message = '视频 Agent 尚未完成与当前项目一致的有效成片导出，请查看制作记录中的工具结果后重试。') {

@@ -30,7 +30,6 @@ export const assetRecoveryConfirmSchema = z.object({ jobId: z.string().min(1), s
 export const assetRecoveryCancelSchema = z.object({ jobId: z.string().min(1) });
 export type AssetRecoveryExpected = z.infer<typeof assetRecoveryExpectedSchema>;
 export type AssetRecoverySource = z.infer<typeof assetRecoverySourceSchema>;
-export type AssetRecoveryCandidate = z.infer<typeof assetRecoveryCandidateSchema>;
 export type AssetRecoveryItem = z.infer<typeof assetRecoveryItemSchema>;
 export type AssetRecoveryJob = z.infer<typeof assetRecoveryJobSchema>;
 export type AssetRecoveryPage = z.infer<typeof assetRecoveryPageSchema>;

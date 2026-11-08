@@ -69,7 +69,7 @@ it('restarts a canceled shot candidate with its original target, model and instr
   expect(requests).toHaveLength(1);
   await runtime.dispatch('run.cancel', { runId: parent.id }); await runtime.waitForIdle();
   const otherModel = await runtime.dispatch('model.save', { model: { name: '后改默认模型', provider: 'openai-compatible', baseUrl, model: 'different-image-model', connectionType: 'image', capabilities: ['image'] } }) as ModelProfile;
-  const afterWorkflow = projectSchema.parse(await runtime.dispatch('workflow.save', { projectId: project.id, revision: project.revision, workflow: { ...project.workflow, nodes: project.workflow.nodes.map(node => node.kind === 'assets' ? { ...node, modelId: otherModel.id } : node) } }));
+  const afterWorkflow = projectSchema.parse(await runtime.dispatch('project.update', { projectId: project.id, revision: project.revision, patch: { workflow: { ...project.workflow, nodes: project.workflow.nodes.map(node => node.kind === 'assets' ? { ...node, modelId: otherModel.id } : node) } } }));
   const edited = projectSchema.parse(await runtime.dispatch('project.update', { projectId: project.id, revision: afterWorkflow.revision, patch: { shots: project.shots.map(shot => shot.id === 'shot-1' ? { ...shot, title: '当前目标标题', narration: '当前目标旁白', visualPrompt: '当前目标画面' } : shot) } }));
   await expect(runtime.dispatch('run.start', { projectId: project.id, parentRunId: parent.id, revision: project.revision })).rejects.toThrow('其他视图修改');
   await expect(runtime.dispatch('run.start', { projectId: project.id, parentRunId: parent.id, nodeId: 'export' })).rejects.toThrow('范围');
@@ -146,9 +146,9 @@ it.each(['removed', 'kind'] as const)('rejects an older single-step restart when
 
 it('keeps a full one-node workflow distinct from an older partial single-step task', async () => {
   const { runtime, project } = await setup({ failpoint: pauseAfterCommit('one') });
-  const single = projectSchema.parse(await runtime.dispatch('workflow.save', { projectId: project.id, revision: project.revision, workflow: { id: 'one', name: '原完整流程', version: 1, production: { mode: 'native-video', referenceMode: 'none', soundPrompt: '', subtitleMode: 'off' }, nodes: [{ id: 'one', kind: 'brief', label: '原步骤', requiresReview: true }], edges: [] } }));
+  const single = projectSchema.parse(await runtime.dispatch('project.update', { projectId: project.id, revision: project.revision, patch: { workflow: { id: 'one', name: '原完整流程', version: 1, production: { mode: 'native-video', referenceMode: 'none', soundPrompt: '', subtitleMode: 'off' }, nodes: [{ id: 'one', kind: 'brief', label: '原步骤', requiresReview: true }], edges: [] } } }));
   const parent = runSchema.parse(await runtime.dispatch('run.start', { projectId: project.id })); await runtime.waitForIdle(); await runtime.dispatch('run.cancel', { runId: parent.id });
-  await runtime.dispatch('workflow.save', { projectId: project.id, revision: single.revision, workflow: { ...single.workflow, nodes: [{ ...single.workflow.nodes[0], requiresReview: false }, { id: 'two', kind: 'brief', label: '新步骤' }] } });
+  await runtime.dispatch('project.update', { projectId: project.id, revision: single.revision, patch: { workflow: { ...single.workflow, nodes: [{ ...single.workflow.nodes[0], requiresReview: false }, { id: 'two', kind: 'brief', label: '新步骤' }] } } });
   const restarted = runSchema.parse(await runtime.dispatch('run.start', { projectId: project.id, parentRunId: parent.id })); await runtime.waitForIdle();
   expect(runInspectionSchema.parse(await runtime.dispatch('run.inspect', { runId: restarted.id })).steps.map(step => step.id)).toEqual(['one', 'two']);
 });
@@ -184,7 +184,7 @@ it('keeps ordinary canceled workflow restarts as new full runs and rejects cross
   } });
   const model = await runtime.dispatch('model.save', { model: { name: '本地注入模型', provider: 'openai-compatible', baseUrl: 'http://127.0.0.1:1/v1', model: 'text-fixture', connectionType: 'text', capabilities: ['text'] } }) as ModelProfile;
   const nodes = project.workflow.nodes.filter(node => node.kind === 'brief' || node.kind === 'style').map(node => ({ ...node, modelId: model.id, requiresReview: false })); expect(nodes).toHaveLength(2);
-  const ready = projectSchema.parse(await runtime.dispatch('workflow.save', { projectId: project.id, revision: project.revision, workflow: { ...project.workflow, nodes, edges: [{ id: 'brief-to-style', source: nodes[0].id, target: nodes[1].id }] } }));
+  const ready = projectSchema.parse(await runtime.dispatch('project.update', { projectId: project.id, revision: project.revision, patch: { workflow: { ...project.workflow, nodes, edges: [{ id: 'brief-to-style', source: nodes[0].id, target: nodes[1].id }] } } }));
   const parent = runSchema.parse(await runtime.dispatch('run.start', { projectId: project.id })); await entered;
   await runtime.dispatch('run.cancel', { runId: parent.id }); await runtime.waitForIdle(); hold = false;
   const other = projectSchema.parse(await runtime.dispatch('project.create', { title: '其他项目' })); await expect(runtime.dispatch('run.start', { projectId: other.id, parentRunId: parent.id })).rejects.toThrow('不属于');

@@ -14,15 +14,15 @@ async function rpc<T>(request: APIRequestContext, method: string, params: unknow
   const payload = await response.json(); expect(response.ok()).toBe(true); expect(payload.error).toBeUndefined(); return payload.result;
 }
 async function close(server: Server) { server.closeAllConnections(); await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve())); }
-async function fixture(request: APIRequestContext) {
+async function fixture(request: APIRequestContext, text?: string) {
   let calls = 0;
-  const server = createServer({ keepAliveTimeout: 0 }, (request, response) => { request.resume(); calls++; response.setHeader('content-type', 'application/json'); response.end(JSON.stringify({ choices: [{ message: { content: `第 ${calls} 版生成风格` } }], usage: { prompt_tokens: 8, completion_tokens: 4 } })); });
+  const server = createServer({ keepAliveTimeout: 0 }, (request, response) => { request.resume(); calls++; response.setHeader('content-type', 'application/json'); response.end(JSON.stringify({ choices: [{ message: { content: text ?? `第 ${calls} 版生成风格` } }], usage: { prompt_tokens: 8, completion_tokens: 4 } })); });
   await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
   const address = server.address(); if (!address || typeof address === 'string') throw new Error('夹具服务没有启动');
   try {
     let project = await rpc<ProjectDocument>(request, 'project.create', { title: `步骤详情验收 ${randomUUID().slice(0, 8)}`, brief: '冻结的创作输入' });
     const model = await rpc<{ id: string }>(request, 'model.save', { model: { name: '执行时的模型', model: 'inspector-fixture', provider: 'openai-compatible', baseUrl: `http://127.0.0.1:${address.port}/v1`, connectionType: 'text', capabilities: ['text'] }, secret: 'inspector-fixture-secret' });
-    project = await rpc<ProjectDocument>(request, 'workflow.save', { projectId: project.id, workflow: { id: 'inspector-flow', version: 1, name: '验收流程', production: { mode: 'native-video', referenceMode: 'none', soundPrompt: '', subtitleMode: 'off' }, nodes: [{ id: 'style', kind: 'style', label: '冻结风格步骤', description: '固定本次创作的视觉风格', modelId: model.id, prompt: '按照创作输入生成风格' }, { id: 'review', kind: 'review', label: '自动检查', requiresReview: true }], edges: [{ id: 'style-review', source: 'style', target: 'review' }] } });
+    project = await rpc<ProjectDocument>(request, 'project.update', { projectId: project.id, patch: { workflow: { id: 'inspector-flow', version: 1, name: '验收流程', production: { mode: 'native-video', referenceMode: 'none', soundPrompt: '', subtitleMode: 'off' }, nodes: [{ id: 'style', kind: 'style', label: '冻结风格步骤', description: '固定本次创作的视觉风格', modelId: model.id, prompt: '按照创作输入生成风格' }, { id: 'review', kind: 'review', label: '自动检查', requiresReview: true }], edges: [{ id: 'style-review', source: 'style', target: 'review' }] } } });
     async function start() {
       const run = await rpc<{ id: string }>(request, 'run.start', { projectId: project.id, nodeId: 'style' });
       await expect.poll(async () => (await rpc<RunSummary>(request, 'run.get', { runId: run.id })).status, { timeout: 30_000 }).toBe('succeeded'); return run;
@@ -41,6 +41,32 @@ async function saved(request: APIRequestContext, projectId: string) { return (aw
 let pageErrors: string[] = [], consoleErrors: string[] = [], expectedErrors: string[] = [];
 test.beforeEach(async ({ page }) => { pageErrors = []; consoleErrors = []; expectedErrors = []; page.on('pageerror', error => pageErrors.push(error.message)); page.on('console', message => { if (message.type() === 'error') consoleErrors.push(message.text()); }); });
 test.afterEach(async ({ page }) => { expect(pageErrors).toEqual([]); expect(consoleErrors).toEqual(expectedErrors); await expect(page.locator('vite-error-overlay')).toHaveCount(0); });
+
+test('keeps step navigation and footer available while reading a long output in desktop and narrow windows', async ({ page, request }, info) => {
+  const source = await fixture(request, Array.from({ length: 120 }, (_, index) => `第 ${index + 1} 段。清晨的街角使用柔和自然光，人物沿同一方向走过画面，保持镜头连续性。`).join('\n\n'));
+  try {
+    await rpc(request, 'project.update', { projectId: source.project.id, patch: { workflow: { ...source.project.workflow, nodes: source.project.workflow.nodes.map(node => node.id === 'review' ? { ...node, kind: 'condition', config: { value: true }, requiresReview: false } : node) } } });
+    const run = await rpc<{ id: string }>(request, 'run.start', { projectId: source.project.id });
+    await expect.poll(async () => (await rpc<RunSummary>(request, 'run.get', { runId: run.id })).status).toBe('succeeded');
+    const dialog = await open(page, run.id);
+    const navigation = dialog.getByRole('navigation', { name: '冻结流程步骤', exact: true });
+    const detail = dialog.locator('.run-inspector__detail');
+    for (const width of [1024, 600]) {
+      await page.setViewportSize({ width, height: 720 });
+      await navigation.getByRole('button', { name: /冻结风格步骤/ }).click();
+      await dialog.getByRole('tab', { name: '步骤产物', exact: true }).click();
+      await expect(dialog.getByRole('region', { name: '本次产物', exact: true })).toContainText('第 120 段');
+      await page.screenshot({ path: info.outputPath(`long-run-output-${width}.png`) });
+      const scrollable = await detail.evaluate(element => element.scrollHeight > element.clientHeight + 20);
+      expect(scrollable).toBe(true);
+      await detail.evaluate(element => { element.scrollTop = element.scrollHeight; });
+      await expect(navigation).toBeInViewport({ ratio: 1 });
+      await expect(dialog.locator('.dialog__footer')).toBeInViewport({ ratio: 1 });
+      await navigation.getByRole('button', { name: /自动检查/ }).click();
+      await expect.poll(() => detail.evaluate(element => element.scrollTop)).toBe(0);
+    }
+  } finally { await close(source.server); }
+});
 
 test('shows the selected run output, exports diagnostics and applies it with undo', async ({ page, request }, info) => {
   // Two sequential completed runs precede the diagnostics and application UI.

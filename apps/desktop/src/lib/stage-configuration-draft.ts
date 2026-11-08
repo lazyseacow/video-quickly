@@ -2,7 +2,7 @@ import { z } from 'zod';
 import { productionSettingsSchema, projectSchema, resolveProductionWorkflow, workflowExecutionSchema, workflowNodeSchema, type ProductionSettings, type WorkflowDefinition, type WorkflowNode } from '@video-quickly/contracts';
 import { sameContent } from './project-edits';
 
-export const productionProjectSettingsSchema = projectSchema.pick({ brief: true, style: true, profile: true, creativeContext: true });
+const productionProjectSettingsSchema = projectSchema.pick({ brief: true, style: true, profile: true, creativeContext: true });
 export type ProductionProjectSettings = z.infer<typeof productionProjectSettingsSchema>;
 export const stageConfigurationDraftSchema = z.object({
   version: z.literal(1),

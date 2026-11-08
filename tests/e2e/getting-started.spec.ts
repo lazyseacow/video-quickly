@@ -337,7 +337,7 @@ test('navigates to current model controls, saves a real local connection and ret
     const summary = await rpc<{ models: ModelProfile[] }>(request, 'workspace.summary'); expect(summary.models.find(model => model.name === name)).toMatchObject({ model: 'guide-local-text', baseUrl: provider.baseUrl });
     await active(page).click(); await atStep(page, '进入创作工作台'); await active(page).click(); await expect(page.getByLabel('项目名称', { exact: true })).toBeVisible(); await atStep(page, '制作设置');
     await active(page).click(); await expect(page.getByRole('dialog', { name: '制作设置', exact: true })).toBeVisible();
-    await page.getByRole('dialog', { name: '制作设置', exact: true }).getByRole('button', { name: '取消', exact: true }).click(); await atStep(page, '整理镜头');
+    await page.getByRole('dialog', { name: '制作设置', exact: true }).getByRole('button', { name: '关闭对话框', exact: true }).click(); await atStep(page, '整理镜头');
     expect(provider.calls.length).toBeGreaterThan(0); expect(provider.calls.every(call => call.method === 'GET')).toBe(true);
     expect(observed.writes).toEqual(['model.save']); expect(observed.errors).toEqual([]);
   } finally { await provider.close(); }
@@ -408,22 +408,47 @@ test('starts production only on the user click and advances only when the real r
 test('keeps export cancellation and failure in place and advances only after a real MP4 is exported', async ({ page, request }, info) => {
   const project = await projectFixture(request, '导览真实导出', 1, 700_000), observed = observe(page); await page.emulateMedia({ reducedMotion: 'reduce' }); await openProjectTour(page, project); await reach(page, '导出成片');
   const dialog = page.getByRole('dialog', { name: '导出视频', exact: true }); await active(page).click(); await expect(dialog).toBeVisible(); await expect(guide(page)).toHaveCount(0);
-  expect(observed.writes).toEqual([]); await dialog.getByRole('button', { name: '关闭', exact: true }).click(); await atStep(page, '导出成片');
+  expect(observed.writes).toEqual([]); await dialog.getByRole('button', { name: '关闭对话框', exact: true }).click(); await atStep(page, '导出成片');
   await active(page).click(); await (await settingField(dialog, '输出文件路径')).fill(info.outputPath('guide-real-output.mp4'));
   const failed = await holdNextRpc(page, 'render.export', '隔离的导出失败'); await dialog.getByRole('button', { name: '导出 MP4', exact: true }).click(); await failed.entered; await expect(guide(page)).toHaveCount(0); failed.release();
   await expect(page.getByText('隔离的导出失败', { exact: true })).toBeVisible(); await expect(dialog).toBeVisible(); await expect(guide(page)).toHaveCount(0);
   await dialog.getByRole('button', { name: '导出 MP4', exact: true }).click(); await expect(dialog.getByText(/文件已保存/)).toBeVisible({ timeout: 30_000 });
   await expect(guide(page)).toHaveCount(0); const runs = await rpc<{ items: RunSummary[] }>(request, 'run.list', { projectId: project.id }); expect(runs.items).toHaveLength(1); expect(runs.items[0].status).toBe('succeeded');
   const output = await rpc<{ videoPath: string }>(request, 'node.result', { runId: runs.items[0].id, nodeId: 'export' }); expect(output.videoPath).toBe(info.outputPath('guide-real-output.mp4')); expect((await stat(output.videoPath)).size).toBeGreaterThan(500);
-  await dialog.getByRole('button', { name: '关闭', exact: true }).click(); await atStep(page, '随时重开指引'); expect(observed.writes).toEqual(['render.export', 'render.export']); expect(observed.errors).toEqual([]);
+  await dialog.getByRole('button', { name: '关闭对话框', exact: true }).click(); await atStep(page, '随时重开指引'); expect(observed.writes).toEqual(['render.export', 'render.export']); expect(observed.errors).toEqual([]);
 });
 
-isolatedTest('guides an empty isolated workspace without creating a project or pointing at absent editor controls', async ({ page, request, isolatedWorkspace }) => {
+isolatedTest('guides an empty workspace through the normal project list and preserves its layout through restore and archive', async ({ page, request, isolatedWorkspace }) => {
+  const sample = await rpc<ProjectDocument>(request, 'project.create', { title: '空列表恢复验收' });
   const before = await rpc<{ projects: ProjectDocument[] }>(request, 'workspace.snapshot');
   for (const project of before.projects.filter(project => !project.archived)) await rpc(request, 'project.archive', { projectId: project.id, revision: project.revision });
   const observed = observe(page); await page.emulateMedia({ reducedMotion: 'reduce' }); await page.goto('/'); await opened(page);
+  const main = page.getByRole('main');
+  const heading = main.getByRole('heading', { name: '我的项目', level: 1, exact: true });
+  await expect(heading).toBeVisible();
   const seen = await walk(page); expect(seen).toEqual(['create-project', 'models', 'projects', 'help']);
-  await expect(page.getByText('开始一段新的创作', { exact: true })).toBeVisible();
+  const list = main.getByRole('region', { name: '项目列表', exact: true });
+  const empty = list.getByRole('heading', { name: '还没有视频项目', exact: true });
+  await expect(empty).toBeVisible();
+  await expect(main.getByLabel('搜索项目', { exact: true })).toBeVisible();
+  await expect(main.getByRole('button', { name: '全部项目', exact: true })).toHaveText('全部 0');
+  for (const name of ['作品与分集', '导入项目', '新建项目']) await expect(main.getByRole('button', { name, exact: true })).toBeEnabled();
   expect((await rpc<{ projects: ProjectDocument[] }>(request, 'workspace.snapshot')).projects.every(project => project.archived)).toBe(true);
   expect(isolatedWorkspace.origin).toBe(new URL(page.url()).origin); expect(observed.writes).toEqual([]); expect(observed.errors).toEqual([]);
+
+  await page.setViewportSize({ width: 360, height: 844 });
+  const listElement = await list.elementHandle();
+  await main.getByRole('button', { name: '回收站', exact: true }).click();
+  const card = list.locator('.project-card').filter({ has: page.getByRole('heading', { name: sample.title, exact: true }) });
+  await card.getByRole('button', { name: '恢复项目', exact: true }).click();
+  await main.getByRole('button', { name: '全部项目', exact: true }).click();
+  await expect(card).toBeVisible();
+  expect(await listElement!.evaluate(element => element.isConnected)).toBe(true);
+  await card.getByRole('button', { name: '继续创作', exact: true }).click();
+  await expect(page.locator('.workbench')).toBeVisible();
+  await rpc(request, 'project.archive', { projectId: sample.id });
+  await expect(heading).toBeVisible();
+  await expect(empty).toBeVisible();
+  expect(await main.evaluate(element => element.scrollWidth - element.clientWidth)).toBeLessThanOrEqual(1);
+  expect(observed.errors).toEqual([]);
 });

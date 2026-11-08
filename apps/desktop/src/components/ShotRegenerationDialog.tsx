@@ -26,7 +26,6 @@ const capabilities = { script: 'text', image: 'image', video: 'video' } as const
 export default function ShotRegenerationDialog({ project, shot, models, assets, source, onClose, onGenerate, onApply }: ShotRegenerationDialogProps) {
   const [kind, setKind] = useState<ShotCandidateKind>(source?.kind ?? 'script');
   const [editRectangle, setEditRectangle] = useState<ImageRectangle>();
-  const [editError, setEditError] = useState('');
   const [modelId, setModelId] = useState('');
   const [instruction, setInstruction] = useState('');
   const [items, setItems] = useState<ShotCandidate[]>([]);
@@ -161,7 +160,7 @@ export default function ShotRegenerationDialog({ project, shot, models, assets, 
       <p className="shot-regeneration__target">{shot.title}</p>
       {source ? <Notice>只重新生成此镜头的{source.kind === 'video' ? '视频' : '图片'}，沿用本次制作的上游产物、提示词与模型：{source.modelName}。其他镜头保留。</Notice> : <div className="shot-regeneration__form"><Field label="生成内容"><Select value={kind} disabled={generating || applying || running} onChange={event => setKind(event.target.value as ShotCandidateKind)}>{Object.entries(candidateKindLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</Select></Field><Field label="生成模型"><Select value={selectedModelId} disabled={generating || applying || running} onChange={event => setModelId(event.target.value)}><option value="" disabled>选择模型</option>{availableModels.map(model => <option key={model.id} value={model.id}>{model.name}</option>)}</Select></Field></div>}
       <Field label="本次调整要求"><textarea value={instruction} maxLength={10000} disabled={generating || applying || running} onChange={event => setInstruction(event.target.value)} placeholder="说明这个镜头希望如何修改…" /></Field>
-      {kind === 'image' && !shot.sceneTemplate && allAssets.find(asset => asset.id === shot.assetId) && availableModels.find(model => model.id === selectedModelId)?.provider === 'openai-compatible' && <ImageEditRegion asset={allAssets.find(asset => asset.id === shot.assetId)!} disabled={generating || applying || running} rectangle={editRectangle} onChange={setEditRectangle} onError={setEditError} />}
+      {kind === 'image' && !shot.sceneTemplate && allAssets.find(asset => asset.id === shot.assetId) && availableModels.find(model => model.id === selectedModelId)?.provider === 'openai-compatible' && <ImageEditRegion asset={allAssets.find(asset => asset.id === shot.assetId)!} disabled={generating || applying || running} rectangle={editRectangle} onChange={setEditRectangle} />}
       {!source && !availableModels.length && <p className="tiny-meta">请先在模型连接中添加具备{candidateKindLabels[kind]}能力的模型。</p>}
       {shot.locked && <Notice>请先解锁当前镜头，再生成或应用候选。</Notice>}
       <div className="shot-regeneration__generate"><Button variant="primary" busy={generating} disabled={applying || running || unfinishedSource || !selectedModelId && !source || shot.locked} onClick={() => void generate()}><Sparkles size={14} />生成候选</Button><span className="tiny-meta">生成结果会先保留为候选，应用前不会替换当前镜头。</span></div>

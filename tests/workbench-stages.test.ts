@@ -1,21 +1,20 @@
 import { expect, it } from 'vitest';
-import { createNativeVideoWorkflow, isModelGenerationNode, resolveProductionWorkflow, resolveWorkflowStages } from '@video-quickly/contracts';
-import { resolveGenerationSteps, resolveWorkbenchStages } from '../apps/desktop/src/lib/workbench-stages';
-
-
+import { createNativeVideoWorkflow, isModelGenerationNode, resolveWorkflowStages } from '@video-quickly/contracts';
+import { resolveWorkbenchStages } from '../apps/desktop/src/lib/workbench-stages';
 
 it('retains explicit stage definitions and leaves ungrouped custom workflows alone', () => {
-  const workflow = createNativeVideoWorkflow();
+  const workflow = { ...createNativeVideoWorkflow(), id: 'custom-workflow' };
   expect(resolveWorkbenchStages(workflow)).toEqual(resolveWorkflowStages(workflow));
-  expect(resolveWorkbenchStages({ ...createNativeVideoWorkflow(), id: 'custom-workflow', stages: undefined })).toBeUndefined();
+  expect(resolveWorkbenchStages({ ...workflow, stages: undefined })).toBeUndefined();
 });
 
-it('shows the native model generation tasks and includes reference generation only when enabled', () => {
+it('keeps four native stages for every reference mode and incomplete stage metadata', () => {
   const workflow = createNativeVideoWorkflow();
-  expect(resolveGenerationSteps(workflow).map(step => step.label)).toEqual(['简报生成', '风格与角色生成', '分镜生成', '镜头视频生成']);
-  const withImages = resolveProductionWorkflow({ ...workflow, production: { ...workflow.production, referenceMode: 'generate' } });
-  expect(resolveGenerationSteps(withImages).map(step => step.nodeIds[0])).toEqual(['brief', 'style', 'script', 'assets', 'video']);
-  expect(resolveGenerationSteps(resolveProductionWorkflow({ ...withImages, production: { ...withImages.production, referenceMode: 'existing' } })).map(step => step.nodeIds[0])).toEqual(['brief', 'style', 'script', 'video']);
+  for (const referenceMode of ['none', 'generate', 'existing'] as const) {
+    const stages = resolveWorkbenchStages({ ...workflow, stages: undefined, production: { ...workflow.production, referenceMode } });
+    expect(stages?.map(stage => stage.label)).toEqual(['策划与分镜', '素材与配音', '剪辑与动画', '审阅与导出']);
+    expect(stages?.map(stage => stage.nodeIds)).toEqual([['brief', 'style', 'script'], ['assets', 'video'], ['animation'], ['export']]);
+  }
   expect(isModelGenerationNode({ ...workflow.nodes.find(node => node.id === 'animation')!, modelId: 'old-model' })).toBe(false);
   expect(isModelGenerationNode({ ...workflow.nodes.find(node => node.id === 'export')!, modelId: 'old-model' })).toBe(false);
 });

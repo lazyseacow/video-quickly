@@ -5,6 +5,7 @@ import { createRuntime, type SecretStore } from './index.js';
 import { createActivityExecutor, createWaveformReader, validateMediaActivity } from '@video-quickly/integrations';
 import { audioMixProjectionKey, prepareAudioMix, readAudioLevelWindow, detectAudioSilence } from '@video-quickly/video/audio-mix';
 import { createLogger, logError } from './logging.js';
+import { readStoryboardWebResearch } from './storyboard-research.js';
 
 const args = process.argv.slice(2);
 const argument = (name: string) => { const index = args.indexOf(name); return index >= 0 ? args[index + 1] : undefined; };
@@ -35,6 +36,7 @@ let runtime: ReturnType<typeof createRuntime>;
 const ffmpegPath = argument('--ffmpeg') ?? process.env.VIDEO_QUICKLY_FFMPEG;
 const waveforms = createWaveformReader({ dataDirectory, ffmpegPath });
 try { runtime = createRuntime({ dataDirectory, mode: 'desktop', logger, ffmpegPath, secretStore, hostCall, readAudioWaveform: asset => waveforms.read(asset),
+  webResearch: readStoryboardWebResearch,
   audioMix: { projectionKey: audioMixProjectionKey, prepare: options => prepareAudioMix({ ...options, ffmpegPath }), levels: readAudioLevelWindow, silence: options => detectAudioSilence({ ...options, ffmpegPath }) },
   preflightActivity: validateMediaActivity, executeActivity: createActivityExecutor({ ffmpegPath }) }); }
 catch (error) {

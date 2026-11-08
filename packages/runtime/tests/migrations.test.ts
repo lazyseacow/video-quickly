@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { INITIAL_SCHEMA, openDatabase, DocumentStore, WORKSPACE_MIGRATIONS, thumbnailShot } from '../src/database.js';
 import { DatabaseMigrationError, migrateDatabase } from '../src/migrations.js';
-import { createNativeVideoWorkflow, DEFAULT_CAPTION_STYLE, DEFAULT_VIDEO_PROFILE, projectSchema, projectSummarySchema } from '@video-quickly/contracts';
+import { createNativeVideoWorkflow, DEFAULT_CAPTION_STYLE, DEFAULT_VIDEO_PROFILE, projectDetailSchema, projectSchema, projectSummarySchema } from '@video-quickly/contracts';
 import { createReadModels } from '../src/read-models.js';
 
 const directories: string[] = [];
@@ -15,6 +15,48 @@ afterEach(async () => { for (const directory of directories.splice(0)) await rm(
 async function directory() { const path = await mkdtemp(join(tmpdir(), 'vq-migration-')); directories.push(path); return path; }
 
 describe('workspace database upgrades', () => {
+  it('opens a v19 project saved with the previous built-in production workflow', async () => {
+    const path = await directory(), previous = new Database(join(path, 'workspace.sqlite'));
+    previous.function('vq_thumbnail', { deterministic: true }, body => JSON.stringify(thumbnailShot(JSON.parse(String(body)))));
+    migrateDatabase(previous, path, WORKSPACE_MIGRATIONS.filter(migration => migration.version <= 19));
+    const native = createNativeVideoWorkflow();
+    const project = projectSchema.parse({ id: 'old-project', title: '旧项目', brief: '保留创意简报', revision: 8, profile: DEFAULT_VIDEO_PROFILE, workflow: native,
+      shots: [{ id: 'shot', title: '旧镜头', narration: '保留旁白', visualPrompt: '', durationUs: 2_000_000, audioAssetId: 'recorded-audio' }], createdAt: '', updatedAt: '' });
+    const nodes = ['brief', 'style', 'script', 'assets', 'voice', 'animation', 'export'].map((id, index) => ({
+      id, kind: id, label: id, prompt: id === 'script' ? '保留用户的分镜要求' : '', modelId: id === 'script' ? 'saved-text' : id === 'voice' ? 'retired-tts' : undefined,
+      position: { x: index * 270, y: 100 }, requiresReview: id === 'script',
+    }));
+    const legacy = { ...project, workflow: { id: 'history-handdrawn', version: 6, name: '历史手绘科普', nodes,
+      edges: nodes.slice(1).map((node, index) => ({ id: `${nodes[index].id}-${node.id}`, source: nodes[index].id, target: node.id })) } };
+    const store = new DocumentStore(previous);
+    store.put('project', legacy.id, legacy);
+    store.put('project', 'current', { ...project, id: 'current' });
+    store.put('run-snapshot', 'old-run', { project: legacy, nodes: [nodes[2]], handlerVersion: 1 });
+    const originalSnapshot = store.get('run-snapshot', 'old-run');
+    previous.close();
+
+    const upgraded = openDatabase(path);
+    try {
+      const documents = new DocumentStore(upgraded);
+      const detail = projectDetailSchema.parse(createReadModels(upgraded, documents).projectDetail(project.id));
+      expect(detail.project).toMatchObject({ ...project, revision: 9, workflow: { id: native.id, version: 7, production: { mode: 'native-video', subtitleMode: 'script' } } });
+      expect(detail.project?.workflow.stages).toEqual(native.stages);
+      expect(detail.project?.workflow.nodes.map(node => node.id)).toEqual(native.nodes.map(node => node.id));
+      expect(detail.project?.workflow.nodes.find(node => node.id === 'script')).toMatchObject({ prompt: '保留用户的分镜要求', modelId: 'saved-text', requiresReview: false, config: { modelOverride: true } });
+      expect(detail.project?.workflow.nodes.find(node => node.id === 'video')?.modelId).toBeUndefined();
+      expect(documents.get('project', 'current')).toEqual({ ...project, id: 'current' });
+      expect(documents.get('run-snapshot', 'old-run')).toEqual(originalSnapshot);
+      expect(upgraded.prepare('SELECT asset_id FROM project_asset_references WHERE project_id = ?').all(project.id)).toEqual([{ asset_id: 'recorded-audio' }]);
+    } finally { upgraded.close(); }
+    const backups = await readdir(join(path, 'database-backups'));
+    expect(backups).toHaveLength(1);
+    const backup = new Database(join(path, 'database-backups', backups[0]), { readonly: true });
+    try {
+      expect(backup.pragma('user_version', { simple: true })).toBe(19);
+      expect(new DocumentStore(backup).get('project', project.id)).toEqual(JSON.parse(JSON.stringify(legacy)));
+    } finally { backup.close(); }
+  });
+
   it('protects confirmed text rejections without guessing the outcome of old submitted receipts', async () => {
     const path = await directory(), previous = new Database(join(path, 'workspace.sqlite'));
     previous.function('vq_thumbnail', { deterministic: true }, body => JSON.stringify(thumbnailShot(JSON.parse(String(body)))));
@@ -175,7 +217,7 @@ describe('workspace database upgrades', () => {
   it('creates a versioned database and does not back up on every reopen', async () => {
     const path = await directory(); const db = openDatabase(path);
     expect(db.pragma('user_version', { simple: true })).toBe(currentVersion);
-    expect(db.prepare('SELECT name FROM schema_migrations ORDER BY version').all()).toEqual([{ name: 'workspace-baseline' }, { name: 'execution-event-index' }, { name: 'workspace-read-models' }, { name: 'audio-asset-references' }, { name: 'project-summary-caption-style' }, { name: 'clip-edit-references-and-first-frame' }, { name: 'workflow-composition-and-keyframe-capabilities' }, { name: 'active-project-runs-index' }, { name: 'workflow-layout' }, { name: 'native-video-production' }, { name: 'production-reference-audio' }, { name: 'project-creative-context' }, { name: 'prompt-workbench' }, { name: 'work-episodes-production-queue' }, { name: 'creative-reference-images-and-media-derivations' }, { name: 'single-step-retry-checkpoints' }, { name: 'script-response-receipts' }, { name: 'text-request-rejection-receipts' }, { name: 'media-request-rejection-receipts' }]);
+    expect(db.prepare('SELECT name FROM schema_migrations ORDER BY version').all()).toEqual([{ name: 'workspace-baseline' }, { name: 'execution-event-index' }, { name: 'workspace-read-models' }, { name: 'audio-asset-references' }, { name: 'project-summary-caption-style' }, { name: 'clip-edit-references-and-first-frame' }, { name: 'workflow-composition-and-keyframe-capabilities' }, { name: 'active-project-runs-index' }, { name: 'workflow-layout' }, { name: 'native-video-production' }, { name: 'production-reference-audio' }, { name: 'project-creative-context' }, { name: 'prompt-workbench' }, { name: 'work-episodes-production-queue' }, { name: 'creative-reference-images-and-media-derivations' }, { name: 'single-step-retry-checkpoints' }, { name: 'script-response-receipts' }, { name: 'text-request-rejection-receipts' }, { name: 'media-request-rejection-receipts' }, { name: 'legacy-project-production-workflows' }, { name: 'asset-read-indexes' }]);
     db.close(); openDatabase(path).close();
     expect(await readdir(path)).not.toContain('database-backups');
   });

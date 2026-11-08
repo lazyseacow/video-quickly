@@ -40,8 +40,6 @@ window.scenePreviewFixture = {
       case 'own-title': replaceTarget({ ...props.shot, title: '已修改的当前标题' }); break;
       case 'numbers': props = { ...props, project: { ...props.project, referenceDisplay: 'numbers' } }; break;
       case 'other-reference': props = { ...props, project: { ...props.project, shots: props.project.shots.map(shot => shot.id === 'other' ? { ...shot, claimIds: ['claim'] } : shot) } }; break;
-      case 'computed-footer': props = { ...props, project: { ...props.project, shots: undefined, referenceFooter: true } }; break;
-      case 'computed-no-footer': props = { ...props, project: { ...props.project, shots: [props.shot, { ...other, claimIds: ['claim'] }], referenceFooter: false } }; break;
       case 'own-reference': replaceTarget({ ...props.shot, claimIds: ['claim'] }); break;
       case 'disputed': props = { ...props, project: { ...props.project, claims: props.project.claims.map(claim => ({ ...claim, status: 'disputed' })) } }; break;
       case 'source-replaced': props = { ...props, project: { ...props.project, researchSources: props.project.researchSources.map(source => ({ ...source, sha256: 'b'.repeat(64) })) } }; break;
@@ -139,17 +137,6 @@ test('invalidates shared clip sources and plans and exposes a removed source', a
   expect(changedPlan.pixels).not.toBe(changedSource.pixels);
   await change(page, 'missing-clip-source');
   await expect(page.getByRole('alert')).toContainText('镜头剪辑来源缺失');
-  expect(errors).toEqual([]);
-});
-
-test('ignores both legacy global reference-footer projections and shot metadata', async ({ page }) => {
-  const errors = await openFixture(page);
-  await change(page, 'numbers'); await change(page, 'small-profile'); const empty = await measure(page);
-  await change(page, 'computed-footer'); const footer = await measure(page);
-  expect(footer.pixels).toBe(empty.pixels);
-  expect(footer.reads).toBe(empty.reads);
-  await change(page, 'computed-no-footer');
-  expect((await measure(page)).pixels).toBe(empty.pixels);
   expect(errors).toEqual([]);
 });
 

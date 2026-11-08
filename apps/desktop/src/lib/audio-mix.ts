@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { audioLevelWindowSchema, audioMixJobSchema, audioMixPrepareResultSchema, usesVideoAudio, type AssetRecord, type AudioLevelWindow, type AudioMixJob, type PreparedAudioMix, type ProjectDocument } from '@video-quickly/contracts';
 import { audioMixProjection } from '@video-quickly/video/audio-projection';
+import { usesFullAudioSource } from '@video-quickly/video/audio';
 import { rpc } from './client';
 import { useAssetAvailabilityKey } from './asset-availability';
 
@@ -48,8 +49,8 @@ function preparedResult(job: AudioMixJob, project: ProjectDocument): PreparedAud
   if (!mix || mix.key !== job.key || !durations || durations.length !== project.shots.length) throw new Error('试听混音与当前项目镜头不匹配，请重新准备。');
   let durationUs = 0;
   for (const [index, shot] of project.shots.entries()) {
-    const mapped = durations[index], legacy = Boolean(shot.audioAssetId) && !shot.clipEdit && shot.sourceInUs === undefined && shot.audioInUs === undefined;
-    if (mapped.shotId !== shot.id || mapped.durationUs < shot.durationUs || !legacy && mapped.durationUs !== shot.durationUs) throw new Error('试听混音与当前镜头时长不匹配，请重新准备。');
+    const mapped = durations[index], fullRecording = Boolean(shot.audioAssetId) && usesFullAudioSource(shot);
+    if (mapped.shotId !== shot.id || mapped.durationUs < shot.durationUs || !fullRecording && mapped.durationUs !== shot.durationUs) throw new Error('试听混音与当前镜头时长不匹配，请重新准备。');
     durationUs += mapped.durationUs;
   }
   if (durationUs !== mix.durationUs) throw new Error('试听混音总时长与镜头不匹配，请重新准备。');
@@ -102,6 +103,7 @@ export async function prepareLatestAudioMixPreview(readLatest: () => { project: 
       }
     }
   }
+  return undefined;
 }
 
 export async function readAudioLevels(mix: PreparedAudioMix, startUs: number, durationUs: number, signal?: AbortSignal): Promise<AudioLevelWindow> {

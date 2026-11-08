@@ -1,4 +1,4 @@
-export interface PathDialogOptions {
+interface PathDialogOptions {
   mode: 'file' | 'directory' | 'save';
   title: string;
   defaultPath?: string;
@@ -12,6 +12,7 @@ interface DesktopBridge {
   assetUrl(path: string): Promise<string>;
   pickPath(options: PathDialogOptions): Promise<string | null>;
   revealFile(path: string): Promise<void>;
+  waitForNativeFullscreenEntry?(): Promise<void>;
 }
 
 declare global { interface Window { videoQuickly?: DesktopBridge; } }

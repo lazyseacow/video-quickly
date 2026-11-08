@@ -20,7 +20,7 @@ async function fixture(options: Partial<RuntimeOptions> = {}, external = false) 
 it('recovers a committed run after a lost start response without creating another run', async () => {
   const { runtime, project } = await fixture();
   const run = runSchema.parse(await runtime.dispatch('run.start', { projectId: project.id, nodeId: 'brief' })); await runtime.waitForIdle();
-  expect(await committedPhaseRun(runtime.dispatch, project.id, 'brief', 'brief', project.revision)).toBe(run.id);
+  expect(await committedPhaseRun(runtime.dispatch, project.id, 'brief', project.revision)).toBe(run.id);
   await resumePhaseRun(runtime.dispatch, run.id);
   const history = await runtime.dispatch('run.list', { projectId: project.id }) as { items: unknown[] };
   expect(history.items).toHaveLength(1);
@@ -30,7 +30,7 @@ it('refuses ambiguous matching runs instead of creating or arbitrarily choosing 
   const { runtime, project } = await fixture();
   await runtime.dispatch('run.start', { projectId: project.id, nodeId: 'brief' }); await runtime.waitForIdle();
   await runtime.dispatch('run.start', { projectId: project.id, nodeId: 'brief' }); await runtime.waitForIdle();
-  await expect(committedPhaseRun(runtime.dispatch, project.id, 'brief', 'brief', project.revision)).rejects.toThrow('多个');
+  await expect(committedPhaseRun(runtime.dispatch, project.id, 'brief', project.revision)).rejects.toThrow('多个');
 });
 
 it('keeps an unknown external submission blocked across restart without calling the provider', async () => {

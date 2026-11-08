@@ -3,7 +3,7 @@ import { modelSchema, validateModelConnection, validateModelParameters, type Mod
 
 export const serviceRoles = ['text', 'image', 'video'] as const;
 export type ServiceRole = typeof serviceRoles[number];
-export interface ServiceConnection { model: ModelProfile; secretEnv?: string }
+interface ServiceConnection { model: ModelProfile; secretEnv?: string }
 export interface RealServiceConfig { title: string; brief: string; roles: Record<ServiceRole, ServiceConnection> }
 
 function record(value: unknown): value is Record<string, unknown> { return !!value && typeof value === 'object' && !Array.isArray(value); }

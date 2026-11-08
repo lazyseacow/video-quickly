@@ -1,11 +1,17 @@
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { createServer, type Server } from 'node:http';
 import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, expect, it, vi } from 'vitest';
-import { assetSchema, createNativeVideoWorkflow, modelSchema, projectSchema, runInspectionSchema, runSchema, skillSchema, type JsonValue, type ProjectDocument, type SkillPackage } from '@video-quickly/contracts';
-import { createRuntime, SimulatedProcessExit, type ActivityExecutionContext, type RuntimeOptions } from '../src/index.js';
+import { assetSchema, createNativeVideoWorkflow, modelSchema, projectSchema, runInspectionSchema, runSchema, shotSchema, workflowNodeSchema, type JsonValue, type ProjectDocument, type SkillPackage, type WorkspaceSnapshot } from '@video-quickly/contracts';
+import { createRuntime, SimulatedProcessExit, type ActivityExecutionContext, type RunSnapshot, type RuntimeOptions } from '../src/index.js';
+import { fingerprint } from '../src/activities.js';
+import { DocumentStore, openDatabase } from '../src/database.js';
+import { createLogger } from '../src/logging.js';
+import { createSkillLibrary } from '../src/skill-library.js';
+import { legacyVideoAgentNode } from '../src/video-agent.js';
+import { importSkillFixture } from '../../../tests/fixtures/import-skill';
 
 type Runtime = ReturnType<typeof createRuntime>;
 type Payload = { tools: Array<{ function: { name: string } }>; messages: Array<{ role: string; content?: string | null }> };
@@ -75,10 +81,30 @@ async function fixture(extra: Partial<RuntimeOptions> = {}) {
   const image = modelSchema.parse(await runtime.dispatch('model.save', { model: { name: '图片边界', provider: 'openai-compatible', baseUrl: 'http://127.0.0.1:1/v1', model: 'fixture', connectionType: 'image', capabilities: ['image'] } }));
   const video = modelSchema.parse(await runtime.dispatch('model.save', { model: { name: '视频边界', provider: 'openai-compatible', baseUrl: 'http://127.0.0.1:1/v1', model: 'fixture', connectionType: 'video', capabilities: ['video'] } }));
   const workflow = createNativeVideoWorkflow();
-  const project = projectSchema.parse(await runtime.dispatch('workflow.save', { projectId: created.id, revision: created.revision, workflow: {
-    ...workflow, production: { ...workflow.production, executionMode: 'agent', textModelId: text.id, imageModelId: image.id, videoModelId: video.id, referenceMode: 'generate' },
-  } }));
-  return { directory, runtime, options, project, actions, requests, errors, provider, media };
+  const project = projectSchema.parse(await runtime.dispatch('project.update', { projectId: created.id, revision: created.revision, patch: { workflow: {
+    ...workflow, production: { ...workflow.production, textModelId: text.id, imageModelId: image.id, videoModelId: video.id, referenceMode: 'generate' },
+  } } }));
+  // Standalone Agent runs are now only reachable through existing snapshots.
+  async function resumeLegacyAgent() {
+    const savedProject = await current(runtime, project.id);
+    const { models } = await runtime.dispatch('workspace.snapshot') as WorkspaceSnapshot;
+    const database = openDatabase(directory), id = randomUUID(), createdAt = new Date().toISOString();
+    try {
+      const store = new DocumentStore(database);
+      const library = createSkillLibrary({ store, directory, changed() {}, logger: createLogger({ dataDirectory: directory, component: 'runtime' }) });
+      const node = legacyVideoAgentNode(savedProject);
+      const skillNodes = node.skillIds.length ? [node] : [node, ...savedProject.workflow.nodes];
+      const legacyProduction = { ...savedProject.workflow.production, executionMode: 'agent' };
+      const saved: RunSnapshot = { project: { ...savedProject, workflow: { ...savedProject.workflow, production: legacyProduction } },
+        nodes: [node], models, mcpServers: store.list('mcp-server'), handlerVersion: 1, characters: [], characterAssets: [],
+        ...await library.prepareForNodes(skillNodes) };
+      store.put('run-snapshot', id, saved);
+      store.put('run', id, runSchema.parse({ id, projectId: savedProject.id, projectRevision: savedProject.revision, workflowVersion: savedProject.workflow.version,
+        snapshotDigest: fingerprint(saved), status: 'queued', stepCount: 1, createdAt, updatedAt: createdAt, events: [], activities: [] }));
+    } finally { database.close(); }
+    return runSchema.parse(await runtime.dispatch('run.resume', { runId: id }));
+  }
+  return { directory, runtime, options, project, actions, requests, errors, provider, media, resumeLegacyAgent };
 }
 
 function productionActions(actions: Action[], afterScript: Action[] = [], skillIds: string[] = []) {
@@ -96,28 +122,122 @@ function productionActions(actions: Action[], afterScript: Action[] = [], skillI
   return () => shotId;
 }
 
+it.each([false, true])('leaves production tools out of a selected workflow Agent (reserved id: %s)', async reserved => {
+  const { runtime, project, directory, actions, requests, errors, media } = await fixture();
+  const node = workflowNodeSchema.parse({ id: reserved ? 'video-agent' : 'ordinary-agent', kind: 'agent', label: '文字助手',
+    modelId: project.workflow.production.textModelId, config: reserved ? { videoAgent: true } : {} });
+  await runtime.dispatch('project.update', { projectId: project.id, revision: project.revision, patch: { workflow: {
+    ...project.workflow, nodes: [node], edges: [], stages: undefined,
+  } } });
+  actions.push(payload => { expect(payload.tools.map(tool => tool.function.name)).not.toContain('execute_video_task'); return undefined; });
+  const run = runSchema.parse(await runtime.dispatch('run.start', { projectId: project.id, nodeId: node.id,
+    ...(reserved ? { destination: join(directory, 'unused.mp4') } : {}) })); await runtime.waitForIdle();
+  expect(requests).toHaveLength(1); expect(errors).toEqual([]); expect(media).not.toHaveBeenCalled();
+  expect((await runtime.dispatch('run.get', { runId: run.id }))).toMatchObject({ status: 'succeeded' });
+});
+
+it('discovers the latest enabled version of a Skill while honoring an explicit older binding', async () => {
+  const { runtime, directory, project, actions, errors, requests, provider, resumeLegacyAgent } = await fixture();
+  const folder = join(directory, 'versioned-skill'); await mkdir(folder);
+  const ids: string[] = [];
+  for (const version of ['first', 'second']) {
+    await writeFile(join(folder, 'SKILL.md'), '---\nname: versioned\ndescription: 版本测试\n---\nVersion ' + version);
+    ids.push((await importSkillFixture(runtime.dispatch, { path: folder })).skills[0].id);
+  }
+  for (const selected of [[], [ids[0]]]) {
+    const currentProject = await current(runtime, project.id), expected = selected[0] ?? ids[1];
+    await runtime.dispatch('project.update', { projectId: project.id, revision: currentProject.revision, patch: { workflow: {
+      ...currentProject.workflow, production: { ...currentProject.workflow.production, agentSkillIds: selected },
+      nodes: currentProject.workflow.nodes.map(node => node.kind === 'brief' ? { ...node, skillIds: [ids[0]] } : node),
+    } } });
+    actions.length = requests.length;
+    actions.push(() => ({ name: 'list_capabilities', input: {} }), payload => {
+      expect(toolResult(payload)).toMatchObject({ skills: [expect.objectContaining({ id: expected, name: 'versioned' })] });
+      return business('brief', 'inherited-skill');
+    });
+    await resumeLegacyAgent(); await runtime.waitForIdle();
+    expect(errors).toEqual([]);
+    expect(provider.mock.calls.at(-1)?.[0].prompt).toContain('Version first');
+  }
+});
+
+it('rejects local paths outside the run output directory and never requests a loopback artifact URL', async () => {
+  const { runtime, directory, project, actions, errors, resumeLegacyAgent } = await fixture();
+  const localPath = join(directory, 'private.png');
+  await writeFile(localPath, Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aN1cAAAAASUVORK5CYII=', 'base64'));
+  let gets = 0;
+  const server = createServer((_request, response) => { gets++; response.writeHead(200, { 'content-type': 'text/plain' }); response.end('private fixture'); });
+  servers.push(server); await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
+  const address = server.address(); if (!address || typeof address === 'string') throw new Error('测试服务未启动。');
+  const shot = shotSchema.parse({ id: 'test-shot', title: '镜头', visualPrompt: '场景', narration: '', durationUs: 1_000_000 });
+  await runtime.dispatch('project.update', { projectId: project.id, revision: project.revision, patch: { shots: [shot] } });
+  actions.push(
+    () => business('import', 'outside-path', { shotId: shot.id, path: localPath }),
+    payload => {
+      expect(toolResult(payload)).toMatchObject({ recoverable: true });
+      return business('import', 'local-url', { shotId: shot.id, url: `http://127.0.0.1:${address.port}/private`, mimeType: 'image/png' });
+    },
+    payload => { expect(toolResult(payload)).toMatchObject({ recoverable: true }); return undefined; },
+  );
+  await resumeLegacyAgent(); await runtime.waitForIdle();
+  expect(gets).toBe(0); expect(errors).toEqual([]);
+  const snapshot = await runtime.dispatch('workspace.snapshot') as { assets: unknown[] };
+  expect(snapshot.assets).toEqual([]);
+});
+
+it('preserves historical output and holds an incomplete run containing an unverified legacy import', async () => {
+  let interrupted = false;
+  const { runtime, project, directory, options, actions, requests, errors, media, resumeLegacyAgent } = await fixture({
+    failpoint(point, id) {
+      if (point === 'after-commit' && id === 'video-agent/tool/import') {
+        interrupted = true; throw new SimulatedProcessExit();
+      }
+    },
+  });
+  const shot = shotSchema.parse({ id: 'test-shot', title: '镜头', visualPrompt: '场景', narration: '', durationUs: 1_000_000 });
+  await runtime.dispatch('project.update', { projectId: project.id, revision: project.revision, patch: { shots: [shot] } });
+  actions.push(() => business('import', 'import', { shotId: shot.id, mimeType: 'image/png',
+    data: 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aN1cAAAAASUVORK5CYII=' }));
+  const run = await resumeLegacyAgent(); await runtime.waitForIdle();
+  expect(interrupted).toBe(true);
+  await runtime.close(); runtimes.delete(runtime);
+  const database = openDatabase(directory);
+  try {
+    const store = new DocumentStore(database), key = run.id + ':video-agent/tool/import';
+    const output = store.get<{ assets: Array<Record<string, unknown>> }>('node-result', key)!;
+    store.put('node-result', key, { assets: output.assets.map(asset => ({ ...asset, provenance: '用户导入' })) });
+  } finally { database.close(); }
+  const reopened = createRuntime({ ...options, failpoint: undefined }); runtimes.add(reopened);
+  const before = requests.length;
+  await reopened.dispatch('run.resume', { runId: run.id }); await reopened.waitForIdle();
+  expect(await reopened.dispatch('run.get', { runId: run.id })).toMatchObject({ status: 'needs_attention', error: expect.stringContaining('旧版工具导入') });
+  expect(await reopened.dispatch('node.result', { runId: run.id, nodeId: 'video-agent/tool/import' })).toMatchObject({ assets: [expect.objectContaining({ provenance: '用户导入' })] });
+  expect(requests).toHaveLength(before); expect(media).not.toHaveBeenCalled(); expect(errors).toEqual([]);
+});
+
 it('discovers task-bound Skill and MCP capabilities, imports their output and completes video production with bound assets', async () => {
-  const { directory, runtime, project: initial, actions, errors, requests, provider, media } = await fixture();
+  const { directory, runtime, project: initial, actions, errors, requests, provider, media, resumeLegacyAgent } = await fixture();
   const skillDirectory = join(directory, 'method'); await mkdir(join(skillDirectory, 'references'), { recursive: true }); await mkdir(join(skillDirectory, 'scripts'));
   await writeFile(join(skillDirectory, 'SKILL.md'), '---\nname: water-story\ndescription: 水循环的叙事方法\n---\n采用 references/story.md 中的起承转合。');
   await writeFile(join(skillDirectory, 'references/story.md'), '每个场景体现水滴状态的变化。');
   await writeFile(join(skillDirectory, 'scripts/marker.mjs'), 'process.stdout.write(JSON.stringify({method:"water-story-script"}));');
   await writeFile(join(skillDirectory, 'scripts/disabled.mjs'), 'throw new Error("disabled tool must never run");');
-  const skill = skillSchema.parse(await runtime.dispatch('skill.import', { path: skillDirectory }));
+  const skill = (await importSkillFixture(runtime.dispatch, { path: skillDirectory })).skills[0];
   await runtime.dispatch('skill.tool.toggle', { skillId: skill.id, toolId: 'scripts/marker.mjs', enabled: true });
   const secondDirectory = join(directory, 'second-method'); await mkdir(secondDirectory);
   await writeFile(join(secondDirectory, 'SKILL.md'), '---\nname: water-color\ndescription: 水彩视觉方法\n---\n保持水彩的连续色彩。');
-  const secondSkill = skillSchema.parse(await runtime.dispatch('skill.import', { path: secondDirectory }));
+  const secondSkill = (await importSkillFixture(runtime.dispatch, { path: secondDirectory })).skills[0];
   const unboundDirectory = join(directory, 'unbound-method'); await mkdir(unboundDirectory);
   await writeFile(join(unboundDirectory, 'SKILL.md'), '---\nname: unbound-method\ndescription: 未选择的方法\n---\n当前任务没有选择。');
-  const unboundSkill = skillSchema.parse(await runtime.dispatch('skill.import', { path: unboundDirectory }));
+  const unboundSkill = (await importSkillFixture(runtime.dispatch, { path: unboundDirectory })).skills[0];
   const disabledDirectory = join(directory, 'disabled-method'); await mkdir(disabledDirectory);
   await writeFile(join(disabledDirectory, 'SKILL.md'), '---\nname: disabled-method\ndescription: 停用方法\n---\n当前任务不允许使用。');
-  const disabledSkill = skillSchema.parse(await runtime.dispatch('skill.import', { path: disabledDirectory }));
+  const disabledSkill = (await importSkillFixture(runtime.dispatch, { path: disabledDirectory })).skills[0];
   await runtime.dispatch('skill.toggle', { skillId: disabledSkill.id, enabled: false });
-  const mcpPath = join(directory, 'mcp-image.mjs'), externalImage = join(directory, 'external.png');
+  const mcpPath = join(directory, 'mcp-image.mjs'), externalImage = 'external.png';
   await writeFile(mcpPath, `import { createInterface } from 'node:readline';
 import { writeFileSync } from 'node:fs';
+import { join } from 'node:path';
 const send = result => process.stdout.write(JSON.stringify(result) + '\\n');
 createInterface({ input: process.stdin }).on('line', line => {
   const message = JSON.parse(line); if (message.id === undefined) return;
@@ -125,8 +245,9 @@ createInterface({ input: process.stdin }).on('line', line => {
   if (message.method === 'initialize') result = { protocolVersion: '2025-06-18', capabilities: { tools: {} }, serverInfo: { name: 'image-fixture', version: '1' } };
   else if (message.method === 'tools/list') result = { tools: [{ name: 'make_image', description: 'Generate an external reference image', inputSchema: { type: 'object', properties: {}, additionalProperties: false } }] };
   else if (message.method === 'tools/call') {
-    writeFileSync(process.argv[2], Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aN1cAAAAASUVORK5CYII=', 'base64'));
-    result = { content: [{ type: 'text', text: JSON.stringify({ path: process.argv[2] }) }] };
+    const path = join(process.env.VIDEO_QUICKLY_TOOL_OUTPUT_DIR, process.argv[2]);
+    writeFileSync(path, Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aN1cAAAAASUVORK5CYII=', 'base64'));
+    result = { content: [{ type: 'text', text: JSON.stringify({ path }) }] };
   } else result = {};
   send({ jsonrpc: '2.0', id: message.id, result });
 });`);
@@ -134,9 +255,9 @@ createInterface({ input: process.stdin }).on('line', line => {
   const secondMcp = await runtime.dispatch('tool.register', { server: { name: '辅助参考图', transport: 'stdio', command: process.execPath, args: [mcpPath, externalImage], enabled: true } }) as { id: string };
   const disabled = await runtime.dispatch('tool.register', { server: { name: '停用能力', transport: 'stdio', command: process.execPath, args: ['not-a-real-server'], enabled: false } }) as { id: string };
   const unboundMcp = await runtime.dispatch('tool.register', { server: { name: '没有为任务选择的离线服务', transport: 'stdio', command: process.execPath, args: ['not-a-real-server'], enabled: true } }) as { id: string };
-  const project = projectSchema.parse(await runtime.dispatch('workflow.save', { projectId: initial.id, revision: initial.revision, workflow: {
+  const project = projectSchema.parse(await runtime.dispatch('project.update', { projectId: initial.id, revision: initial.revision, patch: { workflow: {
     ...initial.workflow, production: { ...initial.workflow.production, agentSkillIds: [skill.id, secondSkill.id], agentMcpServerIds: [mcp.id, secondMcp.id] },
-  } }));
+  } } }));
   let scriptTool = '';
   actions.push(() => ({ name: 'list_capabilities', input: {} }), payload => {
     const result = toolResult(payload) as { skills: Array<{ id: string; tools: Array<{ id: string; name: string }> }>; mcpServers: Array<{ id: string }> };
@@ -178,7 +299,7 @@ createInterface({ input: process.stdin }).on('line', line => {
     return { name: 'call_mcp_tool', input: { serverId: secondMcp.id, toolName: 'make_image', input: {} } };
   });
   const getShotId = productionActions(actions, [() => business('import', 'import-1', { path: externalImage, shotId: getShotId() })], [skill.id, secondSkill.id]);
-  const run = runSchema.parse(await runtime.dispatch('run.start', { projectId: project.id })); await runtime.waitForIdle();
+  const run = await resumeLegacyAgent(); await runtime.waitForIdle();
   const finished = runSchema.parse(await runtime.dispatch('run.get', { runId: run.id }));
   expect(errors).toEqual([]); expect(requests.length).toBeGreaterThan(0); expect(finished.status, finished.error).toBe('succeeded');
   const saved = await current(runtime, project.id);
@@ -195,12 +316,12 @@ createInterface({ input: process.stdin }).on('line', line => {
 });
 
 it('reuses a logical image request while continuing from the latest project after every business tool', async () => {
-  const { runtime, project, actions, errors, requests, media } = await fixture();
+  const { runtime, project, actions, errors, requests, media, resumeLegacyAgent } = await fixture();
   actions.push(() => ({ name: 'list_capabilities', input: {} }), payload => {
     expect(toolResult(payload)).toMatchObject({ skills: [], mcpServers: [] }); return { name: 'read_project_snapshot', input: {} };
   });
   productionActions(actions);
-  const run = runSchema.parse(await runtime.dispatch('run.start', { projectId: project.id })); await runtime.waitForIdle();
+  const run = await resumeLegacyAgent(); await runtime.waitForIdle();
   const completed = runSchema.parse(await runtime.dispatch('run.get', { runId: run.id }));
   expect(errors).toEqual([]); expect(requests.length).toBeGreaterThan(0); expect(completed.status, completed.error).toBe('succeeded');
   expect(media.mock.calls.filter(([context]) => context.node.kind === 'assets')).toHaveLength(1);
@@ -211,23 +332,23 @@ it('reuses a logical image request while continuing from the latest project afte
 });
 
 it.each(['none', 'skills', 'mcp'] as const)('automatically discovers the unbound capability class when %s is explicitly selected', async boundClass => {
-  const { directory, runtime, project: initial, actions, errors } = await fixture();
+  const { directory, runtime, project: initial, actions, errors, resumeLegacyAgent } = await fixture();
   const skills: SkillPackage[] = [];
   for (const name of ['first-method', 'second-method']) {
     const path = join(directory, name); await mkdir(path);
     await writeFile(join(path, 'SKILL.md'), `---\nname: ${name}\ndescription: 测试制作方法\n---\n保持水彩叙事连续。`);
-    skills.push(skillSchema.parse(await runtime.dispatch('skill.import', { path })));
+    skills.push((await importSkillFixture(runtime.dispatch, { path })).skills[0]);
   }
   const connections: Array<{ id: string }> = [];
   for (const name of ['first-service', 'second-service']) connections.push(await runtime.dispatch('tool.register', {
     server: { name, transport: 'stdio', command: process.execPath, args: ['unused-during-capability-list'], enabled: true },
   }) as { id: string });
-  const project = projectSchema.parse(await runtime.dispatch('workflow.save', { projectId: initial.id, revision: initial.revision, workflow: {
+  await runtime.dispatch('project.update', { projectId: initial.id, revision: initial.revision, patch: { workflow: {
     ...initial.workflow, production: { ...initial.workflow.production,
       agentSkillIds: boundClass === 'skills' ? [skills[0].id] : [],
       agentMcpServerIds: boundClass === 'mcp' ? [connections[0].id] : [],
     },
-  } }));
+  } } });
   actions.push(() => ({ name: 'list_capabilities', input: {} }), payload => {
     const result = toolResult(payload) as { skills: Array<{ id: string }>; mcpServers: Array<{ id: string }> };
     expect(result.skills.map(item => item.id).sort()).toEqual((boundClass === 'skills' ? [skills[0].id] : skills.map(skill => skill.id)).sort());
@@ -235,16 +356,16 @@ it.each(['none', 'skills', 'mcp'] as const)('automatically discovers the unbound
     return { name: 'read_project_snapshot', input: {} };
   });
   productionActions(actions, [], [skills[0].id]);
-  const run = runSchema.parse(await runtime.dispatch('run.start', { projectId: project.id })); await runtime.waitForIdle();
+  const run = await resumeLegacyAgent(); await runtime.waitForIdle();
   const completed = runSchema.parse(await runtime.dispatch('run.get', { runId: run.id }));
   expect(errors).toEqual([]); expect(completed.status, completed.error).toBe('succeeded');
 });
 
 it('regenerates a selected shot with a new request and forwards its replacement asset to video generation', async () => {
-  const { runtime, project, actions, errors, media } = await fixture();
+  const { runtime, project, actions, errors, media, resumeLegacyAgent } = await fixture();
   const getShotId = productionActions(actions);
   actions.splice(6, 0, () => business('image', 'image-revised', { shotId: getShotId(), instruction: '让雨滴从云层俯冲落下，强化动作。' }));
-  const run = runSchema.parse(await runtime.dispatch('run.start', { projectId: project.id })); await runtime.waitForIdle();
+  const run = await resumeLegacyAgent(); await runtime.waitForIdle();
   const completed = runSchema.parse(await runtime.dispatch('run.get', { runId: run.id }));
   expect(errors).toEqual([]); expect(completed.status, completed.error).toBe('succeeded');
   const imageCalls = media.mock.calls.filter(([context]) => context.node.kind === 'assets');
@@ -252,22 +373,48 @@ it('regenerates a selected shot with a new request and forwards its replacement 
   expect((await current(runtime, project.id)).shots[0]).toMatchObject({ assetId: 'generated-image-2', videoAssetId: 'generated-video' });
 });
 
-it('requires a successful actual export before treating an autonomous production as complete', async () => {
-  const { runtime, project, requests, media } = await fixture();
-  const run = runSchema.parse(await runtime.dispatch('run.start', { projectId: project.id })); await runtime.waitForIdle();
+it.each(['run.resume', 'run.step.retry'])('opens a new durable continuation round through %s after exhausting the automatic attempts', async method => {
+  let armed = false, crashed = false;
+  const { runtime, options, project, actions, errors, requests, media, provider, resumeLegacyAgent } = await fixture({
+    failpoint(point, id) {
+      if (armed && point === 'after-commit' && id.startsWith('video-agent:model:')) {
+        armed = false; crashed = true; throw new SimulatedProcessExit();
+      }
+    },
+  });
+  actions.push(() => business('brief', 'brief-1', { skillIds: [] }));
+  const run = await resumeLegacyAgent(); await runtime.waitForIdle();
   const completed = runSchema.parse(await runtime.dispatch('run.get', { runId: run.id }));
-  expect(requests.length).toBeGreaterThan(0); expect(requests.length).toBeLessThanOrEqual(4); expect(media).not.toHaveBeenCalled();
-  expect(completed.status).not.toBe('succeeded'); expect(completed.error).toBeTruthy();
+  expect(requests).toHaveLength(5); expect(media).not.toHaveBeenCalled();
+  expect(completed.status).toBe('needs_attention'); expect(completed.error).toContain('三次');
   expect(await current(runtime, project.id)).toEqual(project);
-  const attempts = requests.length;
-  await runtime.dispatch('run.resume', { runId: run.id }); await runtime.waitForIdle();
-  expect(requests).toHaveLength(attempts);
+  const before = requests.length;
+  actions.length = before;
+  productionActions(actions);
+  await runtime.close(); runtimes.delete(runtime);
+  let reopened = createRuntime(options); runtimes.add(reopened);
+  armed = method === 'run.resume';
+  await reopened.dispatch(method, { runId: run.id, ...(method === 'run.step.retry' ? { nodeId: 'video-agent' } : {}) });
+  await reopened.waitForIdle();
+  if (method === 'run.resume') {
+    expect(crashed).toBe(true); expect(requests).toHaveLength(before + 1);
+    await reopened.close(); runtimes.delete(reopened);
+    reopened = createRuntime(options); runtimes.add(reopened);
+    await reopened.dispatch('run.resume', { runId: run.id }); await reopened.waitForIdle();
+    expect(requests.filter(payload => payload.messages.at(-1)?.content?.includes('续作轮次 2'))).toHaveLength(1);
+  }
+  expect(errors).toEqual([]);
+  const recovered = runSchema.parse(await reopened.dispatch('run.get', { runId: run.id }));
+  expect(recovered.status, recovered.error).toBe('succeeded');
+  expect(requests[before]?.messages.some(message => message.role === 'user' && message.content?.includes('续作轮次 2'))).toBe(true);
+  expect(provider).toHaveBeenCalledTimes(3);
+  expect(media.mock.calls.filter(([context]) => context.node.kind === 'export')).toHaveLength(1);
 });
 
 it('continues a premature final reply with real tools until the requested video is exported', async () => {
-  const { runtime, project, actions, errors, requests, media } = await fixture();
+  const { runtime, project, actions, errors, requests, media, resumeLegacyAgent } = await fixture();
   productionActions(actions); actions.unshift(() => undefined);
-  const run = runSchema.parse(await runtime.dispatch('run.start', { projectId: project.id })); await runtime.waitForIdle();
+  const run = await resumeLegacyAgent(); await runtime.waitForIdle();
   const completed = runSchema.parse(await runtime.dispatch('run.get', { runId: run.id }));
   expect(errors).toEqual([]); expect(completed.status, completed.error).toBe('succeeded');
   expect(requests[1].messages.some(message => message.role === 'user' && message.content?.includes('video-agent-continuation:1/3'))).toBe(true);
@@ -276,7 +423,7 @@ it('continues a premature final reply with real tools until the requested video 
 });
 
 it('lets the Agent correct an invalid shot reference and continue the same production', async () => {
-  const { runtime, project, actions, errors, media } = await fixture();
+  const { runtime, project, actions, errors, media, resumeLegacyAgent } = await fixture();
   productionActions(actions);
   actions.splice(3, 0, () => business('image', 'wrong-shot', { shotId: 'unknown-shot' }));
   const readSnapshot = actions[4];
@@ -284,7 +431,7 @@ it('lets the Agent correct an invalid shot reference and continue the same produ
     expect(payload.messages.findLast(message => message.role === 'tool')?.content).toContain('镜头');
     return readSnapshot(payload);
   };
-  const run = runSchema.parse(await runtime.dispatch('run.start', { projectId: project.id })); await runtime.waitForIdle();
+  const run = await resumeLegacyAgent(); await runtime.waitForIdle();
   const completed = runSchema.parse(await runtime.dispatch('run.get', { runId: run.id }));
   expect(errors).toEqual([]); expect(completed.status, completed.error).toBe('succeeded');
   expect(media.mock.calls.filter(([context]) => context.node.kind === 'assets')).toHaveLength(1);
@@ -301,7 +448,7 @@ it('preserves concurrent user edits and retains the Agent production outputs for
     return JSON.stringify({ shots: [{ title: '水滴旅程', narration: '', visualPrompt: '水彩雨滴', durationUs: 6_000_000 }], entities: [] });
   } });
   productionActions(result.actions);
-  const run = runSchema.parse(await result.runtime.dispatch('run.start', { projectId: result.project.id }));
+  const run = await result.resumeLegacyAgent();
   await started;
   const edited = projectSchema.parse(await result.runtime.dispatch('project.update', { projectId: result.project.id, revision: result.project.revision, patch: { title: '用户在制作中修改的标题' } }));
   release(); await result.runtime.waitForIdle();
@@ -312,11 +459,11 @@ it('preserves concurrent user edits and retains the Agent production outputs for
 
 it('recovers after committing a generated image without submitting the same media generation again', async () => {
   let crashed = false;
-  const { runtime, directory, options, project, actions, errors, requests, provider, media } = await fixture({ failpoint(point, activityId) {
+  const { runtime, directory, options, project, actions, errors, requests, provider, media, resumeLegacyAgent } = await fixture({ failpoint(point, activityId) {
     if (!crashed && point === 'after-commit' && activityId === 'video-agent/tool/image-1') { crashed = true; throw new SimulatedProcessExit(); }
   } });
   productionActions(actions);
-  const run = runSchema.parse(await runtime.dispatch('run.start', { projectId: project.id })); await runtime.waitForIdle();
+  const run = await resumeLegacyAgent(); await runtime.waitForIdle();
   expect(crashed).toBe(true);
   expect(media.mock.calls.filter(([context]) => context.node.kind === 'assets')).toHaveLength(1);
   await runtime.close(); runtimes.delete(runtime);
@@ -331,24 +478,24 @@ it('recovers after committing a generated image without submitting the same medi
 it('cancels an active business request and stops dispatching later production tools', async () => {
   let entered!: () => void;
   const started = new Promise<void>(resolve => { entered = resolve; });
-  const { runtime, project, actions, errors, requests, media } = await fixture({ provider: async ({ signal }) => {
+  const { runtime, project, actions, errors, requests, media, resumeLegacyAgent } = await fixture({ provider: async ({ signal }) => {
     entered();
     return new Promise((_resolve, reject) => {
       signal?.addEventListener('abort', () => reject(new Error('controlled canceled provider')), { once: true });
     });
   } });
   productionActions(actions);
-  const run = runSchema.parse(await runtime.dispatch('run.start', { projectId: project.id }));
+  const run = await resumeLegacyAgent();
   await started; await runtime.dispatch('run.cancel', { runId: run.id }); await runtime.waitForIdle();
   expect(errors).toEqual([]); expect(requests).toHaveLength(1); expect(media).not.toHaveBeenCalled();
   expect(runSchema.parse(await runtime.dispatch('run.get', { runId: run.id })).status).toBe('canceled');
   expect(await current(runtime, project.id)).toEqual(project);
 });
 
-it('restarts a canceled synthetic video Agent as a new full production run', async () => {
+it('restarts a canceled legacy Agent in the unified workflow', async () => {
   let entered!: () => void, canceled = false;
   const started = new Promise<void>(resolve => { entered = resolve; });
-  const { runtime, project, actions, errors, requests } = await fixture({ provider: async ({ signal, prompt }) => {
+  const { runtime, project, actions, errors, requests, resumeLegacyAgent } = await fixture({ provider: async ({ signal, prompt }) => {
     if (!canceled) {
       entered();
       return new Promise((_resolve, reject) => signal?.addEventListener('abort', () => { canceled = true; reject(new Error('controlled cancellation')); }, { once: true }));
@@ -358,21 +505,21 @@ it('restarts a canceled synthetic video Agent as a new full production run', asy
     return JSON.stringify({ shots: [{ title: '水滴旅程', narration: '', visualPrompt: '水彩雨滴', durationUs: 6_000_000 }], entities: [] });
   } });
   actions.push(() => business('brief', 'canceled-brief'));
-  const first = runSchema.parse(await runtime.dispatch('run.start', { projectId: project.id }));
+  const first = await resumeLegacyAgent();
   await started; await runtime.dispatch('run.cancel', { runId: first.id }); await runtime.waitForIdle();
   expect(runSchema.parse(await runtime.dispatch('run.get', { runId: first.id })).status).toBe('canceled');
-  productionActions(actions);
   const restarted = runSchema.parse(await runtime.dispatch('run.start', { projectId: project.id, parentRunId: first.id })); await runtime.waitForIdle();
   const completed = runSchema.parse(await runtime.dispatch('run.get', { runId: restarted.id }));
   expect(errors).toEqual([]); expect(restarted.id).not.toBe(first.id); expect(completed.status, completed.error).toBe('succeeded');
-  expect(requests.length).toBeGreaterThan(1); expect((await current(runtime, project.id)).shots[0].videoAssetId).toBe('generated-video');
+  expect(requests).toHaveLength(1); expect((await current(runtime, project.id)).shots[0].videoAssetId).toBe('generated-video');
+  expect((await runtime.dispatch('run.inspect', { runId: restarted.id }))).toMatchObject({ steps: project.workflow.nodes.map(({ id, kind }) => expect.objectContaining({ id, kind })) });
 });
 
 it('halts later parallel business calls after the first external task has an unconfirmed failure', async () => {
   const provider = vi.fn<NonNullable<RuntimeOptions['provider']>>(async () => { throw new Error('connection ended without a receipt'); });
-  const { runtime, project, actions, errors, requests, media } = await fixture({ provider });
+  const { runtime, project, actions, errors, requests, media, resumeLegacyAgent } = await fixture({ provider });
   actions.push(() => [business('brief', 'uncertain-first'), business('style', 'must-not-dispatch')]);
-  const run = runSchema.parse(await runtime.dispatch('run.start', { projectId: project.id })); await runtime.waitForIdle();
+  const run = await resumeLegacyAgent(); await runtime.waitForIdle();
   const completed = runSchema.parse(await runtime.dispatch('run.get', { runId: run.id }));
   expect(errors).toEqual([]); expect(requests).toHaveLength(1); expect(provider).toHaveBeenCalledTimes(1); expect(media).not.toHaveBeenCalled();
   expect(completed.status).not.toBe('succeeded');

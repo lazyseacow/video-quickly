@@ -4,6 +4,7 @@ import { join, resolve } from 'node:path';
 import { afterEach, expect, it } from 'vitest';
 import { projectSchema, type ProjectDocument, type RunRecord, type WorkspaceSummary } from '@video-quickly/contracts';
 import { createRuntime, SimulatedProcessExit, type RuntimeOptions } from '../packages/runtime/src';
+import { DocumentStore, openDatabase } from '../packages/runtime/src/database';
 
 const runtimes: ReturnType<typeof createRuntime>[] = [], directories: string[] = [];
 afterEach(async () => {
@@ -17,9 +18,9 @@ async function setup(options: Partial<RuntimeOptions> = {}) {
   const directory = await mkdtemp(join(tmpdir(), 'vq-workflow-save-')); directories.push(directory);
   const runtime = createRuntime({ dataDirectory: directory, seed: false, ...options }); runtimes.push(runtime);
   const created = projectSchema.parse(await runtime.dispatch('project.create', { title: '流程事务' }));
-  const project = projectSchema.parse(await runtime.dispatch('workflow.save', { projectId: created.id, revision: created.revision, workflow: { id: 'graph', name: '原流程', version: 1, production: { mode: 'native-video', referenceMode: 'none', soundPrompt: '', subtitleMode: 'off' }, nodes: [{ id: 'a', kind: 'brief', label: '简报', requiresReview: true }, { id: 'b', kind: 'brief', label: '提案' }], edges: [{ id: 'ab', source: 'a', target: 'b' }] } }));
+  const project = projectSchema.parse(await runtime.dispatch('project.update', { projectId: created.id, revision: created.revision, patch: { workflow: { id: 'graph', name: '原流程', version: 1, production: { mode: 'native-video', referenceMode: 'none', soundPrompt: '', subtitleMode: 'off' }, nodes: [{ id: 'a', kind: 'brief', label: '简报', requiresReview: true }, { id: 'b', kind: 'brief', label: '提案' }], edges: [{ id: 'ab', source: 'a', target: 'b' }] } } }));
   const current = async () => (await runtime.dispatch('project.get', { projectId: project.id }) as { project: ProjectDocument }).project;
-  return { runtime, project, current };
+  return { directory, runtime, project, current };
 }
 
 it('commits graph and project edits in one revision and owns workflow version increments', async () => {
@@ -28,12 +29,39 @@ it('commits graph and project edits in one revision and owns workflow version in
   const result = projectSchema.parse(await runtime.dispatch('project.update', { projectId: project.id, revision: project.revision, patch: { title: '同步保存的项目名称', workflow } }));
   expect(result.revision).toBe(project.revision + 1); expect(result.workflow.version).toBe(project.workflow.version + 1);
   expect(result.title).toBe('同步保存的项目名称'); expect(result.workflow.nodes[0].prompt).toBe('人工微调');
-  const repeated = projectSchema.parse(await runtime.dispatch('project.update', { projectId: project.id, revision: result.revision, patch: { brief: '仅改简报', workflow: { ...result.workflow, version: 888 } } }));
+  const patch = JSON.parse(JSON.stringify({
+    shots: [{ id: 'shot', title: '仅改镜头', narration: '', visualPrompt: '', durationUs: 1_000_000 }],
+    workflow: { ...result.workflow, version: 888 },
+  }));
+  const repeated = projectSchema.parse(await runtime.dispatch('project.update', { projectId: project.id, revision: result.revision, patch }));
   expect(repeated.workflow.version).toBe(result.workflow.version); expect(repeated.revision).toBe(result.revision + 1);
+  expect(repeated.shots[0].title).toBe('仅改镜头');
   await expect(runtime.dispatch('project.update', { projectId: project.id, revision: project.revision, patch: { title: '旧窗口修改', workflow } })).rejects.toThrow('其他视图');
   expect(await current()).toEqual(repeated);
   expect((await runtime.dispatch('run.list', { projectId: project.id }) as { items: RunRecord[] }).items).toEqual([]);
   expect(await runtime.dispatch('cost.summary', { projectId: project.id })).toMatchObject({ total: 0 });
+});
+
+it('preserves the workflow version when a configuration-only save has unchanged settings', async () => {
+  const { runtime, project } = await setup();
+  const workflow = JSON.parse(JSON.stringify({ ...project.workflow, version: 999 }));
+  const saved = projectSchema.parse(await runtime.dispatch('project.update', { projectId: project.id, revision: project.revision, patch: { workflow } }));
+  expect(saved.workflow).toEqual(project.workflow);
+  expect(saved.revision).toBe(project.revision + 1);
+});
+
+it('keeps the workflow version when saving defaults absent from an older workspace', async () => {
+  const { directory, runtime, project } = await setup();
+  const { agentMcpServerIds: _absent, ...production } = project.workflow.production;
+  const database = openDatabase(directory);
+  try {
+    new DocumentStore(database).put('project', project.id, { ...project, workflow: { ...project.workflow, production } });
+  } finally {
+    database.close();
+  }
+  const saved = projectSchema.parse(await runtime.dispatch('project.update', { projectId: project.id, revision: project.revision, patch: { brief: '补充简报', workflow: project.workflow } }));
+  expect(saved.workflow).toEqual(project.workflow);
+  expect(saved.revision).toBe(project.revision + 1);
 });
 
 it('rejects invalid dependency graphs before committing other fields, revisions or workspace events', async () => {

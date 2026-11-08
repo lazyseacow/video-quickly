@@ -20,7 +20,7 @@ it('serves persisted run history while a cold PDF is being parsed and drains tha
       let interval;
       try {
         const project = await runtime.dispatch('project.create', { title: '并发 PDF 与记录读取' });
-        await runtime.dispatch('workflow.save', { projectId: project.id, workflow: { ...project.workflow, id: 'automatic-check', name: '自动检查', version: 1, nodes: [{ id: 'check', kind: 'review', label: '内容检查', requiresReview: true }], edges: [] } });
+        await runtime.dispatch('project.update', { projectId: project.id, patch: { workflow: { ...project.workflow, id: 'automatic-check', name: '自动检查', version: 1, nodes: [{ id: 'check', kind: 'review', label: '内容检查', requiresReview: true }], edges: [] } } });
         const run = await runtime.dispatch('run.start', { projectId: project.id });
         await runtime.waitForIdle();
         const order = []; let previous = performance.now(), maximumMainThreadDelayMs = 0;

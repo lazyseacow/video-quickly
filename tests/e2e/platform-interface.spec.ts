@@ -47,7 +47,7 @@ for (const platform of [
 
   await page.getByRole('button', { name: '导出', exact: true }).click();
   const exporter = page.getByRole('dialog', { name: '导出视频', exact: true });
-  await exporter.getByRole('tab', { name: '输出设置', exact: true }).click();
+  await expect(exporter.getByRole('tab', { name: 'MP4', exact: true })).toHaveAttribute('aria-selected', 'true');
   const placeholder = await exporter.getByLabel('输出文件路径', { exact: true }).getAttribute('placeholder');
   expect(placeholder?.startsWith(platform.prefix)).toBe(true);
   expect(placeholder).not.toContain(String.fromCharCode(92).repeat(2));
