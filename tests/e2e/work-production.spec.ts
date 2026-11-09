@@ -142,6 +142,8 @@ for (const viewport of [{ width: 1536, height: 960, theme: 'dark' }, { width: 39
     await begin(page); await expect.poll(() => source.calls.length).toBe(1);
     await expect(queue.getByRole('button', { name: '开始队列', exact: true })).toHaveCount(0);
     await expect(queue.locator('.queue-item__status')).toHaveText(['制作中', '待制作']);
+    const pause = queue.getByRole('button', { name: '暂停后续派发', exact: true });
+    await expect(pause).toBeEnabled();
     const detailRequested = Promise.withResolvers<void>(), releaseDetail = Promise.withResolvers<void>();
     await page.route('**/__desktop_rpc', async route => {
       if (route.request().postDataJSON()?.method === 'productionQueue.get') {
@@ -154,7 +156,6 @@ for (const viewport of [{ width: 1536, height: 960, theme: 'dark' }, { width: 39
       // An unrelated project save starts a background queue refresh without changing its revision.
       await rpc(request, 'project.update', { projectId: source.project.id, patch: { title: source.project.title } });
       await detailRequested.promise;
-      const pause = queue.getByRole('button', { name: '暂停后续派发', exact: true });
       await expect(pause).toBeEnabled();
       const [response] = await Promise.all([
         page.waitForResponse(response => response.url().endsWith('/__desktop_rpc') && response.request().postDataJSON()?.method === 'productionQueue.pause'),

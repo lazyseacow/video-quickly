@@ -166,13 +166,18 @@ async function verifyGenericWorkflow(project) {
   await dialog.getByLabel('创作要求', { exact: true }).fill('未提交的项目配置');
   const roles = dialog.getByRole('button', { name: /^角色与连续性/ });
   const templates = dialog.getByRole('button', { name: '应用系列模板', exact: true });
+  const templatePosition = () => templates.evaluate(element => {
+    const { x, y, width, height } = element.getBoundingClientRect();
+    const scrollTop = element.closest('.production-settings__content')?.scrollTop ?? 0;
+    return { x, y: y + scrollTop, width, height };
+  });
   await expect(dialog.locator('.dialog__surface')).toHaveCSS('opacity', '1');
-  const templatePosition = await templates.boundingBox();
+  const initialPosition = await templatePosition();
   await roles.press('Enter');
   await expect(dialog.getByRole('group', { name: '项目角色池', exact: true })).toBeVisible();
   await expect(dialog.getByRole('group', { name: '项目角色池', exact: true }).getByRole('checkbox', { name: character.name, exact: true })).not.toBeChecked();
   await dialog.getByRole('textbox', { name: '连续性要求', exact: true }).fill('同一场景与固定服装');
-  assert.deepEqual(await templates.boundingBox(), templatePosition);
+  assert.deepEqual(await templatePosition(), initialPosition);
   await page.keyboard.press('Escape');
   await expect(roles).toBeFocused();
   await expect(dialog.getByText('高级设置', { exact: true })).toHaveCount(0);
