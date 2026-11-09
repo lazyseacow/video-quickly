@@ -1,20 +1,28 @@
 import { expect, test, type Page, type APIRequestContext, type TestInfo } from '@playwright/test';
-import type { RunSummary } from '@video-quickly/contracts';
+import { formatPlanningDocument, type RunSummary } from '@video-quickly/contracts';
 import { fixture, open, rpc, saved } from './native-video-fixture';
 
-const brief = [
-  '主题：职场人如何用 AI 提效',
-  '目标观众：20–35 岁的职场白领',
-  '核心信息：通过三个实用方法，让职场人用 AI 改善日常工作，缓解工作焦虑。',
-  '叙事顺序：',
-  '1. **黄金 3 秒开场（Hook）**：直接提出痛点，建立悬念。',
-  '2. **痛点与共鸣（Problem）**：还原日常办公场景。',
-  '3. **解决方案（Value）**：用写稿、邮件和会议三个例子说明方法。',
-  '4. **互动与结尾（CTA）**：引导观众收藏和分享。',
-  '预期时长：约 45 秒',
-  `表达要求：保持角色外观一致。${'语气真诚自然，使用短句；先说明操作，再展示具体效果。'.repeat(12)}成片规格为{"width":1920,"height":1080,"frameRate":{"numerator":60000,"denominator":1001},"fitMode":"contain","previewScale":0.5}；保留最后一条表达要求。`,
-].join('\n');
-const style = '## 视觉风格\n采用**柔和蓝色**的漫画画面。\n\n### 画面要点\n- 保持人物服装一致\n- 突出办公桌和屏幕\n\n```html\n<img src="https://invalid.example/never-load.png" onerror="alert(1)">\n```\n最后一段仍然可读。';
+const brief = {
+  topic: '职场人如何用 AI 提效',
+  audience: '20–35 岁的职场白领',
+  coreMessage: '通过三个实用方法，让职场人用 AI 改善日常工作，缓解工作焦虑。',
+  narrativeOrder: [
+    '1. **黄金 3 秒开场（Hook）**：直接提出痛点，建立悬念。',
+    '2. **痛点与共鸣（Problem）**：还原日常办公场景。',
+    '3. **解决方案（Value）**：用写稿、邮件和会议三个例子说明方法。',
+    '4. **互动与结尾（CTA）**：引导观众收藏和分享。',
+  ].join('\n'),
+  targetDuration: '约 45 秒',
+  expression: `保持角色外观一致。${'语气真诚自然，使用短句；先说明操作，再展示具体效果。'.repeat(12)}成片规格为{"width":1920,"height":1080,"frameRate":{"numerator":60000,"denominator":1001},"fitMode":"contain","previewScale":0.5}；保留最后一条表达要求。`,
+};
+const style = {
+  artStyle: '采用**柔和蓝色**的漫画画面。',
+  palette: '',
+  composition: '- 保持人物服装一致\n- 突出办公桌和屏幕',
+  lighting: '',
+  characterAppearance: '',
+  sceneContinuity: '```html\n<img src="https://invalid.example/never-load.png" onerror="alert(1)">\n```\n最后一段仍然可读。',
+};
 
 async function produced(page: Page, request: APIRequestContext, info: TestInfo) {
   const source = await fixture(request, info, false, 1, { brief, style });
@@ -68,7 +76,7 @@ for (const { width, theme } of [{ width: 1536, theme: 'dark' }, { width: 1024, t
       await expect(specs).toBeVisible(); await expect(document).toContainText('59.94 fps');
       await expect(document).toContainText('完整显示');
       await document.locator('summary').filter({ hasText: '查看完整原文' }).click();
-      await expect(document.locator('.result-document__original pre')).toHaveText(brief);
+      await expect(document.locator('.result-document__original pre')).toHaveText(formatPlanningDocument('brief', brief));
       await panel.hover(); await page.mouse.wheel(0, 5000);
       await expect.poll(() => panel.evaluate(element => element.scrollTop)).toBeGreaterThan(0);
       const after = await navigation.boundingBox();
@@ -81,7 +89,7 @@ for (const { width, theme } of [{ width: 1536, theme: 'dark' }, { width: 1024, t
 
       await navigation.getByRole('button', { name: /风格与角色/ }).click();
       const visual = dialog.getByRole('article', { name: '视觉风格', exact: true });
-      await expect(visual.getByRole('heading', { name: '画面要点', exact: true })).toBeVisible();
+      await expect(visual.getByRole('heading', { name: '构图', exact: true })).toBeVisible();
       await expect(visual.locator('ul > li')).toHaveCount(2);
       await expect(visual.locator('pre').first()).toContainText('<img src=');
       await expect(visual.locator('img, script, iframe')).toHaveCount(0);

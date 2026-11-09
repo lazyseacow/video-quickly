@@ -6,7 +6,7 @@ import { openProjectFromList } from './workspace-navigation';
 function gate() { let release!: () => void; const pending = new Promise<void>(resolve => { release = resolve; }); return { pending, release }; }
 for (const kind of ['image', 'video'] as const) for (const viewport of [{ width: 1536, height: 960, theme: 'dark', reducedMotion: 'no-preference' }, { width: 390, height: 844, theme: 'light', reducedMotion: 'reduce' }] as const) {
   test(`shows real partial ${kind} progress and keeps the selected shot at ${viewport.width}px`, async ({ page, request }, info) => {
-    // Nine real model requests, partial-result interaction and video export share this budget.
+    // Model requests, partial-result interaction and video export share this budget.
     test.setTimeout(60_000);
     const held = gate(), blocked = gate(); let submissions = 0;
     const source = await fixture(request, info, false, 3, { beforeReply: async (_body, path) => {
@@ -46,7 +46,7 @@ for (const kind of ['image', 'video'] as const) for (const viewport of [{ width:
       await expect(second).toHaveAttribute('aria-pressed', 'true'); await expect(preview).toContainText('生成的蓝色镜头 2');
       await expect(preview.getByText('已保存', { exact: true })).toBeVisible();
       await expect(dialog.getByRole('button', { name: /^重新生成镜头/ })).toHaveCount(3);
-      await expect(dialog.locator('.step-progress__time')).toHaveCount(0); expect(source.requests).toHaveLength(9); expect(errors).toEqual([]);
+      await expect(dialog.locator('.step-progress__time')).toHaveCount(0); expect(source.requests).toHaveLength(10); expect(errors).toEqual([]);
       await page.screenshot({ path: info.outputPath(`completed-${kind}-${viewport.width}.png`) });
     } finally { held.release(); await source.close(); }
   });
@@ -88,7 +88,7 @@ test('restores partial previews on reload and stops without submitting a second 
     await dialog.getByRole('button', { name: '停止', exact: true }).click();
     await expect.poll(async () => (await latest(request, source.project.id))?.status).toBe('canceled');
     await expect(dialog.getByRole('region', { name: '步骤进度', exact: true })).toContainText('制作已停止');
-    await expect(dialog.locator('[data-generation-state="completed"]')).toHaveCount(1); expect(submissions).toBe(2); expect(source.requests).toHaveLength(5);
+    await expect(dialog.locator('[data-generation-state="completed"]')).toHaveCount(1); expect(submissions).toBe(2); expect(source.requests).toHaveLength(6);
   } finally { held.release(); await source.close(); }
 });
 
@@ -136,7 +136,8 @@ for (const viewport of [{ width: 1464, height: 895, theme: 'dark' }, { width: 10
       expect(cardBounds.x + cardBounds.width - actionBounds.x - actionBounds.width).toBeGreaterThanOrEqual(8);
       expect(await action.evaluate(element => element.scrollWidth <= element.clientWidth + 1)).toBe(true);
       expect(await dialog.evaluate(element => element.scrollWidth <= element.clientWidth)).toBe(true);
-      expect(submissions).toBe(6); expect(source.requests).toHaveLength(9);
+      // Brief, style, outline, two storyboard batches and six videos.
+      expect(submissions).toBe(6); expect(source.requests).toHaveLength(11);
       await expect(page.locator('vite-error-overlay')).toHaveCount(0);
       await page.screenshot({ path: info.outputPath(`six-videos-ready-${viewport.width}.png`) });
     } finally { held.forEach(item => item.release()); await source.close(); }

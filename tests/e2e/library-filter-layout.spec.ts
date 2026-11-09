@@ -90,11 +90,11 @@ test('recovers from project search misses and distinguishes loading, failed and 
 
   let rejectFirstRead!: () => void;
   const pendingRead = new Promise<void>(resolve => { rejectFirstRead = resolve; });
-  let attempts = 0;
+  let failRead = true;
   await page.route('**/__desktop_rpc', async route => {
     const { method, params } = route.request().postDataJSON();
     if (method !== 'asset.list' || params.kind !== 'audio') return route.continue();
-    if (++attempts === 1) {
+    if (failRead) {
       await pendingRead;
       return route.fulfill({ status: 503, json: { error: '素材读取暂时失败' } });
     }
@@ -110,6 +110,7 @@ test('recovers from project search misses and distinguishes loading, failed and 
   } finally { rejectFirstRead(); }
   await expect(page.getByRole('alert')).toContainText('素材读取暂时失败');
   await expect(page.getByText('没有此类素材', { exact: true })).toHaveCount(0);
+  failRead = false;
   await page.getByRole('button', { name: '重试读取素材', exact: true }).click();
   await expect(page.getByText('没有此类素材', { exact: true })).toBeVisible();
   await page.getByRole('button', { name: '查看全部素材', exact: true }).click();
