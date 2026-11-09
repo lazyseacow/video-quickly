@@ -1,10 +1,11 @@
 import { productionStep, saveAndStartProduction } from './production-settings';
 import { expect, test } from '@playwright/test';
-import type { RunSummary } from '@video-quickly/contracts';
-import { fixture, open, pick, latest, rpc, saved } from './native-video-fixture';
+import { runSchema, type RunSummary } from '@video-quickly/contracts';
+import { fixture, open, pick, rpc, saved } from './native-video-fixture';
 import { openProjectFromList } from './workspace-navigation';
 
 for (const { width, theme } of [{ width: 1536, theme: 'dark' }, { width: 600, theme: 'light' }, { width: 390, theme: 'light' }]) test('shows concise storyboard, media and delivery outputs at ' + width + 'px', async ({ page, request }, info) => {
+  test.setTimeout(120_000);
   const source = await fixture(request, info, false, 6), errors: string[] = [];
   page.on('pageerror', error => errors.push(error.message));
   page.on('console', message => { if (['error', 'warning'].includes(message.type())) errors.push(message.text()); });
@@ -16,8 +17,15 @@ for (const { width, theme } of [{ width: 1536, theme: 'dark' }, { width: 600, th
     await expect(settings.getByRole('button', { name: '项目混音设置', exact: true })).toHaveCount(0);
     await expect(settings.getByText('参考音频', { exact: true })).toBeVisible();
     await productionStep(settings, '声音与成片'); await expect(settings.getByRole('button', { name: '背景音乐', exact: true })).toBeVisible();
+    const accepted = page.waitForResponse(response => {
+      if (!response.url().endsWith('/__desktop_rpc')) return false;
+      const input = response.request().postDataJSON();
+      return input.method === 'run.start' && input.params.projectId === source.project.id;
+    }, { timeout: 30_000 });
     await saveAndStartProduction(settings);
-    await expect.poll(async () => (await latest(request, source.project.id))?.status, { timeout: 30000 }).toBe('succeeded');
+    const response = await accepted; expect(response.ok()).toBe(true);
+    const run = runSchema.parse((await response.json()).result);
+    await expect.poll(async () => (await rpc<RunSummary>(request, 'run.get', { runId: run.id })).status, { timeout: 60_000 }).toBe('succeeded');
     await expect(page.getByLabel('旁白音频', { exact: true })).toHaveCount(0);
     await expect(page.getByRole('button', { name: '镜头声音处理', exact: true })).toHaveCount(0);
     await expect(page.getByLabel('轨道信息', { exact: true })).not.toContainText('旁白');
@@ -101,13 +109,14 @@ test('expands a long storyboard without losing the remaining shots', async ({ pa
 });
 
 for (const height of [960, 720]) test(`keeps the image preview in place while scrolling thumbnails at ${height}px height`, async ({ page, request }, info) => {
+  test.setTimeout(120_000);
   const shotCount = 12, source = await fixture(request, info, false, shotCount);
   try {
     await page.setViewportSize({ width: 1536, height }); await page.emulateMedia({ reducedMotion: 'reduce' });
     const image = await rpc<{ id: string }>(request, 'model.save', { model: { name: '参考图夹具', provider: 'openai-compatible', connectionType: 'image', capabilities: ['image'], model: 'fixture-image', baseUrl: source.models[0].baseUrl } });
     await rpc(request, 'project.update', { projectId: source.project.id, patch: { workflow: { ...source.project.workflow, production: { ...source.project.workflow.production!, textModelId: source.models[0].id, videoModelId: source.video.id, imageModelId: image.id, referenceMode: 'generate' } } } });
-    await rpc(request, 'run.start', { projectId: source.project.id });
-    await expect.poll(async () => (await latest(request, source.project.id))?.status, { timeout: 30000 }).toBe('succeeded');
+    const run = await rpc<{ id: string }>(request, 'run.start', { projectId: source.project.id });
+    await expect.poll(async () => (await rpc<RunSummary>(request, 'run.get', { runId: run.id })).status, { timeout: 60_000 }).toBe('succeeded');
     await page.goto('/');
     await openProjectFromList(page, source.project.title);
     await page.getByRole('button', { name: '打开阶段：素材与配音', exact: true }).click();

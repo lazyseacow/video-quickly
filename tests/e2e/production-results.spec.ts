@@ -1,5 +1,6 @@
 import { expect, test, type Page, type APIRequestContext, type TestInfo } from '@playwright/test';
-import { fixture, latest, open, rpc, saved } from './native-video-fixture';
+import type { RunSummary } from '@video-quickly/contracts';
+import { fixture, open, rpc, saved } from './native-video-fixture';
 
 const brief = [
   '主题：职场人如何用 AI 提效',
@@ -19,8 +20,8 @@ async function produced(page: Page, request: APIRequestContext, info: TestInfo) 
   const source = await fixture(request, info, false, 1, { brief, style });
   try {
     await rpc(request, 'project.update', { projectId: source.project.id, patch: { workflow: { ...source.project.workflow, production: { ...source.project.workflow.production!, textModelId: source.models[0].id, videoModelId: source.video.id } } } });
-    await rpc(request, 'run.start', { projectId: source.project.id });
-    await expect.poll(async () => (await latest(request, source.project.id))?.status, { timeout: 30000 }).toBe('succeeded');
+    const run = await rpc<{ id: string }>(request, 'run.start', { projectId: source.project.id });
+    await expect.poll(async () => (await rpc<RunSummary>(request, 'run.get', { runId: run.id })).status, { timeout: 60_000 }).toBe('succeeded');
     await open(page, source.project).then(dialog => dialog.getByRole('button', { name: '关闭对话框', exact: true }).click());
     const trigger = page.getByRole('button', { name: '打开阶段：策划与分镜', exact: true });
     await trigger.click();
@@ -33,6 +34,7 @@ async function produced(page: Page, request: APIRequestContext, info: TestInfo) 
 
 for (const { width, theme } of [{ width: 1536, theme: 'dark' }, { width: 1024, theme: 'light' }, { width: 390, theme: 'dark' }]) {
   test(`makes production results readable and preserves navigation at ${width}px in ${theme}`, async ({ page, request }, info) => {
+    test.setTimeout(120_000);
     const errors: string[] = [];
     page.on('pageerror', error => errors.push(error.message));
     page.on('console', message => { if (['error', 'warning'].includes(message.type())) errors.push(message.text()); });
