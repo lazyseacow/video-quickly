@@ -10,9 +10,10 @@ for (const viewport of [{ width: 1536, height: 960, theme: 'dark', references: t
     const errors: string[] = [], submissions: string[] = [];
     page.on('pageerror', error => errors.push(error.message)); page.on('console', message => { if (message.type() === 'error') errors.push(message.text()); });
     const gates = { brief: gate(), style: gate(), script: gate(), assets: gate(), video: gate() };
+    const textStages = ['brief', 'style', 'script', 'script'] as const; // Storyboard outline, then one batch of shots.
     let textRequests = 0;
     const source = await fixture(request, info, false, 2, { beforeReply: async (_, path) => {
-      const id = path.endsWith('/images/generations') ? 'assets' : path.includes('contents/generations/tasks') ? 'video' : (['brief', 'style', 'script'] as const)[textRequests++];
+      const id = path.endsWith('/images/generations') ? 'assets' : path.includes('contents/generations/tasks') ? 'video' : textStages[textRequests++];
       if (!id) throw new Error('Unexpected model request');
       submissions.push(id); gates[id].entered = true; await gates[id].promise;
     } });
@@ -60,7 +61,7 @@ for (const viewport of [{ width: 1536, height: 960, theme: 'dark', references: t
       await expect(progress.locator('.workbench-guide__step[data-state="succeeded"]')).toHaveCount(4);
       await expect(production.getByLabel('成片状态', { exact: true })).toHaveCount(0);
       await expect(production.getByRole('button', { name: '查看制作记录', exact: true })).toHaveCount(0);
-      expect(submissions.filter(id => id === 'brief')).toHaveLength(1); expect(submissions.filter(id => id === 'style')).toHaveLength(1); expect(submissions.filter(id => id === 'script')).toHaveLength(1);
+      expect(submissions.filter(id => id === 'brief')).toHaveLength(1); expect(submissions.filter(id => id === 'style')).toHaveLength(1); expect(submissions.filter(id => id === 'script')).toHaveLength(2);
       expect(submissions.filter(id => id === 'video')).toHaveLength(2); expect(submissions.filter(id => id === 'assets')).toHaveLength(viewport.references ? 2 : 0);
       await progress.getByRole('button', { name: '打开阶段：审阅与导出', exact: true }).click(); const record = page.getByRole('dialog', { name: '本次制作', exact: true });
       await expect(record.getByRole('tablist', { name: '制作阶段记录', exact: true })).toHaveCount(0); await expect(record.getByRole('navigation', { name: '本次制作步骤', exact: true }).getByRole('button', { name: /导出成片/ })).toHaveAttribute('aria-current', 'step'); await expect(record.getByRole('link', { name: '下载成片', exact: true })).toBeVisible();

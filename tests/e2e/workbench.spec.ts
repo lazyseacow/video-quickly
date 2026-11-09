@@ -373,7 +373,7 @@ test('creates a project and connects a model without exposing credentials', asyn
     const modelDialog = await addModelConnection(page);
     await modelDialog.getByLabel('连接名称').fill('本地文本服务');
     await modelDialog.getByLabel('模型平台', { exact: true }).selectOption('custom');
-    await modelDialog.getByLabel('服务地址').fill(catalog.baseUrl);
+    await modelDialog.getByLabel('服务地址', { exact: true }).fill(catalog.baseUrl);
     await modelDialog.getByRole('button', { name: '获取模型列表', exact: true }).click();
     await selectModel(modelDialog, 'local-fixture');
     await modelDialog.getByRole('button', { name: '保存连接', exact: true }).click();

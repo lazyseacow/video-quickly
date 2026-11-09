@@ -2,6 +2,7 @@ import { createServer, type ServerResponse } from 'node:http';
 import { randomUUID } from 'node:crypto';
 import { expect, type APIRequestContext, type Locator, type Page } from '@playwright/test';
 import { createNativeVideoWorkflow, createSceneTemplate, type ProjectDocument, type RunInspection, type RunSummary } from '@video-quickly/contracts';
+import { storyboardFixtureResponse } from '../fixtures/planning-response';
 import { test } from './isolated-workspace';
 
 const stageLabels = ['策划与分镜', '素材与配音', '剪辑与动画', '审阅与导出'];
@@ -179,7 +180,12 @@ test('keeps the newer run highlighted after an old inspection arrives and expose
 for (const viewport of [{ width: 1536, height: 960, theme: 'light' }, { width: 600, height: 900, theme: 'dark' }] as const) {
   test(`keeps all four stages before and after a single script run at ${viewport.width}px in ${viewport.theme}`, async ({ page, request }, info) => {
     test.setTimeout(60_000);
-    const server = createServer({ keepAliveTimeout: 0 }, (incoming, response) => { incoming.resume(); response.setHeader('content-type', 'application/json'); response.end(JSON.stringify({ choices: [{ message: { content: JSON.stringify({ shots: [{ id: 'local-shot', title: '生成的本地分镜', narration: '本地视频制作文稿', visualPrompt: '', durationUs: 1_000_000 }] }) } }] })); });
+    const server = createServer({ keepAliveTimeout: 0 }, async (incoming, response) => {
+      let body = ''; for await (const part of incoming) body += String(part);
+      const storyboard = JSON.stringify({ shots: [{ id: 'local-shot', title: '生成的本地分镜', narration: '本地视频制作文稿', visualPrompt: '', durationUs: 1_000_000 }] });
+      const content = storyboardFixtureResponse(JSON.parse(body).messages[0].content, storyboard);
+      response.setHeader('content-type', 'application/json'); response.end(JSON.stringify({ choices: [{ message: { content } }] }));
+    });
     await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve)); const address = server.address(); if (!address || typeof address === 'string') throw new Error('本地分镜服务未启动');
     try {
     const model = await rpc<{ id: string }>(request, 'model.save', { model: { name: '四阶段分镜边界', provider: 'openai-compatible', connectionType: 'text', capabilities: ['text'], model: 'fixture-script', baseUrl: `http://127.0.0.1:${address.port}/v1` } });

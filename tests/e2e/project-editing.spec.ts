@@ -4,6 +4,7 @@ import { setWorkspaceTheme } from './workspace-settings';
 import { createServer } from 'node:http';
 import { expect, test, type APIRequestContext, type Page } from '@playwright/test';
 import type { ProjectDocument } from '@video-quickly/contracts';
+import { storyboardFixtureResponse } from '../fixtures/planning-response';
 
 async function rpc(request: APIRequestContext, method: string, params: unknown = {}) {
   const response = await request.post('/__desktop_rpc', { data: { method, params } });
@@ -107,10 +108,12 @@ test('restores an unsaved multi-field draft and resolves external edits without 
 
 test('keeps generated results editable with undo and rejects reapplying them after revisions', async ({ page, request }) => {
   test.setTimeout(60_000);
-  const server = createServer({ keepAliveTimeout: 0 }, (incoming, response) => {
-    incoming.resume();
+  const server = createServer({ keepAliveTimeout: 0 }, async (incoming, response) => {
+    let body = ''; for await (const part of incoming) body += String(part);
+    const storyboard = JSON.stringify({ shots: [{ title: '已生成的分镜', narration: '生成的旁白', visualPrompt: '', durationUs: 2_000_000 }] });
+    const content = storyboardFixtureResponse(JSON.parse(body).messages[0].content, storyboard);
     response.setHeader('Content-Type', 'application/json');
-    response.end(JSON.stringify({ choices: [{ message: { content: JSON.stringify({ shots: [{ title: '已生成的分镜', narration: '生成的旁白', visualPrompt: '', durationUs: 2_000_000 }] }) } }] }));
+    response.end(JSON.stringify({ choices: [{ message: { content } }] }));
   });
   await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
   const address = server.address();

@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { expect, test, type APIRequestContext } from '@playwright/test';
 import type { AssetRecord, CharacterProfile, ProjectDocument, RunSummary } from '@video-quickly/contracts';
+import { storyboardFixtureResponse } from '../fixtures/planning-response';
 import { openProduction, productionStep, saveProduction } from './production-settings';
 
 async function rpc<T>(request: APIRequestContext, method: string, params: unknown = {}): Promise<T> {
@@ -19,10 +20,12 @@ async function fixture(request: APIRequestContext, hold = false) {
   const prompts: string[] = [];
   const server = createServer({ keepAliveTimeout: 0 }, (incoming, response) => { void (async () => {
     let body = ''; for await (const part of incoming) body += String(part); prompts.push(body); entered(); if (hold) await gate;
-    response.setHeader('content-type', 'application/json'); response.end(JSON.stringify({ choices: [{ message: { content: JSON.stringify({
+    const storyboard = JSON.stringify({
       entities: [{ key: 'gate', kind: 'prop', name: '铜锁', description: '旧铜色、圆形锁孔' }],
       shots: [{ title: '自动角色镜头', narration: '找到铜锁了。', visualPrompt: '人物走向花园木门', durationUs: 2_000_000, characterKeys: ['role-1'], entityKeys: ['gate'] }],
-    }) } }] }));
+    });
+    const content = storyboardFixtureResponse(JSON.parse(body).messages[0].content, storyboard);
+    response.setHeader('content-type', 'application/json'); response.end(JSON.stringify({ choices: [{ message: { content } }] }));
   })().catch(error => response.destroy(error instanceof Error ? error : undefined)); });
   await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
   try {
