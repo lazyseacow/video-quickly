@@ -62,6 +62,7 @@ test('edits estimated captions through the production dialog as one undo command
   let dialog = await editor(page);
   await expect(dialog.getByText('当前字幕按旁白文字估时，尚未按语音对齐。')).toBeVisible();
   await expect(dialog.locator('.caption-editor__cue')).toHaveCount(2);
+  await expect(dialog.getByLabel('字幕 1 文字', { exact: true })).toHaveCSS('resize', 'none');
   await dialog.getByLabel('字幕 1 文字', { exact: true }).fill('取消的草稿');
   await dialog.getByRole('button', { name: '取消', exact: true }).click();
   expect((await savedProject(request, project.id)).revision).toBe(project.revision);

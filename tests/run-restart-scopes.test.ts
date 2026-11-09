@@ -1,3 +1,4 @@
+import { planningFixtureResponse } from './fixtures/planning-response';
 import { createHash } from 'node:crypto';
 import { createServer, type Server } from 'node:http';
 import { mkdir, mkdtemp, rm, stat, writeFile } from 'node:fs/promises';
@@ -180,7 +181,7 @@ it('keeps ordinary canceled workflow restarts as new full runs and rejects cross
   const { runtime, project } = await setup({ provider: async request => {
     prompts.push(request.prompt);
     if (hold) await new Promise<void>((_resolve, reject) => { request.signal?.addEventListener('abort', () => reject(new Error('cancel text request')), { once: true }); providerEntered(); });
-    return '普通工作流文本';
+    return planningFixtureResponse(request.prompt, '普通工作流文本');
   } });
   const model = await runtime.dispatch('model.save', { model: { name: '本地注入模型', provider: 'openai-compatible', baseUrl: 'http://127.0.0.1:1/v1', model: 'text-fixture', connectionType: 'text', capabilities: ['text'] } }) as ModelProfile;
   const nodes = project.workflow.nodes.filter(node => node.kind === 'brief' || node.kind === 'style').map(node => ({ ...node, modelId: model.id, requiresReview: false })); expect(nodes).toHaveLength(2);

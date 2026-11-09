@@ -1,7 +1,11 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { afterEach, expect, it } from 'vitest';
 import { modelSchema, type ModelProfile } from '@video-quickly/contracts';
-import { discoverModels } from '../src/providers';
+import { discoverModels, generateText, testModelConnection } from '../src/providers';
+import { createRuntime } from '../src/index.js';
 
 const servers: Server[] = [];
 afterEach(async () => {
@@ -29,7 +33,6 @@ it('reads authenticated compatible model lists, preserves IDs and deduplicates w
 it.each<{ connectionType: ModelProfile['connectionType']; capabilities: ModelProfile['capabilities']; expected: string[] }>([
   { connectionType: 'text', capabilities: ['text', 'vision'], expected: ['ft:gpt-4o-mini:fixture:audio-image-assistant:id', 'chatgpt-4o-latest', 'o3-mini', 'codex-mini-latest', 'gpt-4.1', 'gpt-4o'] },
   { connectionType: 'image', capabilities: ['image'], expected: ['chatgpt-image-latest', 'dall-e-3', 'gpt-image-1'] },
-  { connectionType: 'video', capabilities: ['video'], expected: ['sora-2'] },
 ])('filters OpenAI models for $connectionType $capabilities while preserving newest-first order', async ({ connectionType, capabilities, expected }) => {
   const base = await service((_request, response) => {
     const ids = ['gpt-4o', 'gpt-image-1', 'gpt-4o-mini-tts', 'whisper-1', 'sora-2', 'gpt-4.1', 'gpt-4o-realtime-preview', 'gpt-realtime', 'gpt-audio-mini', 'gpt-4o-audio-preview', 'gpt-4o-mini-transcribe-2025-12-15', 'gpt-4o-transcribe-diarize', 'tts-1-hd', 'dall-e-3', 'chatgpt-image-latest', 'text-embedding-3-large', 'omni-moderation-latest', 'babbage-002', 'codex-mini-latest', 'o3-mini', 'chatgpt-4o-latest', 'ft:gpt-4o-mini:fixture:audio-image-assistant:id'];
@@ -98,7 +101,82 @@ it('asks to retry when OpenAI returns no models for the selected connection type
   const result = await discoverModels(model(base, { platform: 'openai', connectionType: 'text' }));
   expect(result.items).toEqual([]);
   expect(result.message).toContain('未返回适合当前连接类型的模型');
-  expect(result.message).not.toContain('手动填写');
+  expect(result.message).toContain('手动填写');
+});
+
+it('omits the retired official Videos API while keeping the compatible gateway catalogue', async () => {
+  const base = await service((_request, response) => response.end(JSON.stringify({ data: [{ id: 'sora-2' }] })));
+  const video = model(base, { connectionType: 'video', capabilities: ['video'], platform: 'custom' });
+  expect((await discoverModels({ ...video, platform: 'openai' })).items).toEqual([]);
+  expect((await discoverModels(video)).items).toEqual([{ id: 'sora-2', label: 'sora-2' }]);
+});
+
+it('uses Ark output modalities for each model role and exposes reported text capabilities', async () => {
+  const base = await service((_request, response) => response.end(JSON.stringify({ data: [
+    { id: 'vision-chat', domain: 'VLM', modalities: { input_modalities: ['text', 'image'], output_modalities: ['text'] }, features: { tools: { function_calling: true }, structured_outputs: { json_object: false, json_schema: true } } },
+    { id: 'text-only', domain: 'LLM', features: { tools: { function_calling: false } } },
+    { id: 'paint', domain: 'ImageGeneration' },
+    { id: 'movie', modalities: { output_modalities: ['video'] } },
+    { id: 'speech', domain: 'Audio' },
+  ] })));
+  expect((await discoverModels(model(base, { platform: 'seedance', provider: 'seedance', connectionType: 'video', capabilities: ['video'] }))).items.map(item => item.id)).toEqual(['movie']);
+  expect((await discoverModels(model(base, { platform: 'seedream', provider: 'seedream', connectionType: 'image', capabilities: ['image'] }))).items.map(item => item.id)).toEqual(['paint']);
+  const text = model(base, { platform: 'volcengine' });
+  expect((await discoverModels(text)).items.map(item => item.capabilities)).toEqual([['text', 'vision', 'tools'], ['text']]);
+  expect((await discoverModels({ ...text, textProtocol: 'responses' })).items[0].capabilities).toEqual(['text', 'vision', 'tools', 'structured-output']);
+});
+
+it('scopes saved keys to the connection origin during discovery, save, and subsequent checks', async () => {
+  const headers: Array<string | undefined> = [];
+  function catalogue(request: IncomingMessage, response: ServerResponse) {
+    headers.push(request.headers.authorization);
+    response.end(JSON.stringify({ data: [{ id: 'fixture' }] }));
+  }
+  const original = await service(catalogue), differentOrigin = await service(catalogue);
+  const directory = await mkdtemp(join(tmpdir(), 'vq-model-origin-'));
+  const keys = new Map<string, string>();
+  const runtime = createRuntime({ dataDirectory: directory, secretStore: {
+    async get(key) { return keys.get(key); }, async set(key, value) { keys.set(key, value); }, async delete(key) { keys.delete(key); },
+  } });
+  try {
+    const saved = modelSchema.parse(await runtime.dispatch('model.save', { model: model(original), secret: 'original-fixture-key' }));
+    const sameOrigin = { ...saved, baseUrl: `${new URL(original).origin}/alternate` };
+    await runtime.dispatch('model.discover', { model: sameOrigin });
+    expect(modelSchema.parse(await runtime.dispatch('model.save', { model: sameOrigin })).credentialRef).toBe(saved.credentialRef);
+    const other = { ...saved, baseUrl: differentOrigin };
+    await runtime.dispatch('model.discover', { model: other, reuseSavedSecret: true });
+    const detached = modelSchema.parse(await runtime.dispatch('model.save', { model: other }));
+    expect(detached.hasSecret).toBe(false);
+    expect(detached.credentialRef).toBeUndefined();
+    await runtime.dispatch('model.test', { modelId: saved.id });
+    const replacement = modelSchema.parse(await runtime.dispatch('model.save', { model: other, secret: 'new-fixture-key' }));
+    expect(replacement.credentialRef).not.toBe(saved.credentialRef);
+    await runtime.dispatch('model.test', { modelId: saved.id });
+    expect(headers).toEqual(['Bearer original-fixture-key', undefined, undefined, 'Bearer new-fixture-key']);
+  } finally {
+    await runtime.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+it('blocks cross-origin model redirects and retains the key through a same-origin redirect', async () => {
+  const received: Array<string | undefined> = [];
+  const other = await service((request, response) => { received.push(request.headers['x-api-key'] as string | undefined); response.end('{}'); });
+  const base = await service((request, response) => {
+    if (request.url === '/same-origin/models?limit=1000') { response.writeHead(302, { Location: '/catalogue' }).end(); return; }
+    if (request.url === '/catalogue') {
+      expect(request.headers['x-api-key']).toBe('fixture-key');
+      response.end(JSON.stringify({ data: [{ id: 'same-origin-model' }] })); return;
+    }
+    response.writeHead(302, { Location: `${other}/target` }).end();
+  });
+  const selected = model(base, { textProtocol: 'messages' });
+  await expect(discoverModels(selected, 'fixture-key')).rejects.toThrow('其他来源');
+  await expect(testModelConnection(selected, 'fixture-key')).rejects.toThrow('其他来源');
+  await expect(generateText({ model: selected, secret: 'fixture-key', prompt: 'fixture', operationId: 'redirect' })).rejects.toThrow('其他来源');
+  expect(received).toEqual([]);
+  const safe = await discoverModels({ ...selected, baseUrl: `${new URL(base).origin}/same-origin` }, 'fixture-key');
+  expect(safe.items.map(item => item.id)).toEqual(['same-origin-model']);
 });
 
 it('reads paginated Messages models and locally installed Ollama models', async () => {

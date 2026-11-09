@@ -1,4 +1,3 @@
-import { openAdvancedWorkflow } from './production-settings';
 import { openProjectFromList } from './workspace-navigation';
 import { openCosts, openGuide, openWorkspaceSettings } from './workspace-settings';
 import { randomUUID } from 'node:crypto';
@@ -13,7 +12,7 @@ const preference = 'vq-onboarding-v1';
 const targets: Record<string, string[]> = {
   '新建创作项目': ['create-project'], '打开模型连接': ['models'], '添加模型连接': ['model-connection'], '打开我的项目': ['projects'], '进入创作工作台': ['project-open'],
   '制作设置': ['view'], '展开镜头导航': ['outline-toggle'], '整理镜头': ['shots'], '预览画面': ['preview'],
-  '安排镜头节奏': ['timeline'], '展开属性面板': ['inspector-toggle'], '编辑属性': ['inspector'], '当前流程画布': ['workflow'],
+  '安排镜头节奏': ['timeline'], '展开属性面板': ['inspector-toggle'], '编辑属性': ['inspector'],
   '制作前检查': ['check'], '自动制作': ['produce'], '导出成片': ['export'], '随时重开指引': ['help'],
 };
 function freshProfile(origin: string, theme = 'dark') {
@@ -241,15 +240,6 @@ test('does not navigate or target the hidden cached workbench when reopened from
   expect(observed.writes).toEqual([]); expect(observed.errors).toEqual([]);
 });
 
-test('includes only the actual workflow canvas when reopened in the flow view', async ({ page }) => {
-  const observed = observe(page); await page.emulateMedia({ reducedMotion: 'reduce' }); await dismissFirst(page);
-  await openAdvancedWorkflow(page); await expect(page.locator('[data-guide="workflow"]')).toBeVisible();
-  await openGuide(page); await opened(page); const seen = await walk(page);
-  expect(seen).toContain('workflow'); for (const hidden of ['preview', 'shots', 'timeline', 'inspector']) expect(seen).not.toContain(hidden);
-  await expect(page.getByRole('button', { name: '返回工作台', exact: true })).toBeVisible();
-  expect(observed.writes).toEqual([]); expect(observed.errors).toEqual([]);
-});
-
 test('keeps the consolidated settings and scrollable navigation reachable at the native minimum window', async ({ page }, info) => {
   const observed = observe(page); await page.setViewportSize({ width: 1024, height: 720 }); await page.emulateMedia({ reducedMotion: 'reduce' }); await dismissFirst(page);
   await expect(settings(page)).toBeInViewport({ ratio: 1 }); await openGuide(page); await opened(page); await page.keyboard.press('Escape'); await expect(guide(page)).toHaveCount(0); await expect(settings(page)).toBeFocused();
@@ -366,10 +356,14 @@ test('waits for an explicit dirty save to persist and lets a failed save retry i
   await expect(page.getByText('隔离的导览保存失败', { exact: true })).toBeVisible(); await atStep(page, '编辑属性'); await expect(title).toHaveValue('需要实际保存的导览输入');
   const retry = await holdNextRpc(page, 'project.update'); await page.getByRole('button', { name: '保存镜头', exact: true }).click(); await retry.entered; await atStep(page, '编辑属性'); retry.release();
   await expect.poll(async () => (await savedProject(request, project.id)).shots[0].title).toBe('需要实际保存的导览输入'); await atStep(page, '制作前检查');
-  const failedCheck = await holdNextRpc(page, 'project.readiness', '隔离的检查失败'); await active(page).click(); await failedCheck.entered; await expect(guide(page)).toHaveCount(0); failedCheck.release();
+  const more = active(page).getByRole('button', { name: '更多', exact: true });
+  const check = page.getByRole('button', { name: '制作前检查', exact: true });
+  await more.click(); await expect(check).toBeVisible();
+  await page.keyboard.press('Escape'); await expect(check).toHaveCount(0); await atStep(page, '制作前检查');
+  const failedCheck = await holdNextRpc(page, 'project.readiness', '隔离的检查失败'); await more.click(); await check.click(); await failedCheck.entered; await expect(guide(page)).toHaveCount(0); failedCheck.release();
   const report = page.getByRole('dialog', { name: '制作前检查', exact: true }); await expect(report.getByText('隔离的检查失败', { exact: true })).toBeVisible();
   await report.getByRole('button', { name: '关闭', exact: true }).click(); await atStep(page, '制作前检查');
-  await active(page).click(); await expect(report.locator('.readiness-summary')).toBeVisible(); await expect(guide(page)).toHaveCount(0);
+  await more.click(); await check.click(); await expect(report.locator('.readiness-summary')).toBeVisible(); await expect(guide(page)).toHaveCount(0);
   await report.getByRole('button', { name: '关闭', exact: true }).click(); await atStep(page, '自动制作');
   expect((await savedProject(request, project.id)).revision).toBe(project.revision + 1); expect(observed.writes).toEqual(['project.update', 'project.update']); expect(observed.errors).toEqual([]);
 });

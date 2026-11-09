@@ -280,6 +280,9 @@ export const WORKSPACE_MIGRATIONS: readonly DatabaseMigration[] = [
       WHERE kind = 'asset' AND json_extract(body, '$.active') = 1
         AND json_type(body, '$.derivation.sourceAssetId') = 'text';
   ` },
+  // Older clients would otherwise interpret a manual planning step as an AI task.
+  { version: 22, name: 'manual-planning-inputs', sql: "INSERT INTO runtime_metadata(key, value) VALUES ('manual-planning-inputs', '1');" },
+  { version: 23, name: 'structured-planning-prefill', sql: "INSERT INTO runtime_metadata(key, value) VALUES ('structured-planning-prefill', '1');" },
 ];
 
 export function openDatabase(directory: string) {

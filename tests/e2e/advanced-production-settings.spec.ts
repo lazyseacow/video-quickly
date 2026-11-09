@@ -7,7 +7,7 @@ import { productionFixture, productionStep, openProduction, pickProductionModel,
 import { fixture, latest, rpc, saved } from './native-video-fixture';
 import { openProjectFromList } from './workspace-navigation';
 
-for (const viewport of [{ width: 1536, height: 960, theme: 'dark' }, { width: 600, height: 900, theme: 'light' }]) test(`configures concurrency in normal settings and enters advanced composition at ${viewport.width}px`, async ({ page, request }, info) => {
+for (const viewport of [{ width: 1536, height: 960, theme: 'dark' }, { width: 600, height: 900, theme: 'light' }]) test(`configures concurrency in normal settings with the built-in workflow at ${viewport.width}px`, async ({ page, request }, info) => {
   const source = await productionFixture(request), errors: string[] = [], mutations: string[] = [];
   page.on('pageerror', error => errors.push(error.message));
   page.on('request', request => { if (request.url().endsWith('/__desktop_rpc')) mutations.push(request.postDataJSON()?.method); });
@@ -20,23 +20,18 @@ for (const viewport of [{ width: 1536, height: 960, theme: 'dark' }, { width: 60
   await dialog.getByLabel('镜头同时处理数', { exact: true }).selectOption('3');
   await dialog.getByLabel(`${source.video.name} 并发上限`, { exact: true }).selectOption('2');
   await dialog.getByLabel(`${source.image.name} 并发上限`, { exact: true }).selectOption('1');
-  await productionStep(dialog, '创作要求'); await dialog.getByLabel('创作要求', { exact: true }).fill('保留修改后进入高级编排');
+  await productionStep(dialog, '创作要求'); await dialog.getByLabel('创作要求', { exact: true }).fill('系统流程的创作要求');
   await productionStep(dialog, '模型与素材');
   await dialog.getByRole('region', { name: '生成并发', exact: true }).scrollIntoViewIfNeeded();
   await page.screenshot({ path: info.outputPath('normal-concurrency-settings.png') });
-  await dialog.getByRole('button', { name: '打开高级编排', exact: true }).click();
-  await expect(dialog).toContainText('保存设置后将打开高级编排');
+  await expect(dialog.getByRole('button', { name: /高级编排/ })).toHaveCount(0);
   expect((await source.saved()).workflow.execution).toBeUndefined();
-  await dialog.getByRole('button', { name: '保存并打开', exact: true }).click(); await expect(dialog).toHaveCount(0);
-  await expect(page.locator('.react-flow')).toBeVisible();
+  await saveProduction(dialog); await expect(dialog).toHaveCount(0);
   const current = await source.saved();
-  expect(current.brief).toBe('保留修改后进入高级编排');
+  expect(current.brief).toBe('系统流程的创作要求');
   expect(current.workflow.execution).toEqual({ maxConcurrentShots: 3, modelLimits: { [source.video.id]: 2, [source.image.id]: 1 } });
   expect(current.workflow.nodes.map(node => node.id)).toEqual(source.project.workflow.nodes.map(node => node.id)); expect(current.workflow.edges).toEqual(source.project.workflow.edges);
   await expect(page.getByLabel('镜头同时处理数', { exact: true })).toHaveCount(0);
-  await expect(page.getByRole('button', { name: '保存为子流程', exact: true })).toBeVisible(); await expect(page.getByRole('button', { name: '插入子流程', exact: true })).toBeVisible();
-  await page.screenshot({ path: info.outputPath('advanced-composition.png') });
-  await page.getByRole('button', { name: '返回工作台', exact: true }).click();
   await page.getByRole('button', { name: '制作设置', exact: true }).click(); dialog = page.getByRole('dialog', { name: '制作设置', exact: true }); await productionStep(dialog, '模型与素材');
   await expect(dialog.getByLabel('镜头同时处理数', { exact: true })).toHaveValue('3');
   await expect(dialog.getByLabel(`${source.video.name} 并发上限`, { exact: true })).toHaveValue('2');
@@ -80,7 +75,7 @@ test('retains concurrency input when another view saves a conflicting concurrenc
   expect((await source.saved()).workflow.execution?.maxConcurrentShots).toBe(4);
 });
 
-for (const viewport of [{ width: 1536, height: 960, theme: 'dark' }, { width: 1024, height: 720, theme: 'light' }, { width: 390, height: 844, theme: 'light' }]) test(`edits compact advanced tasks without losing input or selector focus at ${viewport.width}px`, async ({ page, request }, info) => {
+for (const viewport of [{ width: 1536, height: 960, theme: 'dark' }, { width: 1024, height: 720, theme: 'light' }, { width: 390, height: 844, theme: 'light' }]) test(`edits existing custom workflow tasks without losing input or selector focus at ${viewport.width}px`, async ({ page, request }, info) => {
   const errors: string[] = [], writes: string[] = [];
   page.on('pageerror', error => errors.push(error.message));
   page.on('console', message => { if (['error', 'warning'].includes(message.type())) errors.push(message.text()); });
@@ -92,7 +87,11 @@ for (const viewport of [{ width: 1536, height: 960, theme: 'dark' }, { width: 10
     await writeFile(join(directory, 'SKILL.md'), `---\nname: ${name}\ndescription: 高级任务布局验收\n---\n保持当前任务的创作要求。`);
   }
   const imported = await importSkillFixture((method, params) => rpc(request, method, params), { path: skillDirectory });
-  const dialog = await openProduction(page, source.project);
+  const skillId = imported.skills.find(skill => skill.name === skillNames[0])!.id;
+  const project = await rpc<ProjectDocument>(request, 'project.update', { projectId: source.project.id, revision: source.project.revision, patch: { workflow: {
+    ...source.project.workflow, id: 'existing-production', nodes: source.project.workflow.nodes.map(node => node.id === 'assets' ? { ...node, skillIds: [skillId] } : node),
+  } } });
+  const dialog = await openProduction(page, project);
   page.on('request', request => {
     if (!request.url().endsWith('/__desktop_rpc') || request.method() !== 'POST') return;
     const method = request.postDataJSON().method;
@@ -109,28 +108,42 @@ for (const viewport of [{ width: 1536, height: 960, theme: 'dark' }, { width: 10
   await expect(advanced.getByRole('combobox', { name: '创意简报模型', exact: true })).toHaveValue(source.override.name);
   await expect(advanced.getByLabel('创意简报补充要求', { exact: true })).toHaveValue('围绕三个具体场景展开');
   await advanced.scrollIntoViewIfNeeded();
-  const skills = advanced.locator('.production-settings__task-skills'), skillSummary = skills.locator(':scope > summary');
-  await expect(skillSummary).toContainText('已选 0 个'); await expect(skills.locator('.skill-picker')).not.toBeVisible();
+  const more = advanced.getByRole('button', { name: '更多操作', exact: true });
+  const skills = advanced.locator('.production-settings__task-skills'), skillTrigger = skills.getByRole('button', { name: /^(创意简报|风格与角色) Skill$/ });
+  await expect(skillTrigger).not.toBeVisible();
+  await expect(advanced.getByRole('button', { name: /预览与实验提示词|查看替代模型|对话修改任务/ })).toHaveCount(0);
   if (viewport.width >= 1024) {
     const controls = (await advanced.locator('.production-settings__task-controls').boundingBox())!;
     const prompt = (await advanced.locator('.production-settings__task-prompt').boundingBox())!;
     expect(prompt.x).toBeGreaterThan(controls.x + controls.width); expect(Math.abs(prompt.y - controls.y)).toBeLessThan(1);
     expect((await advanced.boundingBox())!.height).toBeLessThanOrEqual(280);
-    const buttons = await advanced.locator('.production-settings__task-actions > button').all();
-    const boxes = await Promise.all(buttons.map(button => button.boundingBox()));
-    expect(Math.max(...boxes.map(box => box!.y)) - Math.min(...boxes.map(box => box!.y))).toBeLessThan(1);
   }
-  await expect(advanced.getByRole('button', { name: '查看替代模型', exact: true })).toBeInViewport({ ratio: 1 });
+  await expect(more).toBeInViewport({ ratio: 1 });
   await page.screenshot({ path: info.outputPath(`advanced-text-${viewport.width}.png`) });
-  await advanced.getByRole('button', { name: '查看替代模型', exact: true }).click();
-  await expect(advanced.getByRole('region', { name: '替代模型建议', exact: true })).toBeVisible();
-  await advanced.getByRole('button', { name: '查看替代模型', exact: true }).click();
-  await skillSummary.click();
+  await more.press('Enter');
+  const menu = advanced.getByRole('group', { name: '创意简报更多操作', exact: true });
+  await expect(menu.getByRole('button', { name: '对话修改任务', exact: true })).toBeVisible();
+  await expect(skillTrigger).toContainText('已选 0 个'); await expect(skills.getByRole('searchbox')).not.toBeVisible();
+  await skillTrigger.click();
   const picker = advanced.getByRole('group', { name: '创意简报 Skill', exact: true });
-  await picker.getByRole('searchbox').fill(skillNames[0]); await picker.getByRole('checkbox', { name: new RegExp(skillNames[0]) }).check();
-  await expect(skillSummary).toContainText('已选 1 个'); await skillSummary.click();
-  await task.focus(); await task.selectOption('style'); await expect(skillSummary).toContainText('已选 0 个');
-  await task.selectOption('brief'); await expect(skillSummary).toContainText('已选 1 个');
+  await picker.getByRole('searchbox').fill(skillNames[0]);
+  const groupButton = picker.getByRole('list', { name: 'Skill 分组', exact: true }).getByRole('button');
+  await groupButton.click();
+  await picker.getByRole('checkbox', { name: new RegExp(skillNames[0]) }).check();
+  const panel = picker.locator(':popover-open');
+  await expect(panel).toBeInViewport({ ratio: 1 });
+  const [menuBox, triggerBox] = await Promise.all([panel.boundingBox(), skillTrigger.boundingBox()]);
+  const gap = Math.max(triggerBox!.y - menuBox!.y - menuBox!.height, menuBox!.y - triggerBox!.y - triggerBox!.height);
+  expect(gap).toBeGreaterThanOrEqual(0);
+  expect(gap).toBeLessThanOrEqual(12);
+  await page.screenshot({ path: info.outputPath(`advanced-skill-submenu-${viewport.width}.png`) });
+  await picker.getByRole('button', { name: '返回 Skill 分组', exact: true }).click();
+  await expect(groupButton).toBeFocused();
+  await expect(skillTrigger).toContainText('已选 1 个'); await skillTrigger.click();
+  await page.keyboard.press('Escape');
+  await expect(menu).not.toBeVisible(); await expect(more).toBeFocused();
+  await task.focus(); await task.selectOption('style'); await more.click(); await expect(skillTrigger).toContainText('已选 0 个');
+  await task.focus(); await task.selectOption('brief'); await more.click(); await expect(skillTrigger).toContainText('已选 1 个');
   await productionStep(dialog, '模型与素材'); await dialog.getByLabel('参考素材', { exact: true }).selectOption('generate');
   const media = dialog.locator('[data-production-step="materials"] > .production-settings__advanced').first();
   await media.locator(':scope > summary').click();
@@ -142,13 +155,20 @@ for (const viewport of [{ width: 1536, height: 960, theme: 'dark' }, { width: 10
   await mediaTask.focus(); await mediaTask.selectOption({ index: 0 }); await expect(mediaTask).toBeFocused();
   await mediaTask.selectOption('video'); await expect(mediaTask).toBeFocused();
   await expect(media.getByLabel(`${videoNode.label}补充要求`, { exact: true })).toHaveValue('镜头运动平缓，避免突然切换');
-  await media.scrollIntoViewIfNeeded(); await page.screenshot({ path: info.outputPath(`advanced-video-${viewport.width}.png`) });
+  await mediaTask.selectOption('assets'); await expect(mediaTask).toBeFocused();
+  await media.scrollIntoViewIfNeeded(); await page.screenshot({ path: info.outputPath(`advanced-reference-${viewport.width}.png`) });
+  await media.getByRole('button', { name: '更多操作', exact: true }).click();
+  const referenceMenu = media.getByRole('group', { name: '参考素材准备更多操作', exact: true });
+  await expect(referenceMenu.getByRole('button', { name: '参考素材准备 Skill', exact: true })).toContainText('已选 1 个');
+  await expect(referenceMenu).toBeInViewport({ ratio: 1 });
+  await page.screenshot({ path: info.outputPath(`advanced-reference-menu-${viewport.width}.png`) });
   await productionStep(dialog, '创作要求');
   await expect(advanced.getByLabel('创意简报补充要求', { exact: true })).toHaveValue('围绕三个具体场景展开');
   expect(writes).toEqual([]); await saveProduction(dialog); await expect(dialog).toHaveCount(0);
   const saved = await source.saved();
   expect(saved.workflow.nodes.find(node => node.id === 'brief')).toMatchObject({ modelId: source.override.id, prompt: '围绕三个具体场景展开' });
-  expect(saved.workflow.nodes.find(node => node.id === 'brief')?.skillIds).toEqual([imported.skills.find(skill => skill.name === skillNames[0])!.id]);
+  expect(saved.workflow.nodes.find(node => node.id === 'brief')?.skillIds).toEqual([skillId]);
+  expect(saved.workflow.nodes.find(node => node.id === 'assets')?.skillIds).toEqual([skillId]);
   expect(saved.workflow.nodes.find(node => node.id === 'style')?.prompt).toBe('保持人物外观与色调一致');
   expect(saved.workflow.nodes.find(node => node.id === 'video')?.prompt).toBe('镜头运动平缓，避免突然切换');
   expect(writes).toEqual(['project.update']); await expect(page.locator('vite-error-overlay')).toHaveCount(0); expect(errors).toEqual([]);

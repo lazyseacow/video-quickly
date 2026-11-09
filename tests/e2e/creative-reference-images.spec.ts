@@ -36,9 +36,11 @@ for (const viewport of [{ width: 1536, height: 960, theme: 'dark', name: 'deskto
       await page.setViewportSize(viewport); await page.addInitScript(theme => localStorage.setItem('vq-theme', theme), viewport.theme);
       let dialog = await openProduction(page, source.project);
       await expect(page).toHaveTitle(/Video Quickly/); await expect(page.locator('vite-error-overlay')).toHaveCount(0);
-      await dialog.locator('.creative-context-editor__entities > summary').click();
+      const entities = dialog.getByRole('button', { name: /^人物、场景与道具/ });
+      await entities.click();
+      const addScene = dialog.getByRole('button', { name: '添加场景设定', exact: true });
+      const addScenePosition = await addScene.boundingBox();
       let scene = dialog.getByRole('region', { name: '场景设定 1', exact: true });
-      await scene.locator(':scope > details > summary').click();
       await scene.locator('.creative-reference-picker__disclosure > summary').click();
       let references = scene.getByRole('group', { name: '场景参考图（最多 4 张）', exact: true });
       await expect(references.getByRole('checkbox', { name: source.primary.name, exact: true })).toBeChecked();
@@ -48,7 +50,9 @@ for (const viewport of [{ width: 1536, height: 960, theme: 'dark', name: 'deskto
       await references.getByRole('button', { name: '导入场景参考图', exact: true }).click();
       await expect(scene.locator('.creative-reference-picker__disclosure > summary')).toContainText('2 / 4');
       await expect(references.getByRole('checkbox', { name: /新增花园图-/ })).toBeChecked();
+      expect(await addScene.boundingBox()).toEqual(addScenePosition);
       await productionStep(dialog, '模型与素材'); await productionStep(dialog, '创作要求');
+      await entities.click();
       await expect(scene.locator('.creative-reference-picker__disclosure > summary')).toContainText('2 / 4');
       await scene.locator('.creative-reference-picker__disclosure > summary').scrollIntoViewIfNeeded();
       await expect.poll(() => dialog.evaluate(element => element.scrollWidth <= element.clientWidth + 2)).toBe(true);
@@ -61,8 +65,7 @@ for (const viewport of [{ width: 1536, height: 960, theme: 'dark', name: 'deskto
       await page.getByRole('button', { name: '重做', exact: true }).click();
       await expect.poll(async () => (await source.current()).creativeContext?.entities[0].referenceAssetIds?.length).toBe(2);
       dialog = await openProduction(page, source.project);
-      await dialog.locator('.creative-context-editor__entities > summary').click(); scene = dialog.getByRole('region', { name: '场景设定 1', exact: true });
-      await scene.locator(':scope > details > summary').click();
+      await dialog.getByRole('button', { name: /^人物、场景与道具/ }).click(); scene = dialog.getByRole('region', { name: '场景设定 1', exact: true });
       await scene.locator('.creative-reference-picker__disclosure > summary').click(); references = scene.getByRole('group', { name: '场景参考图（最多 4 张）', exact: true });
       const imported = references.getByRole('checkbox', { name: /新增花园图-/ }); await expect(imported).toBeChecked(); await imported.focus(); await page.keyboard.press('Space'); await expect(imported).not.toBeChecked();
       await dialog.getByRole('button', { name: '关闭对话框', exact: true }).click(); await expect(dialog).toHaveCount(0);

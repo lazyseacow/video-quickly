@@ -17,17 +17,50 @@ for (const viewport of [{ width: 1536, height: 960, theme: 'dark' }, { width: 39
   await page.setViewportSize(viewport); await page.addInitScript(theme => localStorage.setItem('vq-theme', theme), viewport.theme);
   await page.goto('/'); await openProjectFromList(page, project.title);
   const controls = page.locator('.preview-controls'), quality = controls.getByRole('combobox', { name: '预览质量', exact: true }), canvas = page.locator('.preview-frame canvas');
+  const qualityControl = controls.locator('.preview-quality-control');
+  const fullscreen = controls.getByRole('button', { name: '全屏预览', exact: true });
   await expect(quality).toHaveValue('1'); await expect(quality).toBeInViewport();
   await expect(page.locator('.preview-toolbar .preview-quality')).toHaveCount(0);
   await quality.click(); await expect(quality).toHaveJSProperty('value', '1');
-  const picker = await quality.getByRole('option', { name: '原画', exact: true }).boundingBox(), control = await quality.boundingBox(), fullscreen = await controls.getByRole('button', { name: '全屏预览', exact: true }).boundingBox();
-  expect(picker).not.toBeNull(); expect(control).not.toBeNull(); expect(fullscreen).not.toBeNull();
+  await expect(qualityControl).toHaveCSS('outline-style', 'none');
+  const picker = await quality.getByRole('option', { name: '原画', exact: true }).boundingBox(), control = await quality.boundingBox(), fullscreenBounds = await fullscreen.boundingBox();
+  expect(picker).not.toBeNull(); expect(control).not.toBeNull(); expect(fullscreenBounds).not.toBeNull();
   expect(picker!.y + picker!.height).toBeLessThan(control!.y);
   expect(picker!.x).toBeGreaterThan(control!.x - 132);
   expect(picker!.x + picker!.width).toBeLessThanOrEqual(control!.x + control!.width);
-  expect(control!.x + control!.width).toBeLessThanOrEqual(fullscreen!.x);
+  expect(control!.x + control!.width).toBeLessThanOrEqual(fullscreenBounds!.x);
   await page.screenshot({ path: info.outputPath('preview-quality-menu-' + viewport.width + '.png') });
   await quality.press('Escape');
+
+  await page.keyboard.press('Tab'); await expect(fullscreen).toBeFocused();
+  await page.keyboard.press('Shift+Tab'); await expect(quality).toBeFocused();
+  await expect(qualityControl).toHaveCSS('outline-style', 'solid');
+  await expect(qualityControl).toHaveCSS('outline-offset', '-2px');
+  await expect(quality).toHaveCSS('box-shadow', 'none');
+  await page.mouse.move(0, 0);
+  await controls.screenshot({ path: info.outputPath(`preview-quality-focus-${viewport.width}.png`) });
+  await quality.press('Space');
+  await expect(quality.getByRole('option', { name: '原画', exact: true })).toBeVisible();
+  await quality.press('Escape'); await expect(quality).toBeFocused();
+
+  if (viewport.width === 1536) {
+    const volume = controls.getByRole('slider', { name: '预览音量', exact: true });
+    const volumeControl = controls.locator('.preview-volume__slider');
+    await page.keyboard.press('Shift+Tab'); await expect(volume).toBeFocused();
+    await expect(volumeControl).toHaveCSS('outline-style', 'solid');
+    await expect(volumeControl).toHaveCSS('outline-offset', '-2px');
+    await expect(volume).toHaveCSS('box-shadow', 'none');
+    await expect(qualityControl).toHaveCSS('outline-style', 'none');
+    const slider = (await volume.boundingBox())!, volumeBounds = (await volumeControl.boundingBox())!, qualityBounds = (await qualityControl.boundingBox())!;
+    expect(slider.x).toBeGreaterThan(volumeBounds.x);
+    expect(slider.x + slider.width).toBeLessThan(volumeBounds.x + volumeBounds.width);
+    expect(volumeBounds.x + volumeBounds.width).toBeLessThan(qualityBounds.x);
+    await controls.screenshot({ path: info.outputPath('preview-volume-focus.png') });
+    await page.keyboard.press('Tab'); await expect(quality).toBeFocused();
+    await volume.click(); await expect(volume).toBeFocused();
+    await expect(volumeControl).toHaveCSS('outline-style', 'none');
+    await expect(volume).toHaveCSS('box-shadow', 'none');
+  }
   await quality.selectOption('0.25'); await expect(canvas).toHaveJSProperty('width', 160); await expect(canvas).toHaveJSProperty('height', 90);
   await expect(page.locator('.unsaved-dot')).toHaveCount(0);
   await page.screenshot({ path: info.outputPath('preview-quality-' + viewport.width + '.png') });

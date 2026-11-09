@@ -30,7 +30,7 @@ test.afterEach(async () => {
   await Promise.all(directories.splice(0).map(path => rm(path, { recursive: true, force: true })));
 });
 
-test('continues after closing the import dialog, groups every Skill and applies the group to new tasks', async ({ page, request }) => {
+test('continues after closing the import dialog, groups every Skill and applies the group to new tasks', async ({ page, request }, info) => {
   const directory = await sourceDirectory(), source = join(directory, 'repository.zip');
   await writeFile(source, zipSync({
     ...Object.fromEntries(Array.from({ length: 510 }, (_, index) => ['drama-main/examples/' + index + '.md', strToU8('example')])),
@@ -71,28 +71,59 @@ test('continues after closing the import dialog, groups every Skill and applies 
   await page.getByRole('button', { name: '新建项目', exact: true }).click();
   const creation = page.getByRole('dialog', { name: '新建视频项目', exact: true });
   await creation.getByLabel('项目名称').fill('Skill 全流程验收');
-  await creation.getByText('创作 Skill（可选）', { exact: true }).click();
-  await creation.getByRole('button', { name: '选用整组“短剧方法验收”', exact: true }).click();
-  await expect(creation.getByText('已选 2 个', { exact: true })).toBeVisible();
+  const creationPicker = creation.getByRole('group', { name: '创作 Skill（可选）', exact: true });
+  const trigger = creationPicker.getByRole('button', { name: '创作 Skill（可选）', exact: true });
+  const search = creationPicker.getByRole('searchbox');
+  const groupEntry = creationPicker.getByRole('button', { name: /^短剧方法验收/ });
+  const writeSkill = creationPicker.getByRole('checkbox', { name: /^ui-drama-write/ });
+  const storyboardSkill = creationPicker.getByRole('checkbox', { name: /^ui-drama-storyboard/ });
+  const selectGroup = creationPicker.getByRole('button', { name: '选用整组“短剧方法验收”', exact: true });
+  await trigger.press('Enter');
+  await expect(search).toBeFocused();
+  await expect(groupEntry).toContainText('0 / 2');
+  await expect(writeSkill).toHaveCount(0);
+  await page.screenshot({ path: info.outputPath('creation-skill-groups.png') });
+  await search.fill('写作方法验收');
+  await search.press('Enter');
+  await groupEntry.press('Enter');
+  await expect(creationPicker.getByRole('button', { name: '返回 Skill 分组', exact: true })).toBeFocused();
+  await expect(storyboardSkill).toHaveCount(0);
+  await writeSkill.press('Space');
+  await expect(writeSkill).toBeChecked();
+  await expect(trigger).toContainText('已选 1 个');
+  await selectGroup.click();
+  await search.fill('');
+  await expect(storyboardSkill).toBeChecked();
+  await creationPicker.getByRole('button', { name: '取消整组“短剧方法验收”', exact: true }).click();
+  await expect(writeSkill).not.toBeChecked();
+  await selectGroup.click();
+  await creationPicker.getByRole('button', { name: '清空选择', exact: true }).click();
+  await expect(trigger).toContainText('已选 0 个');
+  await selectGroup.click();
+  await expect(trigger).toContainText('已选 2 个');
+  await page.screenshot({ path: info.outputPath('creation-skill-submenu.png') });
+  await page.keyboard.press('Escape');
+  await expect(groupEntry).toBeFocused();
+  await expect(groupEntry).toContainText('2 / 2');
+  await page.keyboard.press('Escape');
+  await expect(search).not.toBeVisible();
+  await expect(trigger).toBeFocused();
   await creation.getByRole('button', { name: '创建项目', exact: true }).click();
   await expect(creation).toHaveCount(0);
   const after = workspaceSnapshotSchema.parse((await (await request.post('/__desktop_rpc', { data: { method: 'workspace.snapshot', params: {} } })).json()).result);
   const project = after.projects.find(item => item.title === 'Skill 全流程验收')!;
   for (const node of project.workflow.nodes.filter(node => ['brief', 'style', 'script'].includes(node.kind))) expect(node.skillIds).toEqual(storedGroup.skillIds);
+  expect(project.workflow.production.agentSkillIds).toEqual(storedGroup.skillIds);
 
   await page.getByRole('button', { name: '制作设置', exact: true }).click();
   const settings = page.getByRole('dialog', { name: '制作设置', exact: true });
-  await settings.locator('summary').filter({ hasText: /^高级设置$/ }).first().click();
-  const brief = project.workflow.nodes.find(node => node.kind === 'brief')!;
-  await settings.getByText(`${brief.label} Skill · 已选 2 个`, { exact: true }).click();
-  const picker = settings.getByRole('group', { name: brief.label + ' Skill', exact: true });
-  await picker.getByRole('searchbox').fill('ui-drama-write');
-  await picker.getByRole('checkbox', { name: /^ui-drama-write/ }).uncheck();
+  await settings.getByText('剪辑 Agent 设置', { exact: true }).click();
+  await expect(settings.getByRole('button', { name: '剪辑 Agent 的 Skill', exact: true })).toContainText('已选 2 个');
   await saveProduction(settings);
   await expect(settings).toHaveCount(0);
   const saved = projectDetailSchema.parse((await (await request.post('/__desktop_rpc', { data: { method: 'project.get', params: { projectId: project.id } } })).json()).result).project!;
-  expect(saved.workflow.nodes.find(node => node.kind === 'brief')!.skillIds).toHaveLength(1);
-  expect(saved.workflow.nodes.find(node => node.kind === 'script')!.skillIds).toEqual(storedGroup.skillIds);
+  for (const node of saved.workflow.nodes.filter(node => ['brief', 'style', 'script'].includes(node.kind))) expect(node.skillIds).toEqual(storedGroup.skillIds);
+  expect(saved.workflow.production).toMatchObject({ agentSkillIds: storedGroup.skillIds, agentMcpServerIds: [] });
 
   await page.getByRole('button', { name: 'Skill 工作室', exact: true }).click();
   await group.getByRole('button', { name: '查看“ui-drama-write”', exact: true }).click();

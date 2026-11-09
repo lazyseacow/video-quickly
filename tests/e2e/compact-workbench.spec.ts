@@ -1,9 +1,8 @@
-import { openAdvancedWorkflow } from './production-settings';
 
 import { expect, type APIRequestContext } from '@playwright/test';
 import { createSceneTemplate, type ProjectDocument } from '@video-quickly/contracts';
 import { test } from './isolated-workspace';
-import { productionFixture } from './production-settings';
+import { productionFixture, productionStep } from './production-settings';
 
 async function rpc<T>(request: APIRequestContext, method: string, params: unknown = {}): Promise<T> {
   const response = await request.post('/__desktop_rpc', { data: { method, params } }), payload = await response.json();
@@ -15,7 +14,7 @@ for (const viewport of [{ width: 1536, height: 960, theme: 'light' }, { width: 1
     const errors: string[] = []; page.on('pageerror', error => errors.push(error.message)); page.on('console', entry => { if (entry.type() === 'error') errors.push(entry.text()); });
     const source = await productionFixture(request), created = source.project;
     const project = await rpc<ProjectDocument>(request, 'project.update', { projectId: created.id, revision: created.revision, patch: {
-      workflow: { ...created.workflow, production: { ...created.workflow.production, textModelId: source.text.id, videoModelId: source.video.id }, nodes: created.workflow.nodes.map(node => node.id === 'style' ? { ...node, prompt: 'style原有提示词' } : node) },
+      workflow: { ...created.workflow, production: { ...created.workflow.production, textModelId: source.text.id, videoModelId: source.video.id }, nodes: created.workflow.nodes.map(node => node.id === 'style' ? { ...node, prompt: 'style原有提示词', modelId: source.override.id, config: { ...node.config, modelOverride: true } } : node) },
       shots: [{ id: 'compact-shot', title: '保留的镜头', narration: '已有旁白', visualPrompt: '', durationUs: 2_000_000, sceneTemplate: createSceneTemplate('process') }],
     } });
     expect(project.workflow.nodes.map(node => node.id)).toEqual(['brief', 'style', 'script', 'assets', 'video', 'animation', 'export']);
@@ -35,17 +34,24 @@ for (const viewport of [{ width: 1536, height: 960, theme: 'light' }, { width: 1
     await expect(dialog.getByRole('navigation', { name: '制作设置步骤', exact: true }).getByRole('button')).toHaveText(['1创作要求', '2模型与素材', '3声音与成片', '4确认保存']); await expect(dialog.getByRole('region', { name: '步骤指引', exact: true })).toHaveCount(0);
     await expect(dialog.getByText(/本步产出|前置步骤|后续步骤|一次确定创作方向|完成后等待人工审阅|资料与史实/)).toHaveCount(0);
     await expect(dialog.getByRole('checkbox', { name: /人工审核|人工审阅/ })).toHaveCount(0); expect((await dialog.locator('.dialog__surface').boundingBox())!.height).toBeLessThanOrEqual(viewport.height);
-    await dialog.locator('summary:visible').filter({ hasText: '高级设置' }).click();
-    const prompt = dialog.getByLabel('创意简报补充要求', { exact: true }); await prompt.fill('精简弹窗也保留可编辑的配置');
+    await expect(dialog.getByText('高级设置', { exact: true })).toHaveCount(0);
+    await expect(dialog.getByText('剪辑 Agent 设置', { exact: true })).toBeVisible();
+    await dialog.getByLabel('创作要求', { exact: true }).fill('精简弹窗也保留可编辑的配置');
+    const agent = dialog.getByText('剪辑 Agent 设置', { exact: true });
+    await agent.scrollIntoViewIfNeeded();
+    await page.screenshot({ path: info.outputPath(`planning-settings-${viewport.theme}-${viewport.width}.png`) });
+    await productionStep(dialog, '模型与素材');
+    await expect(dialog.getByText('高级设置', { exact: true })).toHaveCount(0);
+    await expect(dialog.getByRole('combobox', { name: '文本模型', exact: true })).toHaveValue(source.text.name);
+    await expect(dialog.getByRole('region', { name: '生成并发', exact: true })).toBeVisible();
     await dialog.getByRole('button', { name: '确认保存', exact: true }).click(); const save = dialog.getByRole('button', { name: '保存设置', exact: true }); await expect(save).toBeInViewport({ ratio: 1 });
     await page.screenshot({ path: info.outputPath(`compact-planning-${viewport.theme}-${viewport.width}.png`) }); await save.click(); await expect(dialog).toHaveCount(0);
     const saved = (await rpc<{ project: ProjectDocument }>(request, 'project.get', { projectId: project.id })).project;
-    expect(saved.workflow.nodes.find(node => node.id === 'brief')?.prompt).toBe('精简弹窗也保留可编辑的配置');
-    expect(saved.workflow.nodes.find(node => node.id === 'style')?.prompt).toBe('style原有提示词');
-    await openAdvancedWorkflow(page); await page.locator('.react-flow__node[data-id="script"]').click();
-    const type = page.getByLabel('步骤类型', { exact: true }); await expect(type.locator('option[value="research"], option[value="review"]')).toHaveCount(0);
-    await expect(page.getByLabel('完成后人工审阅', { exact: true })).toHaveCount(0);
-    await page.getByRole('button', { name: '返回工作台', exact: true }).click();
+    expect(saved.brief).toBe('精简弹窗也保留可编辑的配置');
+    expect(saved.workflow.nodes.find(node => node.id === 'brief')?.prompt).toBe(project.workflow.nodes.find(node => node.id === 'brief')?.prompt);
+    expect(saved.workflow.nodes.find(node => node.id === 'style')).toMatchObject({ prompt: 'style原有提示词', modelId: source.override.id, config: { modelOverride: true } });
+    expect(saved.workflow.nodes.map(node => node.kind)).not.toContain('research');
+    expect(saved.workflow.nodes.some(node => node.kind === 'review' || node.requiresReview)).toBe(false);
     await expect(page.getByRole('region', { name: '制作指引', exact: true }).locator('.workbench-guide__step')).toHaveCount(4);
     expect((await rpc<{ project: ProjectDocument }>(request, 'project.get', { projectId: project.id })).project).toEqual(saved);
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true); await expect(page.locator('vite-error-overlay')).toHaveCount(0); expect(errors).toEqual([]);

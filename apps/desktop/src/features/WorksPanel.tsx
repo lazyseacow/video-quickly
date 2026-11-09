@@ -91,7 +91,7 @@ function WorkEditor({ work, workspace, onClose, onSaved }: { work?: StoryWork; w
     try {
       const project = projectDetailSchema.parse(await rpc('project.get', { projectId: id })).project;
       if (!project) throw new Error('项目不可用。');
-      const { referenceAudioAssetIds: _audio, ...production } = project.workflow.production;
+      const { referenceAudioAssetIds: _audio, manualPlanningFields: _planning, ...production } = project.workflow.production;
       setDefaults(workDefaultsSchema.parse({ style: project.style, creativeContext: project.creativeContext, profile: project.profile, production }));
     } catch (error) { setError(failure(error)); } finally { inFlight.current = false; setBusy(false); }
   }

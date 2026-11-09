@@ -105,6 +105,23 @@ it('uses configured Seedance duration and real multi-reference roles without sil
   expect(body).not.toHaveProperty('characterReferenceMode');
 });
 
+it.each([
+  { model: 'doubao-seedance-2-0-260128', width: 5040, height: 2160, ratio: '21:9', resolution: '4k', firstFrame: false },
+  { model: 'doubao-seedance-2-0-fast-260128', width: 864, height: 1080, ratio: 'adaptive', resolution: '720p', firstFrame: false },
+  { model: 'doubao-seedance-2-5-260628', width: 2560, height: 1440, ratio: 'adaptive', resolution: '1080p', firstFrame: true },
+  { model: 'ep-fixture', width: 1920, height: 1080, ratio: '16:9', resolution: undefined, firstFrame: false },
+])('derives compatible Seedance request framing for $model', async ({ model, width, height, ratio, resolution, firstFrame }) => {
+  const { context, requests } = await fixture('seedance', 'animation');
+  context.model = { ...context.model!, model };
+  context.project.profile = { ...context.project.profile, width, height };
+  if (firstFrame) await addCharacter(context);
+  await validateMediaActivity(context);
+  await createActivityExecutor()(context);
+  expect(requests[0].body).toMatchObject({ ratio });
+  if (resolution) expect(requests[0].body).toHaveProperty('resolution', resolution);
+  else expect(requests[0].body).not.toHaveProperty('resolution');
+});
+
 it('rejects unsupported reference combinations before any journal receipt, then explicitly maps a custom request', async () => {
   const { context, requests } = await fixture('openai-compatible', 'animation'); await addCharacter(context, 2);
   await expect(validateMediaActivity(context)).rejects.toThrow('仅支持一张'); await expect(createActivityExecutor()(context)).rejects.toThrow('仅支持一张'); expect(requests).toEqual([]); expect(await readdir(context.dataDirectory)).toEqual(['reference-0.png', 'reference-1.png']);

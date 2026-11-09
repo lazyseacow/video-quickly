@@ -58,8 +58,24 @@ test('keeps recovery feedback and editing actions on a compact light workspace w
   await page.route('**/__desktop_rpc', async route => { if (!rejected && route.request().postDataJSON()?.method === 'project.update') { rejected = true; await route.abort('failed'); return; } await route.continue(); });
   await page.getByLabel('镜头标题', { exact: true }).fill('连接恢复后应保留的镜头草稿'); await page.getByRole('button', { name: '保存镜头', exact: true }).click(); await expect(page.getByText('本地执行组件已断开', { exact: true })).toBeVisible(); await expect(page.locator('.runtime-connection-notice')).toContainText('重新连接'); await expect(page.getByLabel('镜头标题', { exact: true })).toHaveValue('连接恢复后应保留的镜头草稿'); await expect(page.locator('.unsaved-dot')).toHaveText('未保存');
   await page.getByRole('button', { name: '重新连接', exact: true }).click(); await expect(page.locator('.runtime-connection-notice')).toHaveCount(0); await expect(page.getByLabel('镜头标题', { exact: true })).toHaveValue('连接恢复后应保留的镜头草稿');
-  page.once('dialog', dialog => dialog.accept()); await page.reload(); await page.getByRole('button', { name: '我的项目', exact: true }).click(); await page.locator('.project-card').filter({ has: page.getByRole('heading', { name: project.title, exact: true }) }).getByRole('button', { name: '继续创作', exact: true }).click(); await expect(page.getByText('已恢复未保存的本地草稿，含撤销与重做历史。', { exact: true })).toBeVisible(); await expect(page.getByLabel('镜头标题', { exact: true })).toHaveValue('连接恢复后应保留的镜头草稿'); await expectCleanChrome(page); await expect(page.locator('.statusbar')).toHaveCount(0);
-  const save = page.getByRole('button', { name: '保存镜头', exact: true }); await expect(save).toBeEnabled(); await save.click(); await expect.poll(async () => (await rpc<{ project: ProjectDocument }>(request, 'project.get', { projectId: project.id })).project.shots[0].title).toBe('连接恢复后应保留的镜头草稿');
+  page.once('dialog', dialog => dialog.accept()); await page.reload();
+  // Reload restores the active workbench. Leaving it would save the draft before the assertion.
+  const recoveryNotice = page.getByText('已恢复未保存的本地草稿，含撤销与重做历史。', { exact: true });
+  await expect(page.getByLabel('项目名称', { exact: true })).toHaveValue(project.title);
+  await expect(recoveryNotice).toBeVisible();
+  await expect(page.getByLabel('镜头标题', { exact: true })).toHaveValue('连接恢复后应保留的镜头草稿');
+  await expect(page.locator('.unsaved-dot')).toHaveText('未保存');
+  const beforeSave = (await rpc<{ project: ProjectDocument }>(request, 'project.get', { projectId: project.id })).project;
+  expect(beforeSave).toMatchObject({ revision: project.revision, shots: [{ id: 'cleanup-shot', title: '原镜头标题' }] });
+  await expectCleanChrome(page); await expect(page.locator('.statusbar')).toHaveCount(0);
+  await page.screenshot({ path: info.outputPath('compact-workspace-draft-recovered.png') });
+
+  const save = page.getByRole('button', { name: '保存镜头', exact: true });
+  await expect(save).toBeEnabled(); await save.click();
+  await expect.poll(async () => (await rpc<{ project: ProjectDocument }>(request, 'project.get', { projectId: project.id })).project).toMatchObject({
+    revision: project.revision + 1, shots: [{ id: 'cleanup-shot', title: '连接恢复后应保留的镜头草稿' }],
+  });
+  await expect(recoveryNotice).toHaveCount(0);
   const exportButton = page.getByRole('button', { name: '导出', exact: true }); await expect(exportButton).toBeEnabled();
   const controls = await page.locator('.project-heading').evaluate(element => ({ viewport: innerWidth, heading: element.getBoundingClientRect().toJSON(), actions: element.querySelector('.project-heading-actions')!.getBoundingClientRect().toJSON(), buttons: Array.from(element.querySelectorAll('button')).filter(button => button.checkVisibility()).map(button => ({ name: button.getAttribute('aria-label') || button.textContent, left: button.getBoundingClientRect().left, right: button.getBoundingClientRect().right })) }));
   expect(controls.buttons.filter(button => button.left < 52 || button.right > controls.viewport), JSON.stringify(controls)).toEqual([]);

@@ -287,7 +287,11 @@ it('treats applying an automatically applied video as a no-op and preserves subs
   const { runtime, baseline, run } = await videoApplication(true);
   const current = projectDetailSchema.parse(await runtime.dispatch('project.get', { projectId: baseline.id })).project!;
   expect(current.revision).toBeGreaterThan(baseline.revision); expect(current.shots[0].videoAssetId).toBe('generated-video');
+  const acknowledge = { runId: run.id, nodeId: 'video', revision: baseline.revision, applicationId: 'acknowledge-video' };
+  expect(await runtime.dispatch('node.apply', acknowledge)).toEqual(current);
   const later = projectSchema.parse(await runtime.dispatch('project.update', { projectId: current.id, revision: current.revision, patch: { shots: current.shots.map(shot => shot.id !== 'target' ? shot : { ...shot, title: '应用后手动精修', durationUs: 500_000, videoInUs: 200_000, audioProcessing: { ...DEFAULT_AUDIO_PROCESSING, gainDb: -6 }, locked: true }) } }));
+  expect(await runtime.dispatch('node.apply', acknowledge)).toEqual(current);
+  await expect(runtime.dispatch('node.apply', { ...acknowledge, applicationId: 'new-stale-application' })).rejects.toThrow('其他视图');
   const input = { runId: run.id, nodeId: 'video', revision: later.revision, applicationId: 'already-applied-video' };
   expect(await runtime.dispatch('node.apply', input)).toEqual(later);
   expect(await runtime.dispatch('node.apply', input)).toEqual(later);

@@ -35,7 +35,7 @@ for (const { width, theme } of [{ width: 1536, theme: 'dark' }, { width: 600, th
     const steps = dialog.getByRole('navigation', { name: '本次制作步骤', exact: true });
     await steps.getByRole('button', { name: /分镜生成/ }).click();
     const output = dialog.getByRole('region', { name: '本次产物', exact: true });
-    const storyboard = output.getByRole('region', { name: '分镜预览', exact: true });
+    const storyboard = dialog.getByRole('region', { name: '当前项目内容', exact: true }).getByRole('region', { name: '分镜预览', exact: true });
     await expect(storyboard.locator('ol > li')).toHaveCount(6); await expect(storyboard).toContainText('6 个镜头');
     await expect(storyboard.getByRole('heading', { name: '生成的蓝色镜头 1', exact: true })).toBeVisible();
     await expect(storyboard).toContainText('蓝色天空'); await expect(storyboard).toContainText('自然讲述');

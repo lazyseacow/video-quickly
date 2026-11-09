@@ -6,13 +6,18 @@ import { afterEach, expect, it } from 'vitest';
 import { modelSchema, projectSchema, promptLibraryItemSchema, promptPreviewSchema, promptSessionSchema, runSchema, runSummarySchema, shotSchema, workflowNodeSchema, subflowDefinitionSchema, type ProjectDocument, type PromptDraft } from '@video-quickly/contracts';
 import { createRuntime, SimulatedProcessExit, type RuntimeOptions } from '../packages/runtime/src/index';
 import { importSkillFixture } from './fixtures/import-skill';
+import { planningFixtureResponse } from './fixtures/planning-response';
 
 const directories: string[] = [], runtimes: ReturnType<typeof createRuntime>[] = [];
 afterEach(async () => { await Promise.all(runtimes.splice(0).map(runtime => runtime.close())); await Promise.all(directories.splice(0).map(path => rm(path, { recursive: true, force: true }))); });
 async function fixture(options: Partial<RuntimeOptions> = {}) {
   const directory = await mkdtemp(join(tmpdir(), 'vq-prompt-workbench-')); directories.push(directory);
   const prompts: string[] = [];
-  const runtime = createRuntime({ dataDirectory: directory, seed: false, provider: async input => { prompts.push(input.prompt); return { text: '实验生成的创意正文', usage: { source: 'provider', inputTokens: 11, outputTokens: 7 } }; }, ...options }); runtimes.push(runtime);
+  const runtime = createRuntime({ dataDirectory: directory, seed: false, provider: async input => {
+    prompts.push(input.prompt);
+    const text = '实验生成的创意正文';
+    return { text: planningFixtureResponse(input.prompt, text), usage: { source: 'provider', inputTokens: 11, outputTokens: 7 } };
+  }, ...options }); runtimes.push(runtime);
   const model = modelSchema.parse(await runtime.dispatch('model.save', { model: { name: '实验文本', provider: 'openai-compatible', baseUrl: 'http://127.0.0.1:1/v1', model: 'fixture', connectionType: 'text', capabilities: ['text'] } }));
   let project = projectSchema.parse(await runtime.dispatch('project.create', { title: '提示词实验项目', brief: '原始简报' }));
   project = projectSchema.parse(await runtime.dispatch('project.update', { projectId: project.id, revision: project.revision, patch: { workflow: { ...project.workflow, production: { ...project.workflow.production, textModelId: model.id } } } }));
@@ -40,7 +45,7 @@ it('previews offline, freezes input, deduplicates trial submissions and applies 
   expect(await source.runtime.dispatch('run.list', { purpose: 'prompt-trial', promptSessionId: saved.id })).toMatchObject({ items: [{ id: started.id, promptSessionRevision: 1 }] });
   await expect(source.runtime.dispatch('run.start', { projectId: source.project.id, parentRunId: started.id })).rejects.toThrow('不能接续');
   const applied = projectSchema.parse(await source.runtime.dispatch('node.apply', { runId: started.id, nodeId: preview.node.id, revision: source.project.revision }));
-  expect(applied.brief).toBe('实验生成的创意正文'); expect(applied.shots).toEqual(source.project.shots);
+  expect(applied.brief).toContain('实验生成的创意正文'); expect(applied.shots).toEqual(source.project.shots);
   expect(await source.runtime.dispatch('cost.summary', { runId: started.id })).toMatchObject({ total: 1 });
   expect(await source.runtime.dispatch('cost.tasks', { projectId: source.project.id })).toMatchObject({ items: [{ title: expect.stringContaining('提示词实验') }] });
   await expect(source.runtime.dispatch('promptTrial.start', { ...input, revision: 2 })).rejects.toThrow('标识已用于');
@@ -77,7 +82,7 @@ it('uses only saved ancestor output as input and resolves upstream variables wit
   const style = source.project.workflow.nodes.find(node => node.kind === 'style')!;
   const draft: PromptDraft = { ...source.draft, node: { ...style, prompt: '上游：{{prior}}', promptBindings: { prior: { nodeId: source.draft.node.id, path: ['text'] } } }, upstreamRunId: production.id };
   const { preview, session: saved } = await session(source, draft);
-  expect(preview.upstream.map(node => node.nodeId)).toEqual([source.draft.node.id]); expect(preview.prompt).toContain('上游：实验生成的创意正文');
+  expect(preview.upstream.map(node => node.nodeId)).toEqual([source.draft.node.id]); expect(preview.prompt).toContain('上游：主题\n实验生成的创意正文');
   await source.runtime.dispatch('promptTrial.start', { sessionId: saved.id, revision: saved.revision, requestId: randomUUID() }); await source.runtime.waitForIdle();
   expect(source.prompts).toHaveLength(2); expect(source.prompts[1]).toBe(preview.prompt); expect(await source.current()).toEqual(source.project);
 });
@@ -105,7 +110,7 @@ it('retains prompt bindings in a version 6 project backup and refuses misleading
 
 it('freezes the selected model and Skill version and prevents applying a trial over a newer project', async () => {
   const calls: { prompt: string; model: string }[] = [];
-  const source = await fixture({ provider: async input => { calls.push({ prompt: input.prompt, model: input.model.name }); return '旧快照的生成结果'; } });
+  const source = await fixture({ provider: async input => { calls.push({ prompt: input.prompt, model: input.model.name }); return planningFixtureResponse(input.prompt, '旧快照的生成结果'); } });
   const skillDirectory = join(source.directory, 'story-skill'); await mkdir(skillDirectory); await writeFile(join(skillDirectory, 'SKILL.md'), '---\nname: story-method\ndescription: 实验夹具\n---\n沿用旧版叙事方法');
   const skill = (await importSkillFixture(source.runtime.dispatch, { path: skillDirectory })).skills[0];
   const { preview, session: saved } = await session(source, { ...source.draft, node: { ...source.draft.node, skillIds: [skill.id] } });
@@ -118,15 +123,26 @@ it('freezes the selected model and Skill version and prevents applying a trial o
   expect((await source.current()).brief).toBe('人工更新的简报');
 });
 
-it('does not resubmit an ambiguous paid trial when the user resumes it', async () => {
+it('recovers a trial from its saved model response before committing the result', async () => {
   let exited = false;
   const source = await fixture({ failpoint(point) { if (!exited && point === 'after-result') { exited = true; throw new SimulatedProcessExit(); } } });
   const { session: saved } = await session(source);
   const run = runSchema.parse(await source.runtime.dispatch('promptTrial.start', { sessionId: saved.id, revision: 1, requestId: randomUUID() })); await source.runtime.waitForIdle();
   expect(source.prompts).toHaveLength(1);
   await source.runtime.dispatch('run.resume', { runId: run.id }); await source.runtime.waitForIdle();
-  const stopped = runSchema.parse(await source.runtime.dispatch('run.get', { runId: run.id }));
-  expect(stopped.status).toBe('needs_attention'); expect(source.prompts).toHaveLength(1); expect(await source.current()).toEqual(source.project);
+  const recovered = runSchema.parse(await source.runtime.dispatch('run.get', { runId: run.id }));
+  expect(recovered.status).toBe('succeeded'); expect(source.prompts).toHaveLength(1); expect(await source.current()).toEqual(source.project);
+});
+it('does not resubmit a paid trial when its response was never saved', async () => {
+  const calls: string[] = [];
+  const source = await fixture({ provider: async ({ prompt }) => { calls.push(prompt); throw new SimulatedProcessExit(); } });
+  const { session: saved } = await session(source);
+  const run = runSchema.parse(await source.runtime.dispatch('promptTrial.start', { sessionId: saved.id, revision: 1, requestId: randomUUID() })); await source.runtime.waitForIdle();
+  await source.runtime.dispatch('run.resume', { runId: run.id }); await source.runtime.waitForIdle();
+  expect(await source.runtime.dispatch('run.inspect', { runId: run.id })).toMatchObject({
+    steps: [{ status: 'failed', unknownSubmission: true, retry: { allowed: false } }],
+  });
+  expect(calls).toHaveLength(1); expect(await source.current()).toEqual(source.project);
 });
 it('requires an unlocked single shot for media and rejects local or tool-enabled tasks', async () => {
   const source = await fixture();
@@ -159,5 +175,5 @@ it('uses a selected shot as brief context while preserving the text output contr
   expect(preview.node.id).toBe(source.draft.node.id); expect(preview.prompt).toContain(shot.narration);
   const run = runSchema.parse(await source.runtime.dispatch('promptTrial.start', { sessionId: saved.id, revision: 1, requestId: randomUUID() })); await source.runtime.waitForIdle();
   const finished = runSchema.parse(await source.runtime.dispatch('run.get', { runId: run.id })); expect(finished.status, finished.error).toBe('succeeded');
-  expect(await source.current()).toEqual(project); expect(await source.runtime.dispatch('node.result', { runId: run.id, nodeId: preview.node.id })).toMatchObject({ text: '实验生成的创意正文' });
+  expect(await source.current()).toEqual(project); expect(await source.runtime.dispatch('node.result', { runId: run.id, nodeId: preview.node.id })).toMatchObject({ fields: { topic: '实验生成的创意正文' } });
 });

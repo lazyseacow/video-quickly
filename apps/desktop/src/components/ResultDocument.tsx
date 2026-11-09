@@ -1,6 +1,6 @@
 import { useMemo } from 'react';
 import { formatFrameRate, type VideoProfile } from '@video-quickly/contracts';
-import { resultBlocks, resultSections } from '../lib/result-document';
+import { resultBlocks, resultSections, type ResultSection } from '../lib/result-document';
 
 function InlineResult({ text }: { text: string }) {
   return text.split(/(\*\*[^*]+\*\*|`[^`]+`)/g).map((part, index) => part.startsWith('**') && part.endsWith('**')
@@ -28,11 +28,11 @@ function DocumentBody({ text }: { text: string }) {
   });
 }
 
-const overviewHeadings = new Set(['目标观众', '目标受众', '受众', '预计时长', '预期时长', '目标时长']);
+const overviewHeadings = new Set(['目标观众', '目标受众', '受众', '预计时长', '预期时长', '预期成片时长', '目标时长']);
 const detailHeadings = new Set(['表达要求', '制作要求', '注意事项']);
 
-export default function ResultDocument({ text, title, label }: { text: string; title?: string; label: string }) {
-  const sections = useMemo(() => resultSections(text), [text]);
+export default function ResultDocument({ text, title, label, fields }: { text: string; title?: string; label: string; fields?: ResultSection[] }) {
+  const sections = useMemo(() => fields ?? resultSections(text), [fields, text]);
   const topic = sections.find(section => section.heading === '主题' && section.text);
   const overview = sections.filter(section => overviewHeadings.has(section.heading) && section.text && !section.text.includes('\n'));
   return <article className="step-result__document result-document" aria-label={label}>

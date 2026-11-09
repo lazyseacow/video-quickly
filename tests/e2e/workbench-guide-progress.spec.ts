@@ -190,6 +190,7 @@ for (const viewport of [{ width: 1536, height: 960, theme: 'light' }, { width: 6
     await page.goto('/'); await expect(page).toHaveTitle(/Video Quickly/); await selectProject(page, project.title);
     const guide = page.getByRole('region', { name: '制作指引', exact: true }); await expect(guide.locator('.workbench-guide__step strong')).toHaveText(stageLabels); await expect(guide.getByRole('list')).not.toContainText('史实');
     const run = await rpc<RunSummary>(request, 'run.start', { projectId: project.id, nodeId: 'script' });
+    expect(run).toMatchObject({ selection: { nodeId: 'script', mode: 'node' }, stepCount: 1 });
     await expect.poll(() => status(request, run.id), { timeout: 30_000 }).toBe('succeeded');
     const list = progress(page), steps = cards(page), planning = card(page, stageLabels[0]);
     await expect(steps).toHaveCount(4); await expect(steps.locator('strong')).toHaveText(stageLabels); await expect(list).not.toContainText('史实'); await expect(planning).toHaveAttribute('data-state', 'succeeded');

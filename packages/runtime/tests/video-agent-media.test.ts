@@ -1,10 +1,12 @@
+import { planningFixtureResponse, storyboardFixtureResponse } from '../../../tests/fixtures/planning-response';
 import { spawnSync } from 'node:child_process';
 import { createServer, type Server } from 'node:http';
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { afterEach, expect, it } from 'vitest';
 import { createNativeVideoWorkflow, modelSchema, projectSchema, runInspectionSchema, runSchema, type ProjectDocument } from '@video-quickly/contracts';
+import { importSkillFixture } from '../../../tests/fixtures/import-skill';
 import { createActivityExecutor, validateMediaActivity } from '../../integrations/src/index.js';
 import { probeMedia, runMedia } from '../../video/src/node.js';
 import { createRuntime, SimulatedProcessExit, type RuntimeOptions } from '../src/index.js';
@@ -19,7 +21,7 @@ afterEach(async () => {
   await Promise.all(directories.splice(0).map(directory => rm(directory, { recursive: true, force: true })));
 });
 
-it.skipIf(!mediaAvailable)('resumes after applying Agent edits and exports a real trimmed MP4 without regenerating workflow media', async () => {
+it.skipIf(!mediaAvailable).each(['MCP', 'legacy planning Skill'] as const)('resumes Agent edits with %s and exports a real trimmed MP4 without regenerating workflow media', async capability => {
   const directory = await mkdtemp(join(tmpdir(), 'video-quickly-agent-real-media-')); directories.push(directory);
   const sourceVideo = join(directory, 'source.mp4'), sourceImage = join(directory, 'source.png');
   await runMedia(ffmpeg, ['-hide_banner', '-loglevel', 'error', '-y', '-f', 'lavfi', '-i', 'color=c=blue:s=160x90:r=30:d=1',
@@ -63,7 +65,9 @@ it.skipIf(!mediaAvailable)('resumes after applying Agent edits and exports a rea
   servers.push(server); await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
   const address = server.address(); if (!address || typeof address === 'string') throw new Error('测试服务未启动。'); baseUrl = `http://127.0.0.1:${address.port}`;
   const options: RuntimeOptions = { dataDirectory: directory, seed: false, ffmpegPath: ffmpeg, preflightActivity: validateMediaActivity,
-    executeActivity: createActivityExecutor({ ffmpegPath: ffmpeg }), provider: async () => JSON.stringify({ shots: [{ title: '蓝色天空', narration: '雨落下了。', visualPrompt: '蓝色天空与水滴', durationUs: 1_000_000 }], entities: [] }) };
+    executeActivity: createActivityExecutor({ ffmpegPath: ffmpeg }), provider: async ({ prompt }) => !prompt.includes('自动视频制作步骤：旁白与分镜')
+      ? planningFixtureResponse(prompt, '生成蓝色天空与水滴。')
+      : storyboardFixtureResponse(prompt, JSON.stringify({ shots: [{ title: '蓝色天空', narration: '雨落下了。', visualPrompt: '蓝色天空与水滴', durationUs: 1_000_000 }], entities: [] })) };
   let interrupted = false;
   const runtime = createRuntime({ ...options, failpoint(point, id) {
     if (point === 'after-commit' && id === 'animation/tool/edit') { interrupted = true; throw new SimulatedProcessExit(); }
@@ -76,18 +80,32 @@ it.skipIf(!mediaAvailable)('resumes after applying Agent edits and exports a rea
       parameters: { requestPath: `generate-${connectionType}`, requestTemplate: { prompt: '{{prompt}}' }, resultUrlPath: 'url' } } }));
   }
   const image = await mediaModel('image'), video = await mediaModel('video'), workflow = createNativeVideoWorkflow();
-  const connection = await runtime.dispatch('tool.register', { server: { name: '剪辑能力', transport: 'http', url: `${baseUrl}/mcp`, enabled: true } }) as { id: string };
+  let skillId: string | undefined, connectionId: string | undefined;
+  if (capability === 'legacy planning Skill') {
+    const skillDirectory = join(directory, 'planning-skill'); await mkdir(skillDirectory);
+    await writeFile(join(skillDirectory, 'SKILL.md'), '---\nname: planning-skill\ndescription: 创作时选择的叙事方法\n---\n保持镜头之间的画面连续。');
+    skillId = (await importSkillFixture(runtime.dispatch, { path: skillDirectory })).skills[0].id;
+  } else {
+    const connection = await runtime.dispatch('tool.register', { server: { name: '剪辑能力', transport: 'http', url: `${baseUrl}/mcp`, enabled: true } }) as { id: string };
+    connectionId = connection.id;
+  }
   const project = projectSchema.parse(await runtime.dispatch('project.update', { projectId: created.id, revision: created.revision, patch: { workflow: {
-    ...workflow, production: { ...workflow.production, textModelId: controller.id, imageModelId: image.id, videoModelId: video.id, referenceMode: 'generate' },
+    ...workflow,
+    nodes: workflow.nodes.map(node => skillId && ['brief', 'style', 'script'].includes(node.id) ? { ...node, skillIds: [skillId] } : node),
+    production: { ...workflow.production, agentInheritsPlanningSkills: skillId ? undefined : false, textModelId: controller.id, imageModelId: image.id, videoModelId: video.id, referenceMode: 'generate' },
   } } }));
+  expect(project.workflow.production.agentSkillIds).toEqual([]);
   const run = runSchema.parse(await runtime.dispatch('run.start', { projectId: project.id })); await runtime.waitForIdle();
   expect(interrupted).toBe(true);
   await runtime.close(); runtimes.delete(runtime);
   const reopened = createRuntime(options); runtimes.add(reopened);
-  await reopened.dispatch('tool.toggle', { serverId: connection.id, enabled: false });
+  if (skillId) await reopened.dispatch('skill.toggle', { skillId, enabled: false });
+  if (connectionId) await reopened.dispatch('tool.toggle', { serverId: connectionId, enabled: false });
   await reopened.dispatch('run.resume', { runId: run.id }); await reopened.waitForIdle();
-  const inspection = runInspectionSchema.parse(await reopened.dispatch('run.inspect', { runId: run.id }));
+  const inspection = runInspectionSchema.parse(await reopened.dispatch('run.inspect', { runId: run.id, nodeId: 'animation' }));
   expect(fixtureErrors).toEqual([]); expect(inspection.run.status, inspection.run.error).toBe('succeeded');
+  expect(inspection.selected?.node).toMatchObject({ kind: 'agent', skillIds: skillId ? [skillId] : [] });
+  if (skillId) expect(inspection.selected?.skills).toEqual([expect.objectContaining({ id: skillId, enabled: true })]);
   expect(inspection.steps.map(step => step.id)).toEqual(['brief', 'style', 'script', 'assets', 'video', 'animation', 'animation/tool/import', 'animation/tool/edit', 'export']);
   expect(inspection.steps.every(step => step.status === 'succeeded')).toBe(true);
   expect({ controllerRequests, imageRequests, videoRequests }).toEqual({ controllerRequests: 4, imageRequests: 1, videoRequests: 1 });

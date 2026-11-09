@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Check, Circle, LoaderCircle, Pause, TriangleAlert } from 'lucide-react';
 import type { RunStepProgress, RunStepSummary } from '@video-quickly/contracts';
-import { progressPhaseLabel, runningStep } from '../lib/run-progress';
+import { progressPhaseLabel, runningStep, storyboardPartLabel } from '../lib/run-progress';
 import './step-progress.css';
 
 export function ProgressIcon({ status, size = 14 }: { status: string; size?: number }) {
@@ -38,7 +38,7 @@ export default function StepProgress({ step }: { step: RunStepSummary }) {
   const count = progress?.total ? `${progress.completed ?? 0} / ${progress.total} ${step.kind === 'assets' ? '张图片' : '个镜头'}已完成` : '';
   const value = progress?.total ? (progress.completed ?? 0) / progress.total : progress?.fraction;
   const label = active ? step.status === 'retry_scheduled' ? '等待恢复' : progressPhaseLabel(progress, step.kind)
-    : step.status === 'canceled' ? '制作已停止' : '本步骤尚未完成';
+    : step.status === 'canceled' ? '制作已停止' : progress?.storyboard ? `${storyboardPartLabel(progress.storyboard)}尚未完成` : '本步骤尚未完成';
   return <section className="step-progress" aria-label="步骤进度" aria-busy={active}>
     <div className="step-progress__heading"><span role="status"><ProgressIcon status={active ? step.status : step.status === 'canceled' ? 'canceled' : 'interrupted'} />{label}</span>{count && <strong>{count}</strong>}{!count && value !== undefined && <strong>{Math.floor(value * 100)}%</strong>}</div>
     {(active || value !== undefined) && <div className="step-progress__bar" data-indeterminate={value === undefined || undefined} role="progressbar" aria-label={count ? '已完成镜头比例' : '步骤完成进度'} aria-valuemin={0} aria-valuemax={100} aria-valuenow={value === undefined ? undefined : Math.floor(value * 100)}><span style={value === undefined ? undefined : { width: `${value * 100}%` }} /></div>}

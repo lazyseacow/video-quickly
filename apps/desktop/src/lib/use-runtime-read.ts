@@ -27,7 +27,7 @@ export function useRuntimeRead<T>(method: string, params: Record<string, unknown
     return {
       snapshot: () => state,
       subscribe: (listener: () => void) => { listeners.add(listener); return () => { listeners.delete(listener); }; },
-      refresh: () => { failed = false; void read(); },
+      refresh: () => { failed = false; return read(); },
       observe: (version: number) => { if (version !== observedVersion) { observedVersion = version; if (!failed) void read(); } },
     };
   }, [method, parameters, schema]);

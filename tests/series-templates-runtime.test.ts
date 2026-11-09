@@ -1,4 +1,5 @@
 import { fixtureNativeVideo } from './fixtures/native-video';
+import { storyboardFixtureResponse } from './fixtures/planning-response';
 import { createServer, type Server } from 'node:http';
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -58,10 +59,10 @@ it('saves style edits and explicit inheritance exactly, rejects a stale external
 
 async function generationFixture() {
   const { runtime, directory } = await fixture(), requests: Array<{ path: string; body: Record<string, unknown> }> = [];
-  const state = { shots: [{ title: '新脚本文案', narration: '新旁白', visualPrompt: '新画面', captionStyle: { ...DEFAULT_CAPTION_STYLE, textColor: '#FF0000' } }] };
+  const state = { shots: [{ title: '新脚本文案', narration: '新旁白', visualPrompt: '新画面' }] };
   const server = createServer((request, response) => { void (async () => {
-    let text = ''; for await (const chunk of request) text += chunk.toString(); const path = request.url ?? ''; requests.push({ path, body: JSON.parse(text) });
-    if (path.endsWith('/chat/completions')) response.end(JSON.stringify({ choices: [{ message: { content: JSON.stringify({ shots: state.shots }) } }] }));
+    let text = ''; for await (const chunk of request) text += chunk.toString(); const path = request.url ?? '', body = JSON.parse(text); requests.push({ path, body });
+    if (path.endsWith('/chat/completions')) response.end(JSON.stringify({ choices: [{ message: { content: storyboardFixtureResponse(body.messages[0].content, JSON.stringify({ shots: state.shots })) } }] }));
     else if (path.endsWith('/images/generations')) response.end(JSON.stringify({ data: [{ b64_json: 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScLbtAAAAABJRU5ErkJggg==' }] }));
     else if (path.endsWith('/video')) response.end(JSON.stringify({ data: fixtureNativeVideo().toString('base64') }));
     else { response.statusCode = 404; response.end(); }

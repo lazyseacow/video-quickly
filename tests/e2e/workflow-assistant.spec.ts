@@ -1,9 +1,8 @@
-import { openAdvancedWorkflow } from './production-settings';
 import { createServer, type Server } from 'node:http';
 import { randomUUID } from 'node:crypto';
 import { expect, test, type APIRequestContext, type Locator } from '@playwright/test';
 import type { ModelProfile, ProjectDocument } from '@video-quickly/contracts';
-import { openProduction, saveProduction } from './production-settings';
+import { openProduction, pickProductionModel, saveProduction } from './production-settings';
 import { openProjectFromList } from './workspace-navigation';
 
 async function rpc<T>(request: APIRequestContext, method: string, params: unknown = {}): Promise<T> {
@@ -28,11 +27,12 @@ async function fixture(request: APIRequestContext, mode: 'complete' | 'hold-firs
   const model = await rpc<ModelProfile>(request, 'model.save', { model: { name: `建议文本 ${suffix}`, provider: 'openai-compatible', baseUrl: `http://127.0.0.1:${address.port}/v1`, connectionType: 'text', capabilities: ['text'], model: 'fixture', pricing: { currency: 'CNY', inputPerMillionTokens: 1, outputPerMillionTokens: 2 } } });
   const alternative = await rpc<ModelProfile>(request, 'model.save', { model: { name: `替代文本 ${suffix}`, provider: 'openai-compatible', baseUrl: `http://127.0.0.1:${address.port}/alternate`, connectionType: 'text', capabilities: ['text'], model: 'other' } });
   let project = await rpc<ProjectDocument>(request, 'project.create', { title: `可审阅修改 ${suffix}`, brief: '寻找木盒' });
-  project = await rpc<ProjectDocument>(request, 'project.update', { projectId: project.id, revision: project.revision, patch: { workflow: { ...project.workflow, production: { ...project.workflow.production, textModelId: model.id } } } });
+  project = await rpc<ProjectDocument>(request, 'project.update', { projectId: project.id, revision: project.revision, patch: { workflow: { ...project.workflow, id: 'existing-task-settings', production: { ...project.workflow.production, textModelId: model.id } } } });
   return { project, model, alternative, prompts, current: async () => (await rpc<{ project: ProjectDocument }>(request, 'project.get', { projectId: project.id })).project, close: async () => { release(); await close(server); } };
 }
 async function openAssistant(settings: Locator) {
   await settings.locator('summary:visible').filter({ hasText: '高级设置' }).click();
+  await settings.getByRole('button', { name: '更多操作', exact: true }).click();
   await settings.getByRole('button', { name: '对话修改任务', exact: true }).click();
   return settings.page().getByRole('dialog', { name: '对话修改任务', exact: true });
 }
@@ -41,7 +41,9 @@ for (const viewport of [{ width: 1536, height: 960, theme: 'dark' }, { width: 39
   try {
     await page.setViewportSize(viewport); await page.addInitScript(theme => localStorage.setItem('vq-theme', theme), viewport.theme);
     const settings = await openProduction(page, source.project), dialog = await openAssistant(settings);
-    await dialog.getByRole('textbox', { name: '修改要求', exact: true }).fill('加强人物动作，镜头节奏更从容');
+    const instruction = dialog.getByRole('textbox', { name: '修改要求', exact: true });
+    await expect(instruction).toHaveCSS('resize', 'none');
+    await instruction.fill('加强人物动作，镜头节奏更从容');
     await dialog.getByRole('combobox', { name: '建议生成模型', exact: true }).selectOption(source.model.id);
     await dialog.getByRole('button', { name: '生成修改预览', exact: true }).click();
     await expect(dialog.getByRole('region', { name: '修改预览', exact: true })).toContainText('缓慢推近木盒');
@@ -49,6 +51,7 @@ for (const viewport of [{ width: 1536, height: 960, theme: 'dark' }, { width: 39
     expect(await dialog.evaluate(element => element.scrollWidth <= element.clientWidth + 1)).toBe(true);
     await page.screenshot({ path: info.outputPath(`workflow-assistant-${viewport.theme}.png`) });
     await dialog.getByRole('button', { name: '应用到任务草稿', exact: true }).click(); await expect(dialog).toHaveCount(0);
+    await expect(settings.getByRole('button', { name: '更多操作', exact: true })).toBeFocused();
     await expect(settings.getByRole('textbox', { name: /补充要求$/ })).toHaveValue('缓慢推近木盒，保持人物动作连续。'); expect(await source.current()).toEqual(source.project);
     await saveProduction(settings); await expect(settings).toHaveCount(0);
     await expect.poll(async () => (await source.current()).workflow.nodes.find(node => node.id === source.project.workflow.nodes.find(node => node.kind === 'brief')!.id)?.prompt).toBe('缓慢推近木盒，保持人物动作连续。');
@@ -103,7 +106,7 @@ for (const mode of ['hold-first', 'fail-first'] as const) test(`requires review 
   } finally { await source.close(); }
 });
 
-test('reuses a lost start response and keeps alternative selection as a reversible configuration edit', async ({ page, request }) => {
+test('reuses a lost start response and keeps manual model selection as a reversible configuration edit', async ({ page, request }) => {
   const source = await fixture(request); let lost = false;
   await page.route('**/__desktop_rpc', async route => {
     const input = route.request().postDataJSON();
@@ -119,17 +122,14 @@ test('reuses a lost start response and keeps alternative selection as a reversib
     await expect(dialog.getByRole('region', { name: '修改预览', exact: true })).toContainText('缓慢推近木盒');
     expect(source.prompts).toHaveLength(1); expect(await source.current()).toEqual(source.project);
     await dialog.getByRole('button', { name: '关闭', exact: true }).click(); await expect(dialog).toHaveCount(0);
-    await settings.getByRole('button', { name: '关闭对话框', exact: true }).click(); await expect(settings).toHaveCount(0);
-    await openAdvancedWorkflow(page);
     const node = source.project.workflow.nodes.find(node => node.kind === 'brief')!;
-    await page.locator(`.react-flow__node[data-id="${node.id}"]`).click();
-    await page.getByRole('button', { name: '查看替代模型', exact: true }).click();
-    const alternatives = page.getByRole('region', { name: '替代模型建议', exact: true });
-    await alternatives.getByRole('listitem').filter({ hasText: source.alternative.name }).getByRole('button', { name: '用于下次配置', exact: true }).click();
-    await expect(page.getByRole('combobox', { name: '使用模型', exact: true })).toHaveValue(source.alternative.id); expect(source.prompts).toHaveLength(1);
+    await pickProductionModel(settings, `${node.label}模型`, source.alternative);
     expect(await source.current()).toEqual(source.project);
+    await saveProduction(settings); await expect(settings).toHaveCount(0);
+    expect((await source.current()).workflow.nodes.find(step => step.id === node.id)?.modelId).toBe(source.alternative.id);
     await page.getByRole('button', { name: '撤销', exact: true }).click();
-    await expect(page.getByRole('combobox', { name: '使用模型', exact: true })).toHaveValue(source.model.id); expect(source.prompts).toHaveLength(1);
+    await expect.poll(async () => (await source.current()).workflow.nodes.find(step => step.id === node.id)?.modelId).not.toBe(source.alternative.id);
+    expect(source.prompts).toHaveLength(1);
   } finally { await source.close(); }
 });
 

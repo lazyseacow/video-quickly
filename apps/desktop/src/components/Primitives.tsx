@@ -15,12 +15,12 @@ export function Select({ children, multiple, size, className = '', ...props }: C
   return <select {...props} className={`select ${className}`} multiple={multiple} size={size}>{!multiple && size === undefined && <button type="button" className="select-value">{createElement('selectedcontent', { className: 'select-value__text' })}</button>}{children}</select>;
 }
 
-export function Field({ label, hint, children, className = '' }: { label: string; hint?: string; children: ReactNode; className?: string }) {
+export function Field({ label, hint, required = false, children, className = '' }: { label: string; hint?: string; required?: boolean; children: ReactNode; className?: string }) {
   const hintId = useId();
   const control = isValidElement<Record<string, unknown>>(children) && (children.type === Select || typeof children.type === 'string' && ['input', 'select', 'textarea'].includes(children.type))
     ? cloneElement(children, { 'aria-label': children.props['aria-label'] ?? label, ...(hint ? { 'aria-describedby': [children.props['aria-describedby'], hintId].filter(Boolean).join(' ') } : {}) })
     : children;
-  return <label className={`field ${className}`}><span className="field__label">{label}</span>{control}{hint && <span id={hintId} className="field__hint">{hint}</span>}</label>;
+  return <label className={`field ${className}`}><span className="field__label">{label}{required && <span className="field__required" aria-hidden="true">*</span>}</span>{control}{hint && <span id={hintId} className="field__hint">{hint}</span>}</label>;
 }
 
 export function Dialog({ title, children, onClose, onDismissStart, className = '', role, descriptionId, initialFocus }: { title: string; children: ReactNode; onClose: () => void; onDismissStart?: () => void; className?: string; role?: 'dialog' | 'alertdialog'; descriptionId?: string; initialFocus?: RefObject<HTMLElement | null> }) {

@@ -1,4 +1,3 @@
-import { openAdvancedWorkflow } from './production-settings';
 import { confirmAction } from './confirmation-actions';
 import { saveProduction } from './production-settings';
 import { selectModel, closeProjectSettings } from './settings';
@@ -290,7 +289,7 @@ test('scrubs continuously, steps fractional frames and preserves the editing dra
   await expect(page.getByLabel('镜头标题', { exact: true })).toHaveValue('尚未保存的标题');
 });
 
-test('edits real project state, output profiles, graph and theme', async ({ page }) => {
+test('edits real project state, output profiles and theme', async ({ page }) => {
   const errors: string[] = [];
   page.on('pageerror', error => errors.push(error.message));
   await openApp(page);
@@ -318,15 +317,6 @@ test('edits real project state, output profiles, graph and theme', async ({ page
   await expect((await projectSettingField(page, '视频高度'))).toHaveValue('1920');
 
   await closeProjectSettings(page);
-  await openAdvancedWorkflow(page);
-  await expect(page.locator('.react-flow')).toBeVisible();
-  await expect(page.getByRole('button', { name: '保存流程', exact: true })).toBeDisabled();
-  await page.getByRole('button', { name: '添加编排步骤', exact: true }).click();
-  await expect(page.getByLabel('步骤名称')).toHaveValue('新步骤');
-  await page.getByLabel('步骤名称').fill('检查标题与字幕');
-  await page.getByRole('button', { name: '保存流程', exact: true }).click();
-  await expect(page.getByText('检查标题与字幕', { exact: true }).first()).toBeVisible();
-
   await setWorkspaceTheme(page, 'light');
   await expect(page.locator('html')).toHaveAttribute('data-theme', 'light');
   await page.setViewportSize({ width: 1100, height: 800 });
@@ -334,33 +324,6 @@ test('edits real project state, output profiles, graph and theme', async ({ page
   const layout = await page.evaluate(() => ({ viewport: innerWidth, document: document.documentElement.scrollWidth }));
   expect(layout.document).toBeLessThanOrEqual(layout.viewport + 1);
   expect(errors).toEqual([]);
-});
-
-test('keeps flow edits through background refresh and saves before switching views', async ({ page, request }) => {
-  const response = await request.post('/__desktop_rpc', { data: { method: 'project.create', params: { title: '流程交互验收' } } });
-  const project = (await response.json()).result;
-  await request.post('/__desktop_rpc', { data: { method: 'project.create', params: { title: '外部更新的项目名称' } } });
-  await openApp(page);
-  await page.getByRole('button', { name: '我的项目', exact: true }).click();
-  await page.locator('.project-card').filter({ hasText: '流程交互验收' }).getByRole('button', { name: /继续创作/ }).click();
-  await closeProjectSettings(page);
-  await openAdvancedWorkflow(page);
-  await expect(page.getByRole('button', { name: '保存流程', exact: true })).toBeDisabled();
-  await page.getByRole('button', { name: '添加编排步骤', exact: true }).click();
-  await page.getByLabel('步骤名称').fill('后台刷新保留的步骤');
-  const renamed = await request.post('/__desktop_rpc', { data: { method: 'project.update', params: { projectId: project.id, revision: project.revision, patch: { title: '流程交互验收 · 新修订' } } } });
-  expect((await renamed.json()).error).toBeUndefined();
-  await expect(page.getByLabel('项目名称', { exact: true })).toHaveValue('流程交互验收 · 新修订');
-  await expect(page.getByLabel('步骤名称')).toHaveValue('后台刷新保留的步骤');
-  await page.setViewportSize({ width: 600, height: 900 });
-  const canvas = await page.locator('.react-flow').boundingBox();
-  expect(canvas?.height).toBeGreaterThan(300);
-  await page.getByRole('button', { name: '返回工作台', exact: true }).click();
-  await expect(page.locator('.react-flow')).toHaveCount(0);
-  await closeProjectSettings(page);
-  await openAdvancedWorkflow(page);
-  await expect(page.getByText('后台刷新保留的步骤', { exact: true }).first()).toBeVisible();
-  await expect(page.getByRole('button', { name: '保存流程', exact: true })).toBeDisabled();
 });
 
 test('resizes and restores editor panels, and saves before opening a recent project', async ({ page, request }) => {

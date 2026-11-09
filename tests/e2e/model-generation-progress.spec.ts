@@ -65,6 +65,11 @@ for (const viewport of [{ width: 1536, height: 960, theme: 'dark', references: t
       await progress.getByRole('button', { name: '打开阶段：审阅与导出', exact: true }).click(); const record = page.getByRole('dialog', { name: '本次制作', exact: true });
       await expect(record.getByRole('tablist', { name: '制作阶段记录', exact: true })).toHaveCount(0); await expect(record.getByRole('navigation', { name: '本次制作步骤', exact: true }).getByRole('button', { name: /导出成片/ })).toHaveAttribute('aria-current', 'step'); await expect(record.getByRole('link', { name: '下载成片', exact: true })).toBeVisible();
       await record.getByRole('button', { name: '关闭对话框', exact: true }).click(); await page.screenshot({ path: info.outputPath('model-generation-complete.png') });
+      expect((await saved(request, source.project.id)).shots).toHaveLength(0);
+      await progress.getByRole('button', { name: '打开阶段：策划与分镜', exact: true }).click();
+      await record.getByRole('navigation', { name: '本次制作步骤', exact: true }).getByRole('button', { name: /分镜生成/ }).click();
+      await expect(record.getByRole('region', { name: '本次产物', exact: true }).getByRole('region', { name: '分镜预览', exact: true })).toContainText('2 个镜头');
+      await record.getByRole('button', { name: '关闭对话框', exact: true }).click();
       await expect(page).toHaveTitle(/Video Quickly/); await expect(page.locator('vite-error-overlay')).toHaveCount(0); expect(errors).toEqual([]);
       expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
     } finally { Object.values(gates).forEach(gate => gate.resolve()); await source.close(); }

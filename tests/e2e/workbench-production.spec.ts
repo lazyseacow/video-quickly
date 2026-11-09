@@ -83,7 +83,7 @@ for (const viewport of [{ width: 1536, height: 960, theme: 'dark' }, { width: 39
       await page.reload(); await selectProject(page, source.project);
       await production(page).getByRole('button', { name: '打开步骤：分镜确认', exact: true }).click();
       const output = page.getByRole('dialog', { name: '本次制作', exact: true });
-      await expect(output.getByRole('region', { name: '本次产物', exact: true })).toContainText('流程生成镜头'); await output.getByRole('button', { name: '关闭对话框', exact: true }).click(); await expect(output).toHaveCount(0);
+      await expect(output.getByRole('region', { name: '当前项目内容', exact: true })).toContainText('流程生成镜头'); await output.getByRole('button', { name: '关闭对话框', exact: true }).click(); await expect(output).toHaveCount(0);
       await expect(page.getByLabel('镜头标题', { exact: true })).toHaveValue('流程生成镜头');
       await expect(page.getByRole('button', { name: '导出', exact: true })).toBeEnabled();
       await production(page).scrollIntoViewIfNeeded(); await page.screenshot({ path: info.outputPath(`automatic-production-${viewport.width}.png`) });

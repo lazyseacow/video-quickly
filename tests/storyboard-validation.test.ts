@@ -131,10 +131,13 @@ it('persists a negotiated prompt format for the same frozen step across explicit
   expect(f.tail).not.toHaveBeenCalled();
 });
 
-it('preserves truncated raw output as a known validation failure even when its JSON happens to parse', async () => {
-  const f = await fixture(async () => ({ text: valid, incomplete: true }));
+it.each([
+  { reason: 'max_output_tokens', message: '已达到 Token 上限' },
+  { reason: undefined, message: '具体原因未知' },
+] as const)('preserves incomplete raw output with reason $reason even when its JSON parses', async ({ reason, message }) => {
+  const f = await fixture(async () => ({ text: valid, incomplete: true, incompleteReason: reason }));
   expect((await f.inspect()).steps.find(step => step.id === 'script')).toMatchObject({ unknownSubmission: false, retry: { allowed: true } });
-  expect((await f.output()).modelResponse).toMatchObject({ text: valid, incomplete: true, issues: [{ path: '$', message: expect.stringContaining('截断') }] });
+  expect((await f.output()).modelResponse).toMatchObject({ text: valid, incomplete: true, issues: [{ path: '$', message: expect.stringContaining(message) }] });
   expect(f.tail).not.toHaveBeenCalled();
 });
 

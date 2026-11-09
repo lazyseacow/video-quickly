@@ -1,3 +1,4 @@
+import { planningFixtureResponse, storyboardFixtureResponse } from '../fixtures/planning-response';
 import { execFile } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { createServer } from 'node:http';
@@ -36,7 +37,10 @@ for (const surface of [{ width: 1536, height: 960, theme: 'dark' }, { width: 600
           tool = { operation: 'edit', requestId: 'edit', edits: [{ shotId: project.shots[0].id, inUs: 0, outUs: 1_000_000, transition: 'cut' }] };
         }
       }
-      const content = encoded.includes('自动视频制作步骤：旁白与分镜') ? JSON.stringify({ shots: [{ title: '蓝色镜头', narration: '这是蓝色的天空。', visualPrompt: '蓝色天空', durationUs: 2_000_000 }], entities: [] }) : '采用柔和的蓝色画面。';
+      const text = '采用柔和的蓝色画面。';
+      const content = encoded.includes('自动视频制作步骤：旁白与分镜')
+        ? storyboardFixtureResponse(payload.messages[0].content, JSON.stringify({ shots: [{ title: '蓝色镜头', narration: '这是蓝色的天空。', visualPrompt: '蓝色天空', durationUs: 2_000_000 }], entities: [] }))
+        : !payload.tools?.length ? planningFixtureResponse(encoded, text) : text;
       response.end(JSON.stringify({ id: `agent-ui-${controllerCalls}`, object: 'chat.completion', created: 1, model: 'fixture', choices: [{ index: 0, finish_reason: tool ? 'tool_calls' : 'stop', message: tool ? { role: 'assistant', content: null, tool_calls: [{ id: `call-${controllerCalls}`, type: 'function', function: { name: toolName, arguments: JSON.stringify(tool) } }] } : { role: 'assistant', content } }] }));
     } catch (error) { errors.push(String(error)); response.statusCode = 500; response.end('Fixture request failed'); }
   });

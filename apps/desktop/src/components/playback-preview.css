@@ -5,9 +5,10 @@
 .preview-panel.preview-player .preview-chrome { position: absolute; left: 0; right: 0; z-index: 2; transition: opacity var(--motion-fast) var(--motion-ease), visibility var(--motion-fast); }
 .preview-panel.preview-player .preview-toolbar { top: 0; height: auto; min-height: 56px; padding: var(--space-2) var(--space-4); color: var(--on-media); background: linear-gradient(var(--media-overlay), transparent); }
 .preview-player .sample-chip { color: var(--on-media); }
-.preview-quality-control { display: flex; align-items: center; flex-shrink: 0; gap: var(--space-1); color: var(--on-media); font-size: var(--text-size-caption); anchor-scope: --preview-quality-anchor; }
+.preview-quality-control { display: flex; align-items: center; flex-shrink: 0; gap: var(--space-1); padding-inline-start: var(--space-3); border-radius: var(--radius-pill); color: var(--on-media); font-size: var(--text-size-caption); cursor: pointer; anchor-scope: --preview-quality-anchor; }
 .preview-quality-control .preview-quality { --text: var(--on-media); --text-secondary: var(--on-media); --surface: var(--media-player-background); --surface-hover: color-mix(in srgb, var(--on-media) 16%, var(--media-player-background)); --surface-selected: color-mix(in srgb, var(--on-media) 12%, var(--media-player-background)); --accent: var(--on-media); }
-.preview-panel.preview-player .preview-controls select.preview-quality { anchor-name: --preview-quality-anchor; width: 76px; min-width: 0; min-height: var(--control-hit-size); padding-inline: var(--space-2) var(--space-8); border-color: transparent; color: var(--on-media); background: transparent; font-size: var(--text-size-caption); }
+.preview-panel.preview-player .preview-controls select.preview-quality { anchor-name: --preview-quality-anchor; width: 76px; min-width: 0; min-height: var(--control-hit-size); padding-inline: var(--space-2) var(--space-8); border-color: transparent; color: var(--on-media); background: transparent; box-shadow: none; font-size: var(--text-size-caption); }
+.preview-panel.preview-player .preview-controls .preview-quality-control > select.preview-quality:is(:hover, :open) { border-color: transparent; background: transparent; }
 @supports (appearance: base-select) {
   .preview-panel.preview-player .preview-controls select.preview-quality::picker(select) { position-anchor: --preview-quality-anchor; position-area: top span-left; position-try-fallbacks: none; inset: auto; justify-self: end; align-self: end; min-inline-size: 132px; margin: 0 0 var(--space-2); }
   .preview-panel.preview-player .preview-controls select.preview-quality::picker-icon { inset-inline-end: var(--space-2); rotate: 180deg; }
@@ -20,14 +21,20 @@
 .preview-player .preview-controls .timecode { margin: 0 var(--space-2); min-width: 0; white-space: nowrap; color: var(--on-media); }
 .preview-player .timecode b { color: var(--on-media); }
 .preview-volume { display: flex; align-items: center; gap: var(--space-1); margin-left: auto; }
-.preview-volume input { width: 64px; min-width: 0; accent-color: var(--on-media); }
+.preview-volume__slider { display: flex; align-items: center; padding-inline: var(--space-2); border-radius: var(--radius-pill); }
+.preview-player .preview-volume__slider input { width: 64px; min-width: 0; min-height: var(--control-hit-size); margin: 0; background: transparent; box-shadow: none; accent-color: var(--on-media); cursor: pointer; }
+.preview-volume__slider:hover,
+.preview-quality-control:hover,
+.preview-quality-control:has(> select:open) { background: color-mix(in srgb, var(--on-media) 16%, transparent); }
+.preview-volume__slider:has(> input:focus-visible),
+.preview-quality-control:has(> select:focus-visible) { background: var(--media-player-background); outline: 2px solid var(--on-media); outline-offset: -2px; }
 .preview-player .preview-seek { appearance: none; width: 100%; min-width: 0; height: 20px; margin: 0; background: transparent; cursor: pointer; }
 .preview-seek::-webkit-slider-runnable-track { height: 3px; border-radius: var(--radius-pill); background: linear-gradient(to right, var(--on-media) var(--preview-progress), color-mix(in srgb, var(--on-media) 30%, transparent) var(--preview-progress)); }
 .preview-seek::-webkit-slider-thumb { appearance: none; width: 12px; height: 12px; margin-top: -4.5px; border-radius: var(--radius-pill); background: var(--on-media); }
 .preview-seek::-moz-range-track { height: 3px; border-radius: var(--radius-pill); background: color-mix(in srgb, var(--on-media) 30%, transparent); }
 .preview-seek::-moz-range-progress { height: 3px; background: var(--on-media); }
 .preview-seek::-moz-range-thumb { width: 12px; height: 12px; border: 0; border-radius: var(--radius-pill); background: var(--on-media); }
-.preview-player :is(.preview-seek, .preview-volume input, .preview-controls .icon-button):focus-visible { outline: 2px solid var(--on-media); outline-offset: 2px; }
+.preview-player :is(.preview-seek, .preview-controls .icon-button):focus-visible { outline: 2px solid var(--on-media); outline-offset: 2px; }
 .preview-panel.preview-player:focus-visible { outline: 2px solid var(--on-media); outline-offset: -2px; }
 .preview-panel.preview-player[data-controls-visible='false']:not(:has(:focus-visible, select:open)) .preview-chrome { opacity: 0; visibility: hidden; pointer-events: none; }
 .preview-panel.preview-player[data-controls-visible='false']:not(:has(:focus-visible, select:open)) { cursor: none; }
@@ -35,13 +42,14 @@
 .preview-player .preview-audio > .tiny-meta, .preview-player .prepared-mix-preview__warnings { color: var(--on-media); background: var(--media-caption-background); padding: var(--space-2) var(--space-3); border-radius: var(--radius-track); }
 .preview-panel.preview-player:fullscreen { width: 100vw; height: 100dvh; min-height: 0; }
 @container preview-player (max-width: 640px) {
-  .preview-quality-label, .preview-volume input { display: none; }
+  .preview-quality-label, .preview-volume__slider { display: none; }
+  .preview-quality-control { padding-inline-start: 0; }
 }
 @container preview-player (max-width: 520px) {
   .preview-panel.preview-player .preview-toolbar { padding-inline: var(--space-3); }
   .preview-panel.preview-player .preview-controls { padding-inline: var(--space-2); }
-  .preview-volume input { display: none; }
   .preview-player .preview-controls .icon-button { width: 44px; height: 44px; }
+  .preview-panel.preview-player .preview-controls select.preview-quality { min-height: var(--control-height); }
   .preview-player .preview-seek { height: 40px; }
   .preview-controls__row { gap: 0; }
   .preview-player .preview-controls .timecode { margin-inline: var(--space-1); }

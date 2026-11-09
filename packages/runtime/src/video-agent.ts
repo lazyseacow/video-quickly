@@ -1,4 +1,4 @@
-import { workflowNodeSchema, type ProjectDocument, type WorkflowNode } from '@video-quickly/contracts';
+import { workflowNodeSchema, type ProductionSettings, type ProjectDocument, type WorkflowNode } from '@video-quickly/contracts';
 import type { AgentBusinessTools } from './agent.js';
 
 export function legacyVideoAgentNode(project: ProjectDocument): WorkflowNode {
@@ -9,8 +9,7 @@ export function legacyVideoAgentNode(project: ProjectDocument): WorkflowNode {
   });
 }
 
-export function videoEditingAgentNode(step: WorkflowNode, project: ProjectDocument, modelId: string): WorkflowNode {
-  const { agentSkillIds, agentMcpServerIds } = project.workflow.production;
+export function videoEditingAgentNode(step: WorkflowNode, modelId: string, { agentSkillIds, agentMcpServerIds }: Pick<ProductionSettings, 'agentSkillIds' | 'agentMcpServerIds'>): WorkflowNode {
   const { operation: _localOperation, ...config } = step.config;
   return { ...step, kind: 'agent', modelId, skillIds: agentSkillIds,
     description: '按需使用 Skill 和工具补充镜头素材，准备时间轴、运镜与转场。',

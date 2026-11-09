@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Check, ChevronLeft, ChevronRight, Clapperboard, Clock3, Download, FolderOpen, Image, LoaderCircle, Music2, Play, RefreshCw, TriangleAlert } from 'lucide-react';
-import { assetSchema, captionTrackSchema, creativeContextSchema, creativeEntityLabels, workflowProposalSchema, workflowProposalChanges, type AssetRecord, type GenerationShotProgress, type JsonValue, type RunStepPayload, type RunStepProgressDetail, type WorkflowNode } from '@video-quickly/contracts';
+import { assetSchema, captionTrackSchema, creativeContextSchema, creativeEntityLabels, planningDocumentSchemas, planningDocumentSections, workflowProposalSchema, workflowProposalChanges, type AssetRecord, type GenerationShotProgress, type JsonValue, type RunStepPayload, type RunStepProgressDetail, type WorkflowNode } from '@video-quickly/contracts';
 import { getAssetUrl } from '../lib/client';
 import { assetAvailabilityUrl, useAssetAvailability } from '../lib/asset-availability';
 import { nativeDesktop, revealFile } from './PathPicker';
@@ -34,20 +34,27 @@ export default function StepResultView({ value, kind, mediaShots, mediaGeneratio
   const proposalError = copy(object?.proposalError);
   const claims = Array.isArray(object?.claims) ? object.claims.flatMap(value => { const claim = record(value); return claim ? [claim] : []; }) : [];
   const text = typeof value === 'string' ? value : copy(object?.text) || copy(object?.style) || copy(object?.brief);
+  const outline = kind === 'script' ? copy(object?.outline) : '';
+  const fields = useMemo(() => {
+    if (kind !== 'brief' && kind !== 'style') return undefined;
+    const parsed = planningDocumentSchemas[kind].safeParse(object?.fields);
+    return parsed.success ? planningDocumentSections(kind, parsed.data) : undefined;
+  }, [kind, object?.fields]);
   const exportPath = kind === 'export' ? copy(object?.videoPath) || copy(object?.outputPath) || copy(object?.path) : '';
   const localCount = [object?.referenceAssetIds, object?.assetIds, object?.audioAssetIds].find(Array.isArray)?.filter(Boolean).length;
   const preparedShots = kind === 'animation' && typeof object?.shots === 'number' ? object.shots : undefined;
-  const specialized = shots.length || assets.length || progress?.shots.length || captions.success || claims.length || text || exportPath || localCount !== undefined || preparedShots !== undefined || proposal.success || proposalError;
+  const specialized = shots.length || assets.length || progress?.shots.length || captions.success || claims.length || text || outline || exportPath || localCount !== undefined || preparedShots !== undefined || proposal.success || proposalError;
 
   return <div className="step-result" aria-label="制作结果">
+    {outline && <ResultDocument text={outline} title="全片大纲" label="全片大纲" />}
     {shots.length > 0 && <StoryboardResult shots={shots} animation={kind === 'animation'} />}
     {creative.success && (creative.data.entities.length > 0 || creative.data.characterIds.length > 0 || creative.data.continuity) && <section className="step-result__document" aria-label="本次创作设定"><h3>创作设定</h3>{creative.data.characterIds.length > 0 && <p>{creative.data.characterIds.length} 个参考角色</p>}{creative.data.continuity && <p><strong>连续性要求</strong><br />{creative.data.continuity}</p>}{creative.data.entities.map(entity => <p key={entity.key}><strong>{creativeEntityLabels[entity.kind]}：{entity.name}</strong><br />{entity.description}</p>)}</section>}
     {(assets.length > 0 || Boolean(progress?.shots.length)) && <MediaGallery assets={assets} shots={mediaShots} exported={kind === 'export'} nodeKind={kind} progress={progress} mediaGeneration={mediaGeneration} onRegenerate={onRegenerate} />}
     {exportPath && !assets.some(asset => asset.kind === 'video') && <figure className="step-result__media"><ResultMedia path={exportPath} kind="video" name="导出成片" exported /></figure>}
     {captions.success && <CaptionResult track={captions.data} />}
     {claims.length > 0 && <section className="step-result__claims" aria-label="资料主张"><div className="step-result__summary">{claims.length} 条主张</div>{claims.map((claim, index) => <article key={copy(claim.id) || index}><header><strong>主张 {index + 1}</strong><span>{claim.status === 'verified' && object?.readonly === true ? '已核验' : claim.status === 'disputed' ? '存在争议' : '待核验'}</span></header><p>{copy(claim.text)}</p>{copy(claim.evidence) && <blockquote>{copy(claim.evidence)}</blockquote>}</article>)}</section>}
-    {(proposal.success || proposalError) && <section className="step-result__document" aria-label="任务修改建议">{proposal.success && <><h3>{proposal.data.summary}</h3><dl className="step-result__fields">{workflowProposalChanges(proposal.data).map(change => <div key={change.field}><dt>{change.label}</dt><dd><p>当前内容：{change.before || '未设置'}</p><p>建议内容：{change.after || '未设置'}</p></dd></div>)}</dl></>}{proposalError && <Notice kind="error">{proposalError}</Notice>}<p>在对应任务的“对话修改任务”中打开已保存建议，核对修订后应用到草稿。</p>{text && <details><summary>原始模型结果</summary><pre>{text}</pre></details>}</section>}
-    {text && !shots.length && !captions.success && !claims.length && !proposal.success && !proposalError && <ResultDocument text={text} title={copy(object?.title)} label={kind === 'style' ? '视觉风格' : kind === 'brief' ? '创作简报' : '创作内容'} />}
+    {(proposal.success || proposalError) && <section className="step-result__document" aria-label="任务修改建议">{proposal.success && <><h3>{proposal.data.summary}</h3><dl className="step-result__fields">{workflowProposalChanges(proposal.data).map(change => <div key={change.field}><dt>{change.label}</dt><dd><p>当前内容：{change.before || '未设置'}</p><p>建议内容：{change.after || '未设置'}</p></dd></div>)}</dl></>}{proposalError && <Notice kind="error">{proposalError}</Notice>}<p>在对应任务的“更多操作”中打开“对话修改任务”，核对已保存的建议后应用到草稿。</p>{text && <details><summary>原始模型结果</summary><pre>{text}</pre></details>}</section>}
+    {text && !shots.length && !captions.success && !claims.length && !proposal.success && !proposalError && <ResultDocument text={text} fields={fields} title={copy(object?.title)} label={kind === 'style' ? '视觉风格' : kind === 'brief' ? '创作简报' : '创作内容'} />}
     {localCount !== undefined && !assets.length && <div className="step-result__checkpoint"><Check size={20} /><strong>{localCount ? `已沿用 ${localCount} 份素材` : '本步骤未添加参考素材'}</strong></div>}
     {preparedShots !== undefined && <div className="step-result__checkpoint"><Check size={20} /><div><strong>{preparedShots} 个镜头已就绪</strong>{copy(object?.message) && <p>{copy(object?.message)}</p>}</div></div>}
     {!specialized && kind === 'review' ? <div className="step-result__checkpoint"><Check size={24} /><div><strong>自动检查结果</strong><p>检查完成后，流程会自动继续后续步骤。</p></div></div>

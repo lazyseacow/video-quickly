@@ -1,11 +1,23 @@
 import { expect, it } from 'vitest';
 import { createNativeVideoWorkflow, DEFAULT_VIDEO_PROFILE, projectSchema, shotSchema, skillSchema } from '@video-quickly/contracts';
 import { buildWorkflowPrompt, parseWorkflowShots } from '../packages/runtime/src/workflow-prompts';
+import { parseProductionDocument, productionDocumentContract } from '../packages/runtime/src/workflow-outputs';
+import { planningFixtureFields } from './fixtures/planning-response';
 
 const project = () => projectSchema.parse({ id: 'prompt-project', title: '自动制作主题', brief: '上一步已生成的创意简报', style: '上一步已生成的视觉风格', revision: 1, profile: DEFAULT_VIDEO_PROFILE, workflow: createNativeVideoWorkflow(), shots: [], createdAt: '', updatedAt: '' });
 const generated = (title: string, extra: Record<string, unknown> = {}) => ({ title, narration: `${title}的旁白`, visualPrompt: `${title}的画面`, durationUs: 2_000_000, ...extra });
 const response = (...shots: ReturnType<typeof generated>[]) => JSON.stringify({ shots });
 const existing = (id: string, extra: Record<string, unknown> = {}) => shotSchema.parse({ id, ...generated(id), ...extra });
+
+it('keeps the frozen brief output contract and validates fields for new runs', () => {
+  const value = project(), node = value.workflow.nodes.find(node => node.id === 'brief')!;
+  const legacy = productionDocumentContract(node, 1)!, current = productionDocumentContract(node, 2)!;
+  expect(buildWorkflowPrompt(value, node, [], false, [], [], 1)).toContain('{"text":"正文"}');
+  expect(parseProductionDocument('{"text":"已冻结的正文"}', legacy)).toEqual({ text: '已冻结的正文' });
+  const fields = { ...planningFixtureFields('brief', '天气变化'), audience: '学生' };
+  expect(parseProductionDocument(JSON.stringify(fields), current)).toEqual({ text: '主题\n天气变化\n\n目标受众\n学生', fields });
+  expect(() => parseProductionDocument('{"text":"非结构化正文"}', current)).toThrow('topic');
+});
 
 it('builds downstream generation input from current project, actual upstream results and enabled selected skills', () => {
   const current = project(), node = { ...current.workflow.nodes.find(node => node.kind === 'script')!, skillIds: ['selected', 'disabled'], prompt: '镜头不要超过三条' };

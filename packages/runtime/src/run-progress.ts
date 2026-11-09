@@ -1,5 +1,5 @@
 import type { MediaDiagnosticEvent } from '@video-quickly/integrations';
-import type { AssetRecord, GenerationShotProgress, ProjectDocument, RunStepProgress, RunStepProgressDetail } from '@video-quickly/contracts';
+import type { AssetRecord, GenerationShotProgress, ProjectDocument, RunStepProgress, RunStepProgressDetail, StoryboardPart } from '@video-quickly/contracts';
 import { DocumentStore } from './database.js';
 
 interface RecordedProgress extends RunStepProgress { shots: GenerationShotProgress[] }
@@ -31,7 +31,13 @@ export function createRunProgress(store: DocumentStore, changed: () => void = ()
       return { id: shot.id, title: shot.title, durationUs: shot.durationUs, status: saved?.status === 'completed' ? 'completed' : 'pending',
         assetId: saved?.status === 'completed' ? saved.assetId : undefined, referenceAssetId: reference?.id, updatedAt: timestamp };
     }) : [];
-    save(id, { phase: kind ? 'generating' : 'preparing', startedAt: previous && !previous.endedAt ? previous.startedAt : timestamp, updatedAt: timestamp, shots });
+    save(id, { phase: kind ? 'generating' : 'preparing', startedAt: previous && !previous.endedAt ? previous.startedAt : timestamp, updatedAt: timestamp, shots,
+      ...(previous?.storyboard ? { storyboard: previous.storyboard, completed: previous.completed, total: previous.total } : {}) });
+  }
+  function storyboard(id: string, part: StoryboardPart, completed?: number, total?: number) {
+    const current = read(id);
+    if (!current || current.endedAt) return;
+    save(id, { ...current, storyboard: part, completed, total, updatedAt: new Date().toISOString() });
   }
   function phase(id: string, phase: RunStepProgress['phase'], confirmed = false, fraction?: number) {
     if (fraction !== undefined && !Number.isFinite(fraction)) return;
@@ -80,5 +86,5 @@ export function createRunProgress(store: DocumentStore, changed: () => void = ()
     save(id, { ...current, ...(outcome === 'completed' ? { phase: 'completed' as const } : {}), updatedAt: timestamp, endedAt: timestamp,
       shots: current.shots.map(shot => outcome !== 'completed' && activeStates.has(shot.status) ? { ...shot, status: outcome, updatedAt: timestamp } : shot) });
   }
-  return { begin, phase, media, asset, end, summary, detail };
+  return { begin, storyboard, phase, media, asset, end, summary, detail };
 }

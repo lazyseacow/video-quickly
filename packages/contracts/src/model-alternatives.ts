@@ -1,4 +1,4 @@
-import { getModelCapabilities, validateModelConnection, validateModelParameters, type ModelCapability, type ModelProfile, type WorkflowNode } from './index.js';
+import { supportsProductionAgent, validateModelConnection, validateModelParameters, type ModelCapability, type ModelProfile, type WorkflowNode } from './index.js';
 
 export interface ModelFailureContext {
   error?: string; unknownSubmission?: boolean; runStatus?: string; queueOwned?: boolean; trial?: boolean;
@@ -41,8 +41,8 @@ export function modelAlternatives(node: WorkflowNode, models: readonly ModelProf
   const selected = models.find(model => model.id === node.modelId);
   const serviceAddress = (value: string) => { const url = new URL(value); return `${url.origin}${url.pathname.replace(/\/+$/, '')}`; };
   const alternatives = !capability ? [] : models.filter(model => {
-    if (!model.enabled || model.id === node.modelId || !getModelCapabilities(model).includes(capability)) return false;
-    if (node.kind === 'agent' && !getModelCapabilities(model).includes('tools')) return false;
+    if (!model.enabled || model.id === node.modelId || !model.capabilities.includes(capability)) return false;
+    if (node.kind === 'agent' && !supportsProductionAgent(model)) return false;
     if (capability === 'text' && !['openai-compatible', 'ollama'].includes(model.provider)) return false;
     if (capability === 'image' && !['openai-compatible', 'seedream', 'comfyui', 'custom-http'].includes(model.provider)) return false;
     if (capability === 'video' && !['openai-compatible', 'seedance', 'comfyui', 'custom-http'].includes(model.provider)) return false;

@@ -8,7 +8,7 @@
 .caption-editor__cue-heading > span { color: var(--text-subtle); font-size: var(--text-size-micro); font-variant-numeric: tabular-nums; }
 .caption-editor__cue-heading > div { display: flex; gap: var(--space-tight); }
 .caption-editor__cue-heading .icon-button { width: 40px; height: 40px; }
-.caption-editor__cue textarea { min-height: 64px; resize: vertical; }
+.caption-editor__cue textarea { min-height: 64px; }
 .caption-editor__cue input { font-variant-numeric: tabular-nums; }
 .caption-editor__cue .field:last-child { margin-bottom: 0; }
 .caption-editor__empty { grid-column: 1 / -1; padding: var(--space-6) var(--space-3); color: var(--text-secondary); text-align: center; }

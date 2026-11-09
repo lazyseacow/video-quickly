@@ -1,3 +1,4 @@
+import { planningFixtureResponse, storyboardFixtureResponse } from './fixtures/planning-response';
 import { createServer, type Server } from 'node:http';
 import { spawnSync } from 'node:child_process';
 import { mkdtemp, readFile, rm, unlink } from 'node:fs/promises';
@@ -48,6 +49,11 @@ it('restores all four stages and project settings together, detecting changes to
   const draft = updateProductionConfigurationDraft('project', undefined, workflow, workflow.nodes, settings, current, { ...current, brief: '下一次主题' });
   const restored = stageConfigurationDraftSchema.parse(JSON.parse(JSON.stringify(draft)));
   expect(applyStageConfigurationDraft(workflow, restored).workflow.nodes.find(node => node.id === 'script')?.modelId).toBe('next-text');
+  const generatedFields = { brief: { topic: '生成的主题', audience: '', coreMessage: '', narrativeOrder: '', targetDuration: '', expression: '' } };
+  const completed = { ...workflow, production: { ...workflow.production!, manualPlanningFields: generatedFields } };
+  const applied = applyStageConfigurationDraft(completed, restored);
+  expect(applied.conflicts).toEqual([]);
+  expect(applied.workflow.production).toMatchObject({ textModelId: 'next-text', manualPlanningFields: generatedFields });
   expect(applyProductionProjectDraft(current, restored).settings.brief).toBe('下一次主题');
   expect(applyProductionProjectDraft({ ...current, brief: '其他窗口的主题' }, restored).conflicts).toEqual(['brief']);
   expect(applyStageConfigurationDraft({ ...workflow, production: { ...workflow.production!, textModelId: 'remote' } }, restored).conflicts).toContain('production');
@@ -84,7 +90,7 @@ async function fixture(audio = true, failpoint?: RuntimeOptions['failpoint']) {
   servers.push(server); await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
   const address = server.address(); if (!address || typeof address === 'string') throw new Error('Fixture server unavailable'); baseUrl = `http://127.0.0.1:${address.port}`;
   const options: RuntimeOptions = { dataDirectory: directory, seed: false, ffmpegPath: ffmpeg, preflightActivity: validateMediaActivity, executeActivity: createActivityExecutor({ ffmpegPath: ffmpeg }), failpoint,
-    provider: async ({ prompt }) => { textCalls++; return prompt.includes('自动视频制作步骤：旁白与分镜') ? JSON.stringify({ shots: [{ title: '视频镜头', narration: '雨落下了。', visualPrompt: '蓝色天空', soundPrompt: '轻声讲述，雨声', durationUs: 2_000_000 }] }) : '连续的蓝色画面与自然声音。'; } };
+    provider: async ({ prompt }) => { textCalls++; return prompt.includes('自动视频制作步骤：旁白与分镜') ? storyboardFixtureResponse(prompt, JSON.stringify({ shots: [{ title: '视频镜头', narration: '雨落下了。', visualPrompt: '蓝色天空', soundPrompt: '轻声讲述，雨声', durationUs: 2_000_000 }] })) : planningFixtureResponse(prompt, '连续的蓝色画面与自然声音。'); } };
   const runtime = createRuntime(options); runtimes.add(runtime);
   const project = projectSchema.parse(await runtime.dispatch('project.create', { title: '视频制作', brief: '讲述雨水', profile: { width: 160, height: 90, frameRate: { numerator: 30, denominator: 1 } } }));
   const text = modelSchema.parse(await runtime.dispatch('model.save', { model: { name: '文本夹具', provider: 'ollama', model: 'text', connectionType: 'text', capabilities: ['text'], baseUrl } }));
@@ -100,11 +106,12 @@ it.skipIf(!mediaAvailable)('generates, previews through the sound projection, an
   const inspection = runInspectionSchema.parse(await source.runtime.dispatch('run.inspect', { runId: started.id }));
   expect(inspection.run.status, inspection.run.error).toBe('succeeded'); expect(inspection.steps.every(step => step.status === 'succeeded')).toBe(true);
   const project = await source.current(); expect(project.shots[0]).toMatchObject({ soundPrompt: '轻声讲述，雨声', durationUs: 1_000_000, audioProcessing: { version: 2, videoAudio: { enabled: true } } });
-  expect(project.shots[0].audioAssetId).toBeUndefined(); expect(source.counts()).toEqual({ submissions: 1, textCalls: 3 });
+  expect(project.shots[0].audioAssetId).toBeUndefined(); expect(source.counts()).toEqual({ submissions: 1, textCalls: 4 });
   expect(source.received[0]).toMatchObject({ generate_audio: true }); expect(JSON.stringify(source.received[0])).toContain('雨落下了。'); expect(JSON.stringify(source.received[0])).toContain('轻声讲述');
   const payload = await source.runtime.dispatch('run.step.payload', { runId: started.id, nodeId: 'export', kind: 'output' }) as { value: { videoPath: string; subtitlePath: string } };
   expect((await probeMedia(payload.value.videoPath, ffprobe)).audio).toBe(true); expect(await readFile(payload.value.subtitlePath, 'utf8')).toBe('');
-  const backup = await source.runtime.dispatch('project.backup', { projectId: project.id }) as { path: string }; expect(JSON.parse(await readFile(join(backup.path, 'project.json'), 'utf8')).schemaVersion).toBe(4);
+  const backup = await source.runtime.dispatch('project.backup', { projectId: project.id }) as { path: string };
+  expect(JSON.parse(await readFile(join(backup.path, 'project.json'), 'utf8'))).toMatchObject({ schemaVersion: 9, project: { workflow: { production: { manualPlanningFields: { brief: { topic: expect.any(String) } } } } } });
 });
 
 it.skipIf(!mediaAvailable)('recovers a committed native video without submitting or generating its text again', async () => {
@@ -119,7 +126,7 @@ it.skipIf(!mediaAvailable)('recovers a committed native video without submitting
   const started = runSchema.parse(await source.runtime.dispatch('run.start', { projectId: source.configured.id })); await source.runtime.waitForIdle(); await source.runtime.close(); runtimes.delete(source.runtime);
   const recovered = createRuntime({ ...source.options, failpoint: undefined }); runtimes.add(recovered);
   await recovered.dispatch('run.resume', { runId: started.id }); await recovered.waitForIdle();
-  const run = runSchema.parse(await recovered.dispatch('run.get', { runId: started.id })); expect(run.status, run.error).toBe('succeeded'); expect(source.counts()).toEqual({ submissions: 1, textCalls: 3 });
+  const run = runSchema.parse(await recovered.dispatch('run.get', { runId: started.id })); expect(run.status, run.error).toBe('succeeded'); expect(source.counts()).toEqual({ submissions: 1, textCalls: 4 });
   expect(source.received[0].content).toEqual(expect.arrayContaining([{ type: 'audio_url', audio_url: { url: 'data:audio/wav;base64,' + bytes.toString('base64') }, role: 'reference_audio' }]));
 });
 
@@ -141,5 +148,5 @@ it.skipIf(!mediaAvailable)('keeps a silent provider result for inspection and ne
   const source = await fixture(false);
   const started = runSchema.parse(await source.runtime.dispatch('run.start', { projectId: source.configured.id })); await source.runtime.waitForIdle();
   const failed = runSchema.parse(await source.runtime.dispatch('run.get', { runId: started.id })); expect(failed.status).toBe('needs_attention'); expect(failed.error).toContain('音轨');
-  await source.runtime.dispatch('run.resume', { runId: started.id }); await source.runtime.waitForIdle(); expect(source.counts()).toEqual({ submissions: 1, textCalls: 3 });
+  await source.runtime.dispatch('run.resume', { runId: started.id }); await source.runtime.waitForIdle(); expect(source.counts()).toEqual({ submissions: 1, textCalls: 4 });
 });

@@ -1,3 +1,4 @@
+import { planningFixtureResponse } from '../tests/fixtures/planning-response';
 import assert from 'node:assert/strict';
 import { execFile, execFileSync } from 'node:child_process';
 import { createServer } from 'node:http';
@@ -22,7 +23,11 @@ const server = createServer(async (request, response) => {
   if (request.method === 'POST') posts.push(path);
   response.setHeader('Content-Type', 'application/json');
   if (path === '/v1/chat/completions') {
-    const content = Buffer.concat(chunks).toString().includes('自动视频制作步骤：旁白与分镜') ? JSON.stringify({ shots: Array.from({ length: 3 }, (_, index) => ({ id: `service-shot-${index + 1}`, title: `本地回归镜头 ${index + 1}`, narration: '这是本地 CLI 视频回归。', visualPrompt: '红色测试画面', durationUs: 10_000_000 })) }) : '红色测试画面，三个镜头，中文自然讲述。';
+    const prompt = Buffer.concat(chunks).toString();
+    const text = '红色测试画面，三个镜头，中文自然讲述。';
+    const content = prompt.includes('自动视频制作步骤：旁白与分镜')
+      ? JSON.stringify({ shots: Array.from({ length: 3 }, (_, index) => ({ id: `service-shot-${index + 1}`, title: `本地回归镜头 ${index + 1}`, narration: '这是本地 CLI 视频回归。', visualPrompt: '红色测试画面', durationUs: 10_000_000 })) })
+      : planningFixtureResponse(prompt, text);
     response.end(JSON.stringify({ choices: [{ message: { content } }], usage: { prompt_tokens: 10, completion_tokens: 20 } }));
   }
   else if (path === '/v1/images/generations') response.end(JSON.stringify({ data: [{ b64_json: image.toString('base64') }] }));

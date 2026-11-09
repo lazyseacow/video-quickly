@@ -27,7 +27,19 @@ for (const viewport of [{ width: 1536, height: 960 }, { width: 390, height: 844 
     }
     await expect(editor.getByRole('button', { name: '保存并开始制作', exact: true })).toHaveCount(0);
     await expect(editor.getByRole('button', { name: '添加模型连接', exact: true })).toHaveCount(0);
-    await page.screenshot({ path: info.outputPath(`no-available-models-${viewport.width}.png`) }); await saveProduction(editor); await expect(editor).toHaveCount(0); await page.getByRole('button', { name: '开始制作', exact: true }).click(); await expect(page.getByRole('alert')).toContainText('选择可用的模型');
+    await page.screenshot({ path: info.outputPath(`no-available-models-${viewport.width}.png`) }); await saveProduction(editor); await expect(editor).toHaveCount(0);
+    await page.getByRole('button', { name: '开始制作', exact: true }).click();
+    const blocked = page.getByRole('dialog', { name: '暂无法开始制作', exact: true });
+    await expect(blocked).toContainText('选择可用的模型');
+    const connect = blocked.getByRole('button', { name: '配置模型', exact: true }).first();
+    await expect(connect).toBeVisible();
+    await expect(blocked.locator('.dialog__surface')).toHaveCSS('opacity', '1');
+    await expect(blocked.getByRole('button', { name: '关闭', exact: true })).toBeInViewport({ ratio: 1 });
+    await page.screenshot({ path: info.outputPath(`production-blockers-${viewport.width}.png`) });
+    if (viewport.width === 390) {
+      await connect.click(); await expect(page.getByRole('heading', { name: '模型连接', exact: true })).toBeVisible();
+      await openProjectFromList(page, project.title);
+    } else await blocked.getByRole('button', { name: '关闭', exact: true }).click();
     await page.locator('.project-heading-actions').getByRole('button', { name: '制作设置', exact: true }).click(); const settings = page.getByRole('dialog', { name: '制作设置', exact: true });
     await expect(settings.getByRole('tab', { name: '资料', exact: true })).toHaveCount(0); await expect(settings.getByLabel('画面引用编号', { exact: true })).toHaveCount(0); await settings.getByRole('button', { name: '关闭对话框', exact: true }).click();
     const rejected = await request.post('/__desktop_rpc', { data: { method: 'run.start', params: { projectId: project.id, nodeId: 'script' } } });

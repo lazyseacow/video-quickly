@@ -14,7 +14,9 @@
 .series-template-card { min-width: 0; padding: var(--space-5); border: 1px solid var(--border); border-radius: var(--radius-medium); background: var(--surface); }
 .series-template-card h3 { font-size: var(--text-size-body); font-weight: var(--font-weight-emphasis); margin-bottom: var(--space-2); }
 .series-template-card > p { margin: var(--space-3) 0; font-size: var(--text-size-caption); line-height: var(--line-height-prose); color: var(--text-secondary); overflow-wrap: anywhere; max-height: 76px; overflow-y: auto; }
-.series-template-card__actions { display: flex; gap: var(--space-2); justify-content: space-between; align-items: center; margin-top: var(--space-4); }
+.series-template-card__actions { display: flex; flex-wrap: wrap; gap: var(--space-2); justify-content: space-between; align-items: center; margin-top: var(--space-4); }
+.series-template-card__create { margin-inline-end: auto; }
+.series-template-card__actions > .button--ghost { padding-inline: var(--space-2); }
 .series-template-card .pill-row { margin-top: var(--space-3); }
 .series-apply__options { min-width: 0; border: 0; border-top: 1px solid var(--border); padding: var(--space-4) 0 0; margin: var(--space-5) 0; }
 .series-apply__options legend { padding: 0 var(--space-2) 0 0; font-size: var(--text-size-caption); font-weight: var(--font-weight-emphasis); }

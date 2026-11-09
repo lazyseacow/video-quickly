@@ -3,25 +3,31 @@ import { test } from './isolated-workspace';
 import { openProduction, productionFixture, productionStep } from './production-settings';
 
 // Browser plugin not available: inspect real controls in the isolated Playwright preview.
-async function fieldStates(page: Page, dialog: Locator, control: Locator, radius: string) {
-  await dialog.locator('.dialog__header h2').click();
+async function resetControlFocus(dialog: Locator) {
+  const popover = dialog.locator(':is(.creative-context-editor__popover, .creative-context-editor__workspace):popover-open');
+  if (await popover.isVisible()) await popover.click({ position: { x: 8, y: 16 } });
+  else await dialog.locator('.dialog__header h2').click();
+}
+
+async function fieldStates(page: Page, dialog: Locator, control: Locator, radius: string, focusStep: 'Tab' | 'Shift+Tab' = 'Tab') {
+  await resetControlFocus(dialog);
   await expect(control).toHaveCSS('border-top-left-radius', radius);
   await expect(control).toHaveCSS('border-bottom-right-radius', radius);
   await control.hover();
   await expect(control).toHaveCSS('border-radius', radius);
-  await control.focus(); await control.press('Tab'); await control.focus();
+  await control.focus(); await control.press(focusStep); await control.focus();
   await expect(control).toBeFocused(); await expect(control).toHaveCSS('border-radius', radius);
   await expect(control).not.toHaveCSS('box-shadow', 'none');
 }
 
-async function disclosureStates(page: Page, dialog: Locator, summary: Locator, top: string, bottom = top) {
-  await dialog.locator('.dialog__header h2').click();
+async function disclosureStates(page: Page, dialog: Locator, summary: Locator, top: string, bottom = top, focusStep: 'Tab' | 'Shift+Tab' = 'Tab') {
+  await resetControlFocus(dialog);
   await expect(summary).toHaveCSS('border-top-left-radius', top);
   await expect(summary).toHaveCSS('border-bottom-right-radius', bottom);
   await summary.hover();
   await expect(summary).toHaveCSS('border-top-left-radius', top);
   await expect(summary).not.toHaveCSS('background-color', 'rgba(0, 0, 0, 0)');
-  await summary.focus(); await summary.press('Tab'); await summary.focus();
+  await summary.focus(); await summary.press(focusStep); await summary.focus();
   await expect(summary).toBeFocused(); await expect(summary).toHaveCSS('outline-style', 'solid');
   await expect(summary).toHaveCSS('border-top-left-radius', top);
   await expect(summary).toHaveCSS('border-bottom-right-radius', bottom);
@@ -47,26 +53,23 @@ for (const scenario of scenarios) test(`keeps control corners consistent across 
   await expect(dialog.locator('.dialog__surface')).toHaveCSS('opacity', '1');
   await fieldStates(page, dialog, dialog.getByLabel('创作要求', { exact: true }), radius);
   await fieldStates(page, dialog, dialog.getByLabel('视觉风格', { exact: true }), radius);
-  const roles = dialog.locator('.creative-context-editor__roles > summary');
-  await disclosureStates(page, dialog, roles, `${scenario.radius - 1}px`);
+  const roles = dialog.getByRole('button', { name: /^角色与连续性/ });
+  await disclosureStates(page, dialog, roles, radius);
   await roles.click(); await fieldStates(page, dialog, dialog.getByLabel('连续性要求', { exact: true }), radius); await roles.click();
-  const entities = dialog.locator('.creative-context-editor__entities > summary');
-  await disclosureStates(page, dialog, entities, `${scenario.radius - 1}px`); await entities.click();
+  const entities = dialog.getByRole('button', { name: /^人物、场景与道具/ });
+  await disclosureStates(page, dialog, entities, radius); await entities.click();
   await dialog.getByRole('button', { name: '添加场景设定', exact: true }).click();
   const scene = dialog.getByRole('region', { name: '场景设定 1', exact: true });
   await scene.getByLabel('设定名称', { exact: true }).fill('庭院');
   await fieldStates(page, dialog, scene.getByLabel('设定名称', { exact: true }), radius);
   await fieldStates(page, dialog, scene.getByLabel('固定特征', { exact: true }), radius);
-  await disclosureStates(page, dialog, scene.locator(':scope > details > summary'), '7px', '0px');
+  await disclosureStates(page, dialog, dialog.getByRole('tab', { name: '场景 · 庭院', exact: true }), radius);
   const references = scene.locator('.creative-reference-picker__disclosure > summary');
-  await disclosureStates(page, dialog, references, radius); await references.click();
-  await fieldStates(page, dialog, scene.getByLabel('场景参考图路径', { exact: true }), radius);
-  await references.click(); await entities.click();
-  const planningAdvanced = dialog.locator('[data-production-step="planning"] > .production-settings__advanced > summary');
-  await disclosureStates(page, dialog, planningAdvanced, radius); await planningAdvanced.click();
-  await fieldStates(page, dialog, dialog.getByRole('combobox', { name: '任务', exact: true }), radius);
-  await fieldStates(page, dialog, dialog.getByRole('combobox', { name: '创意简报模型', exact: true }), radius);
-  await fieldStates(page, dialog, dialog.getByLabel('创意简报补充要求', { exact: true }), radius);
+  await disclosureStates(page, dialog, references, radius, radius, 'Shift+Tab'); await references.click();
+  await fieldStates(page, dialog, scene.getByLabel('场景参考图路径', { exact: true }), radius, 'Shift+Tab');
+  await references.click(); await dialog.getByRole('button', { name: '返回创作要求', exact: true }).click();
+  await disclosureStates(page, dialog, dialog.getByText('剪辑 Agent 设置', { exact: true }), radius);
+  await fieldStates(page, dialog, dialog.getByLabel('简报来源', { exact: true }), radius);
   await page.screenshot({ path: info.outputPath('planning-control-states.png') });
   await productionStep(dialog, '模型与素材');
   const textModel = dialog.getByRole('combobox', { name: '文本模型', exact: true });
@@ -89,13 +92,11 @@ for (const scenario of scenarios) test(`keeps control corners consistent across 
   await fieldStates(page, dialog, dialog.getByRole('combobox', { name: '图片模型', exact: true }), radius);
   await fieldStates(page, dialog, dialog.getByLabel('参考音频文件路径', { exact: true }), radius);
   await fieldStates(page, dialog, dialog.getByLabel('镜头同时处理数', { exact: true }), radius);
-  const materialSummaries = dialog.locator('[data-production-step="materials"] > .production-settings__advanced > summary');
-  for (const summary of await materialSummaries.all()) await disclosureStates(page, dialog, summary, radius);
   await productionStep(dialog, '声音与成片');
-  for (const label of ['声音要求', '字幕', '画面比例', '分辨率']) await fieldStates(page, dialog, dialog.getByLabel(label, { exact: true }), radius);
+  for (const label of ['声音要求', '字幕', '画面比例', '分辨率', '素材适配']) await fieldStates(page, dialog, dialog.getByLabel(label, { exact: true }), radius);
   const outputDetails = dialog.locator('.video-settings__advanced > summary');
   await disclosureStates(page, dialog, outputDetails, radius); await outputDetails.click();
-  for (const label of ['视频宽度', '视频高度', '视频帧率', '素材适配']) await fieldStates(page, dialog, dialog.getByLabel(label, { exact: true }), radius);
+  for (const label of ['视频宽度', '视频高度', '视频帧率']) await fieldStates(page, dialog, dialog.getByLabel(label, { exact: true }), radius);
   await page.screenshot({ path: info.outputPath('output-control-states.png') });
   expect(await dialog.evaluate(element => element.scrollWidth <= element.clientWidth + 1)).toBe(true);
   await dialog.getByRole('button', { name: '关闭对话框', exact: true }).click(); await expect(dialog).toHaveCount(0);

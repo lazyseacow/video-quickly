@@ -12,7 +12,7 @@ async function fixture(seed?: boolean) {
   const directory = await mkdtemp(join(tmpdir(), 'vq-native-contracts-')); directories.push(directory);
   const runtime = createRuntime({ dataDirectory: directory, seed }); runtimes.push(runtime); return runtime;
 }
-const base = { name: '隔离模型', provider: 'openai-compatible', model: 'fixture', baseUrl: 'http://127.0.0.1:1/v1' };
+const base = { name: '隔离模型', provider: 'openai-compatible' as const, model: 'fixture', baseUrl: 'http://127.0.0.1:1/v1' };
 
 it('opens a new workspace without a default project or sample assets', async () => {
   const runtime = await fixture();
@@ -25,11 +25,19 @@ it('exposes three explicit model types and rejects audio capabilities, providers
   for (const provider of ['qwen-tts', 'volcengine-tts', 'volcengine-asr']) expect(modelSchema.shape.provider.safeParse(provider).success).toBe(false);
   expect(workflowNodeSchema.safeParse({ id: 'voice', kind: 'voice', label: '配音' }).success).toBe(false);
   expect(workflowNodeSchema.safeParse({ id: 'caption', kind: 'animation', label: '识别', config: { operation: 'transcribe' } }).success).toBe(false);
-  expect(() => validateModelConnection({ connectionType: 'text', provider: 'openai-compatible', capabilities: ['text', 'vision', 'tools'] })).not.toThrow();
-  expect(() => validateModelConnection({ connectionType: 'text', provider: 'openai-compatible', capabilities: ['text', 'image'] })).toThrow();
-  expect(() => validateModelConnection({ connectionType: 'image', provider: 'seedream', capabilities: ['image', 'video'] })).toThrow();
+  expect(() => validateModelConnection({ ...base, parameters: {}, connectionType: 'text', capabilities: ['text', 'vision', 'tools'] })).not.toThrow();
+  expect(() => validateModelConnection({ ...base, parameters: {}, connectionType: 'text', capabilities: ['text', 'image'] })).toThrow();
+  expect(() => validateModelConnection({ ...base, parameters: {}, connectionType: 'image', provider: 'seedream', capabilities: ['image', 'video'] })).toThrow();
   const video = modelSchema.parse({ ...base, id: 'video', connectionType: 'video', capabilities: ['video'], parameters: {  }, createdAt: '', updatedAt: '' });
   expect(() => validateExecutionModel(workflowNodeSchema.parse({ id: 'edit', kind: 'animation', label: '剪辑准备', config: { operation: 'prepare-edit' } }), video)).toThrow('剪辑准备使用本地时间轴');
+});
+
+it('rejects new OpenAI official video connections and accepts a compatible video gateway', async () => {
+  const runtime = await fixture();
+  const video = { ...base, connectionType: 'video', capabilities: ['video'], model: 'sora-2' };
+  await expect(runtime.dispatch('model.save', { model: { ...video, platform: 'openai' } })).rejects.toThrow('OpenAI 官方视频接口已停止服务');
+  await expect(runtime.dispatch('model.save', { model: { ...video, platform: 'custom', baseUrl: 'https://api.openai.com/v1' } })).rejects.toThrow('OpenAI 官方视频接口已停止服务');
+  await expect(runtime.dispatch('model.save', { model: { ...video, platform: 'custom' } })).resolves.toMatchObject({ connectionType: 'video', platform: 'custom' });
 });
 
 it('rejects missing types and audio requests before creating a model or run', async () => {

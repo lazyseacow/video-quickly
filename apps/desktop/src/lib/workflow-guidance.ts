@@ -1,4 +1,4 @@
-import { getMediaAdapters, type ModelCapability, type ModelProfile, type WorkflowNode } from '@video-quickly/contracts';
+import { getMediaAdapters, supportsProductionAgent, type ModelCapability, type ModelProfile, type WorkflowNode } from '@video-quickly/contracts';
 
 interface StepGuidance {
   purpose: string; result: string; review: string; local: string; capability?: ModelCapability; requiresModel?: boolean;
@@ -29,7 +29,7 @@ export function matchingStepModels(node: Pick<WorkflowNode, 'kind' | 'config'>, 
   if (!capability) return [];
   const adapters = ['image', 'video'].includes(capability) ? getMediaAdapters([capability]) : undefined;
   return models.filter(model => model.enabled && model.capabilities.includes(capability)
-    && (node.kind !== 'agent' || model.capabilities.includes('tools'))
+    && (node.kind !== 'agent' || supportsProductionAgent(model))
     && (!adapters || adapters.some(adapter => adapter.id === model.provider)));
 }
 

@@ -209,9 +209,7 @@ for (const viewport of [{ width: 1536, height: 960 }, { width: 1024, height: 720
     await trigger.click();
     const dialog = page.getByRole('dialog', { name: '新建视频项目', exact: true });
     await expect(dialog.getByLabel('项目名称', { exact: true })).toBeFocused();
-    await dialog.getByText('更多设置', { exact: true }).click();
-    await dialog.getByLabel('素材适配', { exact: true }).scrollIntoViewIfNeeded();
-    await expect(dialog.getByLabel('素材适配', { exact: true })).toBeInViewport({ ratio: .95 });
+    await expect(dialog.getByRole('button', { name: '创作 Skill（可选）', exact: true })).toBeInViewport({ ratio: .95 });
     const footer = dialog.locator('.dialog__footer');
     await expect(footer).toBeInViewport({ ratio: 1 });
     for (const button of await footer.getByRole('button').all()) await expect(button).toBeInViewport({ ratio: 1 });

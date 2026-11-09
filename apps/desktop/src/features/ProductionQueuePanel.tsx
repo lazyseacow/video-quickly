@@ -50,15 +50,16 @@ function QueueDetail({ queueId, version, history, onRefreshList, listBusy, listE
   const canStart = queue && (queue.status === 'paused' || queue.status === 'needs_attention') && pendingCount > 0 && !blocked;
   const canPause = queue?.status === 'running' && pendingCount > 0;
   const canCancel = queue && queue.status !== 'canceled' && queue.status !== 'succeeded' && (pendingCount > 0 || blocked);
-  const controlsDisabled = busy || detail.busy || Boolean(detail.error);
+  // Background reads keep the last detail usable. Mutations check its revision in the runtime.
+  const controlsDisabled = busy || Boolean(detail.error);
   function refreshQueue() {
     setError('');
     onRefreshList();
-    detail.refresh();
+    void detail.refresh();
   }
   async function perform(method: string, params: unknown) {
     if (inFlight.current) return; inFlight.current = true; setBusy(true); setError('');
-    try { await rpc(method, params); detail.refresh(); }
+    try { await rpc(method, params); await detail.refresh(); }
     catch (error) { setError(error instanceof Error ? error.message : String(error)); }
     finally { inFlight.current = false; setBusy(false); }
   }

@@ -1,3 +1,4 @@
+import { planningFixtureResponse, storyboardFixtureResponse } from './fixtures/planning-response';
 import { createServer, type Server } from 'node:http';
 import { spawnSync } from 'node:child_process';
 import { mkdtemp, readFile, rm, unlink, writeFile } from 'node:fs/promises';
@@ -52,7 +53,8 @@ async function fixture(extra: { full?: boolean; scriptOutput?: string; failpoint
     if (path.endsWith('/chat/completions')) {
       const script = raw.includes('自动视频制作步骤：旁白与分镜');
       if (script) { entered(); if (extra.holdScript) await scriptGate; }
-      response.end(JSON.stringify({ choices: [{ message: { content: script ? extra.scriptOutput ?? JSON.stringify(generatedScript()) : '柔和的傍晚光线，服装和空间保持连续。' } }], usage: { prompt_tokens: 20, completion_tokens: 30 } }));
+      const content = script ? storyboardFixtureResponse(JSON.parse(raw).messages[0].content, extra.scriptOutput ?? JSON.stringify(generatedScript())) : planningFixtureResponse(raw, '柔和的傍晚光线，服装和空间保持连续。');
+      response.end(JSON.stringify({ choices: [{ message: { content } }], usage: { prompt_tokens: 20, completion_tokens: 30 } }));
     } else if (path.endsWith('/images/edits')) response.end(JSON.stringify({ data: [{ b64_json: png.toString('base64') }] }));
     else response.end(JSON.stringify({ id: `video-task-${requests.length}` }));
   })().catch(error => response.destroy(error instanceof Error ? error : undefined)); });
@@ -113,7 +115,7 @@ it.each(['character', 'entity'] as const)('stops an unknown %s key before any me
   const source = await fixture({ scriptOutput: JSON.stringify(script) });
   const started = runSchema.parse(await source.runtime.dispatch('run.start', { projectId: source.project.id })); await source.runtime.waitForIdle();
   const failed = runSchema.parse(await source.runtime.dispatch('run.get', { runId: started.id })); expect(failed.status).toBe('failed');
-  expect(source.requests).toHaveLength(1); expect((await source.current()).shots).toEqual([]);
+  expect(source.requests).toHaveLength(2); expect((await source.current()).shots).toEqual([]);
 });
 
 it('protects pool-only characters and their images, rejecting invalid pool and entity references without saving', async () => {
@@ -169,7 +171,7 @@ it.each([false, true])('resumes committed script output with frozen context acro
   if (edited) await recovered.dispatch('character.save', { character: { ...source.profiles[0], description: '恢复前改变成黄色外衣' } });
   await recovered.dispatch('run.resume', { runId: started.id }); await recovered.waitForIdle();
   const record = runSchema.parse(await recovered.dispatch('run.get', { runId: started.id })); expect(record.status, record.error).toBe(edited ? 'needs_attention' : 'succeeded');
-  expect(source.requests.filter(request => request.path.endsWith('/chat/completions'))).toHaveLength(1);
+  expect(source.requests.filter(request => request.path.endsWith('/chat/completions'))).toHaveLength(2);
   const images = source.requests.filter(request => request.path.endsWith('/images/edits')); expect(images).toHaveLength(2);
   expect(images[0].body.prompt).toEqual(expect.stringContaining('蓝外衣')); expect(images[0].body.prompt).not.toEqual(expect.stringContaining('黄色外衣'));
   const project = await source.current(recovered); expect(project.shots).toHaveLength(edited ? 0 : 2);

@@ -2,4 +2,4 @@ import type { AssetRecord, RunSummary, WorkspaceSummary, WorkflowNode } from '@v
 
 export type Action = <T = unknown>(method: string, params?: unknown, message?: string) => Promise<T | null>;
 export type WorkspaceView = WorkspaceSummary & { assets: AssetRecord[]; runs: RunSummary[] };
-export interface StepOutputSelection { projectId: string; runId: string; nodeId: string; kind: WorkflowNode['kind']; regeneration?: { shotId: string; kind: 'image' | 'video'; modelName: string } }
+export interface StepOutputSelection { projectId: string; runId: string; nodeId: string; kind: WorkflowNode['kind']; candidateShotId?: string; regeneration?: { shotId: string; kind: 'image' | 'video'; modelName: string } }

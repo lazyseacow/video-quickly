@@ -116,7 +116,9 @@ test('pages every scoped record with causes and history, changes scope safely an
   await page.screenshot({ path: info.outputPath('complete-recovery-list-dark-1536.png') });
   await dialog.getByRole('button', { name: '关闭', exact: true }).click(); await setWorkspaceTheme(page, 'light'); await page.setViewportSize({ width: 600, height: 900 });
   await page.getByRole('button', { name: '恢复缺失素材', exact: true }).click(); const narrow = page.getByRole('dialog', { name: '恢复缺失素材', exact: true }); await expect(narrow).toBeVisible();
-  await narrow.getByLabel('查找目录', { exact: true }).focus(); await expect(narrow.getByLabel('查找目录', { exact: true })).toBeFocused();
+  const directory = narrow.getByLabel('查找目录', { exact: true });
+  await expect(directory).toBeEnabled();
+  await directory.focus(); await expect(directory).toBeFocused();
   expect(await narrow.evaluate(element => element.scrollWidth <= element.clientWidth + 1)).toBe(true); await page.screenshot({ path: info.outputPath('complete-recovery-list-light-600.png') });
   await page.keyboard.press('Escape'); await expect(narrow).toHaveCount(0); await expect(page.getByRole('button', { name: '恢复缺失素材', exact: true })).toBeFocused();
 });

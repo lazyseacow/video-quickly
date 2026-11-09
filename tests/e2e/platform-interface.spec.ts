@@ -1,4 +1,3 @@
-import { openAdvancedWorkflow } from './production-settings';
 import { openProjectFromList } from './workspace-navigation';
 import { expect, test, type APIRequestContext } from '@playwright/test';
 import type { ProjectDocument } from '@video-quickly/contracts';
@@ -53,14 +52,6 @@ for (const platform of [
   expect(placeholder).not.toContain(String.fromCharCode(92).repeat(2));
   await page.keyboard.press('Escape'); await expect(exporter).toHaveCount(0);
 
-  await openAdvancedWorkflow(page);
-  await expect(page.locator('.flow-gestures')).toContainText(`${platform.label} + 滚轮缩放`);
-  const canvas = page.locator('.react-flow__viewport');
-  const zoom = () => canvas.evaluate(element => new DOMMatrixReadOnly(getComputedStyle(element).transform).a);
-  const before = await zoom();
-  await page.locator('.react-flow__pane').hover({ position: { x: 20, y: 20 } });
-  await page.keyboard.down(platform.key); await page.mouse.wheel(0, 120); await page.keyboard.up(platform.key);
-  await expect.poll(zoom).not.toBe(before);
   await page.screenshot({ path: info.outputPath(`platform-${platform.browser}.png`) });
   expect(errors).toEqual([]);
 });

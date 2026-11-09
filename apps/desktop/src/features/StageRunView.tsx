@@ -1,11 +1,12 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useId, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { FileCheck2, RefreshCw, Settings2 } from 'lucide-react';
+import { ClipboardList, FileCheck2, RefreshCw, Settings2 } from 'lucide-react';
 import { isModelGenerationNode, runInspectionSchema, type RunStepSummary, type RunSummary, type WorkflowNode } from '@video-quickly/contracts';
-import { Button, IconButton, Notice, Status } from '../components/Primitives';
+import { Button, EmptyState, IconButton, Notice, Status } from '../components/Primitives';
 import { rpc } from '../lib/client';
 import { useRuntimeRead } from '../lib/use-runtime-read';
 import { isConfigurationFailure } from '../lib/run-recovery';
+import { stepRetryLabel } from '../lib/run-progress';
 import { generationLabel } from '../lib/workbench-stages';
 import type { StepOutputSelection } from '../lib/types';
 import type { PlanningControls } from '../lib/planning-edits';
@@ -32,7 +33,7 @@ export interface StageRunViewProps {
 
 export default function StageRunView(props: StageRunViewProps) {
   if (!props.runId) return <section className="stage-run-view stage-run-view--empty" aria-label="本次制作">
-    <h3>{props.flat ? '尚未开始制作' : '本阶段尚未开始制作'}</h3><p>完成制作设置后，可从工作台开始制作。</p>
+    <EmptyState icon={<ClipboardList size={24} />} title={props.flat ? '尚未开始制作' : '本阶段尚未开始制作'} description="完成制作设置后，可从工作台开始制作。" />
   </section>;
   return <RecordedStageRun key={`${props.runId}:${props.stageId ?? ''}:${props.nodeIds.join('\0')}`} {...props} runId={props.runId} />;
 }
@@ -44,6 +45,7 @@ function RecordedStageRun({ runId, stageId, nodeIds, configurableNodeIds = nodeI
   const [error, setError] = useState('');
   const inFlight = useRef(false);
   const navigation = useRef<HTMLElement>(null);
+  const retryDescriptionId = useId();
   const data = inspection.data;
   const frozenStage = stageId ? data?.stages?.find(stage => stage.id === stageId) : undefined;
   const assignedIds = new Set(data?.stages?.flatMap(stage => stage.nodeIds));
@@ -69,6 +71,7 @@ function RecordedStageRun({ runId, stageId, nodeIds, configurableNodeIds = nodeI
     else if (target.bottom > bottom) list.scrollTop += Math.ceil(target.bottom - bottom);
   }, [flat, selectedEntry?.id]);
   const failed = steps.find(step => step.error || ['failed', 'needs_attention'].includes(step.status));
+  const footerRetry = actionsTarget && selected?.retry?.allowed && (selected.responseAvailable || selected.progress?.storyboard) ? selected : undefined;
   const configurableIds = onConfigure ? nodeIds.filter(nodeId => configurableNodeIds.includes(nodeId)) : [];
   const configureId = selected ? configurableIds.find(nodeId => selected.id === nodeId || selected.id.startsWith(`${nodeId}/subflow/`)) : configurableIds[0];
   const failedConfigureId = failed ? configurableIds.find(nodeId => failed.id === nodeId || failed.id.startsWith(`${nodeId}/subflow/`)) : configureId;
@@ -93,6 +96,10 @@ function RecordedStageRun({ runId, stageId, nodeIds, configurableNodeIds = nodeI
     catch (failure) { setError(failure instanceof Error ? failure.message : String(failure)); inspection.refresh(); }
     finally { inFlight.current = false; setPending(''); }
   }
+  function retryStep(nodeId: string) {
+    setSelectedId(nodeId);
+    void perform('run.step.retry', { nodeId });
+  }
 
   return <section className="stage-run-view" aria-label="本次制作">
     {inspection.error && <Notice kind="error">{inspection.error}<Button aria-label={flat ? '重试读取制作记录' : '重试读取阶段制作'} onClick={inspection.refresh}>重试</Button></Notice>}
@@ -104,14 +111,15 @@ function RecordedStageRun({ runId, stageId, nodeIds, configurableNodeIds = nodeI
       {steps.length > 0 ? <>
         <div className="run-inspector__layout">
           <nav ref={navigation} className="run-inspector__steps" aria-label={flat ? '本次制作步骤' : '本阶段制作步骤'}>{entries.map((entry, index) => <button type="button" key={entry.id} aria-current={selectedEntry?.id === entry.id ? 'step' : undefined} onClick={() => setSelectedId(entry.id)}><span className="run-inspector__index">{String(index + 1).padStart(2, '0')}</span><span><strong>{entry.label}</strong>{entry.step ? <StepStatus step={entry.step} /> : <span className="run-inspector__state">未纳入本次制作</span>}</span>{entry.step?.outputAvailable && <FileCheck2 className="stage-run-view__saved" size={16} aria-label="已保存产物" />}</button>)}</nav>
-          {selected && <CurrentStepResult key={`${runId}:${selected.id}`} inspection={data} step={selected} version={version} onOpenOutput={onOpenOutput} planning={planning} retry={{ busy: pending === 'run.step.retry', disabled: blocked, onRetry: () => { setSelectedId(selected.id); void perform('run.step.retry', { nodeId: selected.id }); } }} />}
+          {selected && <CurrentStepResult key={`${runId}:${selected.id}`} inspection={data} step={selected} version={version} onOpenOutput={onOpenOutput} planning={planning} retry={{ busy: pending === 'run.step.retry', disabled: blocked, onRetry: () => retryStep(selected.id), footerDescriptionId: footerRetry ? retryDescriptionId : undefined }} />}
           {!selected && selectedEntry && <div className="run-inspector__detail stage-run-view__empty"><h3>{selectedEntry.label}</h3><p>这次制作未包含此步骤。</p></div>}
         </div>
       </> : data.snapshotAvailable && <div className="stage-run-view__empty"><h3>{flat ? '这次制作没有步骤记录' : '这次制作未包含本阶段'}</h3><p>{flat ? '尚未保存可查看的执行记录。' : '本阶段没有执行记录。'}</p>{configureId && <Button onClick={() => onConfigure?.(configureId)}>查看制作设置</Button>}</div>}
-      {actionsTarget && (canResume || data.recovery.cancel || repairNodeId && ['failed', 'needs_attention', 'canceled'].includes(data.run.status)) && createPortal(
+      {actionsTarget && (canResume || data.recovery.cancel || footerRetry || repairNodeId && ['failed', 'needs_attention', 'canceled'].includes(data.run.status)) && createPortal(
         <div className="stage-run-view__actions" role="group" aria-label="本次制作操作">
           {data.recovery.cancel && <Button busy={pending === 'run.cancel'} disabled={blocked} onClick={() => void perform('run.cancel')}>停止</Button>}
           {repairNodeId && ['failed', 'needs_attention', 'canceled'].includes(data.run.status) && <Button disabled={blocked} onClick={() => onConfigure?.(repairNodeId)}>调整设置并重新制作</Button>}
+          {footerRetry && <Button variant="primary" aria-describedby={retryDescriptionId} busy={pending === 'run.step.retry'} disabled={blocked} onClick={() => retryStep(footerRetry.id)}>{stepRetryLabel(footerRetry)}</Button>}
           {canResume && <Button variant="primary" title="沿用本次保存的配置与已完成产物，继续剩余制作" busy={pending === 'run.resume'} disabled={blocked} onClick={() => void perform('run.resume')}>继续原制作</Button>}
         </div>, actionsTarget,
       )}

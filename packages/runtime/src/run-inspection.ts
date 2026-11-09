@@ -15,6 +15,8 @@ import { DocumentStore } from './database.js';
 import { activityNodeId, createReadModels } from './read-models.js';
 import { createModelResponses } from './model-responses.js';
 import { createRunProgress } from './run-progress.js';
+import { readPartialStoryboard, storyboardResponseId } from './storyboard-generation.js';
+import { shouldRetryWithPromptFormat } from './providers.js';
 
 const runInput = z.object({ runId: z.string().min(1) });
 const stepInput = runInput.extend({ nodeId: z.string().min(1) });
@@ -136,14 +138,32 @@ export function createRunInspector(options: {
         : saved?.exportBatch ? '批量导出请从导出记录继续原任务。'
         : !saved || ![1, 2, 3, 4].includes(saved.handlerVersion) ? '运行版本不兼容，请创建新的运行。'
         : '';
-      const retry = current && node.kind !== 'subflow' && ['failed', 'needs_attention'].includes(status) ? { allowed: !retryReason, reason: retryReason } : undefined;
+      const operationId = `${runId}:${node.id}`;
+      const nodeProgress = progress.summary(operationId);
+      const responseId = storyboardResponseId(runId, node.id, nodeProgress?.storyboard);
+      const responseAvailable = nodeProgress?.storyboard
+        ? Boolean(store.get('model-response-head', responseId))
+        : has('model-response-head', node.id);
+      let retry: RunStepSummary['retry'];
+      if (current && node.kind !== 'subflow' && ['failed', 'needs_attention'].includes(status)) {
+        let reason = retryReason;
+        if (!reason && responseAvailable && !responses.promptFormat(operationId)) {
+          const effectiveNode = store.get<WorkflowNode>('node-definition', operationId) ?? node;
+          const model = saved?.models.find(value => value.id === effectiveNode.modelId);
+          if (model && shouldRetryWithPromptFormat(model, responses.current(responseId)?.response)) {
+            reason = '重试将通过提示词要求返回 JSON，并按原规则校验。';
+          }
+        }
+        retry = { allowed: !retryReason, reason };
+      }
       return { id: node.id, label: node.label, kind: node.kind, description: node.description, requiresReview: node.requiresReview, modelGeneration: isModelGenerationNode(node), status, reason,
-        inputAvailable: has('node-project', node.id), outputAvailable: has('node-result', node.id), responseAvailable: has('model-response-head', node.id), activityCount: receipt?.count ?? 0,
-        unknownSubmission: unknown && Boolean(receipt?.unknown_count), retry, progress: progress.summary(`${runId}:${node.id}`), startedAt: receipt?.started_at, completedAt: status === 'succeeded' ? receipt?.completed_at ?? undefined : undefined, error };
+        inputAvailable: has('node-project', node.id), outputAvailable: has('node-result', node.id), responseAvailable, activityCount: receipt?.count ?? 0,
+        unknownSubmission: unknown && Boolean(receipt?.unknown_count), retry, progress: nodeProgress, startedAt: receipt?.started_at, completedAt: status === 'succeeded' ? receipt?.completed_at ?? undefined : undefined, error };
     });
+    const retryStoryboard = steps.some(step => step.retry?.allowed && step.progress?.storyboard && step.error);
     const selectedNode = nodeId ? store.get<WorkflowNode>('node-definition', `${runId}:${nodeId}`) ?? saved?.nodes.find(node => node.id === nodeId) : undefined, model = selectedNode?.modelId ? saved?.models.find(value => value.id === selectedNode.modelId) : undefined;
     return runInspectionSchema.parse({ run: reads.runSummary(run), projectTitle: saved?.title ?? '历史制作', workflowId: saved?.workflowId ?? undefined, autonomousVideo: saved?.autonomousVideo, snapshotAvailable: !!saved, checkpointAvailable: state.available, steps, stages: saved?.stages,
-      recovery: { review: false, resume, cancel: ['running', 'queued', 'waiting_review', 'waiting_external', 'retry_scheduled', 'needs_attention'].includes(run.status), restart: run.status === 'canceled' && run.purpose !== 'prompt-trial' && !run.productionQueueItemId, reason: unknown ? '存在结果未确认的外部提交，请先核对原任务。' : run.status === 'needs_attention' && run.stepRetry?.status === 'completed' ? '此步骤已完成重试，后续步骤尚未执行。可点击“继续”恢复剩余制作。' : '' },
+      recovery: { review: false, resume: resume && !retryStoryboard, cancel: ['running', 'queued', 'waiting_review', 'waiting_external', 'retry_scheduled', 'needs_attention'].includes(run.status), restart: run.status === 'canceled' && run.purpose !== 'prompt-trial' && !run.productionQueueItemId, reason: unknown ? '存在结果未确认的外部提交，请先核对原任务。' : run.status === 'needs_attention' && run.stepRetry?.status === 'completed' ? '此步骤已完成重试，后续步骤尚未执行。可点击“继续”恢复剩余制作。' : '' },
       selected: selectedNode && saved ? { node: redact(json(selectedNode)), dependencies: saved.edges.filter(edge => edge.target === nodeId).map(edge => edge.source),
         model: model ? { id: model.id, name: model.name, provider: model.provider, model: model.model } : undefined,
         skills: saved.skills.filter(skill => selectedNode.skillIds.includes(skill.id)).map(skill => ({ id: skill.id, name: skill.name, version: skill.version, enabled: skill.enabled })), handlerVersion: saved.handlerVersion } : undefined,
@@ -165,11 +185,13 @@ export function createRunInspector(options: {
     const model = saved.models.find(model => model.id === node.modelId && model.enabled);
     const mediaKind = node.kind === 'assets' ? 'image' : node.kind === 'animation' && node.config.operation !== 'prepare-edit' ? 'video' : undefined;
     const mediaGeneration = mediaOutput && mediaKind && model?.capabilities.includes(mediaKind) ? { kind: mediaKind, modelName: model.name } : undefined;
-    const response = kind === 'output' ? responses.current(`${runId}:${nodeId}`, responseAttempt) : undefined;
-    const modelResponseHistory = kind === 'output' ? responses.history(`${runId}:${nodeId}`).map(item => ({ ...item, invalid: Boolean(item.invalid) })) : undefined;
-    const modelResponse = response?.status === 'received' && response.response && response.receivedAt ? redact(json({ attempt: response.attempt, receivedAt: response.receivedAt, ...response.response, issues: response.issues })) : undefined;
     const detail = kind === 'output' ? progress.detail(`${runId}:${nodeId}`) : undefined;
-    return runStepPayloadSchema.parse({ runId, nodeId, kind, available: value !== undefined, value: value === undefined ? null : redact(value), inputHash: captured?.inputHash, resolvedPromptRecorded: kind === 'input' ? captured?.prompt !== undefined : undefined, mediaShots: mediaShots ? redact(json(mediaShots)) : undefined, mediaGeneration, modelResponse, modelResponseHistory, progress: detail ? redact(json(detail)) : undefined });
+    const operationId = storyboardResponseId(runId, nodeId, detail?.storyboard);
+    const response = kind === 'output' ? responses.current(operationId, responseAttempt) : undefined;
+    const modelResponseHistory = kind === 'output' ? responses.history(operationId).map(item => ({ ...item, invalid: Boolean(item.invalid) })) : undefined;
+    const modelResponse = response?.status === 'received' && response.response && response.receivedAt ? redact(json({ attempt: response.attempt, receivedAt: response.receivedAt, ...response.response, issues: response.issues })) : undefined;
+    const partialStoryboard = value === undefined && detail?.storyboard ? readPartialStoryboard(database, runId, nodeId, detail.storyboard) : undefined;
+    return runStepPayloadSchema.parse({ runId, nodeId, kind, available: value !== undefined, value: value === undefined ? null : redact(value), inputHash: captured?.inputHash, resolvedPromptRecorded: kind === 'input' ? captured?.prompt !== undefined : undefined, mediaShots: mediaShots ? redact(json(mediaShots)) : undefined, mediaGeneration, modelResponse, modelResponseHistory, progress: detail ? redact(json(detail)) : undefined, partialStoryboard: partialStoryboard ? redact(json(partialStoryboard)) : undefined });
   }
   async function payload(runId: string, nodeId: string, kind: 'input' | 'output', responseAttempt?: number) {
     options.run(runId);

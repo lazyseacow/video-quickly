@@ -6,21 +6,21 @@ import { rpc } from '../lib/client';
 import { useRuntimeRead } from '../lib/use-runtime-read';
 import './run-scope.css';
 
-export default function RunScopeDialog({ projectId, nodeId, initialMode = 'downstream', parentRunId, version, onClose, onStarted }: {
-  projectId: string; nodeId: string; initialMode?: RunSelection['mode']; parentRunId?: string; version: number;
+export default function RunScopeDialog({ projectId, selection, parentRunId, version, onClose, onStarted }: {
+  projectId: string; selection: RunSelection; parentRunId: string; version: number;
   onClose: () => void; onStarted: (run: RunRecord) => void;
 }) {
-  const [mode, setMode] = useState(initialMode), [busy, setBusy] = useState(false), [error, setError] = useState('');
+  const [busy, setBusy] = useState(false), [error, setError] = useState('');
   const mounted = useRef(false);
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
-  const read = useRuntimeRead('run.plan', { projectId, selection: { nodeId, mode } }, version, runPlanSchema), plan = read.data;
+  const read = useRuntimeRead('run.plan', { projectId, selection }, version, runPlanSchema), plan = read.data;
   async function start() {
     // Keep a completed preview usable during background refresh. The runtime
     // checks its digest before starting, so a changed plan still needs review.
     if (!plan || busy || read.error || plan.blockedReason) return;
     setBusy(true); setError('');
     try {
-      const run = runSchema.parse(await rpc('run.start', { projectId, selection: { ...plan.selection, previewDigest: plan.digest }, ...(parentRunId ? { parentRunId } : {}) }));
+      const run = runSchema.parse(await rpc('run.start', { projectId, selection: { ...plan.selection, previewDigest: plan.digest }, parentRunId }));
       onStarted(run); if (mounted.current) onClose();
     } catch (error) {
       if (mounted.current) { setError(error instanceof Error ? error.message : String(error)); read.refresh(); }
@@ -30,11 +30,7 @@ export default function RunScopeDialog({ projectId, nodeId, initialMode = 'downs
     <div className="dialog__body">
       {error && <Notice kind="error">{error}</Notice>}
       {read.error && <Notice kind="error">{read.error}</Notice>}
-      {parentRunId ? <p className="run-scope-intro">沿用原任务范围：{mode === 'node' ? '仅此步骤' : '此步骤及后续'}。</p> : <fieldset className="run-scope-options" disabled={busy}>
-        <legend>执行方式</legend>
-        <label className="field-inline"><input type="radio" name="run-scope-mode" checked={mode === 'node'} onChange={() => setMode('node')} />仅此步骤</label>
-        <label className="field-inline"><input type="radio" name="run-scope-mode" checked={mode === 'downstream'} onChange={() => setMode('downstream')} />此步骤及后续</label>
-      </fieldset>}
+      <p className="run-scope-intro">沿用原任务范围：{selection.mode === 'node' ? '仅此步骤' : '此步骤及后续'}。</p>
       {read.busy && <p role="status" className="run-scope-intro">正在核对执行范围…</p>}
       {plan && <>
         <dl className="run-scope-summary"><div><dt>项目修订</dt><dd>{plan.projectRevision}</dd></div><div><dt>流程版本</dt><dd>{plan.workflowVersion}</dd></div><div><dt>涉及步骤</dt><dd>{plan.steps.length}</dd></div><div><dt>锁定镜头</dt><dd>{plan.lockedShotCount}</dd></div></dl>

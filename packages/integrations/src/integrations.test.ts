@@ -122,10 +122,13 @@ describe('media generation request receipts', () => {
       else response.end('image-fixture');
     });
     const context = await contextFor(baseUrl); context.node = { ...context.node, prompt: '保留右上角留白。', config: { operation: 'regenerate', shotId: 'shot-1', instruction: '保留右上角留白。' } };
+    context.project.profile = { ...context.project.profile, width: 800, height: 1000, fitMode: 'blur' };
     context.model = { ...context.model!, provider, parameters: provider === 'custom-http' ? { requestPath: 'generate', requestTemplate: { prompt: '{{prompt}}', narration: '{{narration}}', instruction: '{{instruction}}' }, resultBase64Path: 'image' } : provider === 'comfyui' ? { workflow: { '6': { inputs: { text: '' } } }, inputMapping: { prompt: '6.text' } } : {} };
     await createActivityExecutor()(context);
     const prompt = provider === 'comfyui' ? (requests[0].prompt as { '6': { inputs: { text: string } } })['6'].inputs.text : requests[0].prompt;
-    expect(prompt).toBe('手绘\n树木和纸张\n保留右上角留白。');
+    expect(prompt).toContain('手绘\n树木和纸张\n保留右上角留白。');
+    expect(prompt).toContain('800 × 1000 像素（4:5）');
+    expect(prompt).toContain('素材适配采用模糊背景填充');
     if (provider === 'custom-http') expect(requests[0]).toMatchObject({ narration: '示例旁白', instruction: '保留右上角留白。' });
   });
 

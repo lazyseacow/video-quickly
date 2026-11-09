@@ -2,7 +2,7 @@
 .workflow-assistant > .dialog__surface { max-height: min(840px, calc(100dvh - 2 * var(--space-6))); }
 .workflow-assistant__body { display: grid; gap: var(--space-4); overflow-y: auto; min-width: 0; }
 .workflow-assistant__body .field { margin: 0; }
-.workflow-assistant__body textarea { resize: vertical; min-height: 100px; width: 100%; }
+.workflow-assistant__body textarea { min-height: 100px; width: 100%; }
 .workflow-assistant__hint { color: var(--text-secondary); font-size: var(--text-size-caption); line-height: var(--line-height-body); margin: 0; }
 .workflow-assistant__run { display: flex; align-items: center; flex-wrap: wrap; gap: var(--space-2); }
 .workflow-assistant__run code { font-size: var(--text-size-caption); overflow-wrap: anywhere; }
@@ -13,9 +13,4 @@
 .workflow-assistant__comparison span { color: var(--text-secondary); font-size: var(--text-size-caption); }
 .workflow-assistant__comparison pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 300px; overflow-y: auto; margin: var(--space-2) 0 0; font: var(--text-size-caption)/var(--line-height-body) var(--font-family-code); }
 .workflow-assistant .dialog__footer { flex-wrap: wrap; }
-.model-alternatives { display: grid; gap: var(--space-3); }
-.model-alternatives h3, .model-alternatives p { margin: 0; }
-.model-alternatives ul { list-style: none; margin: 0; padding: 0; }
-.model-alternatives li { display: flex; align-items: center; justify-content: space-between; gap: var(--space-3); padding-block: var(--space-3); border-bottom: 1px solid var(--border-subtle); }
-.model-alternatives li p, .model-alternatives small { color: var(--text-secondary); font-size: var(--text-size-caption); line-height: var(--line-height-body); }
-@media (max-width: 760px) { .workflow-assistant { width: calc(100vw - var(--space-4)); } .workflow-assistant__comparison { grid-template-columns: minmax(0, 1fr); } .workflow-assistant__body { padding: var(--space-4); } .model-alternatives li { align-items: start; flex-wrap: wrap; } }
+@media (max-width: 760px) { .workflow-assistant { width: calc(100vw - var(--space-4)); } .workflow-assistant__comparison { grid-template-columns: minmax(0, 1fr); } .workflow-assistant__body { padding: var(--space-4); } }

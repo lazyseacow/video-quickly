@@ -1,12 +1,12 @@
 import { z } from 'zod';
 import { providerUsageSchema, type ModelResponseIssue } from '@video-quickly/contracts';
 import type { DocumentStore } from './database.js';
-import { TextRequestRejectedError, type TextGenerationResult } from './providers.js';
+import { textIncompleteReasonSchema, TextRequestRejectedError, type TextGenerationResult } from './providers.js';
 
 /** Only safe, locally generated field descriptions cross the checkpoint boundary. */
 export class ModelResponseValidationError extends Error {
-  constructor(readonly issues: ModelResponseIssue[]) {
-    super(`分镜结果校验失败：${issues.map(issue => `${issue.path}：${issue.message}`).join('；')}`);
+  constructor(readonly issues: ModelResponseIssue[], label = '分镜') {
+    super(`${label}结果校验失败：${issues.map(issue => issue.path === '$' ? issue.message : `${issue.path}：${issue.message}`).join('；')}`);
     this.name = 'ModelResponseValidationError';
   }
 }
@@ -19,15 +19,22 @@ export function responseIssues(error: z.ZodError): ModelResponseIssue[] {
       : issue.code === 'too_big' ? `不得超过 ${issue.maximum}${issue.origin === 'string' ? ' 个字符' : issue.origin === 'array' ? ' 项' : ''}`
       : issue.code === 'invalid_value' ? '值不在允许的选项中'
       : issue.code === 'invalid_format' ? '格式不符合要求'
+      : issue.code === 'unrecognized_keys' ? '含有未定义的字段'
       : '不符合字段约束（检查重复项和编号格式）',
   }));
+}
+
+export function parseModelJson(text: string, label = '分镜'): unknown {
+  const cleaned = text.trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '');
+  try { return JSON.parse(cleaned); }
+  catch { throw new ModelResponseValidationError([{ path: '$', message: '不是有效 JSON，请返回完整的 JSON 对象。' }], label); }
 }
 
 const receiptSchema = z.object({
   attempt: z.number().int().positive(), inputHash: z.string(), submittedAt: z.string(),
   status: z.enum(['submitted', 'received', 'rejected']), receivedAt: z.string().optional(),
   rejectedAt: z.string().optional(), rejection: z.object({ status: z.number().int(), unsupportedOutputFormat: z.boolean() }).optional(),
-  response: z.object({ text: z.string(), usage: providerUsageSchema.optional(), incomplete: z.boolean().optional() }).optional(),
+  response: z.object({ text: z.string(), usage: providerUsageSchema.optional(), incomplete: z.boolean().optional(), incompleteReason: textIncompleteReasonSchema.optional() }).optional(),
   issues: z.array(z.object({ path: z.string(), message: z.string() })).optional(),
 });
 type Receipt = z.infer<typeof receiptSchema>;
@@ -52,7 +59,7 @@ export function createModelResponses(store: DocumentStore) {
       const head = store.get<{ attempt: number }>('model-response-head', operationId);
       for (let attempt = (head?.attempt ?? 1) - 1; attempt > 0; attempt--) {
         const receipt = store.get<Receipt>('model-response', `${operationId}:${attempt}`);
-        if (receipt?.status === 'received') return receipt.issues;
+        if (receipt?.status === 'received') return receipt.response?.incomplete ? undefined : receipt.issues;
       }
       return undefined;
     },
@@ -67,8 +74,8 @@ export function createModelResponses(store: DocumentStore) {
       store.database.transaction(() => {
         store.put('model-response-head', options.operationId, { attempt: submitted.attempt });
         save(options.operationId, submitted);
+        options.recordReceipt(`model-response:${options.operationId}:${submitted.attempt}`);
       })();
-      options.recordReceipt(`model-response:${options.operationId}:${submitted.attempt}`);
       try {
         const generated = await options.generate(), response = typeof generated === 'string' ? { text: generated } : generated;
         save(options.operationId, { ...submitted, status: 'received', receivedAt: new Date().toISOString(), response });

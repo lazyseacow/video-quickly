@@ -1,3 +1,4 @@
+import { planningFixtureResponse, storyboardFixtureResponse } from '../../../tests/fixtures/planning-response';
 import { createHash, randomUUID } from 'node:crypto';
 import { createServer, type Server } from 'node:http';
 import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
@@ -500,9 +501,9 @@ it('restarts a canceled legacy Agent in the unified workflow', async () => {
       entered();
       return new Promise((_resolve, reject) => signal?.addEventListener('abort', () => { canceled = true; reject(new Error('controlled cancellation')); }, { once: true }));
     }
-    if (prompt.includes('自动视频制作步骤：创意简报')) return '六秒的水滴旅程，三幕叙事。';
-    if (prompt.includes('自动视频制作步骤：风格与角色')) return '蓝绿色水彩，柔和光线。';
-    return JSON.stringify({ shots: [{ title: '水滴旅程', narration: '', visualPrompt: '水彩雨滴', durationUs: 6_000_000 }], entities: [] });
+    if (prompt.includes('自动视频制作步骤：创意简报')) return planningFixtureResponse(prompt, '六秒的水滴旅程，三幕叙事。');
+    if (prompt.includes('自动视频制作步骤：风格与角色')) return planningFixtureResponse(prompt, '蓝绿色水彩，柔和光线。');
+    return storyboardFixtureResponse(prompt, JSON.stringify({ shots: [{ title: '水滴旅程', narration: '', visualPrompt: '水彩雨滴', durationUs: 6_000_000 }], entities: [] }));
   } });
   actions.push(() => business('brief', 'canceled-brief'));
   const first = await resumeLegacyAgent();

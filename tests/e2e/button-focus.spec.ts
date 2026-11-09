@@ -21,9 +21,21 @@ for (const viewport of [{ width: 1536, height: 960, theme: 'light' }, { width: 6
     await initial.getByRole('button', { name: '关闭对话框', exact: true }).click();
     await expect(initial).toHaveCount(0);
     for (const [name, title] of [['新建项目', '新建视频项目'], ['制作设置', '制作设置'], ['制作前检查', '制作前检查'], ['导出', '导出视频']]) {
-      const button = page.getByRole('button', { name, exact: true }), dialog = page.getByRole('dialog', { name: title, exact: true });
+      const inMore = name === '制作前检查';
+      const button = page.getByRole('button', { name: inMore ? '更多' : name, exact: true }), dialog = page.getByRole('dialog', { name: title, exact: true });
+      async function activate(key?: string) {
+        if (key) await button.press(key);
+        else if (viewport.width === 600) await button.tap();
+        else await button.click();
+        if (!inMore) return;
+        const item = page.getByRole('button', { name, exact: true });
+        if (key) {
+          await page.keyboard.press('Tab'); await expect(item).toBeFocused(); await item.press(key);
+        } else if (viewport.width === 600) await item.tap();
+        else await item.click();
+      }
       await keyboardFocus(page, button);
-      if (viewport.width === 600) await button.tap(); else await button.click();
+      await activate();
       await expect(dialog).toBeVisible();
       if (name === '新建项目') await dialog.getByLabel('项目名称', { exact: true }).press('Tab');
       await page.keyboard.press('Escape'); await expect(dialog).toHaveCount(0);
@@ -32,10 +44,10 @@ for (const viewport of [{ width: 1536, height: 960, theme: 'light' }, { width: 6
       await expect(button).toHaveCSS('outline-style', 'none');
       await keyboardFocus(page, button);
       for (const key of ['Enter', 'Space']) {
-        await button.press(key); await expect(dialog).toBeVisible(); await page.keyboard.press('Escape'); await expect(dialog).toHaveCount(0);
+        await activate(key); await expect(dialog).toBeVisible(); await page.keyboard.press('Escape'); await expect(dialog).toHaveCount(0);
         await expect(button).toBeFocused(); await expect(button).toHaveCSS('outline-style', 'solid');
       }
-      await button.press('Enter'); await expect(dialog).toBeVisible(); await dialog.getByRole('button', { name: '关闭对话框', exact: true }).click(); await expect(dialog).toHaveCount(0);
+      await activate('Enter'); await expect(dialog).toBeVisible(); await dialog.getByRole('button', { name: '关闭对话框', exact: true }).click(); await expect(dialog).toHaveCount(0);
       await expect(button).toBeFocused(); await expect(button).toHaveCSS('outline-style', 'none');
       if (name === '新建项目') {
         await keyboardFocus(page, button); await button.press('Enter'); await expect(dialog).toBeVisible();

@@ -1,3 +1,4 @@
+import { planningFixtureResponse, storyboardFixtureResponse } from '../fixtures/planning-response';
 import { createServer, type Server } from 'node:http';
 import { randomUUID } from 'node:crypto';
 import { expect, test, type APIRequestContext, type Page } from '@playwright/test';
@@ -26,7 +27,10 @@ async function fixture(request: APIRequestContext) {
     const body = JSON.parse(raw), prompt = body.messages?.[0]?.content as string | undefined;
     calls.push({ path: incoming.url ?? '', prompt }); if (calls.length === 1) await gate;
     if (prompt) {
-      const content = prompt.includes('自动视频制作步骤：旁白与分镜') ? JSON.stringify({ shots: [{ title: '花园镜头', narration: '木盒找到了。', visualPrompt: '花园中的蓝色木盒', durationUs: 1000000, characterKeys: [], entityKeys: [] }], entities: [] }) : '统一的水彩花园与蓝色木盒。';
+      const text = '统一的水彩花园与蓝色木盒。';
+      const content = prompt.includes('自动视频制作步骤：旁白与分镜')
+        ? storyboardFixtureResponse(prompt, JSON.stringify({ shots: [{ title: '花园镜头', narration: '木盒找到了。', visualPrompt: '花园中的蓝色木盒', durationUs: 1000000, characterKeys: [], entityKeys: [] }], entities: [] }))
+        : planningFixtureResponse(prompt, text);
       response.end(JSON.stringify({ choices: [{ message: { content } }], usage: { prompt_tokens: 23, completion_tokens: 11 } }));
     } else response.end(JSON.stringify({ id: `episode-video-${calls.length}` }));
   })().catch(error => response.destroy(error instanceof Error ? error : undefined)); });
@@ -137,16 +141,40 @@ for (const viewport of [{ width: 1536, height: 960, theme: 'dark' }, { width: 39
     await expect(page.locator('.queue-item')).toHaveCount(2); expect(source.calls).toHaveLength(0);
     await begin(page); await expect.poll(() => source.calls.length).toBe(1);
     await expect(queue.getByRole('button', { name: '开始队列', exact: true })).toHaveCount(0);
-    await page.getByRole('button', { name: '暂停后续派发', exact: true }).click(); await expect(page.locator('.queue-summary')).toContainText('已暂停派发');
+    await expect(queue.locator('.queue-item__status')).toHaveText(['制作中', '待制作']);
+    const detailRequested = Promise.withResolvers<void>(), releaseDetail = Promise.withResolvers<void>();
+    await page.route('**/__desktop_rpc', async route => {
+      if (route.request().postDataJSON()?.method === 'productionQueue.get') {
+        detailRequested.resolve();
+        await releaseDetail.promise;
+      }
+      await route.continue();
+    });
+    try {
+      // An unrelated project save starts a background queue refresh without changing its revision.
+      await rpc(request, 'project.update', { projectId: source.project.id, patch: { title: source.project.title } });
+      await detailRequested.promise;
+      const pause = queue.getByRole('button', { name: '暂停后续派发', exact: true });
+      await expect(pause).toBeEnabled();
+      const [response] = await Promise.all([
+        page.waitForResponse(response => response.url().endsWith('/__desktop_rpc') && response.request().postDataJSON()?.method === 'productionQueue.pause'),
+        pause.click(),
+      ]);
+      expect(response.ok()).toBe(true);
+    } finally {
+      releaseDetail.resolve();
+      await page.unrouteAll({ behavior: 'wait' });
+    }
+    await expect(page.locator('.queue-summary')).toContainText('已暂停派发');
     await expect(page.locator('.queue-summary')).toContainText('当前分集继续制作');
     source.release(); await expect(page.locator('.queue-item').first().locator('.queue-item__status')).toHaveText('已完成', { timeout: 45000 });
-    await expect(page.locator('.queue-item').nth(1).locator('.queue-item__status')).toHaveText('待制作'); expect(source.calls).toHaveLength(4);
+    await expect(page.locator('.queue-item').nth(1).locator('.queue-item__status')).toHaveText('待制作'); expect(source.calls).toHaveLength(5);
     const works = await rpc<{ items: StoryWork[] }>(request, 'work.list', {}), work = works.items.find(work => work.title === title)!;
     const summary = await rpc<{ projects: { id: string; episode?: { workId: string; number: number } }[] }>(request, 'workspace.summary');
     const episodes = summary.projects.filter(project => project.episode?.workId === work.id).sort((a, b) => a.episode!.number - b.episode!.number);
     const second = (await rpc<{ project: ProjectDocument }>(request, 'project.get', { projectId: episodes[1].id })).project;
     await rpc(request, 'project.update', { projectId: second.id, revision: second.revision, patch: { title: '人工更新的打开木盒' } });
-    await begin(page); await expect(page.locator('.queue-item').nth(1)).toContainText('排队后项目已修改'); expect(source.calls).toHaveLength(4);
+    await begin(page); await expect(page.locator('.queue-item').nth(1)).toContainText('排队后项目已修改'); expect(source.calls).toHaveLength(5);
     await expect(page.locator('.toast__message')).toHaveCount(0);
     await expect(queue.getByText(/排队后项目已修改/)).toHaveCount(1);
     await page.screenshot({ path: info.outputPath(`production-queue-${viewport.theme}.png`) });
@@ -154,7 +182,7 @@ for (const viewport of [{ width: 1536, height: 960, theme: 'dark' }, { width: 39
     await page.getByRole('button', { name: '核对并刷新输入', exact: true }).click(); await confirmAction(page, '刷新输入');
     await begin(page); await expect(page.locator('.queue-summary')).toContainText('已完成', { timeout: 45000 });
     await expect(queue.getByRole('button', { name: '取消后续排队项', exact: true })).toHaveCount(0);
-    expect(source.calls).toHaveLength(8);
+    expect(source.calls).toHaveLength(10);
     for (const episode of episodes) {
       const project = (await rpc<{ project: ProjectDocument }>(request, 'project.get', { projectId: episode.id })).project;
       expect(project.shots).toHaveLength(1); expect(project.shots[0].videoAssetId).toBeTruthy(); expect(project.episode?.originalText).toContain('集原文');

@@ -164,39 +164,27 @@ async function verifyGenericWorkflow(project) {
   await expect(dialog.getByRole('region', { name: '步骤指引', exact: true })).toHaveCount(0);
   await expect(dialog.getByRole('checkbox', { name: /人工审阅|人工审核/ })).toHaveCount(0);
   await dialog.getByLabel('创作要求', { exact: true }).fill('未提交的项目配置');
-  await dialog.locator('.creative-context-editor__roles > summary').click();
+  const roles = dialog.getByRole('button', { name: /^角色与连续性/ });
+  const templates = dialog.getByRole('button', { name: '应用系列模板', exact: true });
+  await expect(dialog.locator('.dialog__surface')).toHaveCSS('opacity', '1');
+  const templatePosition = await templates.boundingBox();
+  await roles.press('Enter');
   await expect(dialog.getByRole('group', { name: '项目角色池', exact: true })).toBeVisible();
   await expect(dialog.getByRole('group', { name: '项目角色池', exact: true }).getByRole('checkbox', { name: character.name, exact: true })).not.toBeChecked();
   await dialog.getByRole('textbox', { name: '连续性要求', exact: true }).fill('同一场景与固定服装');
-  await dialog.locator('summary:visible').filter({ hasText: '高级设置' }).click();
-  const contactsBeforePreview = credentialContacts;
-  await dialog.getByRole('button', { name: '预览与实验提示词', exact: true }).click();
-  const experiment = page.getByRole('dialog', { name: '提示词实验', exact: true });
-  await experiment.getByRole('textbox', { name: '实验提示词', exact: true }).fill('桌面包中的独立实验提示词');
-  await experiment.getByRole('button', { name: '离线预览', exact: true }).click();
-  await expect(experiment.getByLabel('最终提示词', { exact: true })).toContainText('桌面包中的独立实验提示词');
-  await experiment.getByRole('button', { name: '保存实验草稿', exact: true }).click();
-  await expect(experiment.getByText('实验草稿已保存。', { exact: true })).toBeVisible();
-  const sessions = await rpc('promptSession.list', { projectId: project.id });
-  assert.equal(sessions.items.length, 1); assert.equal(sessions.items[0].draft.projectRevision, project.revision);
-  const template = await rpc('promptLibrary.save', { name: '原生提示词模板', kind: 'template', prompt: '原生固定版本', nodeKinds: ['brief'] });
-  await rpc('promptLibrary.save', { id: template.id, revision: template.revision, name: template.name, kind: 'template', prompt: '新版本', nodeKinds: template.nodeKinds });
-  assert.equal((await rpc('promptLibrary.get', { id: template.id, version: 1 })).prompt, '原生固定版本');
-  await experiment.locator('.prompt-workbench__body').evaluate(element => { element.scrollTop = 0; });
-  await page.screenshot({ path: join(artifacts, 'desktop-prompt-experiment.png') });
-  await experiment.getByRole('button', { name: '关闭', exact: true }).click();
-  assert.equal((await projectDocument(project.id)).revision, project.revision); assert.equal(credentialContacts, contactsBeforePreview);
-  checks.promptOfflinePreview = true; checks.promptSessionPersistence = true; checks.promptTemplateVersions = true; checks.promptConfigurationIsolation = true;
-  for (const [taskId, label] of [['brief', '创意简报'], ['style', '风格与角色'], ['script', '旁白与分镜']]) {
-    await dialog.getByRole('combobox', { name: '任务', exact: true }).selectOption(taskId);
-    await dialog.getByLabel(`${label}补充要求`, { exact: true }).fill(`未提交的${label}配置`);
-  }
+  assert.deepEqual(await templates.boundingBox(), templatePosition);
+  await page.keyboard.press('Escape');
+  await expect(roles).toBeFocused();
+  await expect(dialog.getByText('高级设置', { exact: true })).toHaveCount(0);
+  await expect(dialog.getByText('剪辑 Agent 设置', { exact: true })).toBeVisible();
+  await dialog.getByLabel('视觉风格', { exact: true }).fill('未提交的项目风格');
   await steps.getByRole('button', { name: '模型与素材', exact: true }).click();
   await expect(dialog.getByRole('combobox', { name: '文本模型', exact: true })).toHaveValue('');
   await expect(dialog.getByRole('combobox', { name: '视频模型', exact: true })).toHaveValue('');
+  await expect(dialog.getByText('高级设置', { exact: true })).toHaveCount(0);
   await steps.getByRole('button', { name: '创作要求', exact: true }).click();
-  await dialog.getByRole('combobox', { name: '任务', exact: true }).selectOption('brief');
-  await expect(dialog.getByLabel('创意简报补充要求', { exact: true })).toHaveValue('未提交的创意简报配置');
+  await expect(dialog.getByLabel('创作要求', { exact: true })).toHaveValue('未提交的项目配置');
+  await expect(dialog.getByLabel('视觉风格', { exact: true })).toHaveValue('未提交的项目风格');
   await page.screenshot({ path: join(artifacts, 'desktop-workflow-stage.png') });
   await steps.getByRole('button', { name: '确认保存', exact: true }).click();
   await expect(dialog.getByRole('button', { name: '保存设置', exact: true })).toBeVisible();
@@ -214,6 +202,30 @@ async function verifyGenericWorkflow(project) {
   await expect(page.locator('.inspector').getByRole('heading', { name: '镜头属性', exact: true })).toBeVisible();
   await expect(page.locator('.inspector')).not.toContainText(/待核验|已核验|引用已失效/);
   assert.deepEqual((await rpc('workspace.snapshot')).projects, snapshot.projects, 'Inspecting global settings must preserve the project');
+  const contactsBeforePreview = credentialContacts;
+  await page.getByRole('button', { name: 'Skill 工作室', exact: true }).click();
+  await page.getByRole('button', { name: '提示词实验与模板', exact: true }).click();
+  const launcher = page.getByRole('dialog', { name: '选择提示词实验任务', exact: true });
+  await launcher.getByLabel('实验项目', { exact: true }).selectOption(project.id);
+  await launcher.getByLabel('实验任务', { exact: true }).selectOption('brief');
+  await launcher.getByRole('button', { name: '打开提示词实验', exact: true }).click();
+  const experiment = page.getByRole('dialog', { name: '提示词实验', exact: true });
+  await experiment.getByRole('textbox', { name: '实验提示词', exact: true }).fill('桌面包中的独立实验提示词');
+  await experiment.getByRole('button', { name: '离线预览', exact: true }).click();
+  await expect(experiment.getByLabel('最终提示词', { exact: true })).toContainText('桌面包中的独立实验提示词');
+  await experiment.getByRole('button', { name: '保存实验草稿', exact: true }).click();
+  await expect(experiment.getByText('实验草稿已保存。', { exact: true })).toBeVisible();
+  const sessions = await rpc('promptSession.list', { projectId: project.id });
+  assert.equal(sessions.items.length, 1); assert.equal(sessions.items[0].draft.projectRevision, project.revision);
+  const template = await rpc('promptLibrary.save', { name: '原生提示词模板', kind: 'template', prompt: '原生固定版本', nodeKinds: ['brief'] });
+  await rpc('promptLibrary.save', { id: template.id, revision: template.revision, name: template.name, kind: 'template', prompt: '新版本', nodeKinds: template.nodeKinds });
+  assert.equal((await rpc('promptLibrary.get', { id: template.id, version: 1 })).prompt, '原生固定版本');
+  await experiment.locator('.prompt-workbench__body').evaluate(element => { element.scrollTop = 0; });
+  await page.screenshot({ path: join(artifacts, 'desktop-prompt-experiment.png') });
+  await experiment.getByRole('button', { name: '关闭', exact: true }).click(); await expect(experiment).toHaveCount(0);
+  await launcher.getByRole('button', { name: '取消', exact: true }).click(); await expect(launcher).toHaveCount(0);
+  assert.equal((await projectDocument(project.id)).revision, project.revision); assert.equal(credentialContacts, contactsBeforePreview);
+  checks.promptOfflinePreview = true; checks.promptSessionPersistence = true; checks.promptTemplateVersions = true; checks.promptConfigurationIsolation = true;
   checks.projectSettings = true;
   checks.genericWorkflow = true;
 }
@@ -683,6 +695,7 @@ try {
   }
 
   const beforeCheck = await projectDocument(project.id), contactsBeforeCheck = credentialContacts;
+  await page.getByRole('button', { name: '更多', exact: true }).click();
   await page.getByRole('button', { name: '制作前检查', exact: true }).click();
   const readinessDialog = page.getByRole('dialog', { name: '制作前检查', exact: true });
   await expect(readinessDialog.locator('.readiness-summary dd').first()).toHaveText(String(beforeCheck.revision));
@@ -833,7 +846,7 @@ try {
     previewFullscreenTiming,
     nativeDialogs: 'file/directory/save selection, cancellation and close decisions substituted; OS dialog UI requires manual verification',
     nativeShell: 'reveal invocation substituted; Finder/Explorer UI requires manual verification',
-    screenshots: ['desktop-getting-started.png', 'desktop-getting-started-context.png', 'desktop-workflow-stage.png', 'desktop-editor.png', 'desktop-restored-draft.png', ...(compact ? ['desktop-compact-production-settings.png', 'desktop-compact-run-scope.png', 'desktop-compact-export-mp4.png', 'desktop-compact-export-other.png'] : [])],
+    screenshots: ['desktop-getting-started.png', 'desktop-getting-started-context.png', 'desktop-workflow-stage.png', 'desktop-editor.png', 'desktop-restored-draft.png', ...(compact ? ['desktop-compact-production-settings.png', 'desktop-compact-production-readiness.png', 'desktop-compact-export-mp4.png', 'desktop-compact-export-other.png'] : [])],
   }, null, 2));
   console.log('Electron 原生窗口、真实 IPC/Node、编辑历史、媒体 Range/导出、失联重连和重启草稿验收通过。');
 } catch (error) {

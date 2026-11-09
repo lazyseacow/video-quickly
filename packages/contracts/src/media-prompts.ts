@@ -1,7 +1,17 @@
-import type { CharacterProfile, JsonValue, ModelProfile, ProjectDocument, Shot, WorkflowNode } from './index.js';
+import { VIDEO_FIT_MODE_LABELS, videoAspectRatioPreset, type CharacterProfile, type JsonValue, type ModelProfile, type ProjectDocument, type Shot, type VideoProfile, type WorkflowNode } from './index.js';
 import { creativeReferenceAssetIds, shotCreativePrompt } from './creative-context.js';
 import { isVideoGenerationNode } from './production.js';
 import { resolvePromptBindings } from './prompt-bindings.js';
+
+export function generationFramePrompt({ width, height, fitMode }: VideoProfile): string {
+  const ratio = videoAspectRatioPreset(width, height)?.label;
+  const composition = {
+    contain: '保持素材原比例，让主体和关键细节完整入画。',
+    cover: '让画面铺满目标画幅，把主体和关键信息放在居中的裁切安全区。',
+    blur: '保持前景和主体完整，构图预留可填充的背景区域。',
+  }[fitMode];
+  return `按 ${width} × ${height} 像素${ratio ? `（${ratio}）` : ''}的目标画幅构图。素材适配采用${VIDEO_FIT_MODE_LABELS[fitMode]}。${composition}`;
+}
 
 export function characterReferencePrompt(selected: CharacterProfile[], referenceIds: readonly string[] = [...new Set(selected.flatMap(profile => profile.referenceAssetIds))]): string {
   if (!selected.length) return '';
@@ -24,7 +34,7 @@ export function buildMediaPrompt(project: ProjectDocument, node: WorkflowNode, s
   const sourceId = edit && typeof edit === 'object' && !Array.isArray(edit) && typeof edit.sourceAssetId === 'string' ? edit.sourceAssetId : undefined;
   const references = [...new Set([...(sourceId ? [sourceId] : []), ...selected.flatMap(profile => profile.referenceAssetIds), ...creativeReferenceAssetIds(project, shot)])];
   const multimodal = Boolean(project.workflow.production?.referenceAudioAssetIds?.length) || references.length > 0 && model?.parameters.characterReferenceMode === 'reference_image';
-  const prompt = [sourceId ? '图片 1 为待修改原图，保留未要求修改的部分。' : '', project.style, shot.visualPrompt, shotCreativePrompt(project, shot), resolvePromptBindings(node, project, shot, upstream).prompt, characterReferencePrompt(selected, references), creativeReferencePrompt(project, shot, references),
+  const prompt = [sourceId ? '图片 1 为待修改原图，保留未要求修改的部分。' : '', project.style, shot.visualPrompt, shotCreativePrompt(project, shot), resolvePromptBindings(node, project, shot, upstream).prompt, characterReferencePrompt(selected, references), creativeReferencePrompt(project, shot, references), generationFramePrompt(project.profile),
     ...(isVideoGenerationNode(node) ? [shot.narration.trim() ? `实际台词（只朗读以下正文）：${JSON.stringify(shot.narration)}` : '本镜头不需要人声。',
       `声音要求：${[node.config.soundPrompt, shot.soundPrompt].filter(Boolean).join('\n')}`,
       '画面不生成字幕或文字；台词、人声和环境音直接包含在视频音轨中。'] : []),

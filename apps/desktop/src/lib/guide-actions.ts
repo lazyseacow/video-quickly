@@ -1,7 +1,7 @@
 export type GuideAction =
   | 'project-created' | 'models-opened' | 'model-saved' | 'projects-opened' | 'workbench-opened'
   | 'production-settings-opened' | 'shot-selected' | 'preview-played' | 'timeline-seeked'
-  | 'outline-opened' | 'inspector-opened' | 'project-saved' | 'workflow-selected'
+  | 'outline-opened' | 'inspector-opened' | 'project-saved'
   | 'check-completed' | 'production-started' | 'export-completed' | 'help-used';
 
 export interface GuideCompletion { action: GuideAction; sequence: number; }

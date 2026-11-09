@@ -1,8 +1,8 @@
+import { planningFixtureResponse } from '../fixtures/planning-response';
 import { createServer, type Server } from 'node:http';
 import { randomUUID } from 'node:crypto';
-import { expect, test, type APIRequestContext, type Locator } from '@playwright/test';
+import { expect, test, type APIRequestContext, type Locator, type Page } from '@playwright/test';
 import type { ProjectDocument, PromptLibraryItem, RunSummary } from '@video-quickly/contracts';
-import { openProduction, saveProduction } from './production-settings';
 
 async function rpc<T>(request: APIRequestContext, method: string, params: unknown = {}): Promise<T> {
   const response = await request.post('/__desktop_rpc', { data: { method, params } }), payload = await response.json();
@@ -16,7 +16,8 @@ async function fixture(request: APIRequestContext, hold = false) {
   const server = createServer({ keepAliveTimeout: 0 }, (incoming, response) => { void (async () => {
     let body = ''; for await (const bytes of incoming) body += String(bytes);
     const input = JSON.parse(body); prompts.push(input.messages[0].content); if (hold) await gate;
-    response.setHeader('content-type', 'application/json'); response.end(JSON.stringify({ choices: [{ message: { content: '实验生成的创意简报正文' } }], usage: { prompt_tokens: 17, completion_tokens: 9 } }));
+    const content = planningFixtureResponse(input.messages[0].content, '实验生成的创意简报正文');
+    response.setHeader('content-type', 'application/json'); response.end(JSON.stringify({ choices: [{ message: { content } }], usage: { prompt_tokens: 17, completion_tokens: 9 } }));
   })().catch(error => response.destroy(error instanceof Error ? error : undefined)); });
   await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
   const address = server.address(); if (!address || typeof address === 'string') throw new Error('fixture');
@@ -25,17 +26,24 @@ async function fixture(request: APIRequestContext, hold = false) {
   project = await rpc<ProjectDocument>(request, 'project.update', { projectId: project.id, revision: project.revision, patch: { workflow: { ...project.workflow, production: { ...project.workflow.production, textModelId: model.id } } } });
   return { project, prompts, release, async close() { release(); await close(server); }, current: () => rpc<{ project: ProjectDocument }>(request, 'project.get', { projectId: project.id }).then(value => value.project) };
 }
-async function openExperiment(settings: Locator) {
-  await settings.locator('summary:visible').filter({ hasText: '高级设置' }).click();
-  await settings.getByRole('button', { name: '预览与实验提示词', exact: true }).click();
-  return settings.page().getByRole('dialog', { name: '提示词实验', exact: true });
+async function openLauncher(page: Page, project: ProjectDocument, nodeId = 'brief') {
+  await page.goto('/'); await page.getByRole('button', { name: 'Skill 工作室', exact: true }).click();
+  await page.getByRole('button', { name: '提示词实验与模板', exact: true }).click();
+  const launcher = page.getByRole('dialog', { name: '选择提示词实验任务', exact: true });
+  await launcher.getByLabel('实验项目', { exact: true }).selectOption(project.id);
+  await launcher.getByLabel('实验任务', { exact: true }).selectOption(nodeId);
+  return launcher;
+}
+async function openExperiment(launcher: Locator) {
+  await launcher.getByRole('button', { name: '打开提示词实验', exact: true }).press('Enter');
+  return launcher.page().getByRole('dialog', { name: '提示词实验', exact: true });
 }
 for (const viewport of [{ width: 1536, height: 960, theme: 'dark' }, { width: 390, height: 844, theme: 'light' }]) test(`previews offline, versions templates and applies configuration explicitly at ${viewport.width}px`, async ({ page, request }, info) => {
   const source = await fixture(request), errors: string[] = [];
   page.on('pageerror', error => errors.push(error.message));
   try {
     await page.setViewportSize(viewport); await page.addInitScript(theme => localStorage.setItem('vq-theme', theme), viewport.theme);
-    const settings = await openProduction(page, source.project), dialog = await openExperiment(settings);
+    const launcher = await openLauncher(page, source.project), dialog = await openExperiment(launcher);
     await dialog.getByRole('textbox', { name: '实验提示词', exact: true }).fill('用 {{theme}} 写一个温柔的故事');
     await dialog.locator('summary').filter({ hasText: '变量与 Skill' }).click();
     await dialog.getByRole('button', { name: '添加变量', exact: true }).click();
@@ -63,12 +71,11 @@ for (const viewport of [{ width: 1536, height: 960, theme: 'dark' }, { width: 39
     await dialog.getByRole('combobox', { name: '固定版本', exact: true }).selectOption('1');
     await expect(dialog.locator('.prompt-library__content')).toHaveText('用 {{theme}} 写一个温柔的故事');
     await dialog.getByRole('button', { name: '替换草稿', exact: true }).click();
-    await dialog.getByRole('button', { name: '应用提示词到设置', exact: true }).click();
     expect(await source.current()).toEqual(source.project);
-    await dialog.getByRole('button', { name: '关闭', exact: true }).click();
-    await expect(settings.getByRole('textbox', { name: '创意简报补充要求', exact: true })).toHaveValue('用 {{theme}} 写一个温柔的故事');
-    await saveProduction(settings); await expect(settings).toHaveCount(0);
+    await dialog.getByRole('button', { name: '应用提示词到设置', exact: true }).click();
+    await expect(dialog).toHaveCount(0);
     const saved = await source.current(), node = saved.workflow.nodes.find(node => node.kind === 'brief')!;
+    expect(node.prompt).toBe('用 {{theme}} 写一个温柔的故事');
     expect(node.promptBindings).toEqual({ theme: { projectPath: ['title'] } }); expect(node.promptTemplate).toEqual({ id: item.id, version: 1 }); expect(source.prompts).toHaveLength(0); expect(errors).toEqual([]);
   } finally { await source.close(); }
 });
@@ -76,7 +83,7 @@ for (const viewport of [{ width: 1536, height: 960, theme: 'dark' }, { width: 39
 test('runs a frozen experiment, restores its output, and uses the existing explicit apply flow', async ({ page, request }) => {
   const source = await fixture(request);
   try {
-    const settings = await openProduction(page, source.project), dialog = await openExperiment(settings);
+    const launcher = await openLauncher(page, source.project), dialog = await openExperiment(launcher);
     await dialog.getByRole('textbox', { name: '实验提示词', exact: true }).fill('只围绕花园里的蓝色木盒');
     await dialog.getByRole('button', { name: '离线预览', exact: true }).click();
     const prompt = await dialog.getByLabel('最终提示词', { exact: true }).locator('pre').textContent();
@@ -84,25 +91,24 @@ test('runs a frozen experiment, restores its output, and uses the existing expli
     await expect(dialog.getByText('实验草稿已保存。', { exact: true })).toBeVisible();
     await dialog.getByRole('button', { name: '查看试运行', exact: true }).click();
     await dialog.getByRole('button', { name: '试运行（产生用量）', exact: true }).click();
-    await expect(dialog.getByRole('article', { name: '创作简报', exact: true }).getByRole('paragraph').filter({ hasText: '实验生成的创意简报正文' })).toBeVisible();
+    await expect(dialog.getByRole('article', { name: '创作简报', exact: true }).getByRole('heading', { name: '实验生成的创意简报正文', exact: true })).toBeVisible();
     expect(source.prompts).toEqual([prompt]); expect(await source.current()).toEqual(source.project);
     await expect(dialog.getByLabel('实验费用', { exact: true })).toContainText('1 条用量记录');
     await expect(dialog.getByLabel('实验费用', { exact: true })).toContainText('输入 Token 17 · 输出 Token 9');
     await dialog.getByRole('button', { name: '查看与核对费用', exact: true }).click();
     const usage = page.getByRole('dialog', { name: '实验费用', exact: true });
     await expect(usage).toContainText('提示词实验'); await usage.getByRole('button', { name: '返回提示词实验', exact: true }).click();
-    await dialog.getByRole('button', { name: '关闭', exact: true }).click();
-    await settings.getByRole('button', { name: '预览与实验提示词', exact: true }).click();
-    const reopened = page.getByRole('dialog', { name: '提示词实验', exact: true });
+    await dialog.getByRole('button', { name: '关闭', exact: true }).click(); await expect(dialog).toHaveCount(0);
+    const reopened = await openExperiment(launcher);
     const saved = await rpc<{ items: { id: string }[] }>(request, 'promptSession.list', { projectId: source.project.id });
     await reopened.getByRole('combobox', { name: '继续实验', exact: true }).selectOption(saved.items[0].id);
     await reopened.getByRole('button', { name: '查看试运行', exact: true }).click();
-    await expect(reopened.getByRole('article', { name: '创作简报', exact: true }).getByRole('paragraph').filter({ hasText: '实验生成的创意简报正文' })).toBeVisible();
+    await expect(reopened.getByRole('article', { name: '创作简报', exact: true }).getByRole('heading', { name: '实验生成的创意简报正文', exact: true })).toBeVisible();
     await reopened.getByRole('button', { name: '查看并应用产物', exact: true }).click();
     await expect(page.getByRole('dialog', { name: '步骤产物', exact: true })).toBeVisible();
     await page.getByRole('button', { name: '应用到项目', exact: true }).click();
     await page.getByRole('button', { name: '确认应用', exact: true }).click();
-    await expect.poll(async () => (await source.current()).brief).toBe('实验生成的创意简报正文');
+    await expect.poll(async () => (await source.current()).workflow.production.manualPlanningFields?.brief?.topic).toBe('实验生成的创意简报正文');
     const runs = await rpc<{ items: RunSummary[] }>(request, 'run.list', { projectId: source.project.id, purpose: 'prompt-trial' });
     expect(runs.items).toHaveLength(1); expect(runs.items[0].stepCount).toBe(1); expect(source.prompts).toHaveLength(1);
   } finally { await source.close(); }
@@ -111,12 +117,7 @@ test('runs a frozen experiment, restores its output, and uses the existing expli
 test('opens the shared workbench from the existing Skill studio and saves prompt configuration explicitly', async ({ page, request }) => {
   const source = await fixture(request);
   try {
-    await page.goto('/'); await page.getByRole('button', { name: 'Skill 工作室', exact: true }).click();
-    await page.getByRole('button', { name: '提示词实验与模板', exact: true }).click();
-    const launcher = page.getByRole('dialog', { name: '选择提示词实验任务', exact: true });
-    await launcher.getByRole('combobox', { name: '实验项目', exact: true }).selectOption(source.project.id);
-    await launcher.getByRole('button', { name: '打开提示词实验', exact: true }).click();
-    const dialog = page.getByRole('dialog', { name: '提示词实验', exact: true });
+    const launcher = await openLauncher(page, source.project), dialog = await openExperiment(launcher);
     await dialog.getByRole('textbox', { name: '实验提示词', exact: true }).fill('工作室保存的提示词');
     expect(await source.current()).toEqual(source.project);
     await dialog.getByRole('button', { name: '应用提示词到设置', exact: true }).click();
@@ -124,6 +125,35 @@ test('opens the shared workbench from the existing Skill studio and saves prompt
     await expect.poll(async () => (await source.current()).workflow.nodes.find(node => node.kind === 'brief')?.prompt).toBe('工作室保存的提示词');
     expect(source.prompts).toHaveLength(0);
   } finally { await source.close(); }
+});
+
+test('opens a reference image trial in the project candidate comparison', async ({ page, request }) => {
+  const image = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScLbtAAAAABJRU5ErkJggg==';
+  const server = createServer((incoming, response) => {
+    incoming.resume();
+    response.setHeader('content-type', 'application/json'); response.end(JSON.stringify({ data: [{ b64_json: image }] }));
+  });
+  await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
+  try {
+    const address = server.address(); if (!address || typeof address === 'string') throw new Error('fixture');
+    const model = await rpc<{ id: string }>(request, 'model.save', { model: { name: '参考图实验', provider: 'openai-compatible', baseUrl: `http://127.0.0.1:${address.port}/v1`, connectionType: 'image', capabilities: ['image'], model: 'fixture-image' } });
+    const created = await rpc<ProjectDocument>(request, 'project.create', { title: '参考素材候选实验' });
+    const project = await rpc<ProjectDocument>(request, 'project.update', { projectId: created.id, revision: created.revision, patch: {
+      shots: [{ id: 'reference-shot', title: '首帧参考', narration: '', visualPrompt: '蓝色木盒', durationUs: 1_000_000 }],
+      workflow: { ...created.workflow, production: { ...created.workflow.production, referenceMode: 'generate', imageModelId: model.id } },
+    } });
+    const dialog = await openExperiment(await openLauncher(page, project, 'assets'));
+    await dialog.getByLabel('目标镜头', { exact: true }).selectOption('reference-shot');
+    await dialog.getByRole('button', { name: '离线预览', exact: true }).click();
+    await dialog.getByRole('button', { name: '保存实验草稿', exact: true }).click();
+    await expect(dialog.getByText('实验草稿已保存。', { exact: true })).toBeVisible();
+    await dialog.getByRole('button', { name: '查看试运行', exact: true }).click();
+    await dialog.getByRole('button', { name: '试运行（产生用量）', exact: true }).click();
+    await dialog.getByRole('button', { name: '在镜头候选中对比', exact: true }).click();
+    const candidates = page.getByRole('dialog', { name: '镜头候选', exact: true });
+    await expect(candidates.getByRole('button', { name: '应用所选候选', exact: true })).toBeEnabled();
+    expect((await rpc<{ project: ProjectDocument }>(request, 'project.get', { projectId: project.id })).project).toEqual(project);
+  } finally { await close(server); }
 });
 
 test('retries the selected experiment project after a read failure without reopening the launcher', async ({ page, request }, info) => {
@@ -155,7 +185,7 @@ test('retries the selected experiment project after a read failure without reope
 test('preserves the project when a trial is canceled and exposes experiment history separately', async ({ page, request }) => {
   const source = await fixture(request, true);
   try {
-    const settings = await openProduction(page, source.project), dialog = await openExperiment(settings);
+    const launcher = await openLauncher(page, source.project), dialog = await openExperiment(launcher);
     await dialog.getByRole('button', { name: '离线预览', exact: true }).click(); await dialog.getByRole('button', { name: '保存实验草稿', exact: true }).click();
     await expect(dialog.getByText('实验草稿已保存。', { exact: true })).toBeVisible(); await dialog.getByRole('button', { name: '查看试运行', exact: true }).click();
     await dialog.getByRole('button', { name: '试运行（产生用量）', exact: true }).click(); await expect.poll(() => source.prompts.length).toBe(1);
@@ -173,7 +203,7 @@ test('appends a compatible quick snippet, rejects an expression offline and rest
   const source = await fixture(request);
   try {
     const snippet = await rpc<PromptLibraryItem>(request, 'promptLibrary.save', { kind: 'snippet', name: `快捷节奏 ${randomUUID().slice(0, 6)}`, prompt: '镜头节奏舒缓', nodeKinds: ['brief'] });
-    const settings = await openProduction(page, source.project), dialog = await openExperiment(settings);
+    const launcher = await openLauncher(page, source.project), dialog = await openExperiment(launcher);
     await dialog.getByRole('textbox', { name: '实验提示词', exact: true }).fill('草稿前文');
     await dialog.getByRole('button', { name: '模板与片段', exact: true }).click();
     await dialog.getByRole('combobox', { name: '模板或快捷片段', exact: true }).selectOption(snippet.id);
@@ -187,7 +217,7 @@ test('appends a compatible quick snippet, rejects an expression offline and rest
     await dialog.getByRole('button', { name: '离线预览', exact: true }).click(); await expect(dialog.getByRole('alert')).toContainText('未绑定');
     expect(source.prompts).toHaveLength(0);
     await page.keyboard.press('Escape'); await expect(dialog).toHaveCount(0);
-    await expect(settings.getByRole('button', { name: '预览与实验提示词', exact: true })).toBeFocused();
+    await expect(launcher.getByRole('button', { name: '打开提示词实验', exact: true })).toBeFocused();
     expect(await source.current()).toEqual(source.project);
   } finally { await source.close(); }
 });

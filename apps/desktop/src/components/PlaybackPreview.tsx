@@ -138,7 +138,12 @@ export default memo(function PlaybackPreview({ project, draft, assets, timeline,
         <IconButton className="preview-skip" label="回到开头" disabled={!project.shots.length} onClick={() => clock.seek(0)}><SkipBack size={16} /></IconButton>
         <IconButton className="preview-skip" label="下一镜头" disabled={!project.shots.length} onClick={() => { const next = project.shots[((clip?.index ?? 0) + 1) % project.shots.length]; if (next) void onSelect(next.id); }}><SkipForward size={16} /></IconButton>
         <span className="timecode"><b>{formatTime(timeUs)}</b><span> / {formatTime(totalUs)}</span></span>
-        <div className="preview-volume"><IconButton label={project.musicClips?.length || includesVideoAudio ? silent ? '开启预览声音' : '静音预览声音' : silent ? '开启旁白声音' : '静音旁白'} aria-pressed={silent} onClick={toggleMuted}>{silent ? <VolumeX size={17} /> : <Volume2 size={17} />}</IconButton><input type="range" aria-label="预览音量" aria-valuetext={`${Math.round((silent ? 0 : volume) * 100)}%`} min={0} max={1} step={0.05} value={silent ? 0 : volume} onChange={event => { setVolume(event.target.valueAsNumber); setMuted(false); }} /></div>
+        <div className="preview-volume">
+          <IconButton label={project.musicClips?.length || includesVideoAudio ? silent ? '开启预览声音' : '静音预览声音' : silent ? '开启旁白声音' : '静音旁白'} aria-pressed={silent} onClick={toggleMuted}>{silent ? <VolumeX size={17} /> : <Volume2 size={17} />}</IconButton>
+          <span className="preview-volume__slider">
+            <input type="range" aria-label="预览音量" aria-valuetext={`${Math.round((silent ? 0 : volume) * 100)}%`} min={0} max={1} step={0.05} value={silent ? 0 : volume} onChange={event => { setVolume(event.target.valueAsNumber); setMuted(false); }} />
+          </span>
+        </div>
         <label className="preview-quality-control"><span className="preview-quality-label">清晰度</span><Select className="preview-quality" aria-label="预览质量" title="预览清晰度" value={previewScale} onChange={event => { const value = Number(event.target.value); setQuality(value); localStorage.setItem('vq-preview-scale', String(value)); }}><option value="0.25">流畅</option><option value="0.5">平衡</option><option value="1">原画</option></Select></label>
         <IconButton label={fullscreen ? '退出全屏预览' : '全屏预览'} aria-pressed={fullscreen} disabled={!document.fullscreenEnabled} onClick={() => void toggleFullscreen(fullscreen)}>{fullscreen ? <Minimize size={17} /> : <Maximize size={17} />}</IconButton>
       </div>

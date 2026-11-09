@@ -40,12 +40,15 @@ for (const { width, theme } of [{ width: 1536, theme: 'dark' }, { width: 1024, t
       await expect(dialog.getByRole('button', { name: '历史产物', exact: true })).toHaveCount(0);
       await dialog.getByRole('button', { name: '编辑创意简报', exact: true }).click();
       const briefEditor = page.getByRole('dialog', { name: '编辑创意简报', exact: true });
-      await expect(briefEditor.getByLabel('创意简报', { exact: true })).toHaveValue(baseline.brief);
-      await briefEditor.getByLabel('创意简报', { exact: true }).fill('取消的简报'); await briefEditor.getByRole('button', { name: '取消', exact: true }).click();
+      const topic = briefEditor.getByLabel('主题', { exact: true });
+      await expect(topic).toHaveValue(baseline.workflow.production.manualPlanningFields!.brief!.topic);
+      await topic.fill('取消的简报'); await briefEditor.getByRole('button', { name: '取消', exact: true }).click();
       await expect(briefEditor).toHaveCount(0); expect(await saved(request, source.project.id)).toEqual(baseline);
       await dialog.getByRole('button', { name: '编辑创意简报', exact: true }).click();
-      const brief = '主题：修改后的创作主题\n目标观众：新入职的同学\n核心信息：三个具体操作。';
-      await briefEditor.getByLabel('创意简报', { exact: true }).fill(brief);
+      const brief = '主题\n修改后的创作主题\n\n目标受众\n新入职的同学\n\n核心信息\n三个具体操作。';
+      await topic.fill('修改后的创作主题');
+      await briefEditor.getByLabel('目标受众', { exact: true }).fill('新入职的同学');
+      await briefEditor.getByLabel('核心信息', { exact: true }).fill('三个具体操作。');
       await expect(briefEditor.locator('.dialog__surface')).toHaveCSS('opacity', '1');
       await page.screenshot({ path: info.outputPath(`planning-brief-editor-${width}.png`) });
       await briefEditor.getByRole('button', { name: '保存到项目', exact: true }).click();
@@ -54,16 +57,16 @@ for (const { width, theme } of [{ width: 1536, theme: 'dark' }, { width: 1024, t
       const steps = dialog.getByRole('navigation', { name: '本次制作步骤', exact: true });
       await steps.getByRole('button', { name: /风格与角色/ }).click(); await dialog.getByRole('button', { name: '编辑风格与角色', exact: true }).click();
       const styleEditor = page.getByRole('dialog', { name: '编辑风格与角色', exact: true });
-      await styleEditor.getByLabel('视觉风格', { exact: true }).fill('修改后的漫画风格');
+      await styleEditor.getByLabel('画风', { exact: true }).fill('修改后的漫画风格');
       await styleEditor.getByLabel('连续性要求', { exact: true }).fill('全片保留同一件蓝色外套');
       await styleEditor.getByRole('button', { name: '保存到项目', exact: true }).click(); await expect(styleEditor).toHaveCount(0);
-      await expect(dialog.getByRole('region', { name: '本次产物', exact: true })).toContainText('全片保留同一件蓝色外套');
+      await expect(dialog.getByRole('region', { name: '当前项目内容', exact: true })).toContainText('全片保留同一件蓝色外套');
 
       await steps.getByRole('button', { name: /分镜生成/ }).click(); await dialog.getByRole('button', { name: '编辑旁白与分镜', exact: true }).click();
       const scriptEditor = page.getByRole('dialog', { name: '编辑旁白与分镜', exact: true }), first = scriptEditor.getByRole('group', { name: '镜头 1 内容', exact: true });
       await first.getByLabel('镜头标题', { exact: true }).fill('人工调整的第一镜');
       await first.getByLabel('旁白', { exact: true }).fill('修改后的旁白，先讲最重要的一点。');
-      await first.locator('summary').click(); await first.getByLabel('画面要求', { exact: true }).fill('主角站在窗边演示操作');
+      await first.getByText('画面与声音要求', { exact: true }).click(); await first.getByLabel('画面要求', { exact: true }).fill('主角站在窗边演示操作');
       await first.getByLabel('声音要求', { exact: true }).fill('自然的讲述声');
       expect(await scriptEditor.evaluate(element => element.scrollWidth <= element.clientWidth)).toBe(true);
       await expect(scriptEditor.locator('.dialog__surface')).toHaveCSS('opacity', '1');
@@ -71,7 +74,7 @@ for (const { width, theme } of [{ width: 1536, theme: 'dark' }, { width: 1024, t
       await scriptEditor.getByRole('button', { name: '保存到项目', exact: true }).click(); await expect(scriptEditor).toHaveCount(0);
       await expect(dialog.getByRole('heading', { name: '人工调整的第一镜', exact: true })).toBeVisible();
       const modified = await saved(request, source.project.id);
-      expect(modified).toMatchObject({ brief, style: '修改后的漫画风格', creativeContext: { continuity: '全片保留同一件蓝色外套' } });
+      expect(modified).toMatchObject({ brief, style: '画风\n修改后的漫画风格', creativeContext: { continuity: '全片保留同一件蓝色外套' } });
       expect(mediaAndTiming(modified)).toEqual(mediaAndTiming(baseline)); expect(source.requests.length).toBe(calls);
       await dialog.getByRole('button', { name: '关闭对话框', exact: true }).click(); await expect(dialog).toHaveCount(0);
       await page.getByRole('button', { name: '撤销', exact: true }).click(); await expect.poll(async () => (await saved(request, source.project.id)).shots).toEqual(baseline.shots);
@@ -95,7 +98,8 @@ test('keeps edited input after save failure and commits a retried save once whil
     const baseline = await saved(request, source.project.id);
     await dialog.getByRole('button', { name: '编辑创意简报', exact: true }).click();
     const editor = page.getByRole('dialog', { name: '编辑创意简报', exact: true });
-    await editor.getByLabel('创意简报', { exact: true }).fill('保存失败后仍然保留的简报');
+    const topic = editor.getByLabel('主题', { exact: true });
+    await topic.fill('保存失败后仍然保留的简报');
     let updates = 0; const gate = new Promise<void>(resolve => { release = resolve; });
     await page.route('**/__desktop_rpc', async route => {
       const input = route.request().postDataJSON();
@@ -105,12 +109,12 @@ test('keeps edited input after save failure and commits a retried save once whil
       await gate; await route.continue();
     });
     await editor.getByRole('button', { name: '保存到项目', exact: true }).click();
-    await expect(editor.getByRole('alert')).toContainText('保存未完成'); await expect(editor.getByLabel('创意简报', { exact: true })).toHaveValue('保存失败后仍然保留的简报');
+    await expect(editor.getByRole('alert')).toContainText('保存未完成'); await expect(topic).toHaveValue('保存失败后仍然保留的简报');
     expect(await saved(request, source.project.id)).toEqual(baseline);
     await editor.getByRole('button', { name: '保存到项目', exact: true }).click(); await expect.poll(() => updates).toBe(2);
-    await expect(editor.getByLabel('创意简报', { exact: true })).toBeDisabled(); await page.keyboard.press('Control+s'); expect(updates).toBe(2);
+    await expect(topic).toBeDisabled(); await page.keyboard.press('Control+s'); expect(updates).toBe(2);
     release(); await expect(editor).toHaveCount(0);
-    const value = await saved(request, source.project.id); expect(value.brief).toBe('保存失败后仍然保留的简报'); expect(value.revision).toBe(baseline.revision + 1);
+    const value = await saved(request, source.project.id); expect(value.brief).toBe('主题\n保存失败后仍然保留的简报'); expect(value.revision).toBe(baseline.revision + 1);
   } finally { release(); await page.unrouteAll({ behavior: 'wait' }); await source.close(); }
 });
 
@@ -119,13 +123,14 @@ test('retains local editor input and rejects overwriting a concurrently changed 
   try {
     await dialog.getByRole('button', { name: '编辑创意简报', exact: true }).click();
     const editor = page.getByRole('dialog', { name: '编辑创意简报', exact: true });
-    await editor.getByLabel('创意简报', { exact: true }).fill('编辑器里的输入');
+    const topic = editor.getByLabel('主题', { exact: true });
+    await topic.fill('编辑器里的输入');
     const before = await saved(request, source.project.id);
     const external = await rpc<ProjectDocument>(request, 'project.update', { projectId: before.id, revision: before.revision, patch: { brief: '外部修改的简报' } });
     await expect(dialog.locator('.result-document')).toContainText('外部修改的简报');
     await editor.getByRole('button', { name: '保存到项目', exact: true }).click();
     await expect(editor.getByRole('alert')).toContainText('已在其他位置修改');
-    await expect(editor.getByLabel('创意简报', { exact: true })).toHaveValue('编辑器里的输入'); expect(await saved(request, before.id)).toEqual(external);
+    await expect(topic).toHaveValue('编辑器里的输入'); expect(await saved(request, before.id)).toEqual(external);
   } finally { await source.close(); }
 });
 
@@ -145,8 +150,15 @@ test('keeps locked shot inputs read-only while allowing another shot to be edite
   } finally { await source.close(); }
 });
 
-test('disables planning editing while the current production is active', async ({ page, request }, info) => {
-  const source = await fixture(request, info, true);
+test('shows the saved storyboard during video generation and after stopping before it was applied', async ({ page, request }, info) => {
+  const video = Promise.withResolvers<void>();
+  let videoRequested = false;
+  const source = await fixture(request, info, true, 2, { beforeReply: async (_body, path) => {
+    if (path.includes('contents/generations/tasks')) {
+      videoRequested = true;
+      await video.promise;
+    }
+  } });
   let runId = '';
   try {
     await rpc(request, 'project.update', { projectId: source.project.id, patch: { workflow: { ...source.project.workflow, production: { ...source.project.workflow.production!, textModelId: source.models[0].id, videoModelId: source.video.id } } } });
@@ -157,5 +169,26 @@ test('disables planning editing while the current production is active', async (
     await expect(dialog.getByRole('tablist', { name: '步骤详情视图', exact: true })).toHaveCount(0);
     await expect(dialog.getByRole('button', { name: '编辑创意简报', exact: true })).toBeDisabled();
     await expect(dialog).toContainText('完成或停止后可修改策划内容');
-  } finally { if (runId) await rpc(request, 'run.cancel', { runId }); await source.close(); }
+    source.release();
+    await expect.poll(() => videoRequested).toBe(true);
+    const before = await saved(request, source.project.id);
+    expect(before.shots).toHaveLength(0);
+    await dialog.getByRole('navigation', { name: '本次制作步骤', exact: true }).getByRole('button', { name: /分镜生成/ }).click();
+    const storyboard = dialog.getByRole('region', { name: '本次产物', exact: true }).getByRole('region', { name: '分镜预览', exact: true });
+    await expect(storyboard).toContainText('2 个镜头');
+    await expect(storyboard.getByRole('heading', { name: '生成的蓝色镜头 1', exact: true })).toBeVisible();
+    await expect(storyboard).toContainText('天空是蓝色的。');
+    await expect(dialog.getByRole('button', { name: '编辑旁白与分镜', exact: true })).toBeDisabled();
+    await expect(dialog.getByRole('button', { name: '在项目中查看与应用', exact: true })).toHaveCount(0);
+    await page.screenshot({ path: info.outputPath('storyboard-during-production.png') });
+    await rpc(request, 'run.cancel', { runId });
+    await expect.poll(async () => (await latest(request, source.project.id))?.status).toBe('canceled');
+    runId = '';
+    await expect(storyboard).toContainText('2 个镜头');
+    await expect(dialog.getByRole('button', { name: '编辑旁白与分镜', exact: true })).toBeEnabled();
+    expect(await saved(request, source.project.id)).toEqual(before);
+  } finally {
+    try { if (runId) await rpc(request, 'run.cancel', { runId }); }
+    finally { video.resolve(); await source.close(); }
+  }
 });

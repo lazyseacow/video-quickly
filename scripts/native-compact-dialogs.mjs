@@ -21,9 +21,9 @@ export async function verifyNativeCompactDialogs({ page, rpc, openProject, fixtu
   const created = await rpc('project.create', { title: '最小窗口弹窗验收', profile: { width: 320, height: 180, frameRate: { numerator: 30, denominator: 1 }, fitMode: 'contain', previewScale: 1 } });
   const project = await rpc('project.update', { projectId: created.id, revision: created.revision, patch: {
     shots: [{ id: 'compact-preview', title: '窄窗口首镜头', narration: '本地弹窗验收字幕', visualPrompt: '', durationUs: 700_000 }],
-    workflow: { id: 'compact-dialogs', name: '本地范围验收', version: 1, production: created.workflow.production,
+    workflow: { id: 'compact-dialogs', name: '本地制作验收', version: 1, production: created.workflow.production,
       nodes: [
-        { id: 'compact-start', kind: 'condition', label: '局部起点', config: { value: true } },
+        { id: 'compact-start', kind: 'condition', label: '策划起点', config: { value: true } },
         { id: 'compact-tail', kind: 'brief', label: '后续步骤' },
         { id: 'export', kind: 'export', label: '导出成片' },
       ],
@@ -46,48 +46,35 @@ export async function verifyNativeCompactDialogs({ page, rpc, openProject, fixtu
   await next.click(); await expect(button(settings, '模型与素材')).toHaveAttribute('aria-current', 'step');
   await back.press('Enter'); await expect(settings.getByLabel('创作要求', { exact: true })).toHaveValue(brief);
   await next.click();
-  const advanced = button(settings, '打开高级编排');
-  await advanced.scrollIntoViewIfNeeded(); await checkLayout(settings, advanced, back, next);
+  await checkLayout(settings, back, next);
   await page.screenshot({ path: join(artifacts, 'desktop-compact-production-settings.png') });
-  await advanced.click();
+  await next.click(); await next.click();
   await expect(button(settings, '确认保存')).toHaveAttribute('aria-current', 'step');
-  await expect(settings).toContainText('保存设置后将打开高级编排');
   assert.equal((await rpc('project.get', { projectId: project.id })).project.revision, project.revision);
-  const save = button(settings, '保存并打开');
+  const save = button(settings, '保存设置');
   await checkLayout(settings, back, save);
   await save.press('Enter'); await expect(settings).toHaveCount(0);
-  await expect(page.locator('.react-flow')).toBeVisible();
   assert.equal((await rpc('project.get', { projectId: project.id })).project.brief, brief);
   checks.compactProductionSettings = true;
 
-  const start = page.locator('.react-flow__node[data-id="compact-start"]');
-  await start.press('Enter'); await expect(start).toHaveClass(/selected/);
-  const scope = page.getByRole('dialog', { name: '执行范围', exact: true });
-  async function openScope() {
-    await button(page, '配置与执行步骤').click();
-    const editor = page.getByRole('dialog', { name: '局部起点', exact: true });
-    await button(editor, '预览这步及后续').click();
-    await expect(scope).toBeVisible();
-  }
-  await openScope();
-  const plan = scope.getByRole('list', { name: '将执行的步骤' }).locator('li');
-  const single = scope.getByRole('radio', { name: '仅此步骤', exact: true });
-  const downstream = scope.getByRole('radio', { name: '此步骤及后续', exact: true });
-  const cancel = button(scope, '取消'), confirm = button(scope, '确认执行');
-  await expect(plan).toHaveCount(3);
-  await single.check(); await expect(plan).toHaveCount(1);
-  await single.press('ArrowRight'); await expect(downstream).toBeChecked(); await expect(plan).toHaveCount(3);
-  await expect(scope.locator('.dialog__footer').getByRole('button')).toHaveText(['取消', '执行']);
-  await checkLayout(scope, single, downstream, cancel, confirm);
-  await page.screenshot({ path: join(artifacts, 'desktop-compact-run-scope.png') });
-  await cancel.click(); await expect(scope).toHaveCount(0);
-  assert.equal((await rpc('run.list', { projectId: project.id })).items.length, 0);
-  await openScope(); await single.check(); await expect(plan).toHaveCount(1);
-  await confirm.press('Enter'); await expect(scope).toHaveCount(0);
-  await expect.poll(async () => (await rpc('run.list', { projectId: project.id })).items[0]).toMatchObject({ status: 'succeeded', selection: { nodeId: 'compact-start', mode: 'node' }, stepCount: 1 });
-  checks.compactRunScope = true;
+  const more = button(page, '更多');
+  await more.press('Enter');
+  const actions = page.getByRole('group', { name: '更多操作', exact: true });
+  await expect(actions.getByRole('button')).toHaveText(['制作前检查']);
+  await button(actions, '制作前检查').press('Enter');
+  const readiness = page.getByRole('dialog', { name: '制作前检查', exact: true });
+  await expect(readiness.locator('.readiness-summary')).toContainText('涉及步骤3');
+  await checkLayout(readiness, button(readiness, '关闭'), button(readiness, '重新检查'));
+  await page.screenshot({ path: join(artifacts, 'desktop-compact-production-readiness.png') });
+  await button(readiness, '关闭').press('Enter');
+  await expect(readiness).toHaveCount(0); await expect(more).toBeFocused();
+  const runs = async () => (await rpc('run.list', { projectId: project.id })).items;
+  assert.equal((await runs()).length, 0);
+  await button(page, '开始制作').press('Enter');
+  await expect.poll(async () => (await runs())[0], { timeout: 30_000 }).toMatchObject({ status: 'succeeded', stepCount: 3, completedNodeIds: ['compact-start', 'compact-tail', 'export'] });
+  assert.equal((await runs())[0].selection, undefined);
+  checks.compactProductionStart = true;
 
-  await button(page, '返回工作台').click();
   const openExport = button(page, '导出');
   await openExport.click();
   const exporter = page.getByRole('dialog', { name: '导出视频', exact: true });

@@ -38,6 +38,10 @@ for (const viewport of [{ width: 1536, height: 960, theme: 'dark' }, { width: 39
       await (await settingField(dialog, '连接名称')).fill(name); await (await settingField(dialog, '服务地址')).fill(catalog.baseUrl);
       await dialog.getByRole('button', { name: '获取模型列表', exact: true }).click();
       await selectModel(dialog, `fixture-${item.capability}`);
+      if (item.kind === 'text') {
+        const tools = dialog.getByRole('checkbox', { name: '工具调用', exact: true });
+        await expect(tools).not.toBeChecked(); await tools.check();
+      }
       for (const tab of ['文本参数', '图片参数', '视频参数', '配音参数', '识别参数']) {
         if (tab === item.parameterTab) await expect(dialog.getByRole('tab', { name: tab, exact: true })).toBeVisible();
         else await expect(dialog.getByRole('tab', { name: tab, exact: true })).toHaveCount(0);
@@ -49,7 +53,7 @@ for (const viewport of [{ width: 1536, height: 960, theme: 'dark' }, { width: 39
       await expect(dialog.locator('.dialog__footer')).toBeInViewport({ ratio: 1 }); await page.screenshot({ path: info.outputPath(`model-${item.capability}.png`) });
       await dialog.getByRole('button', { name: '保存连接', exact: true }).click(); await expect(dialog).toHaveCount(0);
       const saved = (await models(request)).find(model => model.name === name)!;
-      expect(saved.connectionType).toBe(item.kind); expect(saved.capabilities).toEqual(item.kind === 'text' ? ['text', 'vision', 'tools', 'structured-output'] : [item.capability]);
+      expect(saved.connectionType).toBe(item.kind); expect(saved.capabilities).toEqual(item.kind === 'text' ? ['text', 'tools'] : [item.capability]);
       expect(saved.provider).toBe(item.platform === 'seedream' || item.platform === 'seedance' ? item.platform : 'openai-compatible');
       await expect(page.locator('.list-card').filter({ has: page.getByRole('heading', { name, exact: true }) })).toContainText(item.type);
     }

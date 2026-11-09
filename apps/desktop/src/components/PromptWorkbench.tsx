@@ -15,7 +15,6 @@ import './prompt-workbench.css';
 const StepResultView = lazy(() => import('./StepResultView'));
 const RunInspector = lazy(() => import('../features/RunInspector'));
 const TaskUsage = lazy(() => import('../features/CostsPage').then(module => ({ default: module.TaskUsage })));
-type Context = PromptDraft['context'];
 type Variable = { id: string; name: string; source: 'text' | 'json' | 'project' | 'shot' | 'upstream'; value: string; nodeId: string };
 const activeStatuses = ['queued', 'running', 'waiting_external', 'retry_scheduled'];
 const message = (error: unknown) => error instanceof Error ? error.message : String(error);
@@ -32,12 +31,12 @@ function readBindings(rows: Variable[]): PromptBindings | undefined {
   return promptBindingsSchema.parse(Object.fromEntries(rows.map(row => [row.name, row.source === 'text' ? { literal: row.value } : row.source === 'json' ? { literal: JSON.parse(row.value) } : row.source === 'project' ? { projectPath: row.value.split('.') } : row.source === 'shot' ? { shotPath: row.value.split('.') } : { nodeId: row.nodeId, path: row.value ? row.value.split('.') : [] }])));
 }
 
-export default function PromptWorkbench({ projectId, projectRevision, node: initialNode, context: initialContext, models, skills, groups, version, onClose, onApplyPrompt, onOpenOutput, onOpenCandidate }: {
-  projectId: string; projectRevision: number; node: WorkflowNode; context?: Context; models: ModelProfile[]; skills: SkillPackage[]; groups?: SkillGroup[]; version: number;
-  onClose(): void; onApplyPrompt(node: WorkflowNode): Promise<void> | void; onOpenOutput(selection: StepOutputSelection): void; onOpenCandidate?(shotId: string): void;
+export default function PromptWorkbench({ projectId, projectRevision, node: initialNode, models, skills, groups, version, onClose, onApplyPrompt, onOpenOutput }: {
+  projectId: string; projectRevision: number; node: WorkflowNode; models: ModelProfile[]; skills: SkillPackage[]; groups?: SkillGroup[]; version: number;
+  onClose(): void; onApplyPrompt(node: WorkflowNode): Promise<void>; onOpenOutput(selection: StepOutputSelection): void;
 }) {
   const [node, setNode] = useState(initialNode), [variables, setVariables] = useState(() => variableRows(initialNode.promptBindings));
-  const [context, setContext] = useState(initialContext), [revision, setRevision] = useState(projectRevision);
+  const [context, setContext] = useState<PromptDraft['context']>(), [revision, setRevision] = useState(projectRevision);
   const [project, setProject] = useState<ProjectDocument>(), [upstreamRuns, setUpstreamRuns] = useState<RunSummary[]>([]);
   const [shotId, setShotId] = useState(''), [upstreamRunId, setUpstreamRunId] = useState('');
   const [preview, setPreview] = useState<PromptPreview>(), [session, setSession] = useState<PromptSession>();
@@ -157,11 +156,17 @@ export default function PromptWorkbench({ projectId, projectRevision, node: init
           {run && <><div className="prompt-workbench__run-meta"><Status value={run.status} /><span>{new Date(run.createdAt).toLocaleString('zh-CN')}</span><span>耗时 {Math.max(0, Math.round((Date.parse(run.updatedAt) - Date.parse(run.createdAt)) / 1000))} 秒</span></div>{run.error && <Notice kind="error">{run.error}</Notice>}</>}
           {cost && <div aria-label="实验费用"><p>{cost.total} 条用量记录{cost.unknownActual ? ` · ${cost.unknownActual} 条待核对实付` : ''}</p><p>输入 Token {cost.tokens.inputTokens ?? '未返回'} · 输出 Token {cost.tokens.outputTokens ?? '未返回'}</p>{cost.currencies.map(currency => <p key={currency.currency}>{currency.currency} · 预估 {currency.estimatedAmount ?? '未知'} · 实付 {currency.actualAmount ?? '待核对'}</p>)}{run && cost.total > 0 && <Button onClick={() => setUsageRun(run.id)}>查看与核对费用</Button>}</div>}
           {output !== null && <Suspense fallback={<p role="status">正在打开结果…</p>}><StepResultView value={output} kind={node.kind} /></Suspense>}
-          {run?.status === 'succeeded' && output !== null && <div className="prompt-workbench__actions"><Button onClick={() => { onClose(); onOpenOutput({ projectId, runId: run.id, nodeId: run.selection?.nodeId ?? initialNode.id, kind: node.kind }); }}>查看并应用产物</Button>{typeof output === 'object' && !Array.isArray(output) && output?.candidateId && onOpenCandidate && <Button onClick={() => void perform(async () => { const value = shotCandidateSchema.parse(await rpc('shot.candidate.get', { projectId, candidateId: output.candidateId })); onClose(); onOpenCandidate(value.shotId); })}>在镜头候选中对比</Button>}</div>}
+          {run?.status === 'succeeded' && output !== null && <div className="prompt-workbench__actions">
+            <Button onClick={() => { onClose(); onOpenOutput({ projectId, runId: run.id, nodeId: run.selection?.nodeId ?? initialNode.id, kind: node.kind }); }}>查看并应用产物</Button>
+            {typeof output === 'object' && !Array.isArray(output) && typeof output?.candidateId === 'string' && <Button onClick={() => void perform(async () => {
+              const candidate = shotCandidateSchema.parse(await rpc('shot.candidate.get', { projectId, candidateId: output.candidateId }));
+              onClose(); onOpenOutput({ projectId, runId: run.id, nodeId: run.selection?.nodeId ?? initialNode.id, kind: node.kind, candidateShotId: candidate.shotId });
+            })}>在镜头候选中对比</Button>}
+          </div>}
         </section>}
       </fieldset>
     </div>
-    <div className="dialog__footer"><Button onClick={onClose}>关闭</Button><Button disabled={busy} onClick={() => void perform(async () => { await onApplyPrompt(currentNode()); if (alive.current) setNotice('提示词已应用到制作设置，请在设置中确认保存。'); })}>应用提示词到设置</Button><Button disabled={!session || !preview} onClick={() => setTab('trial')}>查看试运行</Button></div>
+    <div className="dialog__footer"><Button onClick={onClose}>关闭</Button><Button disabled={busy} onClick={() => void perform(() => onApplyPrompt(currentNode()))}>应用提示词到设置</Button><Button disabled={!session || !preview} onClick={() => setTab('trial')}>查看试运行</Button></div>
     {inspected && <Suspense fallback={null}><RunInspector runId={inspected} version={version} onClose={() => setInspected(undefined)} onChanged={() => setRefresh(value => value + 1)} onRestart={() => { setInspected(undefined); setTab('trial'); request.current = undefined; setRun(undefined); }} onOpenOutput={selection => { onClose(); onOpenOutput(selection); }} /></Suspense>}
     {usageRun && <Dialog title="实验费用" className="dialog--wide" onClose={() => setUsageRun(undefined)}><div className="dialog__body"><Suspense fallback={<p role="status">正在读取费用…</p>}><TaskUsage runId={usageRun} version={version} onBack={() => setUsageRun(undefined)} backLabel="返回提示词实验" onTaskUpdated={receiveCost} /></Suspense></div></Dialog>}
   </Dialog>;

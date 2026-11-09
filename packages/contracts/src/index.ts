@@ -12,13 +12,14 @@ import { motionKeyframesSchema } from './keyframes.js';
 import { creativeContextSchema, creativeEntityKeysSchema } from './creative-context.js';
 export { creativeContextSchema, creativeEntitySchema, creativeEntityKeysSchema, creativeCharacterBindings, projectCharacterIds, validateCreativeReferences, shotCreativePrompt, creativeEntityLabels, creativeReferenceAssetIds, type CreativeContext, type CreativeEntity } from './creative-context.js';
 import { productionSettingsSchema, resolveProductionWorkflow } from './production.js';
-export { productionSettingsSchema, resolveProductionWorkflow, isVideoGenerationNode, isModelGenerationNode, captionsEnabled, productionEditingStep, supportsProductionAgent, MAX_REFERENCE_AUDIO_BYTES, MAX_REFERENCE_AUDIOS, type ProductionSettings } from './production.js';
+export { productionSettingsSchema, resolveProductionWorkflow, isVideoGenerationNode, isModelGenerationNode, captionsEnabled, productionEditingStep, productionEditingSkillIds, productionModelSetting, supportsProductionAgent, productionPlanningSteps, productionPlanningStep, usesManualPlanning, MAX_REFERENCE_AUDIO_BYTES, MAX_REFERENCE_AUDIOS, type ProductionPlanningStep, type ProductionSettings } from './production.js';
+export { MAX_STORYBOARD_SHOTS, planningDocumentSchemas, planningDocumentSections, formatPlanningDocument, type ManualPlanningFields, type PlanningDocumentKind } from './planning-fields.js';
 export * from './asset-recovery.js';
 export { skillPromptContext, appendSkillContext, supportsSkillScript } from './skill-context.js';
 export { motionKeyframesSchema, type MotionKeyframe, type MotionEasing } from './keyframes.js';
 export { modelPlatforms, getModelPlatform, platformForConnection } from './model-platforms.js';
 export { textProtocols, mediaAdapters, getMediaAdapters } from './model-protocols.js';
-export { modelConnectionTypes, getModelConnectionType, getModelCapabilities, validateModelConnection } from './model-connections.js';
+export { modelConnectionTypes, getModelConnectionType, modelToolProtocolIssue, validateModelConnection } from './model-connections.js';
 export { providerReportedUsage, sumProviderUsage } from './provider-usage.js';
 export { audioProcessingSchema, audioMixSettingsSchema, usesVideoAudio, DEFAULT_AUDIO_PROCESSING, DEFAULT_AUDIO_MIX_SETTINGS, preparedAudioMixSchema, audioMixJobSchema, audioMixPrepareResultSchema, audioLevelWindowSchema, silenceDetectionSchema, type PreparedAudioMix, type AudioMixJob, type AudioMixPrepareResult, type AudioLevelWindow, type SilenceDetection } from './audio-processing.js';
 export { captionStyleSchema, DEFAULT_CAPTION_STYLE, effectiveCaptionStyle, seriesSettingsSchema, seriesTemplateSchema, type CaptionStyle, type ScenePreset, type SeriesSettings, type SeriesTemplate } from './caption-style.js';
@@ -90,6 +91,13 @@ export const ASPECT_RATIO_PRESETS = [
   { label: '3:4', width: 3, height: 4 }, { label: '4:5', width: 4, height: 5 },
   { label: '21:9', width: 21, height: 9 },
 ] as const;
+export const VIDEO_FIT_MODE_LABELS = {
+  contain: '完整显示 · 等比留边', cover: '裁剪填满', blur: '模糊背景填充',
+} satisfies Record<VideoProfile['fitMode'], string>;
+export function videoAspectRatioPreset(width: number, height: number) {
+  const ratio = width / height;
+  return ASPECT_RATIO_PRESETS.find(item => Math.abs(item.width / item.height - ratio) < .005);
+}
 export function formatFrameRate(rate: FrameRate): string {
   return FRAME_RATE_PRESETS.find(value => value.numerator === rate.numerator && value.denominator === rate.denominator)?.label ?? (rate.numerator / rate.denominator).toFixed(3).replace(/\.?0+$/, '');
 }
@@ -292,7 +300,7 @@ export type ProjectDocument = z.infer<typeof projectSchema>;
 export const workDefaultsSchema = z.object({
   style: z.string().max(30000).default(''), creativeContext: creativeContextSchema.nullable().optional(),
   profile: videoProfileSchema.default(() => structuredClone(DEFAULT_VIDEO_PROFILE)),
-  production: productionSettingsSchema.omit({ referenceAudioAssetIds: true }).extend({ executionMode: z.enum(['workflow', 'agent']).optional() }).strict()
+  production: productionSettingsSchema.omit({ referenceAudioAssetIds: true, manualPlanningFields: true }).extend({ executionMode: z.enum(['workflow', 'agent']).optional() }).strict()
     .transform(({ executionMode: _legacy, ...settings }) => settings).default(() => productionSettingsSchema.parse({ mode: 'native-video' })),
 });
 export const workSchema = z.object({
@@ -339,15 +347,23 @@ export const modelPlatformSchema = z.enum(['openai', 'anthropic', 'google', 'dee
 export type ModelPlatform = z.infer<typeof modelPlatformSchema>;
 export const textProtocolSchema = z.enum(['chat-completions', 'responses', 'messages']);
 export type TextProtocol = z.infer<typeof textProtocolSchema>;
+export const modelAuthModeSchema = z.enum(['protocol-default', 'bearer', 'x-api-key']);
+export type ModelAuthMode = z.infer<typeof modelAuthModeSchema>;
 export const modelConnectionTypeSchema = z.enum(['text', 'image', 'video']);
 export type ModelConnectionType = z.infer<typeof modelConnectionTypeSchema>;
-export const modelDiscoverySchema = z.object({ source: z.enum(['remote', 'preset', 'workflow']), items: z.array(z.object({ id: z.string(), label: z.string() })), message: z.string().optional() });
+export const modelDiscoverySchema = z.object({
+  source: z.enum(['remote', 'preset', 'workflow']),
+  items: z.array(z.object({ id: z.string(), label: z.string(), capabilities: z.array(modelCapabilitySchema).optional() })),
+  message: z.string().optional(),
+});
 export type ModelDiscovery = z.infer<typeof modelDiscoverySchema>;
 export const modelSchema = z.object({
   id: z.string(), name: z.string().min(1).max(120),
   provider: z.enum(['openai-compatible', 'ollama', 'comfyui', 'seedream', 'seedance', 'custom-http']),
   platform: modelPlatformSchema.optional(),
   textProtocol: textProtocolSchema.optional(),
+  authMode: modelAuthModeSchema.optional(),
+  fullUrl: z.boolean().optional(),
   connectionType: modelConnectionTypeSchema,
   baseUrl: z.string().url().refine(value => {
     try {
@@ -531,16 +547,22 @@ export const promptSessionSchema = z.object({
 });
 export type PromptSession = z.infer<typeof promptSessionSchema>;
 export { resolvePromptBindings, applyPromptLibraryItem, supportsPromptExperiment } from './prompt-bindings.js';
-export { buildMediaPrompt, characterReferencePrompt } from './media-prompts.js';
+export { buildMediaPrompt, characterReferencePrompt, generationFramePrompt } from './media-prompts.js';
 export const runStepStatusSchema = z.enum(['pending', 'running', 'waiting_review', 'waiting_external', 'retry_scheduled', 'needs_attention', 'succeeded', 'failed', 'canceled', 'skipped', 'not_recorded']);
 export const modelResponseIssueSchema = z.object({ path: z.string(), message: z.string() });
 export type ModelResponseIssue = z.infer<typeof modelResponseIssueSchema>;
 export const generationShotStatusSchema = z.enum(['pending', 'queued', 'preparing', 'submitting', 'waiting', 'generating', 'downloading', 'validating', 'completed', 'interrupted', 'canceled']);
+const storyboardPartSchema = z.discriminatedUnion('kind', [
+  z.object({ kind: z.literal('outline') }),
+  z.object({ kind: z.literal('batch'), index: z.number().int().positive(), batches: z.number().int().positive() }),
+]);
+export type StoryboardPart = z.infer<typeof storyboardPartSchema>;
 export const runStepProgressSchema = z.object({
   phase: z.enum(['preparing', 'requesting', 'receiving', 'validating', 'saving', 'generating', 'rendering', 'completed']),
   startedAt: z.string(), updatedAt: z.string(), endedAt: z.string().optional(), lastConfirmedAt: z.string().optional(),
   completed: z.number().int().nonnegative().optional(), total: z.number().int().nonnegative().optional(),
   fraction: z.number().min(0).max(1).optional(),
+  storyboard: storyboardPartSchema.optional(),
 });
 export type RunStepProgress = z.infer<typeof runStepProgressSchema>;
 export const generationShotProgressSchema = z.object({
@@ -583,6 +605,7 @@ export const runStepPayloadSchema = z.object({
   value: jsonValueSchema.nullable(), inputHash: z.string().optional(), resolvedPromptRecorded: z.boolean().optional(),
   mediaShots: z.array(shotSchema.pick({ id: true, title: true, durationUs: true })).optional(),
   mediaGeneration: z.object({ kind: z.enum(['image', 'video']), modelName: z.string() }).optional(),
+  partialStoryboard: z.object({ outline: z.string(), shots: z.array(shotSchema.pick({ id: true, title: true, narration: true, visualPrompt: true, soundPrompt: true, durationUs: true })) }).optional(),
   progress: runStepProgressDetailSchema.optional(),
   modelResponse: z.object({ attempt: z.number().int().positive(), receivedAt: z.string(), text: z.string(), incomplete: z.boolean().optional(), issues: z.array(modelResponseIssueSchema).optional() }).optional(),
   modelResponseHistory: z.array(z.object({ attempt: z.number().int().positive(), receivedAt: z.string(), invalid: z.boolean() })).optional(),
@@ -632,7 +655,7 @@ export function createNativeVideoWorkflow(): WorkflowDefinition {
     { id: 'export', kind: 'export', label: '导出成片', description: '检查素材并按选定规格导出成片。', prompt: '', config: {} },
   ];
   const nodes = definitions.map((node, index) => ({ ...node, skillIds: [], position: { x: index * 270, y: 100 }, requiresReview: false }));
-  return resolveProductionWorkflow({ id: 'native-video', version: 1, name: '视频制作', production: productionSettingsSchema.parse({ mode: 'native-video' }), nodes,
+  return resolveProductionWorkflow({ id: 'native-video', version: 1, name: '视频制作', production: productionSettingsSchema.parse({ mode: 'native-video', agentInheritsPlanningSkills: false }), nodes,
     edges: nodes.slice(1).map((node, index) => ({ id: nodes[index].id + '-' + node.id, source: nodes[index].id, target: node.id })),
     stages: [
       { id: 'planning', label: '策划与分镜', description: '一次确定创作方向、视觉风格与镜头脚本。', nodeIds: ['brief', 'style', 'script'] },

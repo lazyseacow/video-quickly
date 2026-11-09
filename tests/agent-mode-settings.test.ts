@@ -1,5 +1,5 @@
 import { expect, it } from 'vitest';
-import { createNativeVideoWorkflow, DEFAULT_VIDEO_PROFILE, productionSettingsSchema, workDefaultsSchema, workflowSchema } from '@video-quickly/contracts';
+import { createNativeVideoWorkflow, DEFAULT_VIDEO_PROFILE, productionEditingSkillIds, productionSettingsSchema, workDefaultsSchema, workflowSchema } from '@video-quickly/contracts';
 import { applyStageConfigurationDraft, updateProductionConfigurationDraft } from '../apps/desktop/src/lib/stage-configuration-draft';
 
 it('reads historical project and work settings without retaining a production mode', () => {
@@ -30,4 +30,18 @@ it('applies a saved Agent setting through the existing configuration draft witho
 it('retains independent Skill and MCP selection when the other class uses automatic discovery', () => {
   expect(productionSettingsSchema.parse({ mode: 'native-video', agentSkillIds: ['skill-a', 'skill-b'] })).toMatchObject({ agentSkillIds: ['skill-a', 'skill-b'], agentMcpServerIds: [] });
   expect(productionSettingsSchema.parse({ mode: 'native-video', agentMcpServerIds: ['tool-a', 'tool-b'] })).toMatchObject({ agentSkillIds: [], agentMcpServerIds: ['tool-a', 'tool-b'] });
+});
+
+it('inherits a legacy creation selection when the three planning tasks agree', () => {
+  const workflow = createNativeVideoWorkflow();
+  const skillIds = ['skill-a', 'skill-b'];
+  const nodes = workflow.nodes.map(node => ['brief', 'style', 'script'].includes(node.id)
+    ? { ...node, skillIds: node.id === 'style' ? [...skillIds].reverse() : skillIds } : node);
+  const production = productionSettingsSchema.parse({ mode: 'native-video' });
+  const legacy = { ...workflow, nodes, production };
+  expect(productionEditingSkillIds(legacy)).toEqual(skillIds);
+  expect(productionEditingSkillIds({ ...legacy, production: { ...production, agentSkillIds: ['override'] } })).toEqual(['override']);
+  expect(productionEditingSkillIds({ ...legacy, production: { ...production, agentInheritsPlanningSkills: false } })).toEqual([]);
+  expect(productionEditingSkillIds({ ...legacy, id: 'custom-workflow' })).toEqual([]);
+  expect(productionEditingSkillIds({ ...legacy, nodes: nodes.map(node => node.id === 'style' ? { ...node, skillIds: ['skill-a'] } : node) })).toEqual([]);
 });

@@ -61,3 +61,16 @@ it('keeps optional sound requirements untouched when opening and saving an uncha
   expect(next).toEqual(baseline); expect(next.shots[0]).toBe(baseline.shots[0]);
   expect(planningResultValue(baseline, 'script')).toMatchObject({ shots: [{ soundPrompt: '' }, { soundPrompt: '' }] });
 });
+
+it('adds authored shots and changes explicit durations without duplicating a retried save', () => {
+  const baseline = editContent(project());
+  const changes = inputs(baseline.shots);
+  changes[0].durationUs = 1_250_000;
+  const newShot: PlanningShot = { id: 'authored', title: '手填镜头', narration: '手填旁白', visualPrompt: '清晨的树林', durationUs: 3_500_000 };
+  const change = { kind: 'script' as const, shots: changes, newShots: [newShot] };
+  const next = applyPlanningEdit(baseline, baseline, change);
+  expect(next.shots[0].durationUs).toBe(1_250_000);
+  expect(next.shots[2]).toMatchObject(newShot);
+  expect(applyPlanningEdit(next, baseline, change)).toEqual(next);
+  expect(() => applyPlanningEdit(baseline, baseline, { ...change, newShots: [{ ...newShot, durationUs: 100_000 }] })).toThrow();
+});

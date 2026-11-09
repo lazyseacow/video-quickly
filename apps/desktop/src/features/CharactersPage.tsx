@@ -121,7 +121,10 @@ export function CharacterPicker({ value = [], version, onChange, disabled = fals
     void Promise.all(value.map(characterId => rpc<unknown>('character.get', { characterId }).then(item => characterProfileSchema.parse(item)))).then(items => { if (active) setSelected(items); }).catch(error => { if (active) setError(error instanceof Error ? error.message : String(error)); });
     return () => { active = false; };
   }, [selectedKey, version]);
-  const profiles = [...new Map([...selected, ...library.items].map(character => [character.id, character])).values()];
+  const profilesById = new Map(library.items.map(character => [character.id, character]));
+  // Keep the library order when details arrive for a selected character.
+  for (const character of selected) if (!profilesById.has(character.id)) profilesById.set(character.id, character);
+  const profiles = [...profilesById.values()];
   if (hideWhenEmpty && !profiles.length && !library.error && !error) return null;
   return <fieldset className="character-shot-picker capability-fieldset"><legend>{label}</legend>{profiles.map(character => <label key={character.id} className="field-inline"><input type="checkbox" checked={value.includes(character.id)} disabled={disabled || !value.includes(character.id) && (character.archived || value.length >= maximum)} onChange={event => onChange(event.target.checked ? [...value, character.id] : value.filter(id => id !== character.id))} />{character.name}{character.archived ? '（已归档）' : ''}</label>)}{!profiles.length && !library.busy && <p className="tiny-meta">在角色参考库创建角色后，可在此选择。</p>}{(library.error || error) && <Notice kind="error">{library.error || error}</Notice>}{library.nextCursor !== null && <Button aria-label="加载更多角色" busy={library.loadingMore} disabled={!library.canLoadMore} onClick={() => void library.loadMore()}>加载更多</Button>}</fieldset>;
 }

@@ -5,7 +5,7 @@ import { dirname, extname, join, resolve } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { z } from 'zod';
 import { probeMedia, renderProject } from '@video-quickly/video/node';
-import { buildMediaPrompt, MediaRequestRejectedError, VideoGenerationError, isVideoGenerationNode, validateCreativeReferences } from '@video-quickly/contracts';
+import { buildMediaPrompt, MediaRequestRejectedError, VideoGenerationError, isVideoGenerationNode, validateCreativeReferences, videoAspectRatioPreset } from '@video-quickly/contracts';
 import { providerReportedUsage, sumProviderUsage, requestModelParameters, validateModelParameters, type ProviderUsage, type AssetRecord, type CharacterProfile, type JsonValue, type ModelProfile, type PreparedAudioMix, type ProjectDocument, type Shot, type WorkflowNode } from '@video-quickly/contracts';
 import { MediaRequestQueue, mapMediaShots } from './media-concurrency.js';
 import { resolveCharacterReferences, type ResolvedCharacterReferences } from './character-references.js';
@@ -278,12 +278,6 @@ function endpoint(base: string, path: string): string {
   return `${url.toString().replace(/\/$/, '')}/${path.replace(/^\//, '')}`;
 }
 
-function aspectRatio(width: number, height: number): string {
-  const gcd = (a: number, b: number): number => b ? gcd(b, a % b) : a;
-  const divisor = gcd(width, height);
-  return `${width / divisor}:${height / divisor}`;
-}
-
 async function atomicJson(path: string, value: unknown) {
   const temporary = `${path}.${randomUUID()}.tmp`;
   await writeFile(temporary, JSON.stringify(value));
@@ -402,6 +396,18 @@ async function downloadReceipt(path: string, receiptPath: string, receipt: Recei
   return asset;
 }
 
+function seedanceProjectResolution(modelId: string, shortSide: number): string | undefined {
+  if (shortSide < 480) return undefined;
+  if (shortSide < 720) return '480p';
+  if (shortSide < 1080) return '720p';
+  // Above 720p, only infer tiers for model IDs with documented support.
+  const standard20 = /^doubao-seedance-2-0(?:-\d+)?$/i.test(modelId);
+  if (standard20 && shortSide >= 2160) return '4k';
+  if (standard20 || /^doubao-seedance-(?:2-5|1-[05]-pro(?:-fast)?)(?:-\d+)?$/i.test(modelId)) return '1080p';
+  if (/^doubao-seedance-2-0-(?:fast|mini)(?:-\d+)?$/i.test(modelId)) return '720p';
+  return undefined;
+}
+
 async function seedanceVideoBody(context: MediaActivityContext & { model: ModelProfile }, shot: Shot, references: ResolvedCharacterReferences, parameters: Record<string, JsonValue>): Promise<string> {
   const audio = await resolveReferenceAudio({ assetIds: context.project.workflow.production.referenceAudioAssetIds ?? [], assets: context.assets, projectId: context.project.id, signal: context.signal });
   const image = currentVideoImage(context, shot);
@@ -409,11 +415,16 @@ async function seedanceVideoBody(context: MediaActivityContext & { model: ModelP
   const multimodal = audio.length > 0 || references.images.length > 0 && context.model.parameters.characterReferenceMode === 'reference_image';
   const images = [...references.images.map(reference => reference.dataUrl), ...(imageUrl ? [imageUrl] : [])];
   const prompt = visualPrompt(context, shot, references);
+  const { width, height } = context.project.profile;
+  const targetRatio = videoAspectRatioPreset(width, height)?.label;
+  const adaptiveFirstFrame = images.length > 0 && !multimodal && /seedance[-_.]?2[._-]?5/i.test(context.model.model);
+  const ratio = parameters.ratio ?? (adaptiveFirstFrame || targetRatio === '4:5' ? 'adaptive' : targetRatio ?? 'adaptive');
+  const resolution = parameters.resolution ?? (parameters.draft === true ? undefined : seedanceProjectResolution(context.model.model, Math.min(width, height)));
   const body = JSON.stringify({ ...parameters, model: context.model.model, content: [
     { type: 'text', text: prompt },
     ...images.map(url => ({ type: 'image_url', image_url: { url }, role: multimodal ? 'reference_image' : 'first_frame' })),
     ...audio.map(reference => ({ type: 'audio_url', audio_url: { url: reference.dataUrl }, role: 'reference_audio' })),
-  ], duration: parameters.duration ?? Math.max(1, Math.ceil(shot.durationUs / 1_000_000)), ratio: parameters.ratio ?? aspectRatio(context.project.profile.width, context.project.profile.height) });
+  ], duration: parameters.duration ?? Math.max(1, Math.ceil(shot.durationUs / 1_000_000)), ratio, resolution });
   if (Buffer.byteLength(body) > 64_000_000) throw new Error('参考素材与提示词编码后超过 64 MB 请求限制，请压缩或减少素材。');
   return body;
 }

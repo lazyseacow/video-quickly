@@ -1,20 +1,64 @@
 .skill-picker { min-width: 0; border: 0; padding: 0; margin: var(--space-3) 0; }
-details > summary + .skill-picker { margin-block: 0 var(--space-2); }
-.skill-picker > legend { font-size: var(--text-size-label); font-weight: var(--font-weight-medium); padding: 0; margin-bottom: var(--space-2); }
-.skill-picker__toolbar { display: flex; align-items: center; flex-wrap: wrap; gap: var(--space-2); margin-bottom: var(--space-2); }
-.skill-picker__toolbar input { flex: 1; min-width: 0; }
-.skill-picker__groups { max-height: 36vh; overflow: auto; overscroll-behavior: contain; }
-.skill-picker__group + .skill-picker__group { border-top: 1px solid var(--border); }
-.skill-picker__group[open] > summary .skill-picker__chevron { transform: rotate(90deg); }
-.skill-picker__group > summary { display: flex; align-items: center; justify-content: space-between; gap: var(--space-2); cursor: pointer; padding-block: var(--space-1); }
-.skill-picker__group > summary > span { min-width: 0; display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); font-size: var(--text-size-label); font-weight: var(--font-weight-medium); }
-.skill-picker__group small { color: var(--text-subtle); font-size: var(--text-size-caption); font-weight: var(--font-weight-regular); }
-.skill-picker__items { display: grid; gap: var(--space-2); padding: var(--space-2) 0 var(--space-3); }
-.skill-picker__item { display: flex; align-items: flex-start; gap: var(--space-2); cursor: pointer; min-width: 0; }
-.skill-picker__item > input { flex: none; margin-top: var(--space-1); }
+.skill-picker > .skill-picker__trigger {
+  width: 100%; min-height: var(--control-height); justify-content: flex-start; padding-inline: var(--space-4);
+  border-radius: var(--radius-small); color: var(--text); background: var(--field); text-align: start;
+}
+.skill-picker:has(> :popover-open) > .skill-picker__trigger, .skill-picker__trigger[aria-expanded='true'] { background: var(--surface-selected); }
+.skill-picker:has(> :popover-open) > .skill-picker__trigger > svg, .skill-picker__trigger[aria-expanded='true'] > svg { transform: rotate(180deg); }
+.skill-picker__panel { max-block-size: min(360px, 44dvh); }
+.skill-picker__panel[popover] {
+  --skill-picker-panel-width: min(max(360px, anchor-size(width)), calc(100dvw - var(--space-10)));
+  position: fixed; inset: auto; position-area: block-start span-all; justify-self: start;
+  inset-inline-start: clamp(var(--space-6), anchor(start), calc(100dvw - var(--skill-picker-panel-width) - var(--space-6)));
+  position-try-fallbacks: flip-block; position-visibility: anchors-visible;
+  inline-size: var(--skill-picker-panel-width);
+  margin: var(--space-2) 0; padding: var(--space-2); border: 1px solid var(--border); border-radius: var(--radius-small);
+  background: var(--surface); color: var(--text); box-shadow: var(--floating-shadow);
+}
+.skill-picker__panel:popover-open, .skill-picker--inline > .skill-picker__panel:not([hidden]) { display: flex; flex-direction: column; gap: var(--space-1); }
+.skill-picker--inline { border: 1px solid var(--border); border-radius: var(--radius-small); background: var(--surface); }
+.skill-picker--inline > .skill-picker__trigger { border-radius: calc(var(--radius-small) - 1px); }
+.skill-picker--inline > .skill-picker__trigger[aria-expanded='true'] { border-end-start-radius: 0; border-end-end-radius: 0; border-block-end-color: var(--border); }
+.skill-picker--inline > .skill-picker__panel { max-block-size: calc(min(360px, 44dvh) - var(--control-height)); padding: var(--space-2); }
+.skill-picker--inline > .skill-picker__panel > .skill-picker__list { overscroll-behavior: auto; scrollbar-gutter: stable; scroll-padding-block-start: var(--control-hit-size); }
+.skill-picker__branch > .skill-picker__list { overflow: visible; }
+.skill-picker--inline .skill-picker__row[aria-expanded='true'] > svg:last-child { transform: rotate(180deg); }
+.skill-picker__group-row { display: flex; align-items: center; border-radius: calc(var(--radius-small) - var(--space-2)); }
+.skill-picker__group-row:has(> [aria-expanded='true']) { position: sticky; inset-block-start: 0; z-index: 1; background: var(--surface-selected); }
+.skill-picker__group-check { display: grid; flex: none; place-items: center; inline-size: var(--control-hit-size); min-block-size: var(--control-hit-size); border-radius: calc(var(--radius-small) - var(--space-2)); cursor: pointer; }
+.skill-picker__group-check:has(:disabled) { cursor: not-allowed; }
+.skill-picker__group-check:not(:has(:disabled)):hover { background: var(--surface-hover); }
+.skill-picker__group-check > input { margin: 0; }
+.skill-picker__branch { margin-block-start: var(--space-1); margin-inline-start: var(--space-3); padding-inline-start: var(--space-2); border-inline-start: 1px solid var(--border); }
+.skill-picker__toolbar, .skill-picker__submenu { display: flex; align-items: center; flex: none; gap: var(--space-2); }
+.skill-picker__toolbar input { flex: 1; min-width: 0; border-radius: calc(var(--radius-small) - var(--space-2)); }
+.skill-picker__toolbar .button, .skill-picker__submenu .button { min-height: var(--control-hit-size); padding-inline: var(--space-2); }
+.skill-picker__submenu { padding-block-start: var(--space-1); border-top: 1px solid var(--border); }
+.skill-picker__submenu strong { font-size: var(--text-size-label); font-weight: var(--font-weight-emphasis); }
+.skill-picker__name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.skill-picker__count { flex: none; color: var(--text-secondary); font-size: var(--text-size-caption); font-variant-numeric: tabular-nums; }
+.skill-picker__list { min-height: 0; margin: 0; padding: 0; list-style: none; overflow-y: auto; overscroll-behavior: contain; }
+.skill-picker__list > li + li { margin-block-start: var(--space-1); }
+.skill-picker__list .skill-picker__row, .skill-picker__item {
+  display: flex; width: 100%; min-height: var(--control-hit-size); gap: var(--space-2); justify-content: flex-start;
+  padding: var(--space-2); border-radius: calc(var(--radius-small) - var(--space-2)); color: var(--text); text-align: start;
+}
+.skill-picker__group-row > .skill-picker__row { flex: 1; min-width: 0; padding-inline-start: 0; }
+.skill-picker__row:focus-visible, :is(.skill-picker__item, .skill-picker__group-check):has(:focus-visible) { outline: 2px solid var(--accent); outline-offset: calc(-1 * var(--space-tight)); }
+.skill-picker__item { align-items: flex-start; cursor: pointer; }
+.skill-picker__item:has(:checked) { background: var(--surface-selected); }
+.skill-picker__item:has(:disabled) { color: var(--text-secondary); cursor: not-allowed; }
+.skill-picker__item:not(:has(:disabled)):hover { background: var(--surface-hover); }
+.skill-picker__item > input { flex: none; margin-block-start: var(--space-tight); }
 .skill-picker__item > span { display: grid; gap: var(--space-1); min-width: 0; overflow-wrap: anywhere; }
 .skill-picker__item strong { font-size: var(--text-size-label); font-weight: var(--font-weight-medium); }
-.skill-picker__item small { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; line-height: var(--line-height-body); }
+.skill-picker__item small { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; color: var(--text-secondary); line-height: var(--line-height-body); }
+.skill-picker__item .skill-picker__description { display: block; text-overflow: ellipsis; white-space: nowrap; cursor: help; }
+.skill-picker__hint { padding: var(--space-2); }
+@media (pointer: coarse) {
+  .skill-picker__panel :is(.button, .icon-button, .skill-picker__item) { min-height: var(--control-height); }
+  .skill-picker__submenu .icon-button { min-width: var(--control-height); }
+}
 .skill-import-status { padding: var(--space-3) var(--space-6) 0; }
 .skill-import-status .notice { margin-bottom: var(--space-2); }
 .skill-import-record { display: flex; align-items: center; gap: var(--space-2); min-width: 0; }
@@ -45,6 +89,5 @@ details > summary + .skill-picker { margin-block: 0 var(--space-2); }
 .skill-resource-preview { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 40vh; overflow: auto; padding: var(--space-3); background: var(--surface); border-radius: var(--radius-small); font-size: var(--text-size-caption); line-height: var(--line-height-prose); }
 @media (max-width: 700px) {
   .skill-import-status { padding-inline: var(--space-3); }
-  .skill-picker__toolbar { align-items: stretch; }
   .skill-import-status .notice__content { flex-wrap: wrap; }
 }

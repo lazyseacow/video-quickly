@@ -8,7 +8,43 @@ async function rpc<T>(request: APIRequestContext, method: string, params: unknow
   expect(response.ok()).toBe(true); expect(payload.error).toBeUndefined(); return payload.result;
 }
 
-test('requires a confirmed model selection before saving', async ({ page, request }) => {
+for (const viewport of [{ width: 1536, height: 960 }, { width: 390, height: 844 }]) {
+  test(`saves a full Messages endpoint with Bearer authentication at ${viewport.width}px`, async ({ page, request }, info) => {
+    const calls: unknown[] = [];
+    const server = createServer((incoming, response) => {
+      calls.push({ method: incoming.method, path: incoming.url, auth: incoming.headers.authorization, apiKey: incoming.headers['x-api-key'] });
+      response.writeHead(incoming.method === 'HEAD' && incoming.url === '/relay/run' ? 405 : 404).end();
+    });
+    await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
+    try {
+      const address = server.address(); if (!address || typeof address === 'string') throw new Error('无测试端口');
+      const baseUrl = `http://127.0.0.1:${address.port}/relay/run`, name = `完整中转地址 ${viewport.width}`;
+      await page.setViewportSize(viewport); await page.goto('/');
+      await page.getByRole('button', { name: '模型连接', exact: true }).click();
+      const dialog = await addModelConnection(page);
+      await (await settingField(dialog, '模型平台')).selectOption('custom');
+      await (await settingField(dialog, '连接名称')).fill(name);
+      await (await settingField(dialog, 'API 协议')).selectOption('messages');
+      await (await settingField(dialog, '鉴权方式')).selectOption('bearer');
+      await (await settingField(dialog, '服务地址格式')).selectOption('full');
+      await (await settingField(dialog, '服务地址')).fill(baseUrl);
+      await (await settingField(dialog, 'API Key')).fill('fixture-relay-token');
+      await (await settingField(dialog, '模型 ID')).fill('relay-model');
+      await expect(dialog.getByRole('button', { name: '获取模型列表', exact: true })).toHaveCount(0);
+      await expect(dialog.locator('.dialog__footer')).toBeInViewport({ ratio: 1 });
+      await page.screenshot({ path: info.outputPath('model-full-messages.png') });
+      await dialog.getByRole('button', { name: '保存连接', exact: true }).click(); await expect(dialog).toHaveCount(0);
+      const saved = (await rpc<{ models: ModelProfile[] }>(request, 'workspace.summary')).models.find(model => model.name === name)!;
+      expect(saved).toMatchObject({ baseUrl, model: 'relay-model', authMode: 'bearer', fullUrl: true, textProtocol: 'messages' });
+      await expect(rpc(request, 'model.test', { modelId: saved.id })).resolves.toMatchObject({ connected: true });
+      expect(calls).toEqual([{ method: 'HEAD', path: '/relay/run', auth: 'Bearer fixture-relay-token', apiKey: undefined }]);
+    } finally {
+      server.closeAllConnections(); await new Promise<void>(resolve => server.close(() => resolve()));
+    }
+  });
+}
+
+test('requires a confirmed selection when saving from the model catalogue', async ({ page, request }) => {
   let releaseModels!: () => void, requestedModels!: () => void;
   const released = new Promise<void>(resolve => { releaseModels = resolve; });
   const requested = new Promise<void>(resolve => { requestedModels = resolve; });

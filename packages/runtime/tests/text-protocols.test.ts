@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, expect, it } from 'vitest';
 import { modelSchema, workflowNodeSchema, type ModelProfile, type RunRecord, type TextProtocol, type WorkspaceSnapshot } from '@video-quickly/contracts';
-import { generateText, testModelConnection, textRequestParameters, TextRequestRejectedError } from '../src/providers.js';
+import { discoverModels, generateText, shouldRetryWithPromptFormat, testModelConnection, textRequestParameters, TextRequestRejectedError } from '../src/providers.js';
 import { createRuntime } from '../src/index.js';
 
 const servers: Server[] = [], directories: string[] = [], runtimes: ReturnType<typeof createRuntime>[] = [];
@@ -25,10 +25,22 @@ async function service(handler: (path: string, body: Record<string, unknown>, he
   return `http://127.0.0.1:${address.port}/gateway/v1`;
 }
 function model(baseUrl: string, textProtocol?: TextProtocol): ModelProfile {
-  return modelSchema.parse({ id: 'model', name: '协议夹具', provider: 'openai-compatible', textProtocol, baseUrl, model: 'fixture', connectionType: 'text', capabilities: ['text', 'image'], parameters: { temperature: .3, max_tokens: 128, size: '1024x1024' }, createdAt: '', updatedAt: '' });
+  return modelSchema.parse({ id: 'model', name: '协议夹具', provider: 'openai-compatible', textProtocol, baseUrl, model: 'fixture', connectionType: 'text', capabilities: ['text', 'structured-output', 'image'], parameters: { temperature: .3, max_tokens: 128, size: '1024x1024' }, createdAt: '', updatedAt: '' });
 }
 const openaiUsage = { input_tokens: 100, output_tokens: 20, total_tokens: 120, input_tokens_details: { cached_tokens: 10 } };
 const anthropicUsage = { input_tokens: 80, output_tokens: 20, cache_read_input_tokens: 10, cache_creation_input_tokens: 10 };
+
+it('offers a prompt-only retry for empty incomplete Responses with automatic formatting', () => {
+  const selected = model('http://127.0.0.1/v1', 'responses');
+  const empty = { text: '', incomplete: true, incompleteReason: 'unknown' } as const;
+  expect(shouldRetryWithPromptFormat(selected, empty)).toBe(true);
+  expect(shouldRetryWithPromptFormat(selected, { ...empty, text: '部分内容' })).toBe(false);
+  for (const incompleteReason of ['max_output_tokens', 'content_filter', 'provider_failed'] as const) {
+    expect(shouldRetryWithPromptFormat(selected, { ...empty, incompleteReason })).toBe(false);
+  }
+  expect(shouldRetryWithPromptFormat({ ...selected, parameters: { text: { format: { type: 'json_schema' } } } }, empty)).toBe(false);
+  expect(shouldRetryWithPromptFormat({ ...selected, textProtocol: 'messages' }, empty)).toBe(false);
+});
 
 for (const status of [400, 401, 403, 422, 429]) {
   it(`classifies HTTP ${status} as a confirmed rejection without disclosing or automatically retrying its body`, async () => {
@@ -108,6 +120,7 @@ it('adds protocol-specific JSON output constraints without replacing explicit mo
   const configured = { type: 'json_schema', json_schema: { name: 'user_schema', schema: { type: 'object' } } };
   expect(textRequestParameters({ ...base, parameters: { response_format: configured } }, schema).response_format).toEqual(configured);
   expect(textRequestParameters(base)).not.toHaveProperty('response_format');
+  expect(textRequestParameters({ ...base, capabilities: ['text'] }, schema)).not.toHaveProperty('response_format');
 });
 
 for (const protocol of ['chat-completions', 'responses', 'messages'] as const) {
@@ -151,13 +164,61 @@ for (const protocol of ['chat-completions', 'responses', 'messages'] as const) {
   });
 }
 
-it('keeps old Claude-compatible profiles on Chat Completions and retains the Ollama native path', async () => {
+it('uses the selected Chat Completions protocol for a Claude gateway and the Ollama native path for a local model', async () => {
   const paths: string[] = [];
   const baseUrl = await service(path => { paths.push(path); return path.endsWith('/api/chat') ? { message: { content: 'Ollama' }, prompt_eval_count: 3, eval_count: 2 } : { choices: [{ message: { content: 'legacy' } }] }; });
-  const legacy = { ...model(baseUrl), platform: 'anthropic' as const };
-  expect(await generateText({ model: legacy, prompt: 'legacy', operationId: 'legacy' })).toMatchObject({ text: 'legacy' });
-  expect(await generateText({ model: { ...legacy, provider: 'ollama', parameters: { options: { num_predict: 128 } } }, prompt: 'native', operationId: 'native' })).toMatchObject({ text: 'Ollama', usage: { inputTokens: 3, outputTokens: 2 } });
+  const relay = { ...model(baseUrl, 'chat-completions'), platform: 'anthropic' as const };
+  expect(await generateText({ model: relay, prompt: 'fixture', operationId: 'chat' })).toMatchObject({ text: 'legacy' });
+  expect(await generateText({ model: { ...relay, provider: 'ollama', parameters: { options: { num_predict: 128 } } }, prompt: 'native', operationId: 'native' })).toMatchObject({ text: 'Ollama', usage: { inputTokens: 3, outputTokens: 2 } });
   expect(paths).toEqual(['/gateway/v1/chat/completions', '/gateway/v1/api/chat']);
+});
+
+it('uses the configured Messages authentication for discovery, checks, direct requests and Agent calls at a full endpoint', async () => {
+  const calls: Array<{ path: string; method: string | undefined; headers: IncomingHttpHeaders }> = [];
+  let agentTurns = 0;
+  const secret = 'bearer-fixture-token';
+  const baseUrl = await service((path, body, headers, response) => {
+    calls.push({ path, method: response.req.method, headers });
+    if (headers.authorization !== `Bearer ${secret}` || headers['x-api-key']) { response.statusCode = 401; return {}; }
+    if (path.startsWith('/gateway/v1/models')) return { data: [{ id: 'relay-model' }] };
+    if (path !== '/relay/invoke') { response.statusCode = 404; return {}; }
+    if (response.req.method === 'HEAD') { response.statusCode = 405; return {}; }
+    const toolCall = Array.isArray(body.tools) && ++agentTurns === 1;
+    return { id: `msg-${calls.length}`, type: 'message', role: 'assistant', model: 'relay-model', content: toolCall
+      ? [{ type: 'tool_use', id: 'call-project', name: 'read_project_snapshot', input: {} }]
+      : [{ type: 'text', text: '已读取项目。' }], stop_reason: toolCall ? 'tool_use' : 'end_turn', usage: anthropicUsage };
+  });
+  const prefix = model(baseUrl, 'messages');
+  const relay = { ...prefix, model: 'relay-model', authMode: 'bearer' as const, capabilities: ['text', 'tools'] as ModelProfile['capabilities'] };
+  expect((await discoverModels(relay, secret)).items.map(item => item.id)).toEqual(['relay-model']);
+  expect(await testModelConnection(relay, secret)).toMatchObject({ connected: true, models: ['relay-model'] });
+  const endpoint = { ...relay, baseUrl: `${new URL(baseUrl).origin}/relay/invoke`, fullUrl: true };
+  expect((await discoverModels(endpoint, secret)).items).toEqual([]);
+  expect(await testModelConnection(endpoint, secret)).toMatchObject({ connected: true, models: [] });
+  expect(await generateText({ model: endpoint, secret, prompt: 'fixture', operationId: 'full-relay' })).toMatchObject({ text: '已读取项目。' });
+
+  const directory = await mkdtemp(join(tmpdir(), 'vq-full-relay-')); directories.push(directory);
+  const secrets = new Map<string, string>();
+  const runtime = createRuntime({ dataDirectory: directory, seed: true, secretStore: {
+    async get(key) { return secrets.get(key); }, async set(key, value) { secrets.set(key, value); }, async delete(key) { secrets.delete(key); },
+  } });
+  runtimes.push(runtime);
+  const { projects: [project] } = await runtime.dispatch('workspace.snapshot') as WorkspaceSnapshot;
+  const selected = modelSchema.parse(await runtime.dispatch('model.save', { model: endpoint, secret }));
+  await runtime.dispatch('project.update', { projectId: project.id, patch: { workflow: {
+    id: 'full-relay', version: 1, name: 'Full relay', production: { mode: 'native-video', referenceMode: 'none', soundPrompt: '', subtitleMode: 'off' },
+    nodes: [workflowNodeSchema.parse({ id: 'agent', kind: 'agent', label: 'Agent', modelId: selected.id })], edges: [],
+  } } });
+  await runtime.dispatch('run.start', { projectId: project.id }); await runtime.waitForIdle();
+  expect((await runtime.dispatch('workspace.snapshot') as WorkspaceSnapshot).runs[0].status).toBe('succeeded');
+  expect(calls.map(({ method, path }) => `${method} ${path}`)).toEqual([
+    'GET /gateway/v1/models?limit=1000', 'GET /gateway/v1/models', 'HEAD /relay/invoke', 'POST /relay/invoke', 'POST /relay/invoke', 'POST /relay/invoke',
+  ]);
+  for (const { headers } of calls) {
+    expect(headers.authorization).toBe(`Bearer ${secret}`);
+    expect(headers['x-api-key']).toBeUndefined();
+    expect(headers['anthropic-version']).toBe('2023-06-01');
+  }
 });
 
 it('maps structured output and token aliases and rejects incomplete or empty native responses', async () => {
@@ -183,7 +244,7 @@ for (const { protocol, reportUsage } of [{ protocol: 'responses', reportUsage: t
     const directory = await mkdtemp(join(tmpdir(), 'vq-text-protocol-')); directories.push(directory);
     const runtime = createRuntime({ dataDirectory: directory, seed: true }); runtimes.push(runtime);
     const initial = await runtime.dispatch('workspace.snapshot') as WorkspaceSnapshot;
-    const selected = await runtime.dispatch('model.save', { model: { name: `Agent ${protocol}`, connectionType: 'text', provider: 'openai-compatible', textProtocol: protocol, baseUrl, model: 'fixture', capabilities: ['text'] } }) as ModelProfile;
+    const selected = await runtime.dispatch('model.save', { model: { name: `Agent ${protocol}`, connectionType: 'text', provider: 'openai-compatible', textProtocol: protocol, baseUrl, model: 'fixture', capabilities: ['text', 'tools'] } }) as ModelProfile;
     await runtime.dispatch('project.update', { projectId: initial.projects[0].id, patch: { workflow: { id: 'native-api', version: 1, name: 'native API', production: { mode: 'native-video', referenceMode: 'none', soundPrompt: '', subtitleMode: 'off' }, nodes: [workflowNodeSchema.parse({ id: 'agent', kind: 'agent', label: 'Agent', modelId: selected.id })], edges: [] } } });
     const run = await runtime.dispatch('run.start', { projectId: initial.projects[0].id }) as RunRecord; await runtime.waitForIdle();
     const after = await runtime.dispatch('workspace.snapshot') as WorkspaceSnapshot;
@@ -200,3 +261,53 @@ for (const { protocol, reportUsage } of [{ protocol: 'responses', reportUsage: t
     await runtime.dispatch('run.replay', { runId: run.id }); expect(calls).toHaveLength(2);
   });
 }
+
+it.each([{ modelId: 'gpt-5.6-terra', reasoning: false }, { modelId: 'deepseek-v4-pro', reasoning: true }])('keeps $modelId on Chat Completions through two Agent tool rounds', async ({ modelId, reasoning }) => {
+  const calls: Array<{ path: string; body: Record<string, unknown> }> = [];
+  const baseUrl = await service((path, body) => {
+    calls.push({ path, body });
+    const turn = calls.length;
+    const message = turn <= 2 ? {
+      role: 'assistant', content: null,
+      ...(reasoning ? { reasoning_content: `fixture-reasoning-${turn}` } : {}),
+      tool_calls: [{ id: `call-project-${turn}`, type: 'function', function: { name: 'read_project_snapshot', arguments: '{}' } }],
+    } : { role: 'assistant', content: '已读取项目快照。' };
+    return { id: `chat-${turn}`, object: 'chat.completion', created: 1, model: modelId, choices: [{ index: 0, message, finish_reason: turn <= 2 ? 'tool_calls' : 'stop' }] };
+  });
+  const directory = await mkdtemp(join(tmpdir(), 'vq-agent-chat-')); directories.push(directory);
+  const runtime = createRuntime({ dataDirectory: directory, seed: true }); runtimes.push(runtime);
+  const { projects: [project] } = await runtime.dispatch('workspace.snapshot') as WorkspaceSnapshot;
+  const selected = modelSchema.parse(await runtime.dispatch('model.save', { model: {
+    name: modelId, connectionType: 'text', provider: 'openai-compatible', platform: reasoning ? 'deepseek' : 'custom',
+    textProtocol: 'chat-completions', baseUrl, model: modelId, capabilities: ['text', 'tools'],
+  } }));
+  await runtime.dispatch('project.update', { projectId: project.id, patch: { workflow: {
+    id: 'agent-chat', version: 1, name: 'Agent Chat', production: { mode: 'native-video', referenceMode: 'none', soundPrompt: '', subtitleMode: 'off' },
+    nodes: [workflowNodeSchema.parse({ id: 'agent', kind: 'agent', label: 'Agent', modelId: selected.id })], edges: [],
+  } } });
+  await runtime.dispatch('run.start', { projectId: project.id }); await runtime.waitForIdle();
+  const after = await runtime.dispatch('workspace.snapshot') as WorkspaceSnapshot;
+  expect(after.runs[0]).toMatchObject({ status: 'succeeded' });
+  expect(calls.map(call => call.path)).toEqual(Array(3).fill('/gateway/v1/chat/completions'));
+  const last = calls[2].body.messages as Array<{ role: string; reasoning_content?: string; tool_call_id?: string }>;
+  expect(last.filter(message => message.role === 'tool').map(message => message.tool_call_id)).toEqual(['call-project-1', 'call-project-2']);
+  expect(last.flatMap(message => message.reasoning_content ? [message.reasoning_content] : [])).toEqual(reasoning ? ['fixture-reasoning-1', 'fixture-reasoning-2'] : []);
+});
+
+it('persists declared capabilities and rejects an Agent binding or protocol the model cannot use', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'vq-agent-capability-')); directories.push(directory);
+  const runtime = createRuntime({ dataDirectory: directory, seed: true }); runtimes.push(runtime);
+  const { projects: [project] } = await runtime.dispatch('workspace.snapshot') as WorkspaceSnapshot;
+  const profile = { name: 'OpenAI fixture', connectionType: 'text', provider: 'openai-compatible', platform: 'openai', model: 'gpt-6-astra', baseUrl: 'https://api.openai.com/v1' };
+  await expect(runtime.dispatch('model.save', { model: { ...profile, capabilities: ['text', 'tools'], textProtocol: 'chat-completions' } })).rejects.toThrow('需要 Responses API');
+  const plain = modelSchema.parse(await runtime.dispatch('model.save', { model: { ...profile, capabilities: ['text'] } }));
+  const tools = modelSchema.parse(await runtime.dispatch('model.save', { model: { ...profile, capabilities: ['text', 'tools'], textProtocol: 'responses' } }));
+  const snapshot = await runtime.dispatch('workspace.snapshot') as WorkspaceSnapshot;
+  expect(snapshot.models.find(model => model.id === plain.id)?.capabilities).toEqual(['text']);
+  expect(snapshot.models.find(model => model.id === tools.id)?.capabilities).toEqual(['text', 'tools']);
+  await runtime.dispatch('project.update', { projectId: project.id, patch: { workflow: {
+    id: 'agent-capability', version: 1, name: 'Agent capability', production: { mode: 'native-video', referenceMode: 'none', soundPrompt: '', subtitleMode: 'off' },
+    nodes: [workflowNodeSchema.parse({ id: 'agent', kind: 'agent', label: 'Agent', modelId: plain.id })], edges: [],
+  } } });
+  await expect(runtime.dispatch('run.start', { projectId: project.id })).rejects.toThrow('具备工具调用能力');
+});

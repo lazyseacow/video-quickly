@@ -18,7 +18,7 @@ it.each(['openai-compatible', 'ollama'] as const)('checks the unified workflow w
   const runtime = createRuntime({ dataDirectory: directory, seed: false, provider }); fixtures.push({ directory, runtime });
   const project = projectSchema.parse(await runtime.dispatch('project.create', { title: '自主制作前检查' }));
   const model = modelSchema.parse(await runtime.dispatch('model.save', { model: {
-    name: 'Agent fixture', provider: providerType, baseUrl: 'http://127.0.0.1:1/v1', model: 'fixture', connectionType: 'text', capabilities: ['text', 'tools'],
+    name: 'Agent fixture', provider: providerType, baseUrl: 'http://127.0.0.1:1/v1', model: 'fixture', connectionType: 'text', capabilities: providerType === 'openai-compatible' ? ['text', 'tools'] : ['text'],
   } }));
   await runtime.dispatch('tool.register', { server: { name: '剪辑工具', transport: 'http', url: 'http://127.0.0.1:1/mcp', enabled: true } });
   const configured = projectSchema.parse(await runtime.dispatch('project.update', { projectId: project.id, revision: project.revision,

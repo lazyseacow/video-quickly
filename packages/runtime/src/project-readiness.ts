@@ -1,10 +1,11 @@
 import { randomUUID } from 'node:crypto';
 import { stat } from 'node:fs/promises';
-import { creativeReferenceAssetIds, projectCharacterIds, projectReadinessSchema, usesVideoAudio, type AssetRecord, type CharacterProfile, type ModelProfile, type ProjectDocument, type ReadinessIssue, type RunSelection, type RuntimeSystem, type SkillPackage, type WorkflowNode } from '@video-quickly/contracts';
+import { creativeReferenceAssetIds, projectCharacterIds, projectReadinessSchema, usesManualPlanning, usesVideoAudio, type AssetRecord, type CharacterProfile, type ModelProfile, type ProjectDocument, type ReadinessIssue, type RunSelection, type RuntimeSystem, type SkillPackage, type WorkflowNode } from '@video-quickly/contracts';
 import { fingerprint } from './activities.js';
 import { audioFileHash } from './audio-preview.js';
 import { ExecutionModelError, validateExecutionModel } from './execution-model.js';
 import { redactInspectionText } from './run-inspection.js';
+import { manualPlanningOutput } from './workflow-outputs.js';
 import type { RuntimeOptions } from './index.js';
 
 export interface ReadinessSnapshot {
@@ -74,6 +75,14 @@ export function createProjectReadiness(options: {
     for (const node of nodes) {
       signal.throwIfAborted();
       const model = node.modelId ? models.get(node.modelId) : undefined;
+      const manual = usesManualPlanning(project.workflow, node);
+      if (manual) {
+        try { manualPlanningOutput(project, node); }
+        catch (error) {
+          add({ severity: 'error', category: 'workflow', nodeId: node.id, message: error instanceof Error ? error.message : '手动策划内容校验失败。',
+            hint: node.kind === 'script' ? '请在工作台添加或修改镜头，也可在制作设置改用 AI 生成。' : '请在制作设置补充正文，也可改用 AI 生成。', fix: 'step' }, `manual:${node.id}`);
+        }
+      }
       try { validateExecutionModel(node, model); }
       catch (failure) {
         invalidModels.add(node.id);
@@ -83,7 +92,7 @@ export function createProjectReadiness(options: {
       for (const id of node.skillIds) if (!enabledSkills.has(id)) add({ severity: 'error', category: 'skill', nodeId: node.id, message: '步骤引用的 Skill 不存在或已停用，请重新选择。', fix: 'step' }, `${node.id}:${id}`);
       if (!model) {
         if (node.kind === 'agent') add({ severity: 'error', category: 'model', nodeId: node.id, message: 'Agent 步骤需要选择具备文本和工具能力的模型。', fix: 'step' }, `agent:${node.id}`);
-        if (node.kind === 'script' && !project.shots.length) add({ severity: futureShots ? 'warning' : 'error', category: 'workflow', nodeId: node.id, message: '本地脚本步骤没有可采用的分镜，请先添加镜头或选择文本模型。', fix: 'step' }, `script:${node.id}`);
+        if (node.kind === 'script' && !manual && !project.shots.length) add({ severity: futureShots ? 'warning' : 'error', category: 'workflow', nodeId: node.id, message: '本地脚本步骤没有可采用的分镜，请先添加镜头或选择文本模型。', fix: 'step' }, `script:${node.id}`);
         if (node.kind === 'assets' && node.config.operation !== 'prepare-references') {
           const kind = 'image';
           for (const shot of project.shots) {

@@ -34,6 +34,10 @@
 .workspace-shell .project-title-input { width: 100%; font-size: var(--text-size-project); min-height: 32px; }
 .workspace-shell .project-heading p { font-size: var(--text-size-micro); gap: var(--space-2); margin-top: var(--space-1); color: var(--text-subtle); }
 .workspace-shell .project-heading-actions { gap: var(--space-2); flex-shrink: 0; }
+.project-more > .button { width: 100%; min-height: var(--control-hit-size); }
+.project-more:has(> :popover-open) > .button { background: var(--control-selected); }
+.project-more__panel { position: fixed; inset: auto; position-area: block-end span-inline-end; justify-self: start; position-try-fallbacks: flip-block, flip-inline; position-visibility: anchors-visible; margin: var(--space-2) 0; padding: var(--space-1); border: 1px solid var(--border); border-radius: var(--radius-small); background: var(--surface); color: var(--text); box-shadow: var(--floating-shadow); }
+.project-more__panel > .button { width: 100%; min-height: var(--control-hit-size); justify-content: flex-start; padding-inline: var(--space-3); border-radius: calc(var(--radius-small) - var(--space-1)); }
 .editor-layout-actions { display: flex; gap: var(--space-2); padding-right: var(--space-3); border-right: 1px solid var(--border); }
 .editor-layout-actions .icon-button { color: var(--text-subtle); }
 .editor-layout-actions .icon-button[aria-pressed='true'] { color: var(--text); background: var(--control-selected); }
@@ -55,6 +59,11 @@
 .workspace-shell .inspector .panel-heading .tabs button.active { color: var(--text); box-shadow: none; background: transparent; }
 .workspace-shell .inspector-section { padding: var(--space-5) var(--space-4); }
 .workspace-shell .inspector .inspector-body { min-height: 0; overflow-y: auto; }
+.workspace-shell .inspector-body:has(> .empty-state) { display: flex; flex-direction: column; justify-content: safe center; }
+.workspace-shell .inspector-body > .empty-state { padding: var(--space-6) var(--space-4); }
+.workspace-shell .inspector-body .empty-state__icon { inline-size: var(--space-10); block-size: var(--space-10); margin-block-end: var(--space-3); }
+.workspace-shell .inspector-body > .empty-state h3 { font-size: var(--text-size-subtitle); }
+.workspace-shell .inspector-body > .empty-state p { font-size: var(--text-size-caption); margin-block-start: var(--space-2); }
 .outline-selection { display: flex; align-items: center; gap: var(--space-tight); padding: var(--space-tight) var(--space-2); border-bottom: 1px solid var(--border); }
 .outline-selection > span { flex: 1; min-width: 0; padding-left: var(--space-1); color: var(--text-secondary); font-size: var(--text-size-badge); line-height: var(--line-height-label); font-variant-numeric: tabular-nums; }
 .outline-selection .icon-button { flex-shrink: 0; width: 40px; height: 40px; }
@@ -121,7 +130,8 @@
   .workspace-shell .editor-layout-actions { grid-column: 4; grid-row: 1; justify-self: end; border: 0; padding: 0; }
   .workspace-shell .project-heading-actions > .button { grid-row: 3; justify-self: stretch; min-width: 0; margin: 0; padding-inline: var(--space-2); }
   .workspace-shell .project-heading-actions > .production-settings-trigger { grid-column: 3 / 5; grid-row: 2; }
-  .workspace-shell .project-heading-actions > [data-guide="check"] { grid-column: 1; }
+  .workspace-shell .project-heading-actions > .project-more { grid-column: 1; grid-row: 3; min-width: 0; }
+  .workspace-shell .project-more > .button { padding-inline: var(--space-2); }
   .workspace-shell .project-heading-actions > [data-guide="produce"] { grid-column: 2 / 4; }
   .workspace-shell .project-heading-actions > .button:last-child { grid-column: 4; }
   .workspace-shell .project-title-input { font-size: var(--text-size-title); }

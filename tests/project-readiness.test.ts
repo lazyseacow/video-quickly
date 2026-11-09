@@ -80,7 +80,7 @@ it('points invalid parameters to model settings and incompatible roles to the ac
   putModel(f, { parameters: { size: 'invalid-size' } });
   let result = await f.check();
   expect(result.issues).toEqual(expect.arrayContaining([expect.objectContaining({ nodeId: 'image', nodeLabel: 'image', modelId: 'model', modelName: '本地检查连接', fix: 'models', severity: 'error' })]));
-  putModel(f, { capabilities: ['text'] }); result = await f.check();
+  putModel(f, { connectionType: 'text', capabilities: ['text'] }); result = await f.check();
   expect(result.issues).toEqual(expect.arrayContaining([expect.objectContaining({ nodeId: 'image', fix: 'step', severity: 'error' })]));
   putModel(f, { provider: 'ollama', connectionType: 'image', capabilities: ['image'] }); result = await f.check();
   expect(result.issues).toEqual(expect.arrayContaining([expect.objectContaining({ nodeId: 'image', fix: 'step', message: expect.stringContaining('协议') })]));
@@ -131,7 +131,7 @@ it('aborts an in-flight local inspection before closing the runtime', async () =
 
 it('blocks exporting an empty saved project unless a valid selected upstream step can create shots', async () => {
   const f = await fixture([{ id: 'script', kind: 'script', modelId: 'model' }, { id: 'export', kind: 'export' }]);
-  putModel(f, { capabilities: ['text'] });
+  putModel(f, { connectionType: 'text', capabilities: ['text'] });
   await f.runtime.dispatch('project.update', { projectId: f.project.id, revision: f.project.revision, patch: { shots: [] } });
   const scoped = await f.check({ nodeId: 'export', mode: 'node' });
   expect(scoped.issues).toEqual(expect.arrayContaining([expect.objectContaining({ nodeId: 'export', category: 'workflow', severity: 'error' })]));
@@ -145,7 +145,7 @@ it('blocks exporting an empty saved project unless a valid selected upstream ste
 
 it('does not treat read-only Agent output as future shots for local script or export steps', async () => {
   const f = await fixture([{ id: 'agent', kind: 'agent', modelId: 'model' }, { id: 'local-script', kind: 'script' }, { id: 'export', kind: 'export' }]);
-  putModel(f, { capabilities: ['text', 'tools'] });
+  putModel(f, { connectionType: 'text', capabilities: ['text', 'tools'] });
   await f.runtime.dispatch('project.update', { projectId: f.project.id, revision: f.project.revision, patch: { shots: [] } });
   const result = await f.check();
   expect(result.issues).toEqual(expect.arrayContaining([expect.objectContaining({ nodeId: 'local-script', category: 'workflow', severity: 'error' }), expect.objectContaining({ nodeId: 'export', category: 'workflow', severity: 'error' })]));

@@ -29,7 +29,11 @@ export function createReadModels(database: Database.Database, store: DocumentSto
     const { events: _events, activities: _activities, ...record } = value;
     const completed = database.prepare("SELECT activity_id FROM activities WHERE run_id = ? AND status = 'completed'").all(value.id) as { activity_id: string }[];
     const ids = nodeIds(value.id);
-    return { ...record, completedNodeIds: [...new Set(completed.map(row => activityNodeId(row.activity_id, ids)))] };
+    const completedNodeIds = completed.flatMap(({ activity_id }) => {
+      const nodeId = activityNodeId(activity_id, ids);
+      return activity_id.startsWith(`${nodeId}:storyboard:`) ? [] : [nodeId];
+    });
+    return { ...record, completedNodeIds: [...new Set(completedNodeIds)] };
   }
   function projectDetail(id: string, revision?: number, knownAssetsVersion?: number): ProjectDetail {
     const summary = store.get<ProjectSummary>('project-summary', id);

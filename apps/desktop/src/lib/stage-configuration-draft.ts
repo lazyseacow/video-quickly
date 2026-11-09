@@ -75,8 +75,15 @@ export function applyStageConfigurationDraft(workflow: WorkflowDefinition, draft
   });
   let production = workflow.production;
   if (draft?.production) {
-    if (sameContent(production, draft.production.baseline) || sameContent(production, draft.production.value)) { production = draft.production.value; changed = true; }
-    else conflicts.push('production');
+    const { manualPlanningFields: baselineFields, ...baselineSettings } = draft.production.baseline;
+    const { manualPlanningFields: submittedFields, ...submittedSettings } = draft.production.value;
+    const { manualPlanningFields: liveFields, ...liveSettings } = production ?? {};
+    if (sameContent(liveSettings, baselineSettings) || sameContent(liveSettings, submittedSettings)) {
+      const brief = sameContent(baselineFields?.brief, submittedFields?.brief) ? liveFields?.brief : submittedFields?.brief;
+      const style = sameContent(baselineFields?.style, submittedFields?.style) ? liveFields?.style : submittedFields?.style;
+      production = { ...submittedSettings, ...(brief || style ? { manualPlanningFields: { brief, style } } : {}) };
+      changed = true;
+    } else conflicts.push('production');
   }
   let execution = workflow.execution;
   if (draft?.execution) {

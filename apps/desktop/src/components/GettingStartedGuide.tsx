@@ -20,18 +20,17 @@ function definitions(): GuideStep[] {
     { id: 'create-project', action: 'project-created', title: '新建创作项目', description: '可以直接点击高亮的“新建项目”，填写主题和创意简报。创建成功并关闭表单后，指引会自动继续；已有项目也可以点“下一步”跳过。', side: 'right' },
     { id: 'models', action: 'models-opened', title: '打开模型连接', description: '点击高亮入口打开模型连接。打开后自动继续；如果准备使用本地图片、视频和配音，也可以手动跳过。', side: 'right' },
     { id: 'model-connection', action: 'model-saved', title: '添加模型连接', description: '点击高亮的添加按钮，选择模型类型，填写服务地址和密钥，再选择型号并保存。保存成功且表单关闭后继续；已有连接可以直接跳过。' },
-    { id: 'projects', action: 'projects-opened', title: '打开我的项目', description: '点击左侧图标打开项目列表，再选择一个项目继续创作。也可以使用上方加号创建新项目。', side: 'right', when: () => !target('project-open') && !target('view') && !target('workflow') && !target('preview') },
+    { id: 'projects', action: 'projects-opened', title: '打开我的项目', description: '点击左侧图标打开项目列表，再选择一个项目继续创作。也可以使用上方加号创建新项目。', side: 'right', when: () => !target('project-open') && !target('view') && !target('preview') },
     { id: 'project-open', action: 'workbench-opened', title: '进入创作工作台', description: '点击项目卡片上的“继续创作”进入工作台。项目加载完成后，指引会继续介绍镜头、预览和制作区域。' },
-    { id: 'view', action: 'production-settings-opened', title: '制作设置', description: '点击“制作设置”配置创作要求、模型和生成并发。需要自定义步骤或子流程时，从“模型与素材”的“高级编排”进入。关闭设置后继续介绍工作台。' },
+    { id: 'view', action: 'production-settings-opened', title: '制作设置', description: '点击“制作设置”配置创作要求、模型和生成并发。关闭设置后继续介绍工作台。' },
     { id: 'outline-toggle', action: 'outline-opened', title: '展开镜头导航', description: '左侧镜头导航已收起，点击高亮按钮展开。展开后会接着介绍真实的镜头列表。', when: () => !target('shots') },
     { id: 'shots', action: 'shot-selected', title: '整理镜头', description: '直接点击列表中的镜头，查看它的画面、旁白与时长。成功选择镜头后，指引会自动继续。', side: 'right' },
     { id: 'preview', action: 'preview-played', title: '预览画面', description: '可以点击播放按钮，或在此区域按空格播放。预览实际开始播放后继续；也可以先核对画面、字幕和声音。', side: 'left' },
     { id: 'timeline', action: 'timeline-seeked', title: '安排镜头节奏', description: '点击时间轴调整播放位置，成功定位后自动继续。也可以在这里查看镜头顺序、时长与音轨。', side: 'top' },
     { id: 'inspector-toggle', action: 'inspector-opened', title: '展开属性面板', description: '右侧属性面板已收起，点击高亮按钮展开，编辑当前镜头的旁白、素材与运镜。', when: () => !target('inspector') },
     { id: 'inspector', action: 'project-saved', title: '编辑属性', description: `可以编辑旁白、素材与运镜，再用 ${shortcutLabel('S')} 保存。修改保存成功后自动继续；不需要修改时可点“下一步”。`, side: 'left' },
-    { id: 'workflow', action: 'workflow-selected', title: '当前流程画布', description: '双击画布中的制作步骤，查看模型、输入和生成要求。步骤成功聚焦后，指引会自动继续。', side: 'top' },
-    { id: 'check', action: 'check-completed', title: '制作前检查', description: '点击高亮按钮检查已保存的配置、素材与运行环境。检查完成并关闭窗口后继续，检查本身不会提交生成任务。' },
-    { id: 'produce', action: 'production-started', title: '自动制作', description: '点击这里提交制作任务，各步骤会根据上一步的结果自动继续生成。完整流程结束后会自动保存制作结果，也可随时查看各步骤产物。' },
+    { id: 'check', action: 'check-completed', title: '制作前检查', description: '从“更多”打开“制作前检查”，可单独排查已保存的配置、素材与运行环境。检查完成并关闭窗口后继续，也可以点“下一步”。' },
+    { id: 'produce', action: 'production-started', title: '自动制作', description: '点击“开始制作”会先核对本地配置和素材。有问题时可从报告直接前往修复，通过后各步骤会自动继续生成并保存结果。' },
     { id: 'export', action: 'export-completed', title: '导出成片', description: '检查并保存修改后，点击导出，确认规格和保存路径。成片实际导出成功、取得路径并关闭窗口后，指引才会自动继续。' },
     { id: 'help', action: 'help-used', title: '随时重开指引', description: '点击高亮的“设置”入口，或选择“完成引导”结束。以后可从“设置 → 使用指南”重新查看当前界面的操作指引。', side: 'right' },
   ];
@@ -101,7 +100,7 @@ export default function GettingStartedGuide({ onClose }: { onClose: () => void }
     }
     function keyboard(event: KeyboardEvent) {
       if (nativeDialog()) return;
-      if (event.key === 'Escape' && document.querySelector('[data-help-tooltip]')) return;
+      if (event.key === 'Escape' && document.querySelector('[data-help-tooltip], :popover-open')) return;
       if (event.key === 'Escape') { event.preventDefault(); event.stopImmediatePropagation(); finish(); return; }
       if (!tour?.isActive() || !popover) return;
       const inPopover = event.target instanceof Node && popover.wrapper.contains(event.target);

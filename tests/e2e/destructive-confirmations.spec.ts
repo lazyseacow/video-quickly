@@ -1,4 +1,3 @@
-import { openAdvancedWorkflow } from './production-settings';
 import { writeFile } from 'node:fs/promises';
 import { expect, type Locator } from '@playwright/test';
 import type { AssetRecord, CharacterProfile, MCPServer, ModelProfile, ProjectDocument, SeriesTemplate } from '@video-quickly/contracts';
@@ -130,17 +129,11 @@ test('keeps the conflicting draft and parent dialog until discard is confirmed',
   expect((await rpc<{ project: ProjectDocument }>(request, 'project.get', { projectId: project.id })).project).toEqual(remote);
 });
 
-test('leaves shots and workflow nodes intact on cancel, including keyboard deletion', async ({ page, request }) => {
-  const created = await rpc<ProjectDocument>(request, 'project.create', { title: '镜头与流程移除确认' });
+test('leaves shots intact when canceling removal', async ({ page, request }) => {
+  const created = await rpc<ProjectDocument>(request, 'project.create', { title: '镜头移除确认' });
   const project = await rpc<ProjectDocument>(request, 'project.update', { projectId: created.id, revision: created.revision, patch: { shots: [0, 1].map(index => ({ id: `confirmation-${index}`, title: `保留镜头 ${index + 1}`, narration: '', visualPrompt: '', durationUs: 2_000_000 })) } });
   await page.goto('/'); await openProjectFromList(page, project.title);
   await page.getByRole('button', { name: '移除所选镜头', exact: true }).click();
   const dialog = page.getByRole('alertdialog'); await dialog.getByRole('button', { name: '取消', exact: true }).click();
   await expect(page.locator('.outline-shot')).toHaveCount(2); expect((await rpc<{ project: ProjectDocument }>(request, 'project.get', { projectId: project.id })).project).toEqual(project);
-  await openAdvancedWorkflow(page);
-  const node = page.locator('.react-flow__node').first(); await expect(node).toBeVisible(); await node.click();
-  const count = await page.locator('.react-flow__node').count();
-  await node.focus(); await page.keyboard.press('Delete'); await expect(dialog).toBeVisible(); await page.keyboard.press('Escape');
-  await expect(dialog).toHaveCount(0); await expect(page.locator('.react-flow__node')).toHaveCount(count);
-  await node.focus(); await page.keyboard.press('Delete'); await confirmAction(page, '确认移除'); await expect(page.locator('.react-flow__node')).toHaveCount(count - 1);
 });

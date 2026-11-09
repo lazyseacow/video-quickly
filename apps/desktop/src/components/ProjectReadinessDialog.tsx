@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { RefreshCw } from 'lucide-react';
-import { projectReadinessSchema, type ProjectReadiness, type ReadinessIssue, type RunSelection } from '@video-quickly/contracts';
+import { projectReadinessSchema, type ProjectReadiness, type ReadinessIssue } from '@video-quickly/contracts';
 import { rpc } from '../lib/client';
 import { beginGuideAction } from '../lib/guide-actions';
 import { Button, Dialog, Notice } from './Primitives';
@@ -10,13 +10,14 @@ const fixLabels: Record<ReadinessIssue['fix'], string> = { project: '查看项�
 const categories: Record<ReadinessIssue['category'], string> = { project: '项目', workflow: '流程', model: '模型', media: '素材', environment: '运行环境', skill: 'Skill' };
 type Request = { id: string; pending: boolean; cancelSent: boolean };
 
-export default function ProjectReadinessDialog({ projectId, selection, version, hasUnsavedChanges = false, onClose, onRepair, onError }: {
-  projectId: string; selection?: RunSelection; version: number; hasUnsavedChanges?: boolean;
+export default function ProjectReadinessDialog({ projectId, version, hasUnsavedChanges = false, blockingReport, onClose, onRepair, onError }: {
+  projectId: string; version: number; hasUnsavedChanges?: boolean; blockingReport?: ProjectReadiness;
   onClose(): void; onRepair(issue: ReadinessIssue): void; onError(message: string): void;
 }) {
-  const [report, setReport] = useState<ProjectReadiness>(), [busy, setBusy] = useState(true), [error, setError] = useState('');
+  const [report, setReport] = useState<ProjectReadiness>(), [busy, setBusy] = useState(!blockingReport), [error, setError] = useState('');
   const [checkedVersion, setCheckedVersion] = useState(version);
   const [issueLimit, setIssueLimit] = useState(100);
+  const firstRepair = useRef<HTMLButtonElement>(null);
   const mounted = useRef(false), current = useRef<Request | undefined>(undefined), errorHandler = useRef(onError);
   useLayoutEffect(() => { errorHandler.current = onError; }, [onError]);
   function cancel(request: Request | undefined) {
@@ -32,7 +33,7 @@ export default function ProjectReadinessDialog({ projectId, selection, version, 
     const requestedVersion = version;
     const completed = beginGuideAction('check-completed');
     try {
-      const result = projectReadinessSchema.parse(await rpc('project.readiness', { projectId, selection, requestId: request.id }));
+      const result = projectReadinessSchema.parse(await rpc('project.readiness', { projectId, requestId: request.id }));
       if (mounted.current && current.current === request) {
         setReport(result); setCheckedVersion(requestedVersion); setIssueLimit(100);
         if (!request.cancelSent) completed();
@@ -41,28 +42,46 @@ export default function ProjectReadinessDialog({ projectId, selection, version, 
     finally { request.pending = false; if (mounted.current && current.current === request) setBusy(false); }
   }
   useEffect(() => {
+    if (blockingReport) return;
     mounted.current = true; setReport(undefined); void check();
     return () => { mounted.current = false; cancel(current.current); current.current = undefined; };
     // Workspace notifications only mark results stale. Hashing is repeated on
     // an explicit check, rather than on every background run notification.
-  }, [projectId, selection?.nodeId, selection?.mode]);
-  const visible = report?.projectId === projectId && report.selection?.nodeId === selection?.nodeId && report.selection?.mode === selection?.mode ? report : undefined;
+  }, [projectId, blockingReport]);
+  const visible = blockingReport ?? (report?.projectId === projectId && !report.selection ? report : undefined);
   const errors = visible?.issues.filter(issue => issue.severity === 'error') ?? [], warnings = visible?.issues.filter(issue => issue.severity === 'warning') ?? [];
-  return <Dialog title="制作前检查" className="dialog--wide project-readiness-dialog" onClose={close} onDismissStart={() => cancel(current.current)}>
+  const issues = blockingReport ? errors : [...errors, ...warnings];
+  return <Dialog title={blockingReport ? '暂无法开始制作' : '制作前检查'} className="dialog--wide project-readiness-dialog" initialFocus={blockingReport ? firstRepair : undefined} onClose={close} onDismissStart={() => cancel(current.current)}>
     <div className="dialog__body">
-      <p className="readiness-intro">核对已保存项目的本地配置与素材，不提交生成任务。供应商连通性和计费状态需单独验证。</p>
-      {hasUnsavedChanges && <Notice>当前有未保存的修改，本次仅检查已保存内容。保存修改后请重新检查。</Notice>}
+      {blockingReport ? <Notice kind="error">有 {errors.length} 项问题需要处理。修复后可再次开始制作。</Notice> : <>
+        <p className="readiness-intro">核对已保存项目的本地配置与素材，不提交生成任务。供应商连通性和计费状态需单独验证。</p>
+        {hasUnsavedChanges && <Notice>当前有未保存的修改，本次仅检查已保存内容。保存修改后请重新检查。</Notice>}
+      </>}
       {error && <Notice kind="error">{error}</Notice>}
       {busy && <p role="status">正在核对步骤和素材文件，可关闭窗口停止检查…</p>}
       {visible && <>
-        <dl className="readiness-summary"><div><dt>项目修订</dt><dd>{visible.projectRevision}</dd></div><div><dt>涉及步骤</dt><dd>{visible.stepCount}</dd></div><div><dt>涉及模型</dt><dd>{visible.modelCount}</dd></div><div><dt>素材引用</dt><dd>{visible.assetCount}</dd></div></dl>
-        {!busy && !error && <Notice kind={errors.length ? 'error' : warnings.length ? 'info' : 'success'}>{errors.length ? `${errors.length} 项需要处理，${warnings.length} 项提醒。` : warnings.length ? `本地检查通过，请核对 ${warnings.length} 项提醒。` : '本地检查通过。'}</Notice>}
-        {checkedVersion !== version && <Notice>工作区在检查后有更新，请重新检查当前配置。</Notice>}
-        <ul className="readiness-issues" aria-label="制作检查结果">{[...errors, ...warnings].slice(0, issueLimit).map(issue => <li key={issue.id}><div><span className="readiness-issue-meta">{issue.severity === 'error' ? '需处理' : '提醒'} · {categories[issue.category]}{issue.nodeLabel ? ` · ${issue.nodeLabel}` : ''}{issue.modelName ? ` · ${issue.modelName}` : ''}</span><strong>{issue.message}</strong>{issue.hint && <p>{issue.hint}</p>}</div><Button disabled={busy || Boolean(error)} onClick={() => onRepair(issue)}>{fixLabels[issue.fix]}</Button></li>)}</ul>
-        {visible.issues.length > issueLimit && <Button className="button-full" onClick={() => setIssueLimit(value => value + 100)}>显示更多检查结果</Button>}
-        <p className="readiness-intro">检查时间：{new Date(visible.checkedAt).toLocaleString('zh-CN')}。制作时仍会按实际输入再次校验。</p>
+        {!blockingReport && <>
+          <dl className="readiness-summary"><div><dt>项目修订</dt><dd>{visible.projectRevision}</dd></div><div><dt>涉及步骤</dt><dd>{visible.stepCount}</dd></div><div><dt>涉及模型</dt><dd>{visible.modelCount}</dd></div><div><dt>素材引用</dt><dd>{visible.assetCount}</dd></div></dl>
+          {!busy && !error && <Notice kind={errors.length ? 'error' : warnings.length ? 'info' : 'success'}>{errors.length ? `${errors.length} 项需要处理，${warnings.length} 项提醒。` : warnings.length ? `本地检查通过，请核对 ${warnings.length} 项提醒。` : '本地检查通过。'}</Notice>}
+        </>}
+        {checkedVersion !== version && <Notice>{blockingReport ? '工作区已更新，请关闭后再次开始制作。' : '工作区在检查后有更新，请重新检查当前配置。'}</Notice>}
+        <ul className="readiness-issues" aria-label="制作检查结果">{issues.slice(0, issueLimit).map((issue, index) => <li key={issue.id}>
+          <div>
+            {blockingReport ? <>
+              <strong>{issue.nodeLabel ?? categories[issue.category]}{issue.modelName && <span className="readiness-issue-meta"> · {issue.modelName}</span>}</strong>
+              <p className="readiness-issue-reason">{issue.message}</p>
+            </> : <>
+              <span className="readiness-issue-meta">{issue.severity === 'error' ? '需处理' : '提醒'} · {categories[issue.category]}{issue.nodeLabel ? ` · ${issue.nodeLabel}` : ''}{issue.modelName ? ` · ${issue.modelName}` : ''}</span>
+              <strong>{issue.message}</strong>
+            </>}
+            {issue.hint && <p>{issue.hint}</p>}
+          </div>
+          <Button ref={blockingReport && index === 0 ? firstRepair : undefined} disabled={busy || Boolean(error)} onClick={() => onRepair(issue)}>{fixLabels[issue.fix]}</Button>
+        </li>)}</ul>
+        {issues.length > issueLimit && <Button className="button-full" onClick={() => setIssueLimit(value => value + 100)}>显示更多检查结果</Button>}
+        {!blockingReport && <p className="readiness-intro">检查时间：{new Date(visible.checkedAt).toLocaleString('zh-CN')}。制作时仍会按实际输入再次校验。</p>}
       </>}
     </div>
-    <div className="dialog__footer"><Button onClick={close}>{hasUnsavedChanges ? '返回保存修改' : '关闭'}</Button><Button variant="primary" busy={busy} onClick={() => void check()}><RefreshCw size={14} />重新检查</Button></div>
+    <div className="dialog__footer"><Button onClick={close}>{!blockingReport && hasUnsavedChanges ? '返回保存修改' : '关闭'}</Button>{!blockingReport && <Button variant="primary" busy={busy} onClick={() => void check()}><RefreshCw size={14} />重新检查</Button>}</div>
   </Dialog>;
 }

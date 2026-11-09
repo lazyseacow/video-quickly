@@ -1,7 +1,7 @@
 import { pathExample } from '../lib/desktop';
 import { lazy, Suspense, useEffect, useId, useLayoutEffect, useRef, useState } from 'react';
 import { Code2, Eye, EyeOff, File, FileImage, FolderOpen, Image, Link, LoaderCircle, Mic, Pencil, RefreshCw, Search, Server, ShieldCheck, Trash2, Video, Upload, Plus, RotateCcw, Download, Check } from 'lucide-react';
-import { modelConnectionTypes, getModelConnectionType, validateModelConnection, platformForConnection, modelDiscoverySchema, type ModelDiscovery, type ModelConnectionType, getModelParameterFields, getMediaAdapters, mediaAdapters, textProtocols, textProtocolSchema, type TextProtocol } from '@video-quickly/contracts';
+import { modelConnectionTypes, getModelConnectionType, validateModelConnection, modelToolProtocolIssue, platformForConnection, modelAuthModeSchema, modelDiscoverySchema, type ModelAuthMode, type ModelDiscovery, type ModelConnectionType, getModelParameterFields, getMediaAdapters, mediaAdapters, textProtocols, textProtocolSchema, type TextProtocol } from '@video-quickly/contracts';
 import { assetListItemSchema, projectDetailSchema, recordPageSchema, jsonValueSchema, modelPlatforms, getModelPlatform, modelPlatformSchema, validateModelParameters, type ModelPlatform, type AssetListItem, type ProjectSummary, type JsonValue, type ModelCapability, type ModelProfile, type ProjectDocument } from '@video-quickly/contracts';
 import { Button, Combobox, Dialog, EmptyState, Field, IconButton, Notice, Select } from '../components/Primitives';
 import { ScenePreview } from '../components/ScenePreview';
@@ -182,14 +182,19 @@ export function ModelsPage({ workspace, action, repairModelId, onRepairConsumed 
 function ModelDialog({ model, connectionType: addingType = 'text', action, onClose }: { model?: ModelProfile; connectionType?: ModelConnectionType; action: Action; onClose: () => void }) {
   const connectionType = model ? getModelConnectionType(model) : addingType;
   const definition = modelConnectionTypes.find(type => type.id === connectionType)!;
+  const initialPreset = platformForConnection(definition.platforms[0]);
   const [name, setName] = useState(model?.name ?? '');
-  const [platform, setPlatform] = useState<ModelPlatform>(model ? getModelPlatform(model).id : 'openai');
-  const [provider, setProvider] = useState<ModelProfile['provider']>(model?.provider ?? 'openai-compatible');
-  const [textProtocol, setTextProtocol] = useState<TextProtocol>(model?.textProtocol ?? 'chat-completions');
+  const [platform, setPlatform] = useState<ModelPlatform>(model ? getModelPlatform(model).id : initialPreset.id);
+  const [provider, setProvider] = useState<ModelProfile['provider']>(model?.provider ?? initialPreset.provider);
+  const [textProtocol, setTextProtocol] = useState<TextProtocol>(model?.textProtocol ?? initialPreset.textProtocol ?? 'chat-completions');
+  const [authMode, setAuthMode] = useState<ModelAuthMode>(model?.authMode ?? 'protocol-default');
+  const [fullUrl, setFullUrl] = useState(model?.fullUrl ?? false);
   const preset = platformForConnection(platform, connectionType);
-  const [baseUrl, setBaseUrl] = useState(model?.baseUrl ?? 'https://api.openai.com/v1');
+  const [baseUrl, setBaseUrl] = useState(model?.baseUrl ?? initialPreset.baseUrl);
   const [modelId, setModelId] = useState(model?.model ?? '');
+  const [modelSource, setModelSource] = useState<'catalog' | 'manual'>('catalog');
   const [secret, setSecret] = useState('');
+  const draftSecretOrigin = useRef<string | undefined>(undefined);
   const secretValue = secret.trim();
   const [secretVisible, setSecretVisible] = useState(false);
   const secretId = useId();
@@ -203,7 +208,7 @@ function ModelDialog({ model, connectionType: addingType = 'text', action, onClo
     const field = discoveryFocus.current; discoveryFocus.current = undefined;
     (field === 'address' ? baseUrlInput : secretInput).current?.focus();
   }, [section]);
-  const [capabilities, setCapabilities] = useState<ModelCapability[]>([...definition.capabilities]);
+  const [capabilities, setCapabilities] = useState<ModelCapability[]>(model?.capabilities ?? [connectionType]);
   const [busy, setBusy] = useState(false);
   const [parametersText, setParametersText] = useState(JSON.stringify(model?.parameters ?? {}, null, 2));
   const [saveError, setSaveError] = useState('');
@@ -214,39 +219,65 @@ function ModelDialog({ model, connectionType: addingType = 'text', action, onClo
   const [discovering, setDiscovering] = useState(false);
   const [discoveryError, setDiscoveryError] = useState<{ field: 'address' | 'secret'; message: string }>();
   const discoveryGeneration = useRef(0);
-  const discoveryKey = JSON.stringify([baseUrl, secretValue, provider, platform, connectionType, textProtocol, capabilities]);
+  const discoveryKey = JSON.stringify([baseUrl, secretValue, provider, platform, connectionType, textProtocol, authMode, fullUrl]);
   const [savedDiscoveryKey] = useState(discoveryKey);
   const discovery = discoveryResult?.key === discoveryKey ? discoveryResult.catalog : undefined;
-  const modelItems = discovery?.items ?? (model && discoveryKey === savedDiscoveryKey ? [{ id: model.model, label: model.model }] : []);
-  const selectedModelId = modelItems.some(item => item.id === modelId) ? modelId : '';
+  const modelItems: ModelDiscovery['items'] = discovery?.items ?? (model && discoveryKey === savedDiscoveryKey ? [{ id: model.model, label: model.model, capabilities: model.capabilities }] : []);
+  const manualModel = provider !== 'comfyui' && (fullUrl || modelSource === 'manual');
+  const selectedModelId = manualModel ? modelId.trim() : modelItems.some(item => item.id === modelId) ? modelId : '';
   let serviceUrl: URL | undefined;
   try { serviceUrl = new URL(baseUrl); } catch { /* An incomplete address is expected while editing. */ }
+  const lastServiceOrigin = useRef(serviceUrl?.origin);
   const keyOptional = ['ollama', 'comfyui'].includes(provider) || Boolean(serviceUrl && ['localhost', '127.0.0.1', '[::1]'].includes(serviceUrl.hostname));
-  const hasSavedSecret = Boolean(model?.hasSecret);
+  const hasSavedSecret = Boolean(model?.hasSecret && new URL(model.baseUrl).origin === serviceUrl?.origin);
+  function changeAddress(value: string) {
+    if (URL.canParse(value)) {
+      const origin = new URL(value).origin;
+      if (draftSecretOrigin.current && draftSecretOrigin.current !== origin) {
+        setSecret(''); setSecretVisible(false); draftSecretOrigin.current = undefined;
+      }
+      if (lastServiceOrigin.current && lastServiceOrigin.current !== origin) setCapabilities([connectionType]);
+      lastServiceOrigin.current = origin;
+    }
+    setBaseUrl(value);
+  }
+  function changeSecret(value: string) {
+    draftSecretOrigin.current = value.trim() ? serviceUrl?.origin : undefined;
+    setSecret(value);
+  }
+  function changeModelSource(value: 'catalog' | 'manual') {
+    if (value === 'manual') { discoveryGeneration.current++; setDiscovering(false); }
+    setModelSource(value);
+  }
   useEffect(() => {
     discoveryGeneration.current++;
     setDiscoveryResult(undefined); setDiscovering(false); setDiscoveryError(undefined);
     return () => { discoveryGeneration.current++; };
   }, [discoveryKey]);
-  function validateDiscoveryInputs() {
+  function validateConnectionInputs() {
     const error = !baseUrl.trim() ? { field: 'address' as const, message: '请填写服务地址。' }
-      : !serviceUrl || !['http:', 'https:'].includes(serviceUrl.protocol) || serviceUrl.username || serviceUrl.password ? { field: 'address' as const, message: '请填写有效的 HTTP 或 HTTPS 服务地址。' }
-      : !keyOptional && !secretValue && !hasSavedSecret ? { field: 'secret' as const, message: '请填写 API Key 后获取模型列表。' } : undefined;
+      : !serviceUrl || !['http:', 'https:'].includes(serviceUrl.protocol) || serviceUrl.username || serviceUrl.password || serviceUrl.search || serviceUrl.hash ? { field: 'address' as const, message: '请填写不含凭据、查询参数和片段的 HTTP 或 HTTPS 地址。' }
+      : !keyOptional && !secretValue && !hasSavedSecret ? { field: 'secret' as const, message: '请填写当前服务的 API Key。' } : undefined;
     setDiscoveryError(error);
-    if (!error) return true;
+    if (!error) {
+      if (secretValue) draftSecretOrigin.current = serviceUrl?.origin;
+      return true;
+    }
     if (section === 'connection') (error.field === 'address' ? baseUrlInput : secretInput).current?.focus();
     else { discoveryFocus.current = error.field; setSection('connection'); }
     return false;
   }
   async function discover() {
-    if (busy || discovering || !validateDiscoveryInputs()) return;
+    if (busy || discovering || !validateConnectionInputs()) return;
     const generation = ++discoveryGeneration.current;
     setDiscovering(true);
     try {
-      const value = await rpc('model.discover', { model: { id: model?.id, provider, platform, connectionType, textProtocol, baseUrl, capabilities }, reuseSavedSecret: hasSavedSecret, ...(secretValue ? { secret: secretValue } : {}) });
+      const value = await rpc('model.discover', { model: { id: model?.id, provider, platform, connectionType, textProtocol, authMode, fullUrl, baseUrl, capabilities: [connectionType] }, ...(secretValue ? { secret: secretValue } : {}) });
       if (closed.current || generation !== discoveryGeneration.current) return;
       const result = modelDiscoverySchema.parse(value); setDiscoveryResult({ key: discoveryKey, catalog: result });
       if (result.source === 'workflow') setModelId('workflow');
+      const discovered = result.items.find(item => item.id === modelId)?.capabilities;
+      if (discovered) setCapabilities(discovered);
     } catch {
       if (!closed.current && generation === discoveryGeneration.current) setDiscoveryResult({ key: discoveryKey, catalog: { source: 'remote', items: [], message: '模型读取失败，请重试。' } });
     } finally {
@@ -259,21 +290,27 @@ function ModelDialog({ model, connectionType: addingType = 'text', action, onClo
     if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error('参数需要填写 JSON 对象。');
     parameters = parsed;
   } catch (error) { jsonError = error instanceof Error ? error.message : '参数 JSON 格式不正确。'; }
+  const configuration = { connectionType, provider, platform, baseUrl, fullUrl, authMode, model: selectedModelId, capabilities, textProtocol, parameters };
+  const toolIssue = connectionType === 'text' ? modelToolProtocolIssue(configuration) : undefined;
   if (!jsonError) {
-    try { validateModelConnection({ connectionType, provider, capabilities }); validateModelParameters({ provider, capabilities, textProtocol, parameters }); }
+    try { validateModelConnection(configuration); validateModelParameters(configuration); }
     catch (error) { parameterError = error instanceof Error ? error.message : String(error); }
   }
   async function save(event: React.FormEvent) {
     event.preventDefault(); setSaveError('');
-    if (jsonError || parameterError || !selectedModelId || discovering || !validateDiscoveryInputs()) return;
+    if (jsonError || parameterError || !selectedModelId || discovering || !validateConnectionInputs()) return;
     const completed = beginGuideAction('model-saved');
     setBusy(true);
-    const result = await action('model.save', { model: { ...model, connectionType, name, platform, provider, ...(capabilities.includes('text') ? { textProtocol } : {}), baseUrl, model: selectedModelId, capabilities, parameters }, ...(secretValue ? { secret: secretValue } : {}) }, '模型连接已保存');
+    const result = await action('model.save', { model: { id: model?.id, name, ...configuration, textProtocol: connectionType === 'text' && provider !== 'ollama' ? textProtocol : undefined }, ...(secretValue ? { secret: secretValue } : {}) }, '模型连接已保存');
     if (closed.current) return;
     setBusy(false);
     if (result !== null) { completed(); onClose(); } else setSaveError('连接尚未保存，请核对提示后重试。');
   }
   const parameterFields = getModelParameterFields({ provider, capabilities, textProtocol });
+  function chooseDiscoveredModel(id: string) {
+    setModelId(id);
+    setCapabilities(modelItems.find(item => item.id === id)?.capabilities ?? [connectionType]);
+  }
   const changeParameters = (value: Record<string, JsonValue>) => { setParametersText(JSON.stringify(value, null, 2)); setSaveError(''); };
   function changeTextProtocol(next: TextProtocol) {
     setTextProtocol(next);
@@ -295,19 +332,38 @@ function ModelDialog({ model, connectionType: addingType = 'text', action, onClo
       <div className="model-connection-fields"><Field label="连接名称"><input required autoFocus value={name} onChange={event => setName(event.target.value)} placeholder="例如：本地分镜助手" /></Field>
       <Field label="模型平台"><Select value={platform} disabled={busy} onChange={event => {
         const selected = platformForConnection(modelPlatformSchema.parse(event.target.value), connectionType);
-        setPlatform(selected.id); setProvider(selected.provider); setBaseUrl(selected.baseUrl);
+        setPlatform(selected.id); setProvider(selected.provider); changeAddress(selected.baseUrl);
+        setAuthMode('protocol-default'); setFullUrl(false);
         if (!jsonError) changeTextProtocol(selected.textProtocol ?? 'chat-completions');
         else setTextProtocol(selected.textProtocol ?? 'chat-completions');
-        setCapabilities([...definition.capabilities]);
+        setCapabilities([connectionType]);
       }}>{platforms.map(item => <option key={item.id} value={item.id}><span className="platform-option"><PlatformIcon platform={item.id} /><span>{platformForConnection(item.id, connectionType).label}</span></span></option>)}</Select></Field>
       {capabilities.includes('text') && <Field label="API 协议"><Select value={provider === 'ollama' ? 'ollama' : textProtocol} disabled={busy || Boolean(jsonError) || provider === 'ollama'} onChange={event => changeTextProtocol(textProtocolSchema.parse(event.target.value))}>{provider === 'ollama' ? <option value="ollama">Ollama 原生 API</option> : textProtocols.map(protocol => <option key={protocol.id} value={protocol.id}>{protocol.label}</option>)}</Select></Field>}
-      {mediaCapabilities.length > 0 && <Field label="API 协议"><Select value={provider} disabled={busy || platform !== 'custom'} onChange={event => setProvider(event.target.value as ModelProfile['provider'])}>{!adapters.some(adapter => adapter.id === provider) && <option value={provider} disabled>{mediaAdapters.find(adapter => adapter.id === provider)?.label ?? '当前接入方式'}</option>}{adapters.map(adapter => <option key={adapter.id} value={adapter.id}>{adapter.id === 'openai-compatible' ? connectionType === 'image' ? 'OpenAI Images API' : 'OpenAI Videos API' : adapter.label}</option>)}</Select></Field>}
-      <Field label="服务地址" hint={preset.addressHint}><input ref={baseUrlInput} required type="url" aria-invalid={discoveryError?.field === 'address' || undefined} aria-describedby={discoveryError?.field === 'address' ? addressErrorId : undefined} value={baseUrl} onChange={event => setBaseUrl(event.target.value)} placeholder={preset.addressPlaceholder} spellCheck={false} /></Field></div>
+      {mediaCapabilities.length > 0 && <Field label="API 协议"><Select value={provider} disabled={busy || platform !== 'custom'} onChange={event => setProvider(event.target.value as ModelProfile['provider'])}>{!adapters.some(adapter => adapter.id === provider) && <option value={provider} disabled>{mediaAdapters.find(adapter => adapter.id === provider)?.label ?? '当前接入方式'}</option>}{adapters.map(adapter => <option key={adapter.id} value={adapter.id}>{adapter.id === 'openai-compatible' ? connectionType === 'image' ? 'OpenAI Images API' : 'OpenAI 兼容视频接口' : adapter.label}</option>)}</Select></Field>}
+      {connectionType === 'text' && <>
+        <Field label="鉴权方式"><Select value={authMode} disabled={busy} onChange={event => setAuthMode(modelAuthModeSchema.parse(event.target.value))}><option value="protocol-default">按协议默认</option><option value="bearer">Bearer Token</option><option value="x-api-key">x-api-key</option></Select></Field>
+        <Field label="服务地址格式"><Select value={fullUrl ? 'full' : 'prefix'} disabled={busy} onChange={event => setFullUrl(event.target.value === 'full')}><option value="prefix">API 地址前缀</option><option value="full">完整请求地址</option></Select></Field>
+      </>}
+      <Field label="服务地址" hint={fullUrl ? '填写生成接口的完整地址。' : preset.addressHint}><input ref={baseUrlInput} required type="url" aria-invalid={discoveryError?.field === 'address' || undefined} aria-describedby={discoveryError?.field === 'address' ? addressErrorId : undefined} value={baseUrl} onChange={event => changeAddress(event.target.value)} placeholder={fullUrl ? undefined : preset.addressPlaceholder} spellCheck={false} /></Field></div>
       {discoveryError?.field === 'address' && <p id={addressErrorId} className="field-error" role="alert">{discoveryError.message}</p>}
-      <div className="field"><label className="field__label" htmlFor={secretId}>API Key</label><div className="model-secret-input"><input ref={secretInput} id={secretId} type={secretVisible ? 'text' : 'password'} autoComplete="new-password" autoCapitalize="none" spellCheck={false} aria-required={!keyOptional && !hasSavedSecret || undefined} aria-invalid={discoveryError?.field === 'secret' || undefined} aria-describedby={`${secretId}-hint`} value={secret} onChange={event => setSecret(event.target.value)} placeholder={hasSavedSecret ? '••••••••••••' : '输入密钥'} /><IconButton label={secretVisible ? '隐藏密钥' : '显示密钥'} aria-pressed={secretVisible} aria-controls={secretId} disabled={!secret} onClick={() => setSecretVisible(value => !value)}>{secretVisible ? <EyeOff size={16} /> : <Eye size={16} />}</IconButton></div><span id={`${secretId}-hint`} className={discoveryError?.field === 'secret' ? 'field-error' : 'field__hint'} role={discoveryError?.field === 'secret' ? 'alert' : undefined}>{discoveryError?.field === 'secret' ? discoveryError.message : hasSavedSecret ? '已保存密钥；留空保留原值。' : keyOptional ? '免鉴权服务可留空。' : '请填写服务的 API Key。'}</span></div>
-      <div className="model-discovery"><div className="field"><label className="field__label" htmlFor={modelInputId}>{'模型 ID'}</label>
-        <Combobox id={modelInputId} label={'模型 ID'} descriptionId={`${modelInputId}-hint`} required value={selectedModelId} items={modelItems} disabled={busy || discovering || !modelItems.length || discovery?.source === 'workflow'} placeholder={discovering ? '正在读取模型…' : !modelItems.length ? discovery ? '暂无可用模型' : '请先获取模型列表' : '选择模型，可输入搜索'} onChange={setModelId} action={<IconButton label="获取模型列表" disabled={busy || discovering} aria-busy={discovering || undefined} onClick={() => void discover()}>{discovering ? <LoaderCircle size={16} className="spin" /> : <Download size={16} />}</IconButton>} />
-      </div><p id={`${modelInputId}-hint`} className="field__hint" role="status">{discovering ? '正在读取模型列表…' : discovery?.message ?? '点击右侧按钮获取模型列表。'}</p></div>
+      <div className="field"><label className="field__label" htmlFor={secretId}>API Key</label><div className="model-secret-input"><input ref={secretInput} id={secretId} type={secretVisible ? 'text' : 'password'} autoComplete="new-password" autoCapitalize="none" spellCheck={false} aria-required={!keyOptional && !hasSavedSecret || undefined} aria-invalid={discoveryError?.field === 'secret' || undefined} aria-describedby={`${secretId}-hint`} value={secret} onChange={event => changeSecret(event.target.value)} placeholder={hasSavedSecret ? '••••••••••••' : '输入密钥'} /><IconButton label={secretVisible ? '隐藏密钥' : '显示密钥'} aria-pressed={secretVisible} aria-controls={secretId} disabled={!secret} onClick={() => setSecretVisible(value => !value)}>{secretVisible ? <EyeOff size={16} /> : <Eye size={16} />}</IconButton></div><span id={`${secretId}-hint`} className={discoveryError?.field === 'secret' ? 'field-error' : 'field__hint'} role={discoveryError?.field === 'secret' ? 'alert' : undefined}>{discoveryError?.field === 'secret' ? discoveryError.message : hasSavedSecret ? '已保存密钥，留空沿用。' : keyOptional ? '免鉴权服务可留空。' : '请填写服务的 API Key。'}</span></div>
+      <div className="model-discovery">
+        {provider !== 'comfyui' && !fullUrl && <Field label="模型来源"><Select value={modelSource} disabled={busy} onChange={event => changeModelSource(event.target.value === 'manual' ? 'manual' : 'catalog')}><option value="catalog">从模型目录选择</option><option value="manual">手动填写</option></Select></Field>}
+        <div className="field"><label className="field__label" htmlFor={modelInputId}>模型 ID</label>
+          {manualModel ? <input id={modelInputId} required maxLength={200} value={modelId} disabled={busy} onChange={event => {
+            if (event.target.value.trim() !== modelId.trim()) setCapabilities([connectionType]);
+            setModelId(event.target.value);
+          }} aria-describedby={`${modelInputId}-hint`} />
+            : <Combobox id={modelInputId} label="模型 ID" descriptionId={`${modelInputId}-hint`} required value={selectedModelId} items={modelItems} disabled={busy || discovering || !modelItems.length || discovery?.source === 'workflow'} placeholder={discovering ? '正在读取模型…' : !modelItems.length ? discovery ? '暂无可用模型' : '请先获取模型列表' : '选择模型，可输入搜索'} onChange={chooseDiscoveredModel} action={<IconButton label="获取模型列表" disabled={busy || discovering} aria-busy={discovering || undefined} onClick={() => void discover()}>{discovering ? <LoaderCircle size={16} className="spin" /> : <Download size={16} />}</IconButton>} />}
+        </div><p id={`${modelInputId}-hint`} className="field__hint" role="status">{manualModel ? '填写服务实际接受的模型 ID 或推理接入点 ID。' : discovering ? '正在读取模型列表…' : discovery?.message ?? '点击右侧按钮获取模型列表。'}</p>
+      </div>
+      {connectionType === 'text' && <fieldset className="capability-fieldset"><legend>模型能力</legend>
+        {definition.capabilities.filter(capability => capability !== 'text').map(capability => <label key={capability} className="field-inline">
+          <input type="checkbox" checked={capabilities.includes(capability)} disabled={busy || capability === 'tools' && Boolean(toolIssue) && !capabilities.includes('tools')}
+            onChange={event => setCapabilities(values => event.target.checked ? [...values, capability] : values.filter(value => value !== capability))} />{capabilityLabels[capability]}
+        </label>)}
+        <p className="field__hint">{toolIssue ?? '请按所选型号和 API 协议确认能力。工具调用用于剪辑 Agent。'}</p>
+      </fieldset>}
 
       </> },
       ...modelParameterSections.filter(section => parameterFields.some(field => field.operation === section.id)).map(section => ({ id: section.id, label: section.label, content: <ModelParameters operation={section.id} provider={provider} textProtocol={textProtocol} capabilities={capabilities} value={parameters} disabled={busy || Boolean(jsonError)} onChange={changeParameters} /> })),

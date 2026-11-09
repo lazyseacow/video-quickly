@@ -1,11 +1,12 @@
 import { spawn } from 'node:child_process';
+import { AsyncLocalStorage } from 'node:async_hooks';
 import { readFile } from 'node:fs/promises';
 import { extname, join, resolve, relative } from 'node:path';
 import { createDeepAgent, type FileData } from 'deepagents';
 import { createMiddleware, tool } from 'langchain';
-import { ChatOpenAI } from '@langchain/openai';
+import { ChatOpenAICompletions, ChatOpenAIResponses, convertMessagesToCompletionsMessageParams, type BaseChatOpenAIFields, type OpenAIClient } from '@langchain/openai';
 import { ChatAnthropic } from '@langchain/anthropic';
-import { isAIMessage, isHumanMessage, isToolMessage, mapStoredMessageToChatMessage, ToolMessage, type StoredMessage } from '@langchain/core/messages';
+import { isAIMessage, isHumanMessage, isToolMessage, mapStoredMessageToChatMessage, ToolMessage, type BaseMessage, type StoredMessage } from '@langchain/core/messages';
 import { AsyncLocalStorageProviderSingleton } from '@langchain/core/singletons';
 import { SqliteSaver } from '@langchain/langgraph-checkpoint-sqlite';
 import { z } from 'zod';
@@ -14,7 +15,7 @@ import { supportsSkillScript, type JsonValue, type ModelProfile, type ProjectDoc
 import { ActivityJournal, AGENT_CONTINUATION_EXHAUSTED, AgentCompletionError, fingerprint, SimulatedProcessExit, type ActivityHooks } from './activities.js';
 import type { createCostLedger } from './costs.js';
 import { connectMcp, type McpServer } from './mcp.js';
-import { modelEndpoint, readModelResponse, textProviderUsage, textRequestParameters } from './providers.js';
+import { fetchModelRequest, modelHeaders, readModelResponse, textModelEndpoint, textProviderUsage, textRequestParameters } from './providers.js';
 import { agentToolOutputDirectory, materializeToolArtifact } from './tool-artifacts.js';
 
 const videoOperations = ['brief', 'style', 'script', 'image', 'video', 'edit', 'export', 'import'] as const;
@@ -55,6 +56,31 @@ interface AgentContext {
 function storedMessage(value: unknown): StoredMessage {
   if (!value || typeof value !== 'object' || !('type' in value) || !('data' in value) || typeof value.type !== 'string' || !value.data || typeof value.data !== 'object') throw new Error('已保存的 Agent 消息格式无效。');
   return value as StoredMessage;
+}
+
+class DeepSeekChatCompletions extends ChatOpenAICompletions {
+  private readonly history = new AsyncLocalStorage<BaseMessage[]>();
+
+  override _generate(...args: Parameters<ChatOpenAICompletions['_generate']>) {
+    // Scope the original messages to this invocation, including restored checkpoints.
+    return this.history.run(args[0], () => super._generate(...args));
+  }
+
+  override completionWithRetry(request: OpenAIClient.Chat.ChatCompletionCreateParamsStreaming, options?: OpenAIClient.RequestOptions): Promise<AsyncIterable<OpenAIClient.Chat.ChatCompletionChunk>>;
+  override completionWithRetry(request: OpenAIClient.Chat.ChatCompletionCreateParamsNonStreaming, options?: OpenAIClient.RequestOptions): Promise<OpenAIClient.Chat.ChatCompletion>;
+  override completionWithRetry(request: OpenAIClient.Chat.ChatCompletionCreateParams, options?: OpenAIClient.RequestOptions) {
+    const history = this.history.getStore();
+    if (request.tools?.length && history?.some(message => isAIMessage(message) && typeof message.additional_kwargs.reasoning_content === 'string')) {
+      const messages = history.flatMap(message => {
+        const params = convertMessagesToCompletionsMessageParams({ messages: [message], model: this.model });
+        const reasoning = isAIMessage(message) ? message.additional_kwargs.reasoning_content : undefined;
+        if (params[0]?.role === 'assistant' && typeof reasoning === 'string') Object.assign(params[0], { reasoning_content: reasoning });
+        return params;
+      });
+      request = { ...request, messages };
+    }
+    return request.stream ? super.completionWithRetry(request, options) : super.completionWithRetry(request, options);
+  }
 }
 
 export async function executeDeepAgent(context: AgentContext): Promise<string> {
@@ -225,20 +251,29 @@ export async function executeDeepAgent(context: AgentContext): Promise<string> {
   });
   const checkpointer = new SqliteSaver(database);
   const { temperature, max_tokens: maximumTokens, max_output_tokens: responseMaximum, ...modelKwargs } = textRequestParameters(model);
-  const nativeModel = model.textProtocol === 'messages'
-    ? new ChatAnthropic({ model: model.model, apiKey: secret ?? 'local-service', maxRetries: 0, maxTokens: typeof maximumTokens === 'number' ? maximumTokens : 4096, temperature: typeof temperature === 'number' ? temperature : undefined, invocationKwargs: modelKwargs, clientOptions: {
-        baseURL: new URL(model.baseUrl).origin, timeout: 120_000,
-        // The saved service address already includes its API prefix, including proxies.
-        fetch: (input, init) => {
-          const request = input instanceof Request ? input : undefined;
-          const url = new URL(request ? request.url : input.toString());
-          const target = modelEndpoint(model.baseUrl, url.pathname.replace(/^\/v1\//, ''));
-          return fetch(request ? new Request(target, request) : target, init);
-        },
-      } })
-    : new ChatOpenAI({ model: model.model, apiKey: secret ?? 'local-service', maxRetries: 0, timeout: 120_000, configuration: { baseURL: model.baseUrl, ...(model.textProtocol === 'responses' ? { fetch: async (input: RequestInfo | URL, init?: RequestInit) => {
-        const response = await fetch(input, init);
-        if (response.ok) {
+  const messages = model.textProtocol === 'messages';
+  const responses = model.textProtocol === 'responses';
+  const endpoint = textModelEndpoint(model), service = new URL(endpoint);
+  const deepSeek = model.platform === 'deepseek' || service.hostname === 'api.deepseek.com' || /^(?:deepseek\/)?deepseek-/i.test(model.model);
+  const sdkPath = messages ? '/v1/messages' : responses ? '/responses' : '/chat/completions';
+  const fetchAgent: typeof fetchModelRequest = (input, init) => {
+    const request = new Request(input, init), url = new URL(request.url);
+    if (url.origin !== service.origin || url.pathname !== sdkPath || request.method !== 'POST') throw new Error('Agent 请求与所选模型协议不一致。');
+    const headers = new Headers(request.headers);
+    // Use the connection's credentials for both direct and SDK requests.
+    headers.delete('authorization');
+    headers.delete('x-api-key');
+    for (const [name, value] of Object.entries(modelHeaders(model, secret))) headers.set(name, value);
+    return fetchModelRequest(new Request(endpoint, request), { headers });
+  };
+  const openAIFields: BaseChatOpenAIFields = {
+    model: model.model, apiKey: 'model-connection', maxRetries: 0, timeout: 120_000,
+    temperature: typeof temperature === 'number' ? temperature : undefined,
+    maxTokens: typeof (maximumTokens ?? responseMaximum) === 'number' ? Number(maximumTokens ?? responseMaximum) : undefined,
+    modelKwargs: { ...(responses ? { store: false } : {}), ...modelKwargs },
+    configuration: { baseURL: service.origin, fetch: responses ? async (input, init) => {
+        const response = await fetchAgent(input, init);
+        if (response.ok && !response.headers.get('content-type')?.includes('text/event-stream')) {
           // Preserve raw counters: SDK-normalized usage fills missing counters with zero.
           const data = await readModelResponse(response.clone());
           if (data && typeof data === 'object' && !Array.isArray(data)) {
@@ -262,7 +297,12 @@ export async function executeDeepAgent(context: AgentContext): Promise<string> {
           }
         }
         return response;
-      } } : {}) }, useResponsesApi: model.textProtocol === 'responses', temperature: typeof temperature === 'number' ? temperature : undefined, maxTokens: typeof (maximumTokens ?? responseMaximum) === 'number' ? Number(maximumTokens ?? responseMaximum) : undefined, modelKwargs: { ...(model.textProtocol === 'responses' ? { store: false } : {}), ...modelKwargs } });
+      } : fetchAgent },
+  };
+  const nativeModel = messages
+    ? new ChatAnthropic({ model: model.model, apiKey: 'model-connection', maxRetries: 0, maxTokens: typeof maximumTokens === 'number' ? maximumTokens : 4096, temperature: openAIFields.temperature, invocationKwargs: modelKwargs, clientOptions: { baseURL: service.origin, timeout: 120_000, fetch: fetchAgent } })
+    : responses ? new ChatOpenAIResponses(openAIFields)
+      : deepSeek ? new DeepSeekChatCompletions(openAIFields) : new ChatOpenAICompletions(openAIFields);
   const agent = createDeepAgent({
     model: nativeModel,
     tools, middleware: [invocationLedger], checkpointer, skills: skills.length ? ['/skills/'] : [],
