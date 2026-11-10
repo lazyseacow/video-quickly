@@ -48,15 +48,15 @@ export default function VideoSettings({ profile, onChange, compact = false, mode
     <Field label="帧率"><Select aria-label="视频帧率" value={fpsPreset?.label ?? 'current'} onChange={event => { const selected = frameRateOptions.find(item => item.label === event.target.value); if (selected) onChange({ ...profile, frameRate: { numerator: selected.numerator, denominator: selected.denominator } }); }}>{!fpsPreset && <option value="current" disabled>{formatFrameRate(profile.frameRate)} fps · 当前</option>}{frameRateOptions.map(item => <option key={item.label} value={item.label}>{item.label} fps</option>)}</Select></Field>
     {!generation && fitField}
   </>;
-  return <div className={compact ? 'video-settings video-settings--compact' : 'video-settings'}>
+  return <div className="video-settings form-stack form-stack--compact">
     <div className="field-row">
       <Field label="画面比例"><Select aria-label="画面比例" value={ratioPreset} onChange={event => { const selected = ASPECT_RATIO_PRESETS.find(item => item.label === event.target.value); if (selected) setResolution(Math.min(resizeProfile.width, resizeProfile.height), selected.width / selected.height); }}>{(!showDisclosure || ratioPreset === 'custom') && <option value="custom" disabled={showDisclosure}>{showDisclosure ? '自定义比例 · 当前' : '自定义'}</option>}{ASPECT_RATIO_PRESETS.map(item => <option key={item.label} value={item.label}>{item.label}{item.label === '9:16' ? ' · 竖屏' : item.label === '16:9' ? ' · 横屏' : ''}</option>)}</Select></Field>
       <Field label="分辨率"><Select aria-label="分辨率" value={resolutionPreset} onChange={event => { if (event.target.value !== 'custom') setResolution(Number(event.target.value)); }}>{(!showDisclosure || resolutionPreset === 'custom') && <option key={showDisclosure ? `${profile.width}x${profile.height}` : 'custom'} value="custom" disabled={showDisclosure}>{showDisclosure ? `${profile.width} × ${profile.height} · 当前` : '自定义'}</option>}<option value="720">720p</option><option value="1080">1080p</option><option value="1440">1440p</option><option value="2160">2160p · 4K</option></Select></Field>
       {generation && fitField}
     </div>
-    {showDisclosure ? <details className="video-settings__advanced" onInvalidCapture={event => { event.currentTarget.open = true; }}>
+    {showDisclosure ? <details className="form-disclosure video-settings__advanced" onInvalidCapture={event => { event.currentTarget.open = true; }}>
       <summary><span>更多成片设置</span><small>{formatFrameRate(profile.frameRate)} fps{!generation && ` · ${{ contain: '完整显示', cover: '裁剪填满', blur: '模糊背景' }[profile.fitMode]}`}</small></summary>
-      <div className="video-settings__detail-fields">{detailFields}</div>
+      <div className="form-disclosure__body video-settings__detail-fields">{detailFields}</div>
     </details> : detailFields}
     {!compact && !showDisclosure && <Field label="预览质量"><Select aria-label="预览质量" value={profile.previewScale} onChange={event => onChange({ ...profile, previewScale: Number(event.target.value) })}><option value="0.25">1/4 · 流畅</option><option value="0.5">1/2 · 平衡</option><option value="1">原始分辨率</option></Select></Field>}
     {error && <p role="alert" className="field-error">{error}</p>}

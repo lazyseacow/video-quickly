@@ -3,9 +3,8 @@
 .export-dialog .settings-sections__nav { padding-inline: var(--space-6); }
 .export-dialog .settings-sections__nav > button { flex: 0 0 auto; padding-inline: var(--space-4); }
 .export-dialog .settings-sections__content { padding: var(--space-4) var(--space-6); }
-.export-dialog .video-settings { margin-block-end: var(--space-4); }
-.export-dialog .video-settings__advanced { margin-top: var(--space-2); padding-block: 0; border: 0; }
-.export-dialog .video-settings__advanced > summary { align-content: center; border-radius: var(--radius-small); }
+.export-dialog .video-settings { margin-block-end: var(--space-form-disclosure); }
+.export-dialog .video-settings__advanced > summary { border-radius: var(--radius-small); }
 .export-dialog__preview { margin: 0; min-width: 0; }
 .export-dialog__frame { width: min(100%, calc(280px * var(--export-aspect))); aspect-ratio: var(--export-aspect); margin-inline: auto; overflow: hidden; border-radius: var(--radius-media); background: var(--surface-raised); outline: 1px solid var(--image-outline); outline-offset: -1px; }
 .export-dialog__frame .scene-preview, .export-dialog__frame canvas { display: block; width: 100%; height: 100%; }

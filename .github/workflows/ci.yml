@@ -31,6 +31,8 @@ jobs:
         run: pnpm install --frozen-lockfile --ignore-scripts
       - name: Check source and validation scripts
         run: pnpm typecheck
+      - name: Check desktop design tokens
+        run: pnpm test tests/design-token-contract.test.ts
 
   browser-windows:
     needs: source-checks

@@ -21,7 +21,7 @@ interface CreativeReferencePickerProps { value?: string[]; version: number; labe
 
 export default function CreativeReferencePicker(props: CreativeReferencePickerProps) {
   const [open, setOpen] = useState(false);
-  return <details className="creative-reference-picker__disclosure" open={open} onToggle={event => setOpen(event.currentTarget.open)}><summary>{props.label}（{props.value?.length ?? 0} / 4）</summary>{open && <CreativeReferenceContent {...props} />}</details>;
+  return <details className="form-disclosure creative-reference-picker__disclosure" open={open} onToggle={event => setOpen(event.currentTarget.open)}><summary>{props.label}（{props.value?.length ?? 0} / 4）</summary>{open && <CreativeReferenceContent {...props} />}</details>;
 }
 
 function CreativeReferenceContent({ value = [], version, label, onChange }: CreativeReferencePickerProps) {
@@ -51,7 +51,7 @@ function CreativeReferenceContent({ value = [], version, label, onChange }: Crea
     } catch (error) { setError(error instanceof Error ? error.message : String(error)); }
     finally { setBusy(false); }
   }
-  return <fieldset className="capability-fieldset creative-reference-picker"><legend>{label}（最多 4 张）</legend>
+  return <fieldset className="capability-fieldset form-stack form-stack--compact form-disclosure__body creative-reference-picker"><legend>{label}（最多 4 张）</legend>
     <div className="creative-reference-picker__images">{assets.map(asset => <label key={asset.id}><input type="checkbox" checked={value.includes(asset.id)} disabled={busy || !value.includes(asset.id) && (value.length >= 4 || !asset.active || asset.projectId !== undefined)} onChange={() => toggle(asset.id)} /><ReferenceImage asset={asset} /><span>{asset.name}{!asset.active ? '（已移除）' : ''}</span></label>)}</div>
     {missing.map(id => <label className="field-inline" key={id}><input type="checkbox" checked disabled={busy} onChange={() => toggle(id)} />已选参考图暂未读取（{id.slice(0, 8)}）</label>)}
     {(error || images.error) && <Notice kind="error">{error || images.error}</Notice>}

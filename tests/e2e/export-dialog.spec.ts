@@ -36,6 +36,15 @@ for (const viewport of [{ width: 1536, height: 960, theme: 'dark' }, { width: 39
     await expect(width).not.toBeVisible();
     await expect(dialog.getByLabel('分辨率', { exact: true }).locator('option:checked')).toHaveText('320 × 180 · 当前');
     await more.press('Enter');
+    const disclosureGaps = await more.evaluate(summary => {
+      const disclosure = summary.parentElement!;
+      const bounds = disclosure.getBoundingClientRect();
+      return [
+        Math.round(bounds.top - disclosure.previousElementSibling!.getBoundingClientRect().bottom),
+        Math.round(disclosure.parentElement!.nextElementSibling!.getBoundingClientRect().top - bounds.bottom),
+      ];
+    });
+    expect(disclosureGaps).toEqual([8, 8]);
     const frameRate = dialog.getByLabel('视频帧率', { exact: true });
     await expect(frameRate).toHaveValue('current'); await expect(frameRate.locator('option:checked')).toHaveText('29.97 fps · 当前');
     expect(await frameRate.locator('option:not([disabled])').allTextContents()).toEqual(['30 fps', '60 fps']);

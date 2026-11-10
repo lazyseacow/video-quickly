@@ -9,15 +9,13 @@
 .batch-export__target { min-width: 0; padding: var(--space-4); border: 1px solid var(--border); border-radius: var(--radius-small); background: var(--surface); }
 .batch-export__target:has(details[open]) { grid-column: 1 / -1; }
 .batch-export__target.is-selected { background: var(--surface-raised); }
-.batch-export__target-heading { display: flex; align-items: center; justify-content: space-between; gap: var(--space-2); margin-bottom: var(--space-4); }
+.batch-export__target-heading { display: flex; align-items: center; justify-content: space-between; gap: var(--space-2); }
 .batch-export__target-heading label { font-size: var(--text-size-caption); font-weight: var(--font-weight-medium); }
-.batch-export__spec { margin: -4px 0 var(--space-3); font-size: var(--text-size-micro); color: var(--text-secondary); font-variant-numeric: tabular-nums; }
-.batch-export__target summary { padding: var(--space-2) 0; color: var(--text-secondary); font-size: var(--text-size-micro); cursor: pointer; }
-.batch-export__target details > .field { margin-top: var(--space-3); }
-.batch-export__target .video-settings { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 340px), 1fr)); align-items: start; gap: var(--space-4); margin-top: var(--space-4); }
-.batch-export__target .video-settings > .field-row { grid-template-columns: repeat(auto-fit, minmax(min(100%, 180px), 1fr)); margin: 0; }
-.batch-export__target .video-settings > .field, .batch-export__target .video-settings > .dimension-row { margin: 0; }
-.batch-export__target .video-settings > .spec-summary { grid-column: 1 / -1; margin: 0; }
+.batch-export__spec { font-size: var(--text-size-micro); color: var(--text-secondary); font-variant-numeric: tabular-nums; }
+.batch-export__target summary { color: var(--text-secondary); font-size: var(--text-size-micro); }
+.batch-export__target .video-settings { grid-template-columns: repeat(auto-fit, minmax(min(100%, 340px), 1fr)); align-items: start; column-gap: var(--space-4); }
+.batch-export__target .video-settings > .field-row { grid-template-columns: repeat(auto-fit, minmax(min(100%, 180px), 1fr)); }
+.batch-export__target .video-settings > :is(.spec-summary, .field-error) { grid-column: 1 / -1; }
 .batch-export__configuration > .field { margin-top: var(--space-4); }
 .batch-export__history { padding-top: var(--space-5); border-top: 1px solid var(--border); }
 .batch-export__history-heading { display: flex; align-items: center; justify-content: space-between; gap: var(--space-3); margin-bottom: var(--space-4); }

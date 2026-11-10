@@ -243,8 +243,8 @@ export default function ProductionSettingsDialog({ project, projectId, projectRe
     const tasks = resolved.nodes.filter(node => group.nodeIds.includes(node.id) && stepGuidance(node).capability && !usesManualPlanning(resolved, node));
     const node = tasks.find(node => node.id === selectedTasks[group.id]) ?? tasks[0];
     if (!node) return null;
-    return <details key={group.id} className="production-settings__advanced" open={advancedStage === group.id} onToggle={event => { const open = event.currentTarget.open; setAdvancedStage(current => open ? group.id : current === group.id ? undefined : current); }}><summary>{['planning', 'materials', 'delivery'].includes(group.id) ? '高级设置' : `${group.label} · 高级设置`}</summary>
-      <div className="production-settings__task" role="group" aria-label={node.label}>
+    return <details key={group.id} className="form-disclosure form-disclosure--divided production-settings__advanced" open={advancedStage === group.id} onToggle={event => { const open = event.currentTarget.open; setAdvancedStage(current => open ? group.id : current === group.id ? undefined : current); }}><summary>{['planning', 'materials', 'delivery'].includes(group.id) ? '高级设置' : `${group.label} · 高级设置`}</summary>
+      <div className="form-disclosure__body production-settings__task" role="group" aria-label={node.label}>
         <div className="production-settings__task-fields">
           <div className="production-settings__task-controls">
             {tasks.length > 1 && <Field label="任务"><Select value={node.id} onChange={event => { const nodeId = event.target.value; setSelectedTasks(current => ({ ...current, [group.id]: nodeId })); }}>{tasks.map(node => <option key={node.id} value={node.id}>{node.label}</option>)}</Select></Field>}
@@ -295,17 +295,17 @@ export default function ProductionSettingsDialog({ project, projectId, projectRe
   }
   const { width, height, frameRate, fitMode } = fields.profile;
   const aspectRatio = videoAspectRatioPreset(width, height)?.label;
-  return <Dialog title={records ? '本次制作' : '制作设置'} onClose={close} onDismissStart={() => { closed.current = true; }} className={`settings-dialog production-settings-dialog${records ? ' production-results-dialog' : ''}`}>
-    {!records && <nav className="production-settings__steps" aria-label="制作设置步骤"><ol>{steps.map((item, index) => <li key={item.id}><button type="button" aria-current={step === item.id ? 'step' : undefined} disabled={Boolean(pending)} onClick={() => selectStep(item.id)}><span className="production-settings__step-index" aria-hidden="true">{index + 1}</span><span>{item.label}</span></button></li>)}</ol></nav>}
+  return <Dialog title={records ? '本次制作' : '制作设置'} onClose={close} onDismissStart={() => { closed.current = true; }} className={`settings-dialog production-settings-dialog ${records ? 'production-results-dialog' : 'dialog--aligned-gutters'}`}>
+    {!records && <nav className="dialog__band production-settings__steps" aria-label="制作设置步骤"><ol>{steps.map((item, index) => <li key={item.id}><button type="button" aria-current={step === item.id ? 'step' : undefined} disabled={Boolean(pending)} onClick={() => selectStep(item.id)}><span className="production-settings__step-index" aria-hidden="true">{index + 1}</span><span>{item.label}</span></button></li>)}</ol></nav>}
     <div className="dialog__body">
-      {!records && (pendingConfiguration || active || configurationError || error) && <div className="production-settings__context">
+      {!records && (pendingConfiguration || active || configurationError || error) && <div className="dialog__band production-settings__context">
         {active && <p>本次制作使用启动时的设置，保存后用于下次制作。</p>}
         {pendingConfiguration && <Notice><span>已保存待用配置。</span>{onDiscardPending && <Button static disabled={Boolean(pending)} onClick={() => void discard()}>放弃待用配置</Button>}</Notice>}
         {(configurationError || error) && <Notice kind="error">{configurationError || error}</Notice>}
       </div>}
       {records ? <div className="production-settings__run">{flat ? <Suspense fallback={<p role="status">正在读取制作记录…</p>}><StageRunView flat planning={planning} runId={run?.id} nodes={resolved.nodes} nodeIds={resolved.nodes.map(node => node.id)} initialNodeId={initialNodeId} version={version} actionsTarget={runActionsTarget} onNotice={showNotice} onOpenOutput={onOpenOutput} configurableNodeIds={[]} /></Suspense> : <SettingsSections label="制作阶段记录" layout="tabs" value={runStage} onValueChange={setRunStage} sections={stages.map(item => ({ id: item.id, label: item.label, content: item.id === selectedStage?.id ? <Suspense fallback={<p role="status">正在读取制作记录…</p>}><StageRunView planning={planning} runId={run?.id} stageId={item.id} nodeIds={item.nodeIds} initialNodeId={initialNodeId} version={version} actionsTarget={runActionsTarget} onNotice={showNotice} onOpenOutput={onOpenOutput} configurableNodeIds={[]} /></Suspense> : null }))} />}</div> : <form ref={form} noValidate className="production-settings__form" onSubmit={event => { event.preventDefault(); if (step === 'review') void submit(); else next(); }}>
-        <fieldset disabled={Boolean(pending)} className="production-settings__fieldset"><div ref={content} className="production-settings__content">
-          <section data-production-step="planning" hidden={step !== 'planning'} aria-label="创作要求配置" tabIndex={-1}>
+        <fieldset disabled={Boolean(pending)} className="production-settings__fieldset"><div ref={content} className="dialog__scroll production-settings__content">
+          <section className="form-stack" data-production-step="planning" hidden={step !== 'planning'} aria-label="创作要求配置" tabIndex={-1}>
             {planningSteps.length > 0 && <div role="group" aria-label="策划内容来源" className="production-settings__models production-settings__planning-sources">
               {planningSteps.map(kind => <div key={kind} className="production-settings__planning-source">
                 <Field label={planningSourceLabels[kind]}>
@@ -331,11 +331,11 @@ export default function ProductionSettingsDialog({ project, projectId, projectRe
             <CreativeContextEditor floatingSections value={fields.creativeContext} version={version} usedEntityKeys={usedEntityKeys} onChange={creativeContext => setFields(current => ({ ...current, creativeContext }))} />
             <ProjectSettingsActions items={['series', 'saveSeries']} onAction={requestTool} />
             {advanced({ id: 'planning', label: '创作要求', nodeIds: resolved.nodes.filter(node => stepGuidance(node).capability === 'text').map(node => node.id) })}
-            {hasEditingStep && <details className="production-settings__agent-capabilities" onToggle={event => {
+            {hasEditingStep && <details className="form-disclosure form-disclosure--divided production-settings__agent-capabilities" onToggle={event => {
               if (event.target === event.currentTarget && event.currentTarget.open) setShowAgentControls(true);
             }}>
               <summary>剪辑 Agent 设置</summary>
-              {showAgentControls && <div className="production-settings__agent-options">
+              {showAgentControls && <div className="form-disclosure__body production-settings__agent-options">
                 {textModel && !supportsProductionAgent(textModel) && <p className="production-settings__agent-help">当前文本模型使用常规剪辑步骤。支持工具调用的文本模型可在剪辑阶段使用 Agent。</p>}
                 <SkillPicker inline
                   label="剪辑 Agent 的 Skill"
@@ -353,7 +353,7 @@ export default function ProductionSettingsDialog({ project, projectId, projectRe
               </div>}
             </details>}
           </section>
-          <section data-production-step="materials" hidden={step !== 'materials'} aria-label="模型与素材" tabIndex={-1}>
+          <section className="form-stack" data-production-step="materials" hidden={step !== 'materials'} aria-label="模型与素材" tabIndex={-1}>
             <div className="production-settings__models">
               {modelField(textField)}
               {modelField(videoField)}
@@ -367,7 +367,7 @@ export default function ProductionSettingsDialog({ project, projectId, projectRe
             <GenerationConcurrencySettings workflow={resolved} models={workspace.models} onChange={setExecution} />
             {advanced({ id: 'materials', label: '模型与素材', nodeIds: resolved.nodes.filter(node => stepGuidance(node).capability && stepGuidance(node).capability !== 'text').map(node => node.id) })}
           </section>
-          <section data-production-step="delivery" hidden={step !== 'delivery'} aria-label="声音与成片" tabIndex={-1}>
+          <section className="form-stack" data-production-step="delivery" hidden={step !== 'delivery'} aria-label="声音与成片" tabIndex={-1}>
             <Field label="声音要求"><textarea value={settings.soundPrompt} onChange={event => updateSettings({ soundPrompt: event.target.value })} rows={3} placeholder="语言、说话方式、环境音与音乐…" /></Field>
             <div className="production-settings__delivery-options">
               <VideoSettings mode="generation" profile={fields.profile} onChange={profile => setFields(current => ({ ...current, profile }))} />
@@ -405,7 +405,7 @@ export default function ProductionSettingsDialog({ project, projectId, projectRe
         </div></fieldset>
       </form>}
     </div>
-    <div className={`dialog__footer${records ? '' : ' production-settings__footer'}`}>{records ? <div ref={setRunActionsTarget} className="production-settings__record-actions" /> : <>
+    <div className={`dialog__footer${records ? '' : ' dialog__band production-settings__footer'}`}>{records ? <div ref={setRunActionsTarget} className="production-settings__record-actions" /> : <>
       {stepIndex > 0 && <Button variant="ghost" disabled={Boolean(pending)} onClick={() => selectStep(steps[stepIndex - 1].id, true)}><ChevronLeft size={14} aria-hidden="true" />上一步</Button>}
       {step === 'review' ? <Button variant="primary" busy={pending === 'save'} disabled={Boolean(pending || configurationError)} onClick={() => void submit()}>{requestedTool ? '保存并打开' : active ? '保存待用配置' : '保存设置'}</Button> : <Button variant="primary" disabled={Boolean(pending || configurationError)} onClick={next}>下一步<ChevronRight size={14} aria-hidden="true" /></Button>}
     </>}</div>

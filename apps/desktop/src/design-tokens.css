@@ -89,6 +89,9 @@
   --space-8: 32px;
   --space-9: 36px;
   --space-10: 48px;
+  --space-form-label: var(--space-1);
+  --space-form-disclosure: var(--space-2);
+  --space-form-group: var(--space-3);
   --font-size-1: 11px;
   --font-size-2: 12px;
   --font-size-3: 13px;

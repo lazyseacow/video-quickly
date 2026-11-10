@@ -10,13 +10,14 @@ it('keeps all owned interface styles on shared color, typography, spacing and ra
   for (const file of styles) {
     if (file === 'design-tokens.css') continue;
     const source = readFileSync(join(root, file), 'utf8').replace(/\/\*[\s\S]*?\*\//g, '');
-    for (const match of source.matchAll(/(?:^|[;{])\s*([a-z-]+)\s*:\s*([^;}]+)/gm)) {
+    for (const match of source.matchAll(/(?:^|[;{])\s*([a-z-]+)\s*:\s*([^;{}]+)(?=[;}])/gmi)) {
       const [, property, value] = match;
       const rawColor = /#[\da-f]{3,8}\b|\brgba?\(|\bhsla?\(/i.test(value)
         || /^(?:color|background(?:-color)?|border(?:-[a-z-]+)?|outline(?:-color)?|box-shadow|text-shadow)$/.test(property) && /\b(?:black|white|gray|grey|red|blue|green|orange|yellow|purple)\b/i.test(value)
         || /var\(--neutral-/.test(value);
       const rawType = ['font-size', 'font-weight', 'line-height', 'letter-spacing', 'font-family'].includes(property) && !value.includes('var(') && !['inherit', 'normal'].includes(value);
-      const rawSpace = /^(?:(?:row-|column-)?gap|padding(?:-[a-z-]+)?|margin(?:-[a-z-]+)?)$/.test(property) && /(?<![\w.-])[1-9]\d*px\b/.test(value);
+      const spacingProperty = /^(?:(?:row-|column-)?gap|(?:scroll-)?(?:padding|margin)(?:-[a-z-]+)?)$/i.test(property);
+      const rawSpace = spacingProperty && [...value.matchAll(/(?<![\w.-])(\d*\.?\d+)(?:[a-z]+|%)/gi)].some(([, amount]) => Number(amount) > 0);
       const rawRadius = property === 'border-radius' && /\d+px\b/.test(value) && !value.includes('var(');
       if (rawColor || rawType || rawSpace || rawRadius) violations.push(`${relative(root, join(root, file))}: ${property}: ${value}`);
     }
