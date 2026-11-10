@@ -238,6 +238,93 @@ function upgradeLegacyProject(body: string): string {
   return JSON.stringify({ ...project, revision: project.revision + 1, workflow });
 }
 
+const COST_AND_RUN_READ_SCHEMA = `
+  CREATE INDEX documents_run_history ON documents(kind) WHERE kind = 'run';
+  CREATE INDEX documents_usage_run ON documents(CAST(json_extract(body, '$.runId') AS TEXT)) WHERE kind = 'usage-record';
+  CREATE INDEX documents_usage_project_run ON documents(json_extract(body, '$.projectId'), CAST(json_extract(body, '$.runId') AS TEXT)) WHERE kind = 'usage-record';
+
+  CREATE TABLE cost_task_order (
+    scope TEXT NOT NULL, cursor INTEGER NOT NULL, run_id TEXT NOT NULL,
+    PRIMARY KEY(scope, cursor), UNIQUE(scope, run_id)
+  ) WITHOUT ROWID;
+  -- Preserve existing cursors independently for the complete ledger and each project.
+  WITH ledger AS MATERIALIZED (
+    SELECT rowid AS cursor, json_extract(body, '$.runId') AS run_id, json_extract(body, '$.projectId') AS project_id
+    FROM documents WHERE kind = 'usage-record'
+      AND json_type(body, '$.runId') = 'text' AND json_type(body, '$.projectId') = 'text'
+  )
+  INSERT INTO cost_task_order(scope, cursor, run_id)
+    SELECT 'all', min(cursor), run_id FROM ledger GROUP BY run_id
+    UNION ALL
+    SELECT 'project:' || project_id, min(cursor), run_id FROM ledger GROUP BY project_id, run_id;
+
+  -- Ledger identities are append-only. Updates to status, usage and actual charges keep their task cursor.
+  CREATE TRIGGER cost_task_order_insert AFTER INSERT ON documents
+    WHEN new.kind = 'usage-record' AND json_type(new.body, '$.runId') = 'text' AND json_type(new.body, '$.projectId') = 'text'
+  BEGIN
+    INSERT INTO cost_task_order(scope, cursor, run_id)
+      SELECT candidate.scope, coalesce((SELECT max(cursor) FROM cost_task_order WHERE scope = candidate.scope), 0) + 1,
+        json_extract(new.body, '$.runId')
+      FROM (SELECT 'all' AS scope UNION ALL SELECT 'project:' || json_extract(new.body, '$.projectId')) candidate
+      WHERE NOT EXISTS (
+        SELECT 1 FROM cost_task_order WHERE scope = candidate.scope AND run_id = json_extract(new.body, '$.runId')
+      );
+  END;
+`;
+
+const invalidateCostOverview = (...rows: ('new' | 'old')[]) => `
+  UPDATE cost_task_order SET overview_metrics = NULL
+  WHERE scope = 'all' AND overview_metrics IS NOT NULL
+    AND run_id IN (${rows.map(row => `CAST(json_extract(${row}.body, '$.runId') AS TEXT)`).join(', ')});
+`;
+
+const COST_OVERVIEW_SCHEMA = `
+  -- Only the global scope owns a subtotal. NULL marks a task for recomputation.
+  ALTER TABLE cost_task_order ADD COLUMN overview_metrics TEXT;
+  CREATE INDEX cost_task_overview_pending ON cost_task_order(scope, overview_metrics, run_id)
+    WHERE scope = 'all' AND overview_metrics IS NULL;
+
+  CREATE TRIGGER cost_overview_insert AFTER INSERT ON documents WHEN new.kind = 'usage-record' BEGIN
+    ${invalidateCostOverview('new')}
+  END;
+  CREATE TRIGGER cost_overview_update AFTER UPDATE OF body ON documents WHEN new.kind = 'usage-record' BEGIN
+    ${invalidateCostOverview('old', 'new')}
+  END;
+  CREATE TRIGGER cost_overview_delete AFTER DELETE ON documents WHEN old.kind = 'usage-record' BEGIN
+    ${invalidateCostOverview('old')}
+  END;
+`;
+
+const queueCostOverview = (...rows: ('new' | 'old')[]) => `
+  UPDATE cost_task_order SET overview_pending = 1
+  WHERE scope = 'all' AND overview_pending = 0
+    AND run_id IN (${rows.map(row => `CAST(json_extract(${row}.body, '$.runId') AS TEXT)`).join(', ')});
+`;
+
+const COST_OVERVIEW_DELTAS_SCHEMA = `
+  ALTER TABLE cost_task_order ADD COLUMN overview_pending INTEGER NOT NULL DEFAULT 1;
+  DROP INDEX cost_task_overview_pending;
+  DROP TRIGGER cost_overview_insert;
+  DROP TRIGGER cost_overview_update;
+  DROP TRIGGER cost_overview_delete;
+
+  -- Older subtotals store rounded numbers. Rebuild from the ledger once for exact deltas.
+  UPDATE cost_task_order SET overview_metrics = NULL WHERE scope = 'all' AND overview_metrics IS NOT NULL;
+  DELETE FROM runtime_metadata WHERE key = 'cost-overview-summary';
+  CREATE INDEX cost_task_overview_pending ON cost_task_order(scope, overview_pending, run_id)
+    WHERE scope = 'all' AND overview_pending = 1;
+
+  CREATE TRIGGER cost_overview_insert AFTER INSERT ON documents WHEN new.kind = 'usage-record' BEGIN
+    ${queueCostOverview('new')}
+  END;
+  CREATE TRIGGER cost_overview_update AFTER UPDATE OF body ON documents WHEN new.kind = 'usage-record' BEGIN
+    ${queueCostOverview('old', 'new')}
+  END;
+  CREATE TRIGGER cost_overview_delete AFTER DELETE ON documents WHEN old.kind = 'usage-record' BEGIN
+    ${queueCostOverview('old')}
+  END;
+`;
+
 export const WORKSPACE_MIGRATIONS: readonly DatabaseMigration[] = [
   { version: 1, name: 'workspace-baseline', sql: INITIAL_SCHEMA },
   { version: 2, name: 'execution-event-index', sql: 'CREATE INDEX execution_events_run_sequence ON execution_events(run_id, sequence);' },
@@ -283,6 +370,9 @@ export const WORKSPACE_MIGRATIONS: readonly DatabaseMigration[] = [
   // Older clients would otherwise interpret a manual planning step as an AI task.
   { version: 22, name: 'manual-planning-inputs', sql: "INSERT INTO runtime_metadata(key, value) VALUES ('manual-planning-inputs', '1');" },
   { version: 23, name: 'structured-planning-prefill', sql: "INSERT INTO runtime_metadata(key, value) VALUES ('structured-planning-prefill', '1');" },
+  { version: 24, name: 'cost-and-run-read-indexes', sql: COST_AND_RUN_READ_SCHEMA },
+  { version: 25, name: 'incremental-cost-overview', sql: COST_OVERVIEW_SCHEMA },
+  { version: 26, name: 'exact-cost-overview-deltas', sql: COST_OVERVIEW_DELTAS_SCHEMA },
 ];
 
 export function openDatabase(directory: string) {

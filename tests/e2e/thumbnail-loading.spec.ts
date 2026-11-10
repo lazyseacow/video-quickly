@@ -38,14 +38,71 @@ test('paints the actual source sample in both thumbnail surfaces and invalidates
   const colors = ['green', 'red', 'blue'] as const;
   for (const [index, expected] of colors.entries()) {
     await color(page.locator('.outline-shot').nth(index).locator('canvas'), expected);
-    await color(page.locator('.timeline-clip--video').nth(index).locator('canvas'), expected);
+    await color(page.locator('.timeline-clip--video').nth(index).locator('canvas').first(), expected);
   }
   const revised = await rpc<ProjectDocument>(request, 'project.update', { projectId: project.id, revision: project.revision, patch: { shots: project.shots.map(shot => shot.id === 'color-0' ? { ...shot, videoInUs: 2_500_000 } : shot) } });
   await expect(page.locator('.project-heading-copy')).toHaveAttribute('data-revision', String(revised.revision));
   await color(page.locator('.outline-shot').first().locator('canvas'), 'blue');
-  await color(page.locator('.timeline-clip--video').first().locator('canvas'), 'blue');
+  await color(page.locator('.timeline-clip--video').first().locator('canvas').first(), 'blue');
   await color(page.locator('.preview-panel .scene-preview canvas'), 'blue');
   expect(errors).toEqual([]);
+});
+
+test('fills the clip with sampled source frames and adds thumbnails when zoomed', async ({ page, request }, info) => {
+  const { project } = await fixture(request, info, 8);
+  const [wide, ...others] = project.shots;
+  const updated = await rpc<ProjectDocument>(request, 'project.update', { projectId: project.id, revision: project.revision, patch: { shots: [
+    { ...wide, durationUs: 2_500_000 },
+    ...others,
+  ] } });
+  await open(page, updated.title);
+  const strips = page.locator('.timeline-clip__media');
+  const strip = strips.first(), frames = strip.locator('canvas');
+  await expect(strips.last().locator('canvas')).toHaveCount(1);
+  await expect.poll(() => frames.count()).toBeGreaterThan(2);
+  const initialCount = await frames.count();
+  await color(frames.first(), 'green');
+  await color(frames.nth(Math.floor(initialCount / 2)), 'red');
+  await color(frames.last(), 'blue');
+  await expect.poll(() => strip.evaluate(element => {
+    const { left, right } = element.getBoundingClientRect();
+    let edge = left;
+    for (const canvas of element.querySelectorAll('canvas')) {
+      const frame = canvas.getBoundingClientRect();
+      if (canvas.width < 64 || getComputedStyle(canvas).visibility !== 'visible' || Math.abs(frame.left - edge) >= 1) return false;
+      edge = frame.right;
+    }
+    return Math.abs(right - edge) < 1;
+  })).toBe(true);
+  await expect(strip.locator('.timeline-clip__duration')).toHaveText('2.5s');
+  await page.locator('.timeline').screenshot({ path: info.outputPath('timeline-filmstrip.png') });
+
+  await page.setViewportSize({ width: 1024, height: 720 });
+  await expect.poll(() => frames.count()).toBeLessThan(initialCount);
+  await page.getByLabel('时间轴缩放', { exact: true }).press('End');
+  await expect.poll(() => frames.count()).toBeGreaterThan(initialCount);
+  await frames.last().scrollIntoViewIfNeeded();
+  await color(frames.last(), 'blue');
+  await expect.poll(() => frames.first().evaluate((canvas: HTMLCanvasElement) => canvas.width)).toBe(1);
+  expect((await rpc<{ project: ProjectDocument }>(request, 'project.get', { projectId: project.id })).project).toEqual(updated);
+});
+
+test('paints the middle thumbnail when a seek lands one microsecond early', async ({ page, request }, info) => {
+  const { project } = await fixture(request, info, 6);
+  const updated = await rpc<ProjectDocument>(request, 'project.update', {
+    projectId: project.id, revision: project.revision, patch: {
+      profile: { ...project.profile, frameRate: { numerator: 60, denominator: 1 } },
+      shots: project.shots.map((shot, index) => ({ ...shot, durationUs: index === 3 ? 6_050_000 : 4_800_000, videoInUs: 0 })),
+    },
+  });
+  await open(page, updated.title);
+  const frames = page.locator('.timeline-clip--video').nth(3).locator('canvas');
+  await expect(frames).toHaveCount(3);
+  await color(frames.first(), 'green');
+  // The middle cell requests 2,016,666 µs. Chromium reports 2,016,665 µs after the seek.
+  await color(frames.nth(1), 'blue');
+  await expect(frames.nth(1)).toBeVisible();
+  await color(frames.last(), 'blue');
 });
 
 test('releases offscreen canvas buffers and restores real thumbnails without changing selection or focus', async ({ page, request }, info) => {

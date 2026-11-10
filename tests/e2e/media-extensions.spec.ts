@@ -1,3 +1,4 @@
+import { confirmAction } from './confirmation-actions';
 import { execFileSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
@@ -81,7 +82,7 @@ for (const viewport of viewports) test(`generates a masked image candidate and a
     await dialog.getByRole('textbox', { name: '本次调整要求', exact: true }).fill('将选中区域的木盒改成绿色');
     expect(await source.current()).toEqual(source.project); expect(calls).toHaveLength(0);
     await page.screenshot({ path: info.outputPath(`image-edit-region-${viewport.width}.png`) });
-    await dialog.getByRole('button', { name: '生成候选', exact: true }).click(); await expect(dialog.getByAltText('候选画面')).toBeVisible();
+    await dialog.getByRole('button', { name: '生成候选', exact: true }).click(); await confirmAction(page, '确认生成'); await expect(dialog.getByAltText('候选画面')).toBeVisible();
     expect(calls).toHaveLength(1); expect(calls[0].path).toBe('/v1/images/edits'); expect(calls[0].source).toEqual(source.bytes); expect(calls[0].prompt).toContain('木盒改成绿色');
     const maskPath = join(source.directory, 'submitted-mask.png'); await writeFile(maskPath, calls[0].mask);
     const rgba = execFileSync(ffmpeg, ['-v', 'error', '-i', maskPath, '-f', 'rawvideo', '-pix_fmt', 'rgba', 'pipe:1'], { windowsHide: true });

@@ -1,4 +1,4 @@
-import { openProjectFromList } from './workspace-navigation';
+import { openProjectFromList, sampleProjectTitle } from './workspace-navigation';
 import { setWorkspaceTheme } from './workspace-settings';
 import { randomUUID } from 'node:crypto';
 import { expect, test, type APIRequestContext, type Page } from '@playwright/test';
@@ -103,7 +103,7 @@ test('retries the clean saved baseline without another project revision and rema
 });
 
 test('keeps an unread corrupt draft protected and offers manual project saving without an ineffective draft retry', async ({ page, request }) => {
-  await page.goto('/'); await expect(page.getByLabel('镜头标题', { exact: true })).toBeVisible();
+  await page.goto('/'); await openProjectFromList(page, sampleProjectTitle);
   const project = await fixture(request), calls = updates(page, project.id), workspace = await rpc<{ system: { dataDirectory: string } }>(request, 'workspace.summary');
   const corrupt = { projectId: project.id, version: 2, revision: project.revision, base: 'unreadable fixture', present: 'protected fixture', undo: [], redo: [] };
   await page.evaluate(async ({ key, corrupt }) => {

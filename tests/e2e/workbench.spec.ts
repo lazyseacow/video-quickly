@@ -2,7 +2,7 @@ import { confirmAction } from './confirmation-actions';
 import { saveProduction } from './production-settings';
 import { selectModel, closeProjectSettings } from './settings';
 import { createSceneTemplate, type ProjectDocument } from '@video-quickly/contracts';
-import { openProjectFromList } from './workspace-navigation';
+import { openProjectFromList, sampleProjectTitle } from './workspace-navigation';
 import { setWorkspaceTheme } from './workspace-settings';
 import { addModelConnection } from './settings';
 import { projectSettingField } from './settings';
@@ -259,7 +259,7 @@ test('scrubs continuously, steps fractional frames and preserves the editing dra
   await expect(page.locator('.track-header--video')).toContainText('画面');
   await expect(page.locator('.track-header--video .track-header__type')).toHaveCount(0);
   await expect(page.locator('.track-header--audio')).toHaveCount(0);
-  await expect(page.locator('.timeline-clip--video canvas')).toHaveCount(2);
+  await expect(page.locator('.timeline-clip--video').filter({ has: page.locator('canvas') })).toHaveCount(2);
   const headerBefore = await page.locator('.timeline-track-headers').boundingBox();
   const playheadBefore = await page.locator('.playhead').boundingBox();
   await page.getByRole('button', { name: '放大时间轴', exact: true }).click();
@@ -293,6 +293,7 @@ test('edits real project state, output profiles and theme', async ({ page }) => 
   const errors: string[] = [];
   page.on('pageerror', error => errors.push(error.message));
   await openApp(page);
+  await openProjectFromList(page, sampleProjectTitle);
   await expect(page).toHaveTitle(/Video Quickly/);
   await expect(page.getByRole('button', { name: '模型连接', exact: true })).toBeVisible();
   await expect(page.locator('vite-error-overlay')).toHaveCount(0);
@@ -303,6 +304,7 @@ test('edits real project state, output profiles and theme', async ({ page }) => 
   await expect(page.getByRole('button', { name: '保存镜头', exact: true })).toBeDisabled();
   expect((await (await shotSaved).json()).error).toBeUndefined();
   await page.reload();
+  await openProjectFromList(page, sampleProjectTitle);
   await expect(page.getByLabel('镜头标题', { exact: true })).toHaveValue('一纸登科 · 已编辑');
 
   await (await projectSettingField(page, '画面比例', { exact: true })).selectOption('9:16');
@@ -313,6 +315,7 @@ test('edits real project state, output profiles and theme', async ({ page }) => 
   await saveProduction(page.getByRole('dialog', { name: '制作设置', exact: true }));
   expect((await (await profileSaved).json()).error).toBeUndefined();
   await page.reload();
+  await openProjectFromList(page, sampleProjectTitle);
   await expect((await projectSettingField(page, '视频帧率'))).toHaveValue('60');
   await expect((await projectSettingField(page, '视频高度'))).toHaveValue('1920');
 
@@ -330,6 +333,7 @@ test('resizes and restores editor panels, and saves before opening a recent proj
   const snapshot = await request.post('/__desktop_rpc', { data: { method: 'workspace.snapshot' } });
   const original = (await snapshot.json()).result.projects.find((project: { id: string }) => project.id === 'example-history');
   await openApp(page);
+  await openProjectFromList(page, original.title);
   await expect(page.getByLabel('项目名称', { exact: true })).toHaveValue(original.title);
   const outline = page.getByRole('separator', { name: '调整镜头导航宽度' });
   await outline.press('ArrowRight'); await expect(outline).toHaveAttribute('aria-valuenow', '240');

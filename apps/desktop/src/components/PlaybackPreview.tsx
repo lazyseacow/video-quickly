@@ -14,11 +14,12 @@ interface Props {
   project: ProjectDocument; draft?: Shot; assets: AssetRecord[]; timeline: TimelineClip[];
   audioMix: { status: 'idle' | 'pending' | 'ready' | 'error'; mix?: PreparedAudioMix; error?: string; retry: () => void };
   onLevels: ReadAudioLevels; onPlayableChange: (ready: boolean) => void;
-  clock: PlaybackClock; onRepair: (shot: Shot) => void;
-  onSelect: (id: string) => Promise<void>; onAdd: () => Promise<void>; onError: (message: string, error?: boolean) => void;
+  clock: PlaybackClock; onRepair?: (shot: Shot) => void;
+  onSelect: (id: string) => void | Promise<void>; onAdd: () => Promise<void>; onError: (message: string, error?: boolean) => void;
+  productionView?: { active: boolean; toggle: () => void };
 }
 
-export default memo(function PlaybackPreview({ project, draft, assets, timeline, audioMix, onLevels, onPlayableChange, clock, onRepair, onSelect, onAdd, onError }: Props) {
+export default memo(function PlaybackPreview({ project, draft, assets, timeline, audioMix, onLevels, onPlayableChange, clock, onRepair, onSelect, onAdd, onError, productionView }: Props) {
   const { playing, timeUs, buffering } = usePlayback(clock);
   const player = useRef<HTMLElement>(null);
   const [muted, setMuted] = useState(false);
@@ -37,9 +38,11 @@ export default memo(function PlaybackPreview({ project, draft, assets, timeline,
   const previewProject = useMemo(() => ({ ...project, profile: { ...project.profile, previewScale } }), [project, previewScale]);
   const [readyKey, setReadyKey] = useState('');
   const mix = audioMix.status === 'ready' ? audioMix.mix : undefined;
-  const playable = audioMix.status === 'idle' || Boolean(mix && readyKey === mix.key);
+  const live = Boolean(productionView?.active);
+  const mixPlayable = Boolean(mix && readyKey === mix.key);
+  const playable = live || audioMix.status === 'idle' || mixPlayable;
   const mixReady = useCallback((ready: boolean) => setReadyKey(ready && mix ? mix.key : ''), [mix?.key]);
-  const mixFailure = useCallback((message: string, error?: boolean) => { clock.pause(); onError(message, error); }, [clock, onError]);
+  const mixFailure = useCallback((message: string, error?: boolean) => { if (!live) clock.pause(); onError(message, error); }, [clock, onError, live]);
   function togglePlayback() {
     if (!playable || !project.shots.length) return;
     const completed = beginGuideAction('preview-played');
@@ -128,9 +131,12 @@ export default memo(function PlaybackPreview({ project, draft, assets, timeline,
     if (event.code === 'KeyF') { event.preventDefault(); if (!event.repeat) void toggleFullscreen(); }
     if (event.code === 'KeyM') { event.preventDefault(); if (!event.repeat) toggleMuted(); }
   }}>
-    <div className="preview-surface" onClick={clickPicture}>{shot ? <div className="preview-frame" style={{ aspectRatio: `${profile.width} / ${profile.height}`, width: `min(100cqw, calc(100cqh * ${profile.width / profile.height}))` }}><TimelinePreview project={previewProject} draft={draft} assets={assets} clock={clock} playing={playing} buffering={buffering} timeUs={timeUs} onRepair={target => { clock.pause(); onRepair(target); }} /></div> : <EmptyState icon={<Film size={26} />} title="你的故事从第一镜开始" description="添加镜头，填写旁白和画面要求。"><Button onClick={() => void onAdd()}><Plus size={15} />添加镜头</Button></EmptyState>}</div>
-    <div className="preview-toolbar preview-chrome" onPointerEnter={() => { hoveringControls.current = true; revealControls(); }} onPointerLeave={() => { hoveringControls.current = false; revealControls(); }}><span>画面预览</span><span className="sample-chip"><span className="online-dot" />{shot?.sceneTemplate ? '科普图解' : shot?.videoAssetId ? '视频素材' : shot?.assetId ? '本地素材' : '本地示例'}</span></div>
-    <div className="preview-audio">{mix ? <PreparedMixPreview mix={mix} onLevels={onLevels} controls={false} showLevels={false} playing={playing && !buffering && playable} timeUs={timeUs} muted={silent} volume={volume} onReadyChange={mixReady} onError={mixFailure} /> : audioMix.status === 'pending' ? <p className="tiny-meta" role="status">正在准备预览混音…</p> : audioMix.status === 'error' ? <Notice kind="error">{audioMix.error}<Button aria-label="重新准备预览混音" onClick={audioMix.retry}>重新准备</Button></Notice> : null}</div>
+    <div className="preview-surface" onClick={clickPicture}>{shot ? <div className="preview-frame" style={{ aspectRatio: `${profile.width} / ${profile.height}`, width: `min(100cqw, calc(100cqh * ${profile.width / profile.height}))` }}><TimelinePreview project={previewProject} draft={draft} assets={assets} clock={clock} playing={playing} buffering={buffering} timeUs={timeUs} onRepair={onRepair && (target => { clock.pause(); onRepair(target); })} /></div> : <EmptyState icon={<Film size={26} />} title="你的故事从第一镜开始" description="添加镜头，填写旁白和画面要求。"><Button onClick={() => void onAdd()}><Plus size={15} />添加镜头</Button></EmptyState>}</div>
+    <div className="preview-toolbar preview-chrome" onPointerEnter={() => { hoveringControls.current = true; revealControls(); }} onPointerLeave={() => { hoveringControls.current = false; revealControls(); }}>
+      <span>{live ? '制作预览' : '画面预览'}</span><span className="sample-chip"><span className="online-dot" />{shot?.sceneTemplate ? '科普图解' : shot?.videoAssetId ? '视频素材' : shot?.assetId ? '本地素材' : live ? '待生成' : '本地示例'}</span>
+      {productionView && <Button static variant="ghost" className="preview-source-toggle" onClick={productionView.toggle}>{live ? '编辑项目' : '制作预览'}</Button>}
+    </div>
+    <div className="preview-audio">{mix ? <PreparedMixPreview mix={mix} onLevels={onLevels} controls={false} showLevels={false} playing={playing && !buffering && mixPlayable} timeUs={timeUs} muted={silent} volume={volume} onReadyChange={mixReady} onError={mixFailure} /> : audioMix.status === 'pending' ? <p className="tiny-meta" role="status">正在准备预览混音…</p> : audioMix.status === 'error' ? <Notice kind="error">{audioMix.error}<Button aria-label="重新准备预览混音" onClick={audioMix.retry}>重新准备</Button></Notice> : null}</div>
     <div className="preview-controls preview-chrome" onPointerEnter={() => { hoveringControls.current = true; revealControls(); }} onPointerLeave={() => { hoveringControls.current = false; revealControls(); }}>
       <input className="preview-seek" type="range" aria-label="播放器播放位置" aria-valuetext={`${formatTime(timeUs)} / ${formatTime(totalUs)}`} min={0} max={lastFrame} step={1} value={frame} disabled={!totalUs} style={progressStyle} onChange={event => seekFrame(event.target.valueAsNumber)} onPointerDown={startScrubbing} onPointerUp={finishScrubbing} onPointerCancel={finishScrubbing} onLostPointerCapture={finishScrubbing} />
       <div className="preview-controls__row">

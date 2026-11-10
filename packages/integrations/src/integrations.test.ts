@@ -103,6 +103,20 @@ describe('media generation request receipts', () => {
     expect(JSON.parse(await readFile(path, 'utf8'))).toMatchObject({ state: 'completed', attempt: 2 });
     await createActivityExecutor()(context); expect(keys).toHaveLength(2);
   });
+  it.each([
+    { format: 'Ark error code', body: JSON.stringify({ error: { code: 'OutputImageSensitiveContentDetected', message: 'private provider detail' } }) },
+    { format: 'plain relay message', body: 'status_code=400, The request failed because the output image may contain sensitive information. Request id: private provider detail' },
+  ])('reports a safe output image rejection for $format', async ({ body }) => {
+    const baseUrl = await listen((request, response) => {
+      request.resume();
+      response.writeHead(400).end(body);
+    });
+    const context = await contextFor(baseUrl);
+    await expect(createActivityExecutor()(context)).rejects.toMatchObject({
+      name: 'MediaRequestRejectedError', status: 400, reason: 'output-image-moderation',
+      message: '模型服务的内容审核拦截了生成的图片（HTTP 400）。请调整生成描述或参考图后重试。',
+    });
+  });
   it('prepares the local timeline and rejects a generation model on the editing step', async () => {
     const context = await contextFor('http://127.0.0.1:1');
     context.node = context.project.workflow.nodes.find(node => node.config.operation === 'prepare-edit')!;

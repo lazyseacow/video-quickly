@@ -1,2 +1,15 @@
 .confirmation-dialog .dialog__body > p { margin-bottom: 0; overflow-wrap: anywhere; }
 .confirmation-dialog .dialog__header h2 { overflow-wrap: anywhere; }
+.confirmation-dialog--estimate > .dialog__surface { display: flex; flex-direction: column; max-height: calc(100dvh - var(--space-8)); overflow: hidden; }
+.confirmation-dialog--estimate :is(.dialog__header, .dialog__footer) { flex-shrink: 0; }
+.confirmation-dialog--estimate .dialog__body { min-height: 0; overflow-y: auto; }
+.charge-estimate { margin-block: var(--space-4) 0; padding-block-start: var(--space-3); border-top: 1px solid var(--border); overflow-wrap: anywhere; }
+.charge-estimate h3 { margin: 0; font-size: var(--text-size-label); font-weight: var(--font-weight-semibold); }
+.charge-estimate__models { list-style: none; margin: 0; padding: 0; }
+.charge-estimate__models li { display: flex; flex-wrap: wrap; justify-content: space-between; gap: var(--space-2); padding-block: var(--space-2); }
+.charge-estimate__model { display: grid; gap: var(--space-1); min-width: 0; }
+.charge-estimate__model :is(small, span), .charge-estimate__hint { color: var(--text-secondary); font-size: var(--text-size-caption); }
+.charge-estimate__hint { margin: var(--space-2) 0 0; }
+.charge-estimate__total { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: baseline; gap: var(--space-2); margin: var(--space-2) 0 0; padding-block-start: var(--space-3); border-top: 1px solid var(--border); font-weight: var(--font-weight-semibold); }
+.charge-estimate__total dd { margin: 0; }
+.charge-estimate__total dd, .charge-estimate__amount { font-variant-numeric: tabular-nums; }

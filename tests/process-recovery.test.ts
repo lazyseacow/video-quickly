@@ -7,7 +7,7 @@ import { tmpdir } from 'node:os';
 import { basename, dirname, join, resolve } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { afterEach, describe, expect, it } from 'vitest';
-import type { ProjectDocument, RunInspection, RunPlan, RunRecord, WorkspaceSnapshot } from '@video-quickly/contracts';
+import { chargeConfirmationSchema, type ProjectDocument, type RunInspection, type RunPlan, type RunRecord, type WorkspaceSnapshot } from '@video-quickly/contracts';
 import { openDatabase, DocumentStore } from '../packages/runtime/src/database';
 
 const directories: string[] = [];
@@ -45,6 +45,10 @@ class RpcProcess {
       this.waiting.set(id, { resolve: value => { clearTimeout(timeout); resolve(value as T); }, reject: error => { clearTimeout(timeout); reject(error); } });
       this.child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id, method, params })}\n`);
     });
+  }
+  async requestConfirmed<T>(method: 'run.start' | 'run.resume', params: Record<string, unknown>): Promise<T> {
+    const prepared = chargeConfirmationSchema.nullable().parse(await this.request('billing.prepare', { method, params }));
+    return this.request<T>(method, prepared ? { ...params, chargeConfirmationId: prepared.confirmationId } : params);
   }
   async kill() {
     if (this.child.exitCode !== null || this.child.signalCode !== null) return;
@@ -107,14 +111,14 @@ describe('actual sidecar process recovery', () => {
       edges: [{ id: 'os', source: 'outside', target: 'selected' }, { id: 'st', source: 'selected', target: 'tail' }],
     } } });
     const plan = await first.request<RunPlan>('run.plan', { projectId: project.id, selection: { nodeId: 'selected', mode: 'downstream' } });
-    const run = await first.request<RunRecord>('run.start', { projectId: project.id, selection: { ...plan.selection, previewDigest: plan.digest } });
+    const run = await first.requestConfirmed<RunRecord>('run.start', { projectId: project.id, selection: { ...plan.selection, previewDigest: plan.digest } });
     await boundary.downloading;
     const before = await waitFor(first, run.id, 'running'); expect(before.activities.map(activity => [activity.id, activity.status])).toEqual([['selected', 'completed'], ['tail', 'submitted']]);
     await first.request('workspace.snapshot'); await first.kill();
     boundary.release();
     const second = new RpcProcess(directory);
     const edited = await second.request<ProjectDocument>('project.update', { projectId: project.id, revision: project.revision, patch: { title: '恢复前的人工标题', workflow: { ...project.workflow, nodes: [...project.workflow.nodes, { ...project.workflow.nodes[0], id: 'new-outside', label: '新增的范围外步骤' }] } } });
-    await second.request('run.resume', { runId: run.id });
+    await second.requestConfirmed('run.resume', { runId: run.id });
     const after = await waitFor(second, run.id, 'succeeded'); expect(after.selection).toEqual(plan.selection); expect(after.activities.map(activity => activity.id)).toEqual(['selected', 'tail']);
     const inspection = await second.request<RunInspection>('run.inspect', { runId: run.id, nodeId: 'selected' }); expect(inspection.selected?.handlerVersion).toBe(2); expect(inspection.steps.map(step => step.id)).toEqual(['selected', 'tail']);
     expect((await second.request<{ project: ProjectDocument }>('project.get', { projectId: project.id })).project).toEqual(edited);
@@ -129,7 +133,7 @@ describe('actual sidecar process recovery', () => {
     const boundary = await downloadBoundary(first);
     const project = await first.request<ProjectDocument>('project.create', { title: '旧流程审阅进程恢复', templateId: 'history-handdrawn' });
     await first.request('project.update', { projectId: project.id, revision: project.revision, patch: { shots: boundary.shots, workflow: { id: 'process-automatic', version: 1, name: '自动恢复', production: { mode: 'native-video', referenceMode: 'none', soundPrompt: '', subtitleMode: 'off' }, nodes: [{ id: 'images', kind: 'assets', label: '生成画面', modelId: boundary.model.id, requiresReview: true }, { id: 'finish', kind: 'brief', label: '自动收尾', requiresReview: true }], edges: [{ id: 'continue', source: 'images', target: 'finish' }] } } });
-    const run = await first.request<RunRecord>('run.start', { projectId: project.id });
+    const run = await first.requestConfirmed<RunRecord>('run.start', { projectId: project.id });
     await boundary.downloading;
     const before = await waitFor(first, run.id, 'running');
     expect(before.activities).toHaveLength(1);
@@ -141,7 +145,7 @@ describe('actual sidecar process recovery', () => {
     const second = new RpcProcess(directory);
     const restored = await second.request<WorkspaceSnapshot>('workspace.snapshot');
     expect(restored.runs.find(record => record.id === run.id)).toMatchObject({ status: 'queued', currentNodeId: 'images' });
-    await second.request('run.resume', { runId: run.id });
+    await second.requestConfirmed('run.resume', { runId: run.id });
     const after = await waitFor(second, run.id, 'succeeded');
     expect(after.activities.map(activity => activity.nodeId)).toEqual(['images', 'finish']);
     expect(after.activities[0].result).toMatchObject({ assets: [{ kind: 'image', shotId: 'shot-1' }] });
@@ -159,9 +163,9 @@ it('resumes a version-three subflow after a hard exit and automatically complete
   const boundary = await downloadBoundary(first);
   const definition = { id: 'fixed-template', version: 1, name: '自动衔接', inputs: [], outputs: [{ name: 'brief', type: 'string', nodeId: 'first', path: ['brief'] }], nodes: [{ id: 'first', kind: 'brief', label: '前置生成', requiresReview: true }, { id: 'second', kind: 'assets', label: '后续画面', modelId: boundary.model.id, requiresReview: true }], edges: [{ id: 'edge', source: 'first', target: 'second' }] };
   await first.request('project.update', { projectId: project.id, revision: project.revision, patch: { shots: boundary.shots, workflow: { id: 'parent', version: 1, name: 'parent', production: { mode: 'native-video', referenceMode: 'none', soundPrompt: '', subtitleMode: 'off' }, nodes: [{ id: 'call', kind: 'subflow', label: '固定流程', subflow: { id: definition.id, version: 1, inputs: {} } }], edges: [], subflows: [definition] } } });
-  const run = await first.request<RunRecord>('run.start', { projectId: project.id }); await boundary.downloading;
+  const run = await first.requestConfirmed<RunRecord>('run.start', { projectId: project.id }); await boundary.downloading;
   const previous = await first.request('node.result', { runId: run.id, nodeId: 'call/subflow/first' }); await first.kill(); boundary.release();
-  const second = new RpcProcess(directory); await second.request('run.resume', { runId: run.id }); await waitFor(second, run.id, 'succeeded');
+  const second = new RpcProcess(directory); await second.requestConfirmed('run.resume', { runId: run.id }); await waitFor(second, run.id, 'succeeded');
   const inspection = await second.request<RunInspection>('run.inspect', { runId: run.id }); expect(inspection.steps.every(step => step.status === 'succeeded')).toBe(true); expect(inspection.steps).toHaveLength(3);
   expect(await second.request('node.result', { runId: run.id, nodeId: 'call/subflow/first' })).toEqual(previous); expect(boundary.posts()).toBe(1);
 });
@@ -192,7 +196,7 @@ it('recovers parallel media receipts after SIGKILL while preserving completed si
   const first = new RpcProcess(directory), project = await first.request<ProjectDocument>('project.create', { title: '真实并发进程恢复' });
   const model = await first.request<{ id: string }>('model.save', { model: { name: '本地真实HTTP夹具', provider: 'custom-http', baseUrl: base, model: 'fixture', connectionType: 'image', capabilities: ['image'], parameters: { requestPath: 'generate', requestTemplate: { name: '{{narration}}' }, taskIdPath: 'id', pollPath: 'tasks/{{taskId}}', statusPath: 'status', resultUrlPath: 'url', pollTimeoutSeconds: 30 } } });
   await first.request('project.update', { projectId: project.id, revision: project.revision, patch: { shots: [0, 1].map(index => ({ id: `shot-${index}`, title: `镜头${index}`, narration: `shot-${index}`, visualPrompt: '', durationUs: 1_000_000 })), workflow: { id: 'parallel', version: 1, name: 'parallel', production: { mode: 'native-video', referenceMode: 'none', soundPrompt: '', subtitleMode: 'off' }, nodes: [{ id: 'images', kind: 'assets', label: '图片', modelId: model.id }], edges: [], execution: { maxConcurrentShots: 2, modelLimits: { [model.id]: 2 } } } } });
-  const run = await first.request<RunRecord>('run.start', { projectId: project.id }); await pending; await completedQuery;
+  const run = await first.requestConfirmed<RunRecord>('run.start', { projectId: project.id }); await pending; await completedQuery;
   const receipt = join(directory, 'projects', project.id, 'activities', createHash('sha256').update(`${run.id}:images`).digest('hex').slice(0, 24), `${createHash('sha256').update('shot-0').digest('hex').slice(0, 24)}.receipt.json`);
   // The other shot beginning a poll does not complete this shot. Hold its
   // query at that legal submitted boundary, then explicitly let it finish.
@@ -214,7 +218,7 @@ it('recovers parallel media receipts after SIGKILL while preserving completed si
   expect(JSON.parse(await readFile(waitingReceipt, 'utf8'))).toMatchObject({ state: 'submitted', taskId: 'shot-1' });
   await first.kill(); expect(posts).toBe(2);
   const queriesBeforeRestart = queries.length; released = true;
-  const second = new RpcProcess(directory); await second.request('run.resume', { runId: run.id }); await waitFor(second, run.id, 'succeeded'); expect(posts).toBe(2);
+  const second = new RpcProcess(directory); await second.requestConfirmed('run.resume', { runId: run.id }); await waitFor(second, run.id, 'succeeded'); expect(posts).toBe(2);
   expect(queries.slice(queriesBeforeRestart)).toEqual(['shot-1']);
   expect(downloads.filter(path => path === '/asset/shot-0')).toHaveLength(1);
   const output = await second.request<{ assets: { shotId: string }[] }>('node.result', { runId: run.id, nodeId: 'images' }); expect(output.assets.map(asset => asset.shotId)).toEqual(['shot-0', 'shot-1']);
@@ -241,7 +245,7 @@ it('never repeats an unknown parallel submission after SIGKILL and reopening the
   const first = new RpcProcess(directory), project = await first.request<ProjectDocument>('project.create', { title: '未知并行提交保护' });
   const model = await first.request<{ id: string }>('model.save', { model: { name: '未知提交夹具', provider: 'custom-http', baseUrl: base, model: 'fixture', connectionType: 'image', capabilities: ['image'], parameters: { requestPath: 'generate', requestTemplate: { name: '{{narration}}' }, resultUrlPath: 'url' } } });
   await first.request('project.update', { projectId: project.id, revision: project.revision, patch: { shots: [0, 1].map(index => ({ id: `shot-${index}`, title: `镜头${index}`, narration: `shot-${index}`, visualPrompt: '', durationUs: 1_000_000 })), workflow: { id: 'parallel', version: 1, name: 'parallel', production: { mode: 'native-video', referenceMode: 'none', soundPrompt: '', subtitleMode: 'off' }, nodes: [{ id: 'images', kind: 'assets', label: '图片', modelId: model.id }], edges: [], execution: { maxConcurrentShots: 2, modelLimits: { [model.id]: 2 } } } } });
-  const run = await first.request<RunRecord>('run.start', { projectId: project.id }); await ambiguous;
+  const run = await first.requestConfirmed<RunRecord>('run.start', { projectId: project.id }); await ambiguous;
   const receipt = join(directory, 'projects', project.id, 'activities', createHash('sha256').update(`${run.id}:images`).digest('hex').slice(0, 24), `${createHash('sha256').update('shot-0').digest('hex').slice(0, 24)}.receipt.json`);
   try {
     await expect.poll(async () => { try { return JSON.parse(await readFile(receipt, 'utf8')).state; } catch { return ''; } }, { timeout: processTimeout }).toBe('completed');
@@ -257,7 +261,7 @@ it('never repeats an unknown parallel submission after SIGKILL and reopening the
     } finally { observer.close(); }
   }
   await first.kill(); expect(posts).toBe(2);
-  const second = new RpcProcess(directory); await second.request('run.resume', { runId: run.id });
+  const second = new RpcProcess(directory); await second.requestConfirmed('run.resume', { runId: run.id });
   await expect.poll(async () => (await second.request<WorkspaceSnapshot>('workspace.snapshot')).runs.find(value => value.id === run.id)?.status, { timeout: processTimeout }).toBe('failed'); expect(posts).toBe(2);
   const inspection = await second.request<RunInspection>('run.inspect', { runId: run.id }); expect(inspection.steps[0].reason).toContain('核对');
 });
@@ -274,7 +278,7 @@ it('keeps cancellation terminal across a hard exit with a pending parallel downl
   const first = new RpcProcess(directory), project = await first.request<ProjectDocument>('project.create', { title: '并行下载取消' });
   const model = await first.request<{ id: string }>('model.save', { model: { name: '取消夹具', provider: 'custom-http', baseUrl: base, model: 'fixture', connectionType: 'image', capabilities: ['image'], parameters: { requestPath: 'generate', requestTemplate: { name: '{{narration}}' }, resultUrlPath: 'url' } } });
   await first.request('project.update', { projectId: project.id, revision: project.revision, patch: { shots: [0, 1].map(index => ({ id: `shot-${index}`, title: `镜头${index}`, narration: `shot-${index}`, visualPrompt: '', durationUs: 1_000_000 })), workflow: { id: 'parallel', version: 1, name: 'parallel', production: { mode: 'native-video', referenceMode: 'none', soundPrompt: '', subtitleMode: 'off' }, nodes: [{ id: 'images', kind: 'assets', label: '图片', modelId: model.id }], edges: [], execution: { maxConcurrentShots: 2, modelLimits: { [model.id]: 2 } } } } });
-  const run = await first.request<RunRecord>('run.start', { projectId: project.id }); await downloading; await first.request('run.cancel', { runId: run.id });
+  const run = await first.requestConfirmed<RunRecord>('run.start', { projectId: project.id }); await downloading; await first.request('run.cancel', { runId: run.id });
   await expect.poll(async () => (await first.request<WorkspaceSnapshot>('workspace.snapshot')).runs.find(value => value.id === run.id)?.activities[0]?.status, { timeout: processTimeout }).toBe('unknown'); await first.kill();
-  const second = new RpcProcess(directory); await expect(second.request('run.resume', { runId: run.id })).rejects.toThrow('已经结束'); expect((await second.request<WorkspaceSnapshot>('workspace.snapshot')).runs.find(value => value.id === run.id)?.status).toBe('canceled'); expect(posts).toBe(2);
+  const second = new RpcProcess(directory); await expect(second.requestConfirmed('run.resume', { runId: run.id })).rejects.toThrow('已经结束'); expect((await second.request<WorkspaceSnapshot>('workspace.snapshot')).runs.find(value => value.id === run.id)?.status).toBe('canceled'); expect(posts).toBe(2);
 });

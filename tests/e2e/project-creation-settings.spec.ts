@@ -86,6 +86,44 @@ test('keeps 60fps when choosing series settings from an existing 30fps project w
   expect(observed.writes).toEqual(['project.create']); expect(observed.errors).toEqual([]);
 });
 
+test('lists built-in templates by name and creates a portrait project with the matching Skill', async ({ page, request }, info) => {
+  const custom = await rpc<SeriesTemplate>(request, 'seriesTemplate.save', { template: { name: '自定义系列模板', description: '', settings: { style: '', captionStyle: null, scenePreset: null } } });
+  const observed = observe(page);
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  const dialog = await openCreation(page, '竖屏真人短剧验收');
+  const selector = dialog.getByLabel('系列模板（可选）', { exact: true });
+  const builtIn = selector.locator('optgroup[label="系统内置"] option');
+  await expect(builtIn).toHaveText(['AI 漫剧 · 国风水墨', 'AI 漫剧 · 动态条漫', 'AI 短剧 · 竖屏真人']);
+  await expect(selector.locator(`option[value="${custom.id}"]`)).toHaveText(custom.name);
+
+  await selector.click();
+  await expect.poll(() => selector.evaluate(element => element.matches(':open'))).toBe(true);
+  await page.screenshot({ path: info.outputPath('builtin-drama-template-picker.png') });
+  await selector.press('Escape');
+  const picker = dialog.getByRole('button', { name: '创作 Skill（可选）', exact: true });
+  await selector.selectOption({ label: 'AI 漫剧 · 动态条漫' });
+  await expect(picker).toContainText('已选 1 个');
+  await selector.selectOption('');
+  await expect(picker).toContainText('已选 0 个');
+  await selector.selectOption({ label: 'AI 短剧 · 竖屏真人' });
+  await expect(picker).toContainText('已选 1 个');
+  const template = await rpc<SeriesTemplate>(request, 'seriesTemplate.get', { templateId: await selector.inputValue() });
+  const { project } = await submit(page, dialog);
+  expect(project).toMatchObject({ ...template.settings, shots: [], profile: { width: 1080, height: 1920 } });
+  expect(project.workflow.production.agentSkillIds).toEqual(template.creationDefaults!.skillIds);
+  expect(project.workflow.nodes.find(node => node.kind === 'script')!.skillIds).toEqual(template.creationDefaults!.skillIds);
+
+  await page.getByRole('button', { name: '素材库', exact: true }).click();
+  await page.getByRole('button', { name: '图片', exact: true }).click();
+  for (const name of ['巴黎石板巷', '大桥骤雨', '云山隐居图']) {
+    const image = page.getByRole('img', { name: `内置参考 · ${name}`, exact: true });
+    await image.scrollIntoViewIfNeeded();
+    await expect.poll(() => image.evaluate(element => (element as HTMLImageElement).naturalWidth)).toBeGreaterThan(0);
+  }
+  expect(observed.writes).toEqual(['project.create']);
+  expect(observed.errors).toEqual([]);
+});
+
 test('starts project creation with a selected template from a later library page', async ({ page, request }, info) => {
   const settings = { style: '暖色手绘科普', captionStyle: { ...DEFAULT_CAPTION_STYLE, textColor: '#225588' }, scenePreset: { kind: 'comparison', palette: 'amber', motion: 'none' } };
   const template = await rpc<SeriesTemplate>(request, 'seriesTemplate.save', { template: { name: '手绘科普系列', description: '', settings } });
@@ -133,7 +171,7 @@ test('preserves existing 30fps data and keeps complete frame-rate and dimension 
   const project = await rpc<ProjectDocument>(request, 'project.update', { projectId: source.id, revision: source.revision, patch: { shots: [{ id: 'existing-profile-shot', title: '保持现有素材与时长', narration: '', visualPrompt: '', durationUs: 1_000_000, sceneTemplate: createSceneTemplate('process') }] } });
   const observed = observe(page); await page.emulateMedia({ reducedMotion: 'reduce' }); await page.goto('/'); await openProjectFromList(page, project.title);
   expect(await saved(request, project.id)).toEqual(project); await page.locator('.project-heading-actions').getByRole('button', { name: '制作设置', exact: true }).click();
-  const panel = page.getByRole('dialog', { name: '制作设置', exact: true }); await productionStep(panel, '声音与成片');
+  const panel = page.getByRole('dialog', { name: '制作设置', exact: true }); await productionStep(panel, '创作要求');
   await expect(panel.getByLabel('视频宽度', { exact: true })).toHaveValue('800'); await expect(panel.getByLabel('视频高度', { exact: true })).toHaveValue('1000');
   const rate = await settingField(panel, '视频帧率'); await expect(rate).toHaveValue('30');
   for (const value of ['4:5', '21:9']) await expect(panel.getByLabel('画面比例', { exact: true }).locator(`option[value="${value}"]`)).toHaveCount(1);

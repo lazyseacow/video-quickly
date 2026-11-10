@@ -45,6 +45,7 @@ await copyModule('pdfjs-dist',fromPdf);
 await writeFile(join(stage,'package.json'),JSON.stringify({name:'video-quickly-runtime',version:'0.1.0',private:true,type:'module'}));
 await cp(runtime,join(stage,'runtime.mjs'));
 await cp(join(root,'packages/runtime/dist/pdf-process.mjs'),join(stage,'pdf-process.mjs'));
+await cp(join(root,'packages/runtime/dist/builtin-drama-media'),join(stage,'builtin-drama-media'),{recursive:true});
 const mediaRoot=process.env.VIDEO_QUICKLY_MEDIA_DIR;
 if(mediaRoot){
   const mediaSource=resolve(mediaRoot);

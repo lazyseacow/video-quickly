@@ -25,6 +25,7 @@ await build({
   }],
 });
 await cp(resolve(root, 'packages/integrations/src/pdf-process.mjs'), resolve(root, 'packages/runtime/dist/pdf-process.mjs'));
+await cp(resolve(root, 'packages/runtime/src/builtin-drama-media'), resolve(root, 'packages/runtime/dist/builtin-drama-media'), { recursive: true });
 
 // The desktop shell uses the same file-only logger as the standalone runtime.
 // Bundle its Node entry so production never depends on workspace source paths.

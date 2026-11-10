@@ -63,7 +63,11 @@ export async function verifyNativeMediaExtensions({ page, rpc, openProject, fixt
     const checkbox = candidates.getByRole('checkbox', { name: '局部改图：保留原图并修改选中区域', exact: true }); await expect(checkbox).toBeEnabled(); await checkbox.check();
     for (const [name, value] of [['左侧像素', '10'], ['顶部像素', '12'], ['区域宽度', '40'], ['区域高度', '30']]) await candidates.getByRole('spinbutton', { name, exact: true }).fill(value);
     await candidates.getByRole('textbox', { name: '本次调整要求', exact: true }).fill('原生包中只修改所选木盒区域');
-    await candidates.getByRole('button', { name: '生成候选', exact: true }).click(); await expect(candidates.getByAltText('候选画面')).toBeVisible();
+    await candidates.getByRole('button', { name: '生成候选', exact: true }).click();
+    const billing = page.getByRole('alertdialog', { name: '生成镜头候选？', exact: true });
+    await expect(billing).toContainText('可能产生费用'); assert.equal(calls.image.length, 0);
+    await billing.getByRole('button', { name: '确认生成', exact: true }).click();
+    await expect(candidates.getByAltText('候选画面')).toBeVisible();
     assert.equal(calls.image.length, 1); assert.deepEqual(calls.image[0].source, sourceBytes); assert.deepEqual(calls.image[0].mask, await readFile(mask.path));
     assert.deepEqual(await current(), project);
     const candidate = (await rpc('shot.candidates', { projectId: project.id, shotId: project.shots[0].id })).items[0]; assert.ok(candidate);
@@ -77,7 +81,11 @@ export async function verifyNativeMediaExtensions({ page, rpc, openProject, fixt
     const textModel = await rpc('model.save', { model: { name: '原生修改建议夹具', provider: 'openai-compatible', connectionType: 'text', capabilities: ['text'], baseUrl: `http://127.0.0.1:${address.port}/v1`, model: 'fixture-text' } });
     project = await current(); const baseline = project.workflow.nodes.find(node => node.kind === 'brief'); assert.ok(baseline);
     const input = { projectId: project.id, revision: project.revision, node: baseline, modelId: textModel.id, instruction: '请简化为缓慢推近木盒', requestId: randomUUID() };
-    const suggestion = await rpc('workflowAssistant.start', input);
+    const startSuggestion = async () => {
+      const prepared = await rpc('billing.prepare', { method: 'workflowAssistant.start', params: input });
+      return rpc('workflowAssistant.start', { ...input, chargeConfirmationId: prepared.confirmationId });
+    };
+    const suggestion = await startSuggestion();
     await expect.poll(async () => (await rpc('run.get', { runId: suggestion.run.id })).status).toBe('succeeded');
     const result = await rpc('node.result', { runId: suggestion.run.id, nodeId: suggestion.nodeId }); assert.equal(result.proposal.patch.prompt, '原生建议：缓慢推近木盒。');
     const snapshot = await rpc('run.step.payload', { runId: suggestion.run.id, nodeId: suggestion.nodeId, kind: 'input' }); assert.equal(snapshot.value.project.revision, project.revision); assert.equal(snapshot.value.model.id, textModel.id);

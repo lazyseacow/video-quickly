@@ -43,8 +43,14 @@ export default function MusicEditor({ clips, assets, durationUs, onClose, onAppl
     finally { setBusy(false); }
   }
   return <Dialog title="背景音乐" onClose={onClose} className="dialog--wide"><div className="dialog__body music-editor">
-    <div className="music-editor__add"><Field label="从素材库添加音乐"><Select value="" disabled={busy} onChange={event => { if (event.target.value) add(event.target.value); }}><option value="">选择音频素材…</option>{audio.map(asset => <option key={asset.id} value={asset.id}>{asset.name}</option>)}</Select></Field><span className="tiny-meta">音乐按项目时间播放；镜头重排不会移动音乐。</span></div>
-    <details className="music-editor__import"><summary>导入音乐文件</summary><Field label="音乐文件路径"><PathPicker label="音乐文件路径" value={path} onChange={setPath} extensions={['wav', 'mp3', 'm4a', 'ogg']} disabled={busy} /></Field><Button aria-label="导入并添加" disabled={busy || !path.trim()} onClick={() => void importAudio()}><Plus size={14} />导入</Button></details>
+    <div className="music-editor__controls">
+      <div className="music-editor__add"><Field label="从素材库添加音乐"><Select value="" disabled={busy} onChange={event => { if (event.target.value) add(event.target.value); }}><option value="">选择音频素材…</option>{audio.map(asset => <option key={asset.id} value={asset.id}>{asset.name}</option>)}</Select></Field><span className="tiny-meta">音乐按项目时间播放；镜头重排不会移动音乐。</span></div>
+      <details className="form-disclosure music-editor__import">
+        <summary>导入音乐文件</summary>
+        <Field label="音乐文件路径"><PathPicker label="音乐文件路径" value={path} onChange={setPath} extensions={['wav', 'mp3', 'm4a', 'ogg']} disabled={busy} /></Field>
+        <Button aria-label="导入并添加" disabled={busy || !path.trim()} onClick={() => void importAudio()}><Plus size={14} />导入</Button>
+      </details>
+    </div>
     {!draft.length && <p className="tiny-meta">添加音乐后可设置位置、音量、循环与淡入淡出。</p>}
     {draft.map((clip, index) => <MusicFields key={clip.id} clip={clip} index={index} assets={audio} disabled={busy}
       onChange={next => setDraft(current => current.map(item => item.id === clip.id ? next : item))}

@@ -87,24 +87,24 @@ function capture(input: ThumbnailRequest, signal: AbortSignal): Promise<Thumbnai
     video.dataset.previewRole = 'thumbnail';
     video.muted = true; video.playsInline = true; video.preload = 'auto';
     let settled = false, timeout: ReturnType<typeof setTimeout> | undefined;
-    let controller: ReturnType<typeof createPreviewVideoController> | undefined;
-    const range = { startUs: input.timeUs, endUs: input.timeUs + 1 };
-    const cleanup = () => { if (timeout !== undefined) clearTimeout(timeout); signal.removeEventListener('abort', cancel); controller?.dispose(); };
+    const cleanup = () => { if (timeout !== undefined) clearTimeout(timeout); signal.removeEventListener('abort', cancel); controller.dispose(); };
     const fail = (error: unknown) => { if (settled) return; settled = true; cleanup(); reject(error); };
     const cancel = () => fail(aborted());
     const ready = () => {
-      if (settled || video.seeking || video.readyState < 2) return;
-      const source = controller?.frameForPaint(range); if (!source) return;
-      const scale = Math.min(1, input.width / video.videoWidth, input.height / video.videoHeight);
-      const image = document.createElement('canvas'); image.width = Math.max(1, Math.round(video.videoWidth * scale)); image.height = Math.max(1, Math.round(video.videoHeight * scale));
+      const { videoWidth, videoHeight } = video;
+      if (settled || video.seeking || video.readyState < 2 || !videoWidth || !videoHeight) return;
+      const scale = Math.min(1, input.width / videoWidth, input.height / videoHeight);
+      const image = document.createElement('canvas');
+      image.width = Math.max(1, Math.round(videoWidth * scale));
+      image.height = Math.max(1, Math.round(videoHeight * scale));
       const context = image.getContext('2d'); if (!context) { fail(new Error('无法读取视频缩略图')); return; }
-      try { context.drawImage(source, 0, 0, image.width, image.height); }
+      try { context.drawImage(video, 0, 0, image.width, image.height); }
       catch (error) { fail(error); return; }
       settled = true; cleanup(); resolve({ image, width: image.width, height: image.height });
     };
-    controller = createPreviewVideoController(video, { onReady: ready, onFrame: ready, onError: message => fail(new Error(message)), frameSize: () => input });
-    // A one-microsecond range requests an accurate source sample, including a held tail frame.
-    controller.synchronize(input.timeUs, false, 30, 'thumbnail', range);
+    const controller = createPreviewVideoController(video, { onReady: ready, onFrame: ready, onError: message => fail(new Error(message)) });
+    // The paused seek produces a usable frame even if the browser adjusts its reported position.
+    controller.synchronize(input.timeUs, false, 30, 'thumbnail');
     signal.addEventListener('abort', cancel, { once: true });
     timeout = setTimeout(() => fail(new Error('视频缩略图读取超时')), 8_000);
     void getAssetUrl(input.asset.path).then(url => { if (!settled) { video.src = assetAvailabilityUrl(url, input.asset.id); video.load(); } }).catch(fail);

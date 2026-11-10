@@ -1,3 +1,4 @@
+import { confirmAction } from './confirmation-actions';
 import { expect, test } from '@playwright/test';
 import { type ModelProfile, type ProjectDocument, type RunSummary } from '@video-quickly/contracts';
 import { fixture, latest, open, pick, rpc, saved } from './native-video-fixture';
@@ -33,6 +34,10 @@ for (const viewport of [{ width: 1536, height: 960, theme: 'dark', shotCount: 3 
       await expect(dialog.getByLabel('生成内容', { exact: true })).toHaveCount(0); await expect(dialog.getByLabel('生成模型', { exact: true })).toHaveCount(0);
       const beforeGeneration = await saved(request, source.project.id);
       await dialog.getByRole('button', { name: '生成候选', exact: true }).click();
+      const estimate = page.getByRole('alertdialog').getByRole('region', { name: '生成与费用预估' });
+      await expect(estimate).toContainText(source.video.name);
+      await expect(estimate).toContainText('1 段视频');
+      await confirmAction(page, '确认生成');
       await expect(dialog.getByRole('button', { name: '应用所选候选', exact: true })).toBeEnabled({ timeout: 30000 });
       expect(source.requests).toHaveLength(generationCount + 1);
       const submitted = source.requests.at(-1)!;

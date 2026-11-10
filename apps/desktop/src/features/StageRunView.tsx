@@ -1,16 +1,16 @@
 import { useEffect, useId, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { ClipboardList, FileCheck2, RefreshCw, Settings2 } from 'lucide-react';
+import { ClipboardList, RefreshCw, Settings2 } from 'lucide-react';
 import { isModelGenerationNode, runInspectionSchema, type RunStepSummary, type RunSummary, type WorkflowNode } from '@video-quickly/contracts';
-import { Button, EmptyState, IconButton, Notice, Status } from '../components/Primitives';
-import { rpc } from '../lib/client';
+import { Button, EmptyState, IconButton, Notice } from '../components/Primitives';
+import { useChargeRpc } from '../components/ConfirmationDialog';
 import { useRuntimeRead } from '../lib/use-runtime-read';
 import { isConfigurationFailure } from '../lib/run-recovery';
-import { stepRetryLabel } from '../lib/run-progress';
+import { runningStep, stepRetryLabel } from '../lib/run-progress';
 import { generationLabel } from '../lib/workbench-stages';
 import type { StepOutputSelection } from '../lib/types';
 import type { PlanningControls } from '../lib/planning-edits';
-import { CurrentStepResult, StepStatus } from './RunInspector';
+import { CurrentStepResult, SavedOutputIcon, StepStatus } from './RunInspector';
 import './stage-run-view.css';
 
 export interface StageRunViewProps {
@@ -41,6 +41,7 @@ export default function StageRunView(props: StageRunViewProps) {
 function RecordedStageRun({ runId, stageId, nodeIds, configurableNodeIds = nodeIds, initialNodeId, flat = false, nodes = [], version, actionsTarget, onNotice, onOpenOutput, onConfigure, onChanged, planning }: StageRunViewProps & { runId: string }) {
   const inspection = useRuntimeRead('run.inspect', { runId }, version, runInspectionSchema);
   const [selectedId, setSelectedId] = useState(initialNodeId ?? '');
+  const chargeRpc = useChargeRpc();
   const [pending, setPending] = useState('');
   const [error, setError] = useState('');
   const inFlight = useRef(false);
@@ -92,7 +93,10 @@ function RecordedStageRun({ runId, stageId, nodeIds, configurableNodeIds = nodeI
   async function perform(method: 'run.resume' | 'run.cancel' | 'run.step.retry', params: Record<string, unknown> = {}) {
     if (inFlight.current) return;
     inFlight.current = true; setPending(method); setError('');
-    try { await rpc(method, { runId, ...params }); inspection.refresh(); onChanged?.(); }
+    try {
+      if (await chargeRpc(method, { runId, ...params }) === null) return;
+      inspection.refresh(); onChanged?.();
+    }
     catch (failure) { setError(failure instanceof Error ? failure.message : String(failure)); inspection.refresh(); }
     finally { inFlight.current = false; setPending(''); }
   }
@@ -106,11 +110,22 @@ function RecordedStageRun({ runId, stageId, nodeIds, configurableNodeIds = nodeI
     {error && <Notice kind="error">{error}</Notice>}
     {!data && !inspection.error && <p role="status">正在读取本次制作…</p>}
     {data && <>
-      <header className="stage-run-view__summary"><div><p className="stage-run-view__completion"><strong>{steps.filter(step => ['succeeded', 'skipped'].includes(step.status)).length}</strong><span>/ {steps.length} 项任务完成</span></p><time dateTime={data.run.createdAt}>{new Date(data.run.createdAt).toLocaleString('zh-CN')}</time></div><div className="stage-run-view__summary-actions"><Status value={data.run.status} /><IconButton label={flat ? '刷新制作记录' : '刷新阶段制作'} disabled={inspection.busy || Boolean(pending)} onClick={inspection.refresh}><RefreshCw size={16} className={inspection.busy ? 'spin' : undefined} /></IconButton></div></header>
+      <header className="stage-run-view__summary">
+        <div><p className="stage-run-view__completion"><strong>{steps.filter(step => ['succeeded', 'skipped'].includes(step.status)).length}</strong><span>/ {steps.length} 项任务完成</span></p><time dateTime={data.run.createdAt}>{new Date(data.run.createdAt).toLocaleString('zh-CN')}</time></div>
+        <IconButton label={flat ? '刷新制作记录' : '刷新阶段制作'} disabled={inspection.busy || Boolean(pending)} onClick={inspection.refresh}><RefreshCw size={16} className={inspection.busy ? 'spin' : undefined} /></IconButton>
+      </header>
       {failed && <Notice kind="error"><div className="stage-run-view__failure"><div><strong>{failed.label}未完成</strong><p>{failed.error || failed.reason}</p>{!nodeIds.some(nodeId => failed.id === nodeId || failed.id.startsWith(`${nodeId}/subflow/`)) && <p>此步骤已移出当前阶段，请从顶部“制作设置”核对当前任务配置。</p>}</div>{failedConfigureId && <Button onClick={() => onConfigure?.(failedConfigureId)}><Settings2 size={16} />修复配置</Button>}</div></Notice>}
       {steps.length > 0 ? <>
         <div className="run-inspector__layout">
-          <nav ref={navigation} className="run-inspector__steps" aria-label={flat ? '本次制作步骤' : '本阶段制作步骤'}>{entries.map((entry, index) => <button type="button" key={entry.id} aria-current={selectedEntry?.id === entry.id ? 'step' : undefined} onClick={() => setSelectedId(entry.id)}><span className="run-inspector__index">{String(index + 1).padStart(2, '0')}</span><span><strong>{entry.label}</strong>{entry.step ? <StepStatus step={entry.step} /> : <span className="run-inspector__state">未纳入本次制作</span>}</span>{entry.step?.outputAvailable && <FileCheck2 className="stage-run-view__saved" size={16} aria-label="已保存产物" />}</button>)}</nav>
+          <nav ref={navigation} className="run-inspector__steps" aria-label={flat ? '本次制作步骤' : '本阶段制作步骤'}>{entries.map((entry, index) => {
+            const isSelected = selectedEntry?.id === entry.id;
+            const showStatus = !isSelected && (!entry.step || !runningStep(entry.step.status));
+            return <button type="button" key={entry.id} aria-current={isSelected ? 'step' : undefined} onClick={() => setSelectedId(entry.id)}>
+              <span className="run-inspector__index">{String(index + 1).padStart(2, '0')}</span>
+              <span><strong>{entry.label}</strong>{showStatus && (entry.step ? <StepStatus step={entry.step} overview /> : <span className="run-inspector__state">未纳入本次制作</span>)}</span>
+              {entry.step?.outputAvailable && <SavedOutputIcon />}
+            </button>;
+          })}</nav>
           {selected && <CurrentStepResult key={`${runId}:${selected.id}`} inspection={data} step={selected} version={version} onOpenOutput={onOpenOutput} planning={planning} retry={{ busy: pending === 'run.step.retry', disabled: blocked, onRetry: () => retryStep(selected.id), footerDescriptionId: footerRetry ? retryDescriptionId : undefined }} />}
           {!selected && selectedEntry && <div className="run-inspector__detail stage-run-view__empty"><h3>{selectedEntry.label}</h3><p>这次制作未包含此步骤。</p></div>}
         </div>

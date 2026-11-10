@@ -1,11 +1,12 @@
 import { lazy, Suspense, useCallback, useEffect, useId, useLayoutEffect, useRef, useState } from 'react';
 import { ChevronLeft, ChevronRight, Ellipsis, WandSparkles } from 'lucide-react';
-import { VIDEO_FIT_MODE_LABELS, applyWorkflowProposal, formatFrameRate, formatPlanningDocument, planningDocumentSchemas, productionEditingSkillIds, productionEditingStep, productionModelSetting, productionPlanningStep, productionPlanningSteps, productionSettingsSchema, projectSchema, resolveProductionWorkflow, supportsProductionAgent, usesManualPlanning, videoAspectRatioPreset, videoProfileSchema, type AssetRecord, type PlanningDocumentKind, type ProductionPlanningStep, type ProductionSettings, type ProjectDocument, type PromptDraft, type RunSummary, type WorkflowDefinition, type WorkflowNode, type WorkflowStage } from '@video-quickly/contracts';
+import { VIDEO_FIT_MODE_LABELS, applyWorkflowProposal, formatFrameRate, formatPlanningDocument, getMediaAdapters, planningDocumentSchemas, productionEditingSkillIds, productionEditingStep, productionModelSetting, productionPlanningStep, productionPlanningSteps, productionSettingsSchema, resolveProductionWorkflow, supportsAutomaticCasting, supportsProductionAgent, usesManualPlanning, videoAspectRatioPreset, videoProfileSchema, type AssetRecord, type PlanningDocumentKind, type ProductionPlanningStep, type ProductionSettings, type ProjectDocument, type PromptDraft, type RunSummary, type WorkflowDefinition, type WorkflowNode, type WorkflowStage } from '@video-quickly/contracts';
 import type { WorkspaceView, StepOutputSelection } from '../lib/types';
-import { planningLabels, type PlanningControls } from '../lib/planning-edits';
+import { planningLabels, storyboardDraftSchema, type PlanningControls } from '../lib/planning-edits';
 import type { ProductionProjectSettings } from '../lib/stage-configuration-draft';
 import { matchingStepModels, stepGuidance } from '../lib/workflow-guidance';
 import { readPlanningPrefill } from '../lib/planning-prefill';
+import { useChargeRpc } from './ConfirmationDialog';
 import { Button, Combobox, Dialog, Field, Notice, Select } from './Primitives';
 import SettingsSections from './SettingsSections';
 import VideoSettings from './VideoSettings';
@@ -30,7 +31,6 @@ const unifiedModelFields = [
 ] as const;
 const planningSourceLabels = { brief: '简报来源', style: '风格来源', script: '分镜来源' };
 const prefillLabels = { brief: 'AI 填写简报', style: 'AI 填写风格', script: 'AI 填写分镜' };
-const storyboardDraftSchema = projectSchema.pick({ shots: true, creativeContext: true });
 type ConfigurationStep = typeof steps[number]['id'];
 export interface ProductionConfiguration { nodes: WorkflowNode[]; production: ProductionSettings; project: ProductionProjectSettings; execution: WorkflowDefinition['execution']; }
 
@@ -44,6 +44,7 @@ export default function ProductionSettingsDialog({ project, projectId, projectRe
   onOpenTool: (action: ProjectSettingsAction) => void; onSectionChange?: (section: string) => void;
   onImportReferenceAudio: (path: string) => Promise<AssetRecord | undefined>;
 }) {
+  const chargeRpc = useChargeRpc();
   const [settings, setSettings] = useState(() => productionSettingsSchema.parse(workflow.production));
   const [fields, setFields] = useState<ProductionProjectSettings>(() => ({ brief: project.brief, style: project.style, profile: project.profile, creativeContext: project.creativeContext }));
   const [documents, setDocuments] = useState(() => ({
@@ -100,6 +101,8 @@ export default function ProductionSettingsDialog({ project, projectId, projectRe
   const flat = flatRecords ?? workflow.id === 'native-video';
   const active = Boolean(run && ['queued', 'running', 'waiting_review', 'waiting_external', 'retry_scheduled'].includes(run.status));
   const resolved = resolveProductionWorkflow({ ...workflow, nodes, production: settings, execution });
+  const automaticCasting = supportsAutomaticCasting(resolved);
+  const showImageModel = automaticCasting || settings.referenceMode === 'generate';
   const planningSteps = productionPlanningSteps.filter(kind => resolved.nodes.some(node => productionPlanningStep(resolved, node) === kind));
   const manualSteps = planningSteps.filter(kind => settings.manualPlanningSteps?.includes(kind));
   const shotCount = planning?.project.shots.length ?? 0;
@@ -107,6 +110,7 @@ export default function ProductionSettingsDialog({ project, projectId, projectRe
   const modelFields = unifiedModelFields.map(field => {
     const tasks = requiredModelTasks.filter(node => productionModelSetting(node) === field.key);
     const models = workspace.models.filter(model => model.enabled && model.capabilities.includes(field.capability)
+      && (field.key !== 'imageModelId' || getMediaAdapters(['image']).some(adapter => adapter.id === model.provider))
       && tasks.every(node => matchingStepModels(node, [model]).length > 0));
     return { ...field, models, required: tasks.length > 0 };
   });
@@ -145,6 +149,7 @@ export default function ProductionSettingsDialog({ project, projectId, projectRe
   function requestTool(tool: ProjectSettingsAction) { setRequestedTool(tool); selectStep('review', true); }
   async function prefill(kind: ProductionPlanningStep) {
     if (inFlight.current || active || !projectId || !projectRevision || !planning || configurationError) return;
+    if (!validateProfile()) return;
     const node = resolved.nodes.find(node => productionPlanningStep(resolved, node) === kind);
     if (!node?.modelId || !workspace.models.some(model => model.id === node.modelId && model.enabled && model.capabilities.includes('text'))) {
       selectStep('materials', true); setError('请先选择文本模型，再返回创作要求使用 AI 填写。');
@@ -157,12 +162,12 @@ export default function ProductionSettingsDialog({ project, projectId, projectRe
     prefillRequest.current = request;
     inFlight.current = true; setPending(kind); setError('');
     try {
-      const output = await readPlanningPrefill(draft, request.id, () => !closed.current, () => { prefillRequest.current = undefined; });
-      if (closed.current) return;
+      const output = await readPlanningPrefill(draft, request.id, () => !closed.current, () => { prefillRequest.current = undefined; }, chargeRpc);
+      if (closed.current || output === undefined) return;
       if (latestRevision.current !== projectRevision) throw new Error('生成期间项目已更新，请按当前内容重新填写。');
       if (!output || typeof output !== 'object' || Array.isArray(output)) throw new Error('AI 草稿没有可回填的字段。');
       if (kind === 'script') {
-        planning.onEdit('script', { storyboard: storyboardDraftSchema.parse(output), onSaved(context) {
+        planning.onEdit('script', { storyboard: storyboardDraftSchema.parse(output), profile: fields.profile, onSaved(context) {
           updatePlanningSource('script', true);
           setFields(current => ({ ...current, creativeContext: context }));
           showNotice('分镜已保存，后续制作会使用修改后的镜头。');
@@ -176,6 +181,19 @@ export default function ProductionSettingsDialog({ project, projectId, projectRe
     } catch (failure) { if (!closed.current) setError(failure instanceof Error ? failure.message : 'AI 填写未完成。'); }
     finally { inFlight.current = false; if (!closed.current) setPending(undefined); }
   }
+  function validateProfile() {
+    const result = videoProfileSchema.safeParse(fields.profile);
+    if (result.success) return true;
+    selectStep('planning'); setError('请检查分镜尺寸与帧率。');
+    const field = result.error.issues[0]?.path[0];
+    const label = field === 'frameRate' ? '视频帧率' : field === 'height' ? '视频高度' : '视频宽度';
+    requestAnimationFrame(() => {
+      const control = form.current?.querySelector<HTMLElement>(`[aria-label="${label}"]`);
+      for (let details = control?.closest('details'); details; details = details.parentElement?.closest('details')) details.open = true;
+      control?.focus();
+    });
+    return false;
+  }
   function validate(all = false) {
     if (all || step === 'planning') for (const kind of ['brief', 'style'] as const) {
       if (!manualSteps.includes(kind)) continue;
@@ -187,15 +205,7 @@ export default function ProductionSettingsDialog({ project, projectId, projectRe
       requestAnimationFrame(() => form.current?.querySelector<HTMLElement>(`[data-planning-field="${CSS.escape(field)}"]`)?.focus());
       return false;
     }
-    if ((all || step === 'delivery') && !videoProfileSchema.safeParse(fields.profile).success) {
-      selectStep('delivery'); setError('请检查成片尺寸与帧率。');
-      requestAnimationFrame(() => {
-        const details = form.current?.querySelector<HTMLDetailsElement>('.video-settings__advanced');
-        if (details) details.open = true;
-        form.current?.querySelector<HTMLInputElement>('[aria-label="视频宽度"]')?.focus();
-      });
-      return false;
-    }
+    if ((all || step === 'planning') && !validateProfile()) return false;
     const target = all ? form.current : form.current?.querySelector(`[data-production-step="${step}"]`);
     const invalid = target?.querySelector<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>('input:invalid, select:invalid, textarea:invalid');
     if (!invalid) return true;
@@ -306,6 +316,12 @@ export default function ProductionSettingsDialog({ project, projectId, projectRe
       {records ? <div className="production-settings__run">{flat ? <Suspense fallback={<p role="status">正在读取制作记录…</p>}><StageRunView flat planning={planning} runId={run?.id} nodes={resolved.nodes} nodeIds={resolved.nodes.map(node => node.id)} initialNodeId={initialNodeId} version={version} actionsTarget={runActionsTarget} onNotice={showNotice} onOpenOutput={onOpenOutput} configurableNodeIds={[]} /></Suspense> : <SettingsSections label="制作阶段记录" layout="tabs" value={runStage} onValueChange={setRunStage} sections={stages.map(item => ({ id: item.id, label: item.label, content: item.id === selectedStage?.id ? <Suspense fallback={<p role="status">正在读取制作记录…</p>}><StageRunView planning={planning} runId={run?.id} stageId={item.id} nodeIds={item.nodeIds} initialNodeId={initialNodeId} version={version} actionsTarget={runActionsTarget} onNotice={showNotice} onOpenOutput={onOpenOutput} configurableNodeIds={[]} /></Suspense> : null }))} />}</div> : <form ref={form} noValidate className="production-settings__form" onSubmit={event => { event.preventDefault(); if (step === 'review') void submit(); else next(); }}>
         <fieldset disabled={Boolean(pending)} className="production-settings__fieldset"><div ref={content} className="dialog__scroll production-settings__content">
           <section className="form-stack" data-production-step="planning" hidden={step !== 'planning'} aria-label="创作要求配置" tabIndex={-1}>
+            <details className="form-disclosure production-settings__storyboard">
+              <summary><span>分镜全局参数</span><small>{width} × {height} · {formatFrameRate(frameRate)} fps</small></summary>
+              <div className="form-disclosure__body" role="group" aria-label="分镜全局参数">
+                <VideoSettings mode="generation" profile={fields.profile} onChange={profile => setFields(current => ({ ...current, profile }))} />
+              </div>
+            </details>
             {planningSteps.length > 0 && <div role="group" aria-label="策划内容来源" className="production-settings__models production-settings__planning-sources">
               {planningSteps.map(kind => <div key={kind} className="production-settings__planning-source">
                 <Field label={planningSourceLabels[kind]}>
@@ -326,7 +342,10 @@ export default function ProductionSettingsDialog({ project, projectId, projectRe
             </div>
             {manualSteps.includes('script') && <div className="production-settings__planning-note">
               <p>项目分镜<span className="field__required" aria-hidden="true">*</span> · {shotCount ? `已填写 ${shotCount} 个镜头` : '请至少填写一个镜头'}</p>
-              {planning && <Button ref={storyboardEditor} static disabled={Boolean(planning.disabledReason)} onClick={() => { setError(''); planning.onEdit('script'); }}>{shotCount ? '编辑项目分镜' : '填写项目分镜'}</Button>}
+              {planning && <Button ref={storyboardEditor} static disabled={Boolean(planning.disabledReason)} onClick={() => {
+                if (!validateProfile()) return;
+                setError(''); planning.onEdit('script', { profile: fields.profile });
+              }}>{shotCount ? '编辑项目分镜' : '填写项目分镜'}</Button>}
             </div>}
             <CreativeContextEditor floatingSections value={fields.creativeContext} version={version} usedEntityKeys={usedEntityKeys} onChange={creativeContext => setFields(current => ({ ...current, creativeContext }))} />
             <ProjectSettingsActions items={['series', 'saveSeries']} onAction={requestTool} />
@@ -361,18 +380,16 @@ export default function ProductionSettingsDialog({ project, projectId, projectRe
             {!textField.required && hasEditingStep && <p className="production-settings__agent-help">文本模型可选，供剪辑 Agent 使用。</p>}
             <div className="production-settings__models">
               <Field label="参考素材"><Select value={settings.referenceMode} onChange={event => updateSettings({ referenceMode: event.target.value as ProductionSettings['referenceMode'] })}><option value="none">直接文生视频</option><option value="existing">使用已有参考图</option><option value="generate">先生成参考图</option></Select></Field>
-              {settings.referenceMode === 'generate' && modelField(imageField)}
+              {showImageModel && modelField(imageField)}
             </div>
+            {automaticCasting && <p className="field__hint">反复出镜的人物缺少参考图时，使用图片模型自动定妆。留空时使用唯一可用的图片模型。</p>}
             <ReferenceAudioPicker assets={workspace.assets} value={settings.referenceAudioAssetIds ?? []} onChange={referenceAudioAssetIds => updateSettings({ referenceAudioAssetIds })} onImport={importReferenceAudio} disabled={Boolean(pending)} />
             <GenerationConcurrencySettings workflow={resolved} models={workspace.models} onChange={setExecution} />
             {advanced({ id: 'materials', label: '模型与素材', nodeIds: resolved.nodes.filter(node => stepGuidance(node).capability && stepGuidance(node).capability !== 'text').map(node => node.id) })}
           </section>
           <section className="form-stack" data-production-step="delivery" hidden={step !== 'delivery'} aria-label="声音与成片" tabIndex={-1}>
             <Field label="声音要求"><textarea value={settings.soundPrompt} onChange={event => updateSettings({ soundPrompt: event.target.value })} rows={3} placeholder="语言、说话方式、环境音与音乐…" /></Field>
-            <div className="production-settings__delivery-options">
-              <VideoSettings mode="generation" profile={fields.profile} onChange={profile => setFields(current => ({ ...current, profile }))} />
-              <Field label="字幕"><Select value={settings.subtitleMode} onChange={event => updateSettings({ subtitleMode: event.target.value === 'script' ? 'script' : 'off' })}><option value="off">关闭</option><option value="script">显示分镜文本（预估时间）</option></Select></Field>
-            </div>
+            <Field label="字幕"><Select value={settings.subtitleMode} onChange={event => updateSettings({ subtitleMode: event.target.value === 'script' ? 'script' : 'off' })}><option value="off">关闭</option><option value="script">显示分镜文本（预估时间）</option></Select></Field>
             <ProjectSettingsActions items={['music', 'caption']} onAction={requestTool} />
           </section>
           {step === 'review' && <section data-production-step="review" aria-label="确认保存" className="production-settings__review" tabIndex={-1}>
@@ -380,6 +397,8 @@ export default function ProductionSettingsDialog({ project, projectId, projectRe
             <section>
               <header><h3>创作要求</h3><Button static variant="ghost" aria-label="修改创作要求" onClick={() => selectStep('planning', true)}>修改</Button></header>
               <dl>
+                <div><dt>分镜全局参数</dt><dd>{aspectRatio && `${aspectRatio} · `}{width} × {height} · {formatFrameRate(frameRate)} fps</dd></div>
+                <div><dt>素材适配</dt><dd>{VIDEO_FIT_MODE_LABELS[fitMode]}</dd></div>
                 <div><dt>{manualSteps.includes('brief') ? '创意简报' : '创作要求'}</dt><dd>{(manualSteps.includes('brief') ? formatPlanningDocument('brief', documents.brief) : fields.brief.trim()) || '尚未填写'}</dd></div>
                 <div><dt>视觉风格</dt><dd>{(manualSteps.includes('style') ? formatPlanningDocument('style', documents.style) : fields.style.trim()) || '沿用默认风格'}</dd></div>
                 {manualSteps.length > 0 && <div><dt>手动策划内容</dt><dd>{manualSteps.map(kind => planningLabels[kind]).join('、')}</dd></div>}
@@ -391,13 +410,11 @@ export default function ProductionSettingsDialog({ project, projectId, projectRe
                 </div>}
               </dl>
             </section>
-            <section><header><h3>模型与素材</h3><Button static variant="ghost" aria-label="修改模型与素材" onClick={() => selectStep('materials', true)}>修改</Button></header><dl><div><dt>文本模型</dt><dd>{modelName(settings.textModelId)}</dd></div><div><dt>视频模型</dt><dd>{modelName(settings.videoModelId)}</dd></div><div><dt>参考素材</dt><dd>{{ none: '直接文生视频', existing: '使用已有参考图', generate: '先生成参考图' }[settings.referenceMode]}</dd></div>{settings.referenceMode === 'generate' && <div><dt>图片模型</dt><dd>{modelName(settings.imageModelId)}</dd></div>}<div><dt>参考音频</dt><dd>{settings.referenceAudioAssetIds?.length ? `已选择 ${settings.referenceAudioAssetIds.length} 段` : '未添加'}</dd></div><div><dt>镜头同时处理数</dt><dd>{execution?.maxConcurrentShots ?? 1}</dd></div><div><dt>模型并发上限</dt><dd>{Object.entries(execution?.modelLimits ?? {}).map(([modelId, limit]) => `${modelName(modelId)}：${limit}`).join('；') || '跟随镜头并发'}</dd></div></dl></section>
+            <section><header><h3>模型与素材</h3><Button static variant="ghost" aria-label="修改模型与素材" onClick={() => selectStep('materials', true)}>修改</Button></header><dl><div><dt>文本模型</dt><dd>{modelName(settings.textModelId)}</dd></div><div><dt>视频模型</dt><dd>{modelName(settings.videoModelId)}</dd></div><div><dt>参考素材</dt><dd>{{ none: '直接文生视频', existing: '使用已有参考图', generate: '先生成参考图' }[settings.referenceMode]}</dd></div>{showImageModel && <div><dt>图片模型</dt><dd>{settings.imageModelId || imageField.required ? modelName(settings.imageModelId) : '按需自动选择'}</dd></div>}<div><dt>参考音频</dt><dd>{settings.referenceAudioAssetIds?.length ? `已选择 ${settings.referenceAudioAssetIds.length} 段` : '未添加'}</dd></div><div><dt>镜头同时处理数</dt><dd>{execution?.maxConcurrentShots ?? 1}</dd></div><div><dt>模型并发上限</dt><dd>{Object.entries(execution?.modelLimits ?? {}).map(([modelId, limit]) => `${modelName(modelId)}：${limit}`).join('；') || '跟随镜头并发'}</dd></div></dl></section>
             <section>
               <header><h3>声音与成片</h3><Button static variant="ghost" aria-label="修改声音与成片" onClick={() => selectStep('delivery', true)}>修改</Button></header>
               <dl>
                 <div><dt>声音要求</dt><dd>{settings.soundPrompt.trim() || '跟随分镜内容'}</dd></div>
-                <div><dt>生成画面约束</dt><dd>{aspectRatio && `${aspectRatio} · `}{width} × {height} · {formatFrameRate(frameRate)} fps</dd></div>
-                <div><dt>素材适配</dt><dd>{VIDEO_FIT_MODE_LABELS[fitMode]}</dd></div>
                 <div><dt>字幕</dt><dd>{settings.subtitleMode === 'off' ? '关闭' : '显示分镜文本（预估时间）'}</dd></div>
               </dl>
             </section>

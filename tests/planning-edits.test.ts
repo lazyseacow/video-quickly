@@ -1,6 +1,6 @@
 import { expect, it } from 'vitest';
 import { createNativeVideoWorkflow, DEFAULT_VIDEO_PROFILE, projectSchema, type CreativeContext } from '@video-quickly/contracts';
-import { applyPlanningEdit, planningResultValue, type PlanningShot } from '../apps/desktop/src/lib/planning-edits';
+import { applyPlanningEdit, planningResultValue, readRecordedStoryboardDraft, type PlanningShot } from '../apps/desktop/src/lib/planning-edits';
 import { editContent, ProjectEditSession } from '../apps/desktop/src/lib/project-edits';
 
 function project() { return projectSchema.parse({ id: 'planning-project', title: '策划修改', brief: '原简报', style: '原风格', revision: 1, profile: DEFAULT_VIDEO_PROFILE, workflow: createNativeVideoWorkflow(), createdAt: '', updatedAt: '', shots: ['A', 'B'].map(id => ({ id, title: id, narration: `旁白${id}`, visualPrompt: `画面${id}`, durationUs: 2_000_000 })) }); }
@@ -60,6 +60,18 @@ it('keeps optional sound requirements untouched when opening and saving an uncha
   const next = applyPlanningEdit(baseline, baseline, { kind: 'script', shots: inputs(baseline.shots) });
   expect(next).toEqual(baseline); expect(next.shots[0]).toBe(baseline.shots[0]);
   expect(planningResultValue(baseline, 'script')).toMatchObject({ shots: [{ soundPrompt: '' }, { soundPrompt: '' }] });
+});
+
+it('restores recorded storyboard references while keeping current creative settings', () => {
+  const room = { key: 'room', kind: 'scene' as const, name: '办公室', description: '窗边的办公桌' };
+  const prop = { key: 'book', kind: 'prop' as const, name: '笔记本', description: '蓝色封面' };
+  const recorded = {
+    shots: project().shots.map(shot => ({ ...shot, creativeEntityKeys: ['room', 'book'] })),
+    creativeContext: { characterIds: [], entities: [room, prop], continuity: '保持蓝色服装' },
+  };
+  const current = { characterIds: [], entities: [{ ...room, description: '门边的办公桌' }], continuity: '保持白色服装' };
+  expect(readRecordedStoryboardDraft(recorded, undefined)).toEqual(recorded);
+  expect(readRecordedStoryboardDraft(recorded, current)).toEqual({ shots: recorded.shots, creativeContext: { ...current, entities: [...current.entities, prop] } });
 });
 
 it('adds authored shots and changes explicit durations without duplicating a retried save', () => {

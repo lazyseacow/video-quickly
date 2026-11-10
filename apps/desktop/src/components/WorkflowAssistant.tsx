@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { applyWorkflowProposal, workflowAssistantContextSchema, workflowProposalChanges, workflowProposalSchema, modelPriceDescription, costSummarySchema, runSummarySchema, runInspectionSchema, type WorkflowProposal, type CostSummary, type ModelProfile, type RunSummary, type WorkflowNode } from '@video-quickly/contracts';
 import { rpc } from '../lib/client';
 import { Button, Dialog, Field, Notice, Select, Status } from './Primitives';
-import { useConfirmation } from './ConfirmationDialog';
+import { useChargeRpc, useConfirmation } from './ConfirmationDialog';
 import './workflow-assistant.css';
 
 const startResultSchema = z.object({ run: runSummarySchema, nodeId: z.string() });
@@ -15,6 +15,7 @@ export default function WorkflowAssistant({ projectId, projectRevision, node, mo
   onClose(): void; onApply(node: WorkflowNode, proposal: WorkflowProposal): void | Promise<void>;
 }) {
   const confirm = useConfirmation();
+  const chargeRpc = useChargeRpc();
   const available = models.filter(model => model.enabled && model.capabilities.includes('text') && ['openai-compatible', 'ollama'].includes(model.provider));
   const [instruction, setInstruction] = useState(''), [modelId, setModelId] = useState(available[0]?.id ?? '');
   const [run, setRun] = useState<RunSummary>(), [nodeId, setNodeId] = useState(''), [proposal, setProposal] = useState<WorkflowProposal>();
@@ -67,8 +68,11 @@ export default function WorkflowAssistant({ projectId, projectRevision, node, mo
     finally { inFlight.current = false; if (alive.current) setBusy(false); }
   }
   async function start() {
+    const previous = request.current;
     request.current ??= { id: crypto.randomUUID(), input: { projectId, revision: projectRevision, node: structuredClone(node), modelId, instruction } };
-    const result = startResultSchema.parse(await rpc('workflowAssistant.start', { ...request.current.input, requestId: request.current.id }));
+    const value = await chargeRpc('workflowAssistant.start', { ...request.current.input, requestId: request.current.id });
+    if (value === null) { request.current = previous; return; }
+    const result = startResultSchema.parse(value);
     if (alive.current) { setRun(result.run); setNodeId(result.nodeId); setUnknown(false); setVerified(false); setRefresh(value => value + 1); }
   }
   function newSuggestion() {

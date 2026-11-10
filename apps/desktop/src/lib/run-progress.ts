@@ -5,6 +5,9 @@ export const generationShotLabels: Record<GenerationShotProgress['status'], stri
   downloading: '正在下载', validating: '正在校验', completed: '已完成', interrupted: '未完成', canceled: '已停止',
 };
 export const runningStep = (status: string) => ['running', 'queued', 'waiting_external', 'retry_scheduled'].includes(status);
+export function showsStepProgress(step: RunStepSummary, progress = step.progress): boolean {
+  return step.status !== 'pending' && (runningStep(step.status) || Boolean(progress && !step.outputAvailable));
+}
 export function storyboardPartLabel(part: StoryboardPart) {
   return part.kind === 'outline' ? '全片大纲' : `第 ${part.index}/${part.batches} 批分镜`;
 }

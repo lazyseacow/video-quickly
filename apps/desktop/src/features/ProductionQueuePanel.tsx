@@ -1,12 +1,12 @@
 import { lazy, Suspense, useRef, useState, type ReactNode } from 'react';
 import { ListOrdered, RefreshCw } from 'lucide-react';
 import { productionQueueDetailSchema, productionQueueSchema, projectDetailSchema, recordPageSchema, type ProductionQueueItem, type StoryWork } from '@video-quickly/contracts';
-import { rpc } from '../lib/client';
 import { useRecordPage } from '../lib/use-record-page';
 import { useRuntimeRead } from '../lib/use-runtime-read';
 import type { StepOutputSelection } from '../lib/types';
 import { Button, EmptyState, Field, Notice, Select } from '../components/Primitives';
-import { useConfirmation } from '../components/ConfirmationDialog';
+import { useChargeRpc, useConfirmation } from '../components/ConfirmationDialog';
+import { rpc } from '../lib/client';
 const RunInspector = lazy(() => import('./RunInspector'));
 const queuePage = recordPageSchema(productionQueueSchema);
 const queueLabels = { paused: '已暂停派发', running: '顺序制作中', needs_attention: '需要处理', succeeded: '已完成', canceled: '已取消后续派发' };
@@ -43,6 +43,7 @@ function QueueDetail({ queueId, version, history, onRefreshList, listBusy, listE
   const detail = useRuntimeRead('productionQueue.get', { queueId }, version, productionQueueDetailSchema);
   const [busy, setBusy] = useState(false), [error, setError] = useState(''), [inspected, setInspected] = useState<string>();
   const inFlight = useRef(false), confirm = useConfirmation();
+  const chargeRpc = useChargeRpc();
   const queue = detail.data?.queue, items = detail.data?.items ?? [];
   const pendingCount = items.filter(item => item.status === 'queued').length;
   const completedCount = items.filter(item => item.status === 'succeeded').length;
@@ -59,12 +60,12 @@ function QueueDetail({ queueId, version, history, onRefreshList, listBusy, listE
   }
   async function perform(method: string, params: unknown) {
     if (inFlight.current) return; inFlight.current = true; setBusy(true); setError('');
-    try { await rpc(method, params); await detail.refresh(); }
+    try { if (await chargeRpc(method, params) !== null) await detail.refresh(); }
     catch (error) { setError(error instanceof Error ? error.message : String(error)); }
     finally { inFlight.current = false; setBusy(false); }
   }
   async function start() {
-    if (!queue || !await confirm({ title: '开始顺序制作？', description: `将按列表顺序制作 ${pendingCount} 集，开始每集前会核对入队时的项目修订。模型请求会产生用量。`, confirmLabel: '开始队列', variant: 'primary' })) return;
+    if (!queue) return;
     await perform('productionQueue.start', { queueId, revision: queue.revision });
   }
   async function cancel() {

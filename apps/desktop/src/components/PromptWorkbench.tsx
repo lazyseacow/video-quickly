@@ -5,6 +5,7 @@ import {
   type CostSummary, type CostTaskDetail, type JsonValue, type ModelProfile, type PromptBindings, type PromptDraft, type PromptPreview, type PromptSession, type ProjectDocument, type RunSummary, type SkillGroup, type SkillPackage, type WorkflowNode,
 } from '@video-quickly/contracts';
 import { rpc } from '../lib/client';
+import { useChargeRpc } from './ConfirmationDialog';
 import SkillPicker from './SkillPicker';
 import type { StepOutputSelection } from '../lib/types';
 import { matchingStepModels } from '../lib/workflow-guidance';
@@ -35,6 +36,7 @@ export default function PromptWorkbench({ projectId, projectRevision, node: init
   projectId: string; projectRevision: number; node: WorkflowNode; models: ModelProfile[]; skills: SkillPackage[]; groups?: SkillGroup[]; version: number;
   onClose(): void; onApplyPrompt(node: WorkflowNode): Promise<void>; onOpenOutput(selection: StepOutputSelection): void;
 }) {
+  const chargeRpc = useChargeRpc();
   const [node, setNode] = useState(initialNode), [variables, setVariables] = useState(() => variableRows(initialNode.promptBindings));
   const [context, setContext] = useState<PromptDraft['context']>(), [revision, setRevision] = useState(projectRevision);
   const [project, setProject] = useState<ProjectDocument>(), [upstreamRuns, setUpstreamRuns] = useState<RunSummary[]>([]);
@@ -108,7 +110,9 @@ export default function PromptWorkbench({ projectId, projectRevision, node: init
     if (!session || !preview || preview.digest !== session.preview.digest) return;
     const key = `${session.id}@${session.revision}`;
     if (!request.current || request.current.session !== key) request.current = { session: key, revision: session.revision, id: crypto.randomUUID() };
-    const value = runSummarySchema.parse(await rpc('promptTrial.start', { sessionId: session.id, revision: session.revision, requestId: request.current.id }));
+    const result = await chargeRpc('promptTrial.start', { sessionId: session.id, revision: session.revision, requestId: request.current.id });
+    if (result === null) return;
+    const value = runSummarySchema.parse(result);
     if (alive.current) { setRun(value); setTab('trial'); setRefresh(value => value + 1); }
   }
   function restoreSession(value: PromptSession) {
@@ -128,7 +132,7 @@ export default function PromptWorkbench({ projectId, projectRevision, node: init
           {(media || node.kind === 'script' || variables.some(variable => variable.source === 'shot')) && <Field label="目标镜头"><Select value={shotId} onChange={event => { setShotId(event.target.value); invalidate(); }}><option value="">{media ? '请选择一个镜头' : node.kind === 'script' ? '完整分镜' : '项目上下文'}</option>{project?.shots.filter(shot => !shot.locked).map(shot => <option key={shot.id} value={shot.id}>{shot.title}</option>)}</Select></Field>}
           <Field label="上游输入"><Select value={upstreamRunId} onChange={event => { setUpstreamRunId(event.target.value); invalidate(); }}><option value="">当前项目内容</option>{upstreamRuns.map(run => <option key={run.id} value={run.id}>{new Date(run.createdAt).toLocaleString('zh-CN')} · 修订 {run.projectRevision}</option>)}</Select></Field>
           <Field label="实验提示词"><textarea rows={8} value={node.prompt} onChange={event => { setNode(value => ({ ...value, prompt: event.target.value, promptTemplate: undefined })); invalidate(); }} /></Field>
-          <details><summary>变量与 Skill</summary><p className="muted">使用 {'{{变量名}}'} 插入数据。字段路径使用点号分隔。</p>
+          <details className="form-disclosure"><summary>变量与 Skill</summary><p className="muted">使用 {'{{变量名}}'} 插入数据。字段路径使用点号分隔。</p>
             {variables.map((variable, index) => <div className="prompt-variable" key={variable.id}>
               <Field label={`变量 ${index + 1} 名称`}><input value={variable.name} onChange={event => { setVariables(rows => rows.map(row => row.id === variable.id ? { ...row, name: event.target.value } : row)); invalidate(); }} /></Field>
               <Field label={`变量 ${index + 1} 来源`}><Select value={variable.source} onChange={event => { setVariables(rows => rows.map(row => row.id === variable.id ? { ...row, source: event.target.value as Variable['source'] } : row)); invalidate(); }}>{[['text', '文本'], ['json', 'JSON 字面值'], ['project', '项目字段'], ['shot', '镜头字段'], ['upstream', '上游产物']].map(([id, label]) => <option key={id} value={id}>{label}</option>)}</Select></Field>
@@ -149,7 +153,7 @@ export default function PromptWorkbench({ projectId, projectRevision, node: init
           <div className="prompt-workbench__actions"><Button variant="primary" disabled={!session || !preview || preview.digest !== session.preview.digest || Boolean(running) || Boolean(request.current && run && request.current.session === `${session?.id}@${session?.revision}`)} onClick={() => void perform(trial)}>试运行（产生用量）</Button>
             {run && !running && <Button onClick={() => { request.current = undefined; setRun(undefined); setOutput(null); setCost(undefined); }}>准备新的试运行</Button>}
             {running && <Button onClick={() => void perform(async () => { await rpc('run.cancel', { runId: run!.id }); setRefresh(value => value + 1); })}>停止试运行</Button>}
-            {run && (['failed', 'needs_attention', 'waiting_external'].includes(run.status) || run.status === 'queued' && run.error) && <Button onClick={() => void perform(async () => { await rpc('run.resume', { runId: run.id }); setRefresh(value => value + 1); })}>继续原试运行</Button>}
+            {run && (['failed', 'needs_attention', 'waiting_external'].includes(run.status) || run.status === 'queued' && run.error) && <Button onClick={() => void perform(async () => { if (await chargeRpc('run.resume', { runId: run.id }) !== null) setRefresh(value => value + 1); })}>继续原试运行</Button>}
             {run && <Button onClick={() => setInspected(run.id)}>查看冻结输入</Button>}
           </div>{!session && <p className="muted">请先离线预览并保存实验草稿。</p>}
           {runs.length > 0 && <Field label="实验记录"><Select value={run?.id ?? ''} onChange={event => { setRun(runs.find(run => run.id === event.target.value)); }}><option value="">选择记录</option>{runs.map(run => <option key={run.id} value={run.id}>{new Date(run.createdAt).toLocaleString('zh-CN')} · {run.status} · 草稿 v{run.promptSessionRevision}</option>)}</Select></Field>}

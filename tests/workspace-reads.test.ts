@@ -73,6 +73,23 @@ describe('on-demand workspace reads', () => {
     } finally { database.close(); }
   }, 90_000);
 
+  it('keeps active tasks and retained run outputs when deleting from history', async () => {
+    const { runtime, project, directory } = await fixture(10, { assets: 1, runs: 3, eventsPerRun: 1 });
+    const database = openDatabase(directory), store = new DocumentStore(database);
+    const removed = `${project.id}-run-2`, active = `${project.id}-run-1`;
+    try {
+      const run = store.get<RunRecord>('run', active)!;
+      store.put('run', active, { ...run, status: 'waiting_external' });
+      await expect(runtime.dispatch('run.delete', { runId: active })).rejects.toThrow('请先停止制作');
+      await expect(runtime.dispatch('run.delete', { runId: removed })).resolves.toEqual({ deleted: true });
+      await expect(runtime.dispatch('run.delete', { runId: removed })).resolves.toEqual({ deleted: true });
+      const history = recordPageSchema(runSummarySchema).parse(await runtime.dispatch('run.list', { projectId: project.id, limit: 1 }));
+      expect(history.items.map(item => item.id)).toEqual([active]);
+      expect(history.nextCursor).not.toBeNull();
+      expect(await runtime.dispatch('run.get', { runId: removed })).toMatchObject({ id: removed, completedNodeIds: ['brief'] });
+    } finally { database.close(); }
+  });
+
   it.each(['failed', 'needs_attention'] as const)('follows a resumed older %s run through automatic execution, then returns to the newest completed run', async failureStatus => {
     const directory = await mkdtemp(join(tmpdir(), 'vq-current-run-')); directories.push(directory);
     let release!: () => void, releaseOther!: () => void, attempts = 0;
@@ -171,6 +188,56 @@ describe('on-demand workspace reads', () => {
     await runtime.dispatch('asset.retain', { assetId: `${project.id}-asset-0`, retained: true });
     const assets = projectDetailSchema.parse(await runtime.dispatch('project.get', { projectId: project.id, revision: 2, assetsVersion: first.assetsVersion }));
     expect(assets.project).toBeUndefined(); expect(assets.assets?.[0].retained).toBe(true);
+  });
+
+  it('seeks project and shared assets through the same index in creation order', async () => {
+    const { runtime, project, directory } = await fixture(10, { assets: 1, runs: 0, eventsPerRun: 0 });
+    const database = openDatabase(directory), store = new DocumentStore(database);
+    try {
+      const id = `${project.id}-asset-0`, asset = store.get<AssetRecord>('asset', id)!;
+      store.put('asset', 'shared-first', { ...asset, id: 'shared-first', projectId: undefined });
+      store.put('asset', 'foreign', { ...asset, id: 'foreign', projectId: 'another-project' });
+      store.put('asset', 'project-inactive', { ...asset, id: 'project-inactive', active: false });
+      store.put('asset', 'shared-last', { ...asset, id: 'shared-last', projectId: undefined });
+      const prepared = vi.spyOn(Object.getPrototypeOf(database) as Pick<typeof database, 'prepare'>, 'prepare');
+      let sql: string | undefined;
+      try {
+        const result = projectDetailSchema.parse(await runtime.dispatch('project.get', { projectId: project.id }));
+        expect(result.assets?.map(value => value.id)).toEqual([id, 'shared-first', 'project-inactive', 'shared-last']);
+        sql = prepared.mock.calls.find(([query]) => query.includes("kind = 'asset'") && query.includes('ORDER BY cursor'))?.[0];
+      } finally { prepared.mockRestore(); }
+      expect(sql).toBeDefined();
+      const plan = database.prepare(`EXPLAIN QUERY PLAN ${sql}`).all(project.id) as { detail: string }[];
+      expect(plan.filter(row => row.detail.includes('USING INDEX documents_project (kind=? AND <expr>=?)'))).toHaveLength(2);
+      expect(plan.some(row => /SCAN documents|USE TEMP B-TREE/.test(row.detail))).toBe(false);
+    } finally { database.close(); }
+  });
+
+  it('batches activity and frozen node reads for one page of run summaries', async () => {
+    const { runtime, project, directory } = await fixture(10, { assets: 0, runs: 3, eventsPerRun: 0 });
+    const database = openDatabase(directory), store = new DocumentStore(database);
+    try {
+      const runId = `${project.id}-run-2`, legacyId = `${project.id}-run-1`;
+      store.put('run-snapshot', runId, { nodes: [{ id: 'phase' }], inspectionNodes: [{ id: 'phase:clip' }, { id: 'script' }] });
+      const activity = database.prepare("INSERT INTO activities(run_id, activity_id, input_hash, safety, status, started_at) VALUES (?, ?, 'fixture', 'local', ?, '')");
+      activity.run(runId, 'phase:clip:tool', 'completed');
+      activity.run(runId, 'script:storyboard:batch', 'completed');
+      activity.run(runId, 'unused', 'failed');
+      activity.run(legacyId, 'step:tool', 'completed');
+      const prepared = vi.spyOn(Object.getPrototypeOf(database) as Pick<typeof database, 'prepare'>, 'prepare');
+      let pageSql: string;
+      try {
+        const result = recordPageSchema(runSummarySchema).parse(await runtime.dispatch('run.list', { limit: 2 }));
+        expect(result.items).toMatchObject([{ id: runId, completedNodeIds: ['brief', 'phase:clip'] }, { id: legacyId, completedNodeIds: ['brief', 'step'] }]);
+        expect(result.nextCursor).not.toBeNull();
+        expect(prepared.mock.calls).toHaveLength(3);
+        [pageSql] = prepared.mock.calls[0];
+      } finally { prepared.mockRestore(); }
+      const plan = database.prepare(`EXPLAIN QUERY PLAN ${pageSql}`).all({ limit: 3 }) as { detail: string }[];
+      expect(plan.some(row => row.detail.includes('USING INDEX documents_run_history'))).toBe(true);
+      expect(plan.some(row => row.detail.includes('USE TEMP B-TREE'))).toBe(false);
+      expect(runSummarySchema.parse(await runtime.dispatch('run.get', { runId })).completedNodeIds).toEqual(['brief', 'phase:clip']);
+    } finally { database.close(); }
   });
 
   it('bounds history to 100 and uses stable cursors when new events/runs arrive between pages', async () => {

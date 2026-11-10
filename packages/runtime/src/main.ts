@@ -35,7 +35,7 @@ const secretStore: SecretStore = {
 let runtime: ReturnType<typeof createRuntime>;
 const ffmpegPath = argument('--ffmpeg') ?? process.env.VIDEO_QUICKLY_FFMPEG;
 const waveforms = createWaveformReader({ dataDirectory, ffmpegPath });
-try { runtime = createRuntime({ dataDirectory, mode: 'desktop', logger, ffmpegPath, secretStore, hostCall, readAudioWaveform: asset => waveforms.read(asset),
+try { runtime = createRuntime({ dataDirectory, mode: 'desktop', requireChargeConfirmation: true, seedBuiltInTemplates: true, logger, ffmpegPath, secretStore, hostCall, readAudioWaveform: asset => waveforms.read(asset),
   webResearch: readStoryboardWebResearch,
   audioMix: { projectionKey: audioMixProjectionKey, prepare: options => prepareAudioMix({ ...options, ffmpegPath }), levels: readAudioLevelWindow, silence: options => detectAudioSilence({ ...options, ffmpegPath }) },
   preflightActivity: validateMediaActivity, executeActivity: createActivityExecutor({ ffmpegPath }) }); }

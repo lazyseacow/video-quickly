@@ -1,10 +1,10 @@
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { once } from 'node:events';
 import { mkdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { basename, dirname, join } from 'node:path';
 import { createCanvas, loadImage, GlobalFonts } from '@napi-rs/canvas';
-import { captionsEnabled, effectiveCaptionStyle, firstFrameAtUs, videoProfileSchema, type AssetRecord, type PreparedAudioMix, type ProjectDocument, type Shot } from '@video-quickly/contracts';
+import { captionsEnabled, effectiveCaptionStyle, firstFrameAtUs, VideoGenerationError, videoProfileSchema, type AssetRecord, type PreparedAudioMix, type ProjectDocument, type Shot, type VideoProfile } from '@video-quickly/contracts';
 import { buildTimeline, captionGeometry, captionPages, createSubtitleCues, createTimedSrt, drawSceneFrame, frameTimeUs, type SceneFrame } from './index.js';
 import { clipEditSource, resolveShotSpans } from './clip-edits.js';
 import { audioMixProjectionKey, prepareAudioMix, resolveAudioProject } from './audio-mix.js';
@@ -64,6 +64,43 @@ async function encodeCanvasShot(scene: SceneFrame & {durationUs:number}, path: s
   }catch(error){child.stdin.destroy();child.kill();await completed.catch(()=>undefined);throw error;}
 }
 
+function videoFitFilters(input: string, output: string, { width, height, fitMode }: VideoProfile): string[] {
+  const cover = `scale=${width}:${height}:force_original_aspect_ratio=increase,crop=${width}:${height}`;
+  const contain = `scale=${width}:${height}:force_original_aspect_ratio=decrease`;
+  if (fitMode === 'blur') return [`[${input}]split=2[bg][fg]`, `[bg]${cover},gblur=sigma=20[background]`, `[fg]${contain}[foreground]`, `[background][foreground]overlay=(W-w)/2:(H-h)/2,setsar=1[${output}]`];
+  const fit = fitMode === 'cover' ? cover : `${contain},pad=${width}:${height}:(ow-iw)/2:(oh-ih)/2:color=0x1d2724`;
+  return [`[${input}]${fit},setsar=1[${output}]`];
+}
+
+function matchesVideoProfile(metadata: Awaited<ReturnType<typeof probeMedia>>, profile: VideoProfile): boolean {
+  const [numerator, denominator] = (metadata.frameRate ?? '').split('/').map(Number);
+  return metadata.width === profile.width && metadata.height === profile.height && numerator > 0 && denominator > 0
+    && numerator * profile.frameRate.denominator === denominator * profile.frameRate.numerator;
+}
+
+export async function prepareGeneratedVideo(path: string, profile: VideoProfile, options: {
+  conform?: boolean; ffmpegPath?: string; ffprobePath?: string; signal?: AbortSignal;
+}): Promise<Pick<AssetRecord, 'width' | 'height' | 'durationUs'>> {
+  const { conform, ffmpegPath = 'ffmpeg', ffprobePath, signal } = options;
+  let metadata = await probeMedia(path, ffprobePath, signal);
+  if (!metadata.width || !metadata.height || !metadata.audio) throw new VideoGenerationError();
+  if (conform && !matchesVideoProfile(metadata, profile)) {
+    const temporary = `${path}.${randomUUID()}.mp4`;
+    const { numerator, denominator } = profile.frameRate;
+    const filters = [...videoFitFilters('0:v:0', 'fit', profile), `[fit]fps=${numerator}/${denominator}[video]`];
+    try {
+      await runMedia(ffmpegPath, ['-nostdin', '-hide_banner', '-loglevel', 'error', '-i', path, '-filter_complex', filters.join(';'),
+        '-map', '[video]', '-map', '0:a:0', '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '20', '-pix_fmt', 'yuv420p',
+        '-video_track_timescale', String(numerator), '-c:a', 'aac', '-b:a', '192k', '-movflags', '+faststart', temporary], { signal });
+      metadata = await probeMedia(temporary, ffprobePath, signal);
+      if (!metadata.audio || !matchesVideoProfile(metadata, profile)) throw new Error('镜头视频转换后未达到分镜全局规格。');
+      signal?.throwIfAborted();
+      await rename(temporary, path);
+    } finally { await rm(temporary, { force: true }); }
+  }
+  return { width: metadata.width, height: metadata.height, durationUs: Math.round((metadata.videoDuration ?? metadata.duration) * 1_000_000) };
+}
+
 async function encodeVideoShot(shot: Shot, project: ProjectDocument, asset: AssetRecord, schedule: RenderClipSchedule, path: string, ffmpeg: string, ffprobe: string, options: RenderOptions): Promise<void> {
   const { width, height, frameRate } = project.profile, rate = `${frameRate.numerator}/${frameRate.denominator}`;
   const metadata = await probeMedia(asset.path, ffprobe, options.signal), [numerator, denominator] = (metadata.frameRate ?? rate).split('/').map(Number);
@@ -79,10 +116,8 @@ async function encodeVideoShot(shot: Shot, project: ProjectDocument, asset: Asse
       const target = Math.min((span.videoInUs + phaseUs) / 1_000_000, lastSourceSeconds), seek = Math.max(0, target - 1);
       const part = `${path}.part-${index}.mp4`;
       const args = ['-nostdin', '-hide_banner', '-loglevel', 'error', '-y', '-f', 'lavfi', '-i', `color=c=0x1d2724:s=${width}x${height}:r=${rate}`, '-ss', String(seek), '-i', asset.path];
-      const fit = project.profile.fitMode === 'cover' ? `scale=${width}:${height}:force_original_aspect_ratio=increase,crop=${width}:${height}` : `scale=${width}:${height}:force_original_aspect_ratio=decrease,pad=${width}:${height}:(ow-iw)/2:(oh-ih)/2:color=0x1d2724`;
-      const filters = [`[0:v]setsar=1,settb=1/${frameRate.numerator},setpts=N*${frameRate.denominator}[clock]`];
-      if (project.profile.fitMode === 'blur') filters.push(`[1:v]setpts=PTS+(${seek}-${target})/TB,split=2[bg][fg]`, `[bg]scale=${width}:${height}:force_original_aspect_ratio=increase,crop=${width}:${height},gblur=sigma=20[background]`, `[fg]scale=${width}:${height}:force_original_aspect_ratio=decrease[foreground]`, '[background][foreground]overlay=(W-w)/2:(H-h)/2,setsar=1[fit]');
-      else filters.push(`[1:v]setpts=PTS+(${seek}-${target})/TB,${fit},setsar=1[fit]`);
+      const filters = [`[0:v]setsar=1,settb=1/${frameRate.numerator},setpts=N*${frameRate.denominator}[clock]`,
+        `[1:v]setpts=PTS+(${seek}-${target})/TB[source]`, ...videoFitFilters('source', 'fit', project.profile)];
       // The main CFR clock chooses the preceding source frame at each global sample instant.
       // No internal EDL span owns a separately rounded duration or a fresh source sampling phase.
       filters.push('[clock][fit]overlay=0:0:eof_action=repeat:shortest=0:repeatlast=1[video]');

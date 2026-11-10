@@ -3,7 +3,7 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { afterEach, expect, it } from 'vitest';
-import { characterProfileSchema, modelSchema, productionQueueDetailSchema, productionQueueEnqueueResultSchema, productionQueueSchema, projectSchema, projectSummarySchema, runInspectionSchema, runSchema, workDefaultsSchema, workSchema, workflowNodeSchema, type ProjectDocument, type ProductionQueue, type StoryWork } from '@video-quickly/contracts';
+import { characterProfileSchema, chargeConfirmationSchema, modelSchema, productionQueueDetailSchema, productionQueueEnqueueResultSchema, productionQueueSchema, projectSchema, projectSummarySchema, runInspectionSchema, runSchema, workDefaultsSchema, workSchema, workflowNodeSchema, type ProjectDocument, type ProductionQueue, type StoryWork } from '@video-quickly/contracts';
 import { createRuntime, SimulatedProcessExit, type RuntimeOptions } from '../packages/runtime/src/index';
 import { openDatabase, DocumentStore } from '../packages/runtime/src/database';
 import { importSkillFixture } from './fixtures/import-skill';
@@ -32,6 +32,72 @@ async function enqueue(source: Awaited<ReturnType<typeof fixture>>, selected = s
 }
 async function detail(runtime: ReturnType<typeof createRuntime>, queueId: string) { return productionQueueDetailSchema.parse(await runtime.dispatch('productionQueue.get', { queueId })); }
 async function start(runtime: ReturnType<typeof createRuntime>, queue: ProductionQueue) { await runtime.dispatch('productionQueue.start', { queueId: queue.id, revision: queue.revision }); }
+
+it('quotes the selected episodes by model and currency and invalidates the quote after a price change', async () => {
+  const source = await fixture({ requireChargeConfirmation: true });
+  const { runtime } = source;
+  const image = modelSchema.parse(await runtime.dispatch('model.save', { model: {
+    name: '队列图片模型', model: 'image-fixture', baseUrl: 'http://127.0.0.1:1/v1', provider: 'openai-compatible',
+    connectionType: 'image', capabilities: ['image'], pricing: { currency: 'CNY', perImage: 0.25 },
+  } }));
+  const video = modelSchema.parse(await runtime.dispatch('model.save', { model: {
+    name: '队列视频模型', model: 'video-fixture', baseUrl: 'http://127.0.0.1:1/v1', provider: 'openai-compatible',
+    connectionType: 'video', capabilities: ['video'], parameters: { seconds: 5 }, pricing: { currency: 'USD', perVideoSecond: 0.1 },
+  } }));
+  const episodes = [];
+  for (const project of source.projects.slice(0, 2)) {
+    episodes.push(projectSchema.parse(await runtime.dispatch('project.update', { projectId: project.id, revision: project.revision, patch: {
+      shots: [{ id: 'one', title: '一段视频', narration: '', visualPrompt: '一座桥', durationUs: 2_000_000 }],
+      workflow: { ...project.workflow, nodes: [
+        workflowNodeSchema.parse({ id: 'pictures', kind: 'assets', label: '出图', modelId: image.id }),
+        workflowNodeSchema.parse({ id: 'clips', kind: 'animation', label: '出片', modelId: video.id }),
+      ], edges: [{ id: 'next', source: 'pictures', target: 'clips' }] },
+    } })));
+  }
+  const { result } = await enqueue(source, episodes);
+  const method = 'productionQueue.start', params = { queueId: result.queue!.id, revision: result.queue!.revision };
+  const prepare = async () => chargeConfirmationSchema.parse(await runtime.dispatch('billing.prepare', { method, params }));
+  const priced = await prepare();
+  expect(priced.estimate).toMatchObject({ batch: true, items: [
+    { model: image.model, modelName: image.name, kind: 'image', count: 2, estimated: { currency: 'CNY', amount: 0.5 } },
+    { model: video.model, modelName: video.name, kind: 'video', count: 2, videoSeconds: 10, estimated: { currency: 'USD', amount: 1 } },
+  ], totals: [{ currency: 'CNY', amount: 0.5 }, { currency: 'USD', amount: 1 }] });
+
+  await runtime.dispatch('model.save', { model: { ...image, pricing: null } });
+  await expect(runtime.dispatch(method, { ...params, chargeConfirmationId: priced.confirmationId })).rejects.toThrow('预估费用已变化');
+  const unknown = (await prepare()).estimate;
+  expect(unknown?.items[0]).toMatchObject({ model: image.model, count: 2 });
+  expect(unknown?.totals).toBeUndefined();
+  expect((await detail(runtime, params.queueId)).queue.status).toBe('paused');
+  expect(source.calls).toHaveLength(0);
+});
+
+it('pauses a previously running queue on desktop startup until its remaining episodes are approved', async () => {
+  const source = await fixture();
+  const { result } = await enqueue(source);
+  const queue = result.queue!;
+  await source.runtime.close();
+  const database = openDatabase(source.directory);
+  try { new DocumentStore(database).put('production-queue', queue.id, { ...queue, status: 'running' }); }
+  finally { database.close(); }
+
+  const recovered = createRuntime({ ...source.options, requireChargeConfirmation: true });
+  runtimes.push(recovered);
+  await recovered.waitForIdle();
+  const paused = await detail(recovered, queue.id);
+  expect(paused.queue.status).toBe('paused');
+  expect(paused.items.every(item => item.status === 'queued' && !item.runId)).toBe(true);
+  expect(source.calls).toHaveLength(0);
+
+  const method = 'productionQueue.start', params = { queueId: queue.id, revision: paused.queue.revision };
+  await expect(recovered.dispatch(method, params)).rejects.toThrow('请先确认此操作的费用影响');
+  const { confirmationId, description } = chargeConfirmationSchema.parse(await recovered.dispatch('billing.prepare', { method, params }));
+  expect(description).toContain('3 集');
+  await recovered.dispatch(method, { ...params, chargeConfirmationId: confirmationId });
+  await recovered.waitForIdle();
+  expect((await detail(recovered, queue.id)).queue.status).toBe('succeeded');
+  expect(source.calls).toHaveLength(6);
+});
 
 it('retries only the failed step of a queued episode and keeps later episodes waiting until explicit continuation', async () => {
   let mediaCalls = 0;
@@ -114,6 +180,9 @@ it('deduplicates active projects across requests and runs episodes in the record
   const duplicate = productionQueueEnqueueResultSchema.parse(await source.runtime.dispatch('productionQueue.enqueue', { ...input, requestId: randomUUID() })); expect(duplicate.queue).toBeNull(); expect(duplicate.reused).toHaveLength(3);
   await expect(source.runtime.dispatch('run.start', { projectId: source.projects[0].id })).rejects.toThrow('排队项');
   await expect(source.runtime.dispatch('project.archive', { projectId: source.projects[0].id })).rejects.toThrow('生产队列');
+  const independent = projectSchema.parse(await source.runtime.dispatch('project.create', { title: '批量回收中的独立项目' }));
+  await expect(source.runtime.dispatch('project.archiveMany', { projectIds: [independent.id, source.projects[0].id] })).rejects.toThrow('生产队列');
+  expect(await source.runtime.dispatch('project.get', { projectId: independent.id })).toMatchObject({ project: { id: independent.id, revision: independent.revision, archived: false } });
   await start(source.runtime, queue); await source.runtime.waitForIdle();
   const finished = await detail(source.runtime, queue.id); expect(finished.queue.status).toBe('succeeded'); expect(finished.items.map(value => value.status)).toEqual(['succeeded', 'succeeded', 'succeeded']);
   expect(source.calls.filter(prompt => prompt.includes('步骤：简报')).map(prompt => prompt.match(/项目标题：([^\n]+)/)?.[1])).toEqual(['第3集', '第2集', '第1集']);

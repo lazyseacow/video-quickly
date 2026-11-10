@@ -5,16 +5,23 @@
 .planning-result-editor__hint { margin: 0; color: var(--text-secondary); font-size: var(--text-size-caption); line-height: var(--line-height-body); }
 .planning-result-editor__fields { display: grid; gap: var(--space-4); border: 0; min-width: 0; margin: 0; padding: 0; }
 .planning-result-editor__fields .field { margin: 0; }
+.planning-result-editor__fields > :is(.field, .planning-document-fields) + .creative-context-editor,
+.planning-result-editor__fields > :is(.field, .planning-document-fields) + .creative-context-editor > .character-shot-picker { margin-block-start: 0; }
 .planning-result-editor__fields textarea { line-height: var(--line-height-prose); }
 .planning-result-editor__shots { display: grid; gap: var(--space-6); list-style: none; padding: 0; margin: 0; }
 .planning-result-editor__shots > li { min-width: 0; padding: var(--space-5); border: 1px solid var(--border); border-radius: var(--radius-small); }
 .planning-result-editor__shots header { display: flex; align-items: center; gap: var(--space-3); margin-bottom: var(--space-4); }
 .planning-result-editor__shots header strong { margin-right: auto; font-size: var(--text-size-body); font-weight: var(--font-weight-semibold); }
 .planning-result-editor__shots header span { display: flex; align-items: center; gap: var(--space-1); color: var(--text-secondary); font-size: var(--text-size-caption); font-variant-numeric: tabular-nums; }
-.planning-result-editor__shots summary { cursor: pointer; min-height: var(--control-hit-size); color: var(--text-secondary); font-size: var(--text-size-label); }
-.planning-result-editor__shots details .field + .field { margin-top: var(--space-3); }
 .planning-result-editor__shot-basics { display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 1fr); gap: var(--space-3); }
-.planning-result-editor__references { display: grid; gap: var(--space-3); }
+.planning-result-editor__shot-content, .planning-result-editor__references { display: grid; gap: var(--space-form-disclosure); }
+.planning-result-editor__shot-content > details > summary { color: var(--text-secondary); font-size: var(--text-size-label); }
+.planning-result-editor__references { margin-block-start: var(--space-form-disclosure); }
+.planning-result-editor__references > .capability-fieldset { margin: 0; }
+.planning-result-editor__references > .character-shot-picker { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-1) var(--space-4); }
+.planning-result-editor__references .character-shot-picker > legend { position: absolute; width: 1px; height: 1px; margin: 0; overflow: hidden; clip-path: inset(50%); }
+.planning-result-editor__references .character-shot-picker > .field-inline { min-width: var(--control-hit-size); min-height: var(--control-hit-size); margin: 0; overflow-wrap: anywhere; }
+.planning-result-editor__references .character-shot-picker > :is(.tiny-meta, .notice) { flex-basis: 100%; }
 .planning-result-editor__add { justify-self: start; }
 .planning-result-editor__add, .planning-result-editor__shots header > .button { min-height: var(--control-hit-size); }
 @media (max-width: 600px) { .planning-result-editor__shots > li { padding: var(--space-4); } }

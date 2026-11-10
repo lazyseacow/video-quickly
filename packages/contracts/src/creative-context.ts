@@ -1,12 +1,12 @@
 import { z } from 'zod';
-import type { CharacterProfile, Shot } from './index.js';
+import type { AssetRecord, CharacterProfile, Shot } from './index.js';
 
 const uniqueKeys = (maximum: number) => z.array(z.string().min(1)).max(maximum).refine(values => new Set(values).size === values.length, '创作引用不能重复。');
 export const creativeEntitySchema = z.object({
   key: z.string().regex(/^(?!role-)[a-z][a-z0-9-]{0,63}$/, '设定编号须为小写字母、数字或连字符，且不能以 role- 开头。'),
   kind: z.enum(['character', 'scene', 'prop']), name: z.string().trim().min(1).max(120), description: z.string().max(4000),
   referenceAssetIds: uniqueKeys(4).optional(),
-}).refine(entity => entity.kind !== 'character' || !entity.referenceAssetIds?.length, '人物参考图请通过角色参考库设置。');
+});
 export const creativeContextSchema = z.object({
   characterIds: uniqueKeys(50).default([]),
   entities: z.array(creativeEntitySchema).max(100).refine(values => new Set(values.map(value => value.key)).size === values.length, '创作设定编号不能重复。').default([]),
@@ -21,6 +21,18 @@ type CreativeProject = { creativeContext?: CreativeContext | null; shots: Readon
 export function creativeReferenceAssetIds(project: Pick<CreativeProject, 'creativeContext'>, shot?: Pick<Shot, 'creativeEntityKeys'>): string[] {
   const selected = shot ? new Set(shot.creativeEntityKeys ?? []) : undefined;
   return [...new Set((project.creativeContext?.entities ?? []).filter(entity => !selected || selected.has(entity.key)).flatMap(entity => entity.referenceAssetIds ?? []))];
+}
+
+export function hasCharacterAppearance(project: Pick<CreativeProject, 'creativeContext'>, shot: Pick<Shot, 'creativeEntityKeys'>): boolean {
+  return Boolean(project.creativeContext?.entities.some(entity => entity.kind === 'character' && entity.referenceAssetIds?.length && shot.creativeEntityKeys?.includes(entity.key)));
+}
+
+export function isCreativeReferenceAsset(project: Pick<CreativeProject, 'creativeContext'> & { id?: string }, asset: AssetRecord | undefined): asset is AssetRecord {
+  if (!asset?.active || asset.kind !== 'image') return false;
+  if (asset.projectId === undefined) return true;
+  if (asset.projectId !== project.id || asset.shotId) return false;
+  const entities = project.creativeContext?.entities.filter(entity => entity.referenceAssetIds?.includes(asset.id)) ?? [];
+  return entities.length > 0 && entities.every(entity => entity.kind === 'character');
 }
 
 /** Pool order is frozen with the project; models use these keys rather than authoring library IDs. */

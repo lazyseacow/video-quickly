@@ -130,7 +130,7 @@ export function createSkillLibrary({ store, directory, changed, logger }: { stor
   function automaticSkills() {
     const latest = new Map<string, SkillPackage>();
     for (const skill of store.list<SkillPackage>('skill')) {
-      if (skill.enabled && (latest.get(skill.name)?.importedAt ?? '') <= skill.importedAt) latest.set(skill.name, skill);
+      if (skill.enabled && skill.autoDiscover !== false && (latest.get(skill.name)?.importedAt ?? '') <= skill.importedAt) latest.set(skill.name, skill);
     }
     return [...latest.values()];
   }

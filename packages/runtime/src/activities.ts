@@ -137,8 +137,8 @@ export class ActivityJournal {
       logger?.error('activity.failed', { status, durationMs: Math.round(performance.now() - started), error: logError(error) });
       // LangGraph also persists thrown errors in pending writes. Replace the
       // error before crossing that boundary; redacting only UI logs is too late.
-      if (error instanceof TextRequestRejectedError) throw new TextRequestRejectedError(error.status, error.unsupportedOutputFormat);
-      if (error instanceof MediaRequestRejectedError) throw new MediaRequestRejectedError(error.status);
+      if (error instanceof TextRequestRejectedError) throw new TextRequestRejectedError(error.status, error.unsupportedOutputFormat, error.rateLimit);
+      if (error instanceof MediaRequestRejectedError) throw new MediaRequestRejectedError(error.status, error.reason);
       if (safety === 'external') throw new Error(message);
       throw error;
     }

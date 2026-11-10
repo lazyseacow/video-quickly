@@ -50,6 +50,39 @@ for (const status of [400, 401, 403, 422, 429]) {
     expect(calls).toBe(1);
   });
 }
+
+it.each([
+  { error: { code: 'rate_limit_exceeded' }, header: '45', kind: 'rate', message: '请求频率或吞吐限制' },
+  { error: { type: 'insufficient_quota' }, header: 'date', kind: 'quota', message: '用量额度已达上限' },
+  { error: { code: 'unknown_gateway_code' }, header: '', kind: 'unknown', message: '限流或额度限制' },
+])('reports a $kind HTTP 429 using safe fields and Retry-After', async ({ error, header, kind, message }) => {
+  let calls = 0;
+  const retryDate = new Date(Date.now() + 90_000).toUTCString();
+  const baseUrl = await service((_path, _body, _headers, response) => {
+    calls++;
+    response.statusCode = 429;
+    if (header) response.setHeader('Retry-After', header === 'date' ? retryDate : header);
+    return { error: { ...error, message: 'private-provider-body' } };
+  });
+  const startedAt = Date.now();
+  const rejection: unknown = await generateText({ model: model(baseUrl, 'responses'), prompt: 'JSON', operationId: 'limited' }).catch(error => error);
+  expect(rejection).toBeInstanceOf(TextRequestRejectedError);
+  if (!(rejection instanceof TextRequestRejectedError)) throw new Error('Expected a confirmed request rejection');
+  expect(rejection.message).toContain(message);
+  expect(rejection.message).not.toContain('private-provider-body');
+  expect(rejection.rateLimit?.kind).toBe(kind);
+  const retryAt = rejection.rateLimit?.retryAt;
+  if (header === '45') {
+    expect(Date.parse(retryAt ?? '')).toBeGreaterThanOrEqual(startedAt + 45_000);
+    expect(Date.parse(retryAt ?? '')).toBeLessThanOrEqual(Date.now() + 45_000);
+  } else if (header === 'date') {
+    expect(retryAt).toBe(new Date(retryDate).toISOString());
+  } else {
+    expect(retryAt).toBeUndefined();
+  }
+  expect(calls).toBe(1);
+});
+
 for (const status of [408, 409, 500, 503]) {
   it(`keeps HTTP ${status} outside confirmed request rejection recovery`, async () => {
     const baseUrl = await service((_path, _body, _headers, response) => { response.statusCode = status; return { error: { message: 'private-uncertain-body' } }; });

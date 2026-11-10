@@ -3,7 +3,7 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, expect, it } from 'vitest';
-import { costTaskDetailSchema, costTaskSchema, projectSchema, recordPageSchema, workflowNodeSchema, type ModelProfile, type RunRecord, type UsageRecord } from '@video-quickly/contracts';
+import { chargeConfirmationSchema, costTaskDetailSchema, costTaskSchema, projectSchema, recordPageSchema, workflowNodeSchema, type ModelProfile, type RunRecord, type UsageRecord } from '@video-quickly/contracts';
 import { createRuntime, SimulatedProcessExit, type RuntimeOptions } from '../packages/runtime/src';
 import { executeDeepAgent } from '../packages/runtime/src/agent';
 import { createCostLedger } from '../packages/runtime/src/costs';
@@ -43,6 +43,33 @@ async function fixture(provider: ModelProfile['provider'] = 'openai-compatible',
   const start = async () => { const run = await runtime.dispatch('run.start', { projectId: project.id }) as RunRecord; await runtime.waitForIdle(); return run; };
   return { runtime, directory, project, model, state, start, received };
 }
+
+it('requires an unused confirmation for the exact model action before creating a run or charge', async () => {
+  const { runtime, project, state } = await fixture('openai-compatible', { requireChargeConfirmation: true });
+  const method = 'run.start', params = { projectId: project.id };
+  const prepare = async () => chargeConfirmationSchema.parse(await runtime.dispatch('billing.prepare', { method, params }));
+  await expect(runtime.dispatch(method, params)).rejects.toThrow('请先确认此操作的费用影响');
+  const declined = await prepare();
+  await runtime.dispatch('billing.cancel', { chargeConfirmationId: declined.confirmationId });
+  await expect(runtime.dispatch(method, { ...params, chargeConfirmationId: declined.confirmationId })).rejects.toThrow('费用确认已失效');
+
+  const { confirmationId } = await prepare();
+  const confirmed = { ...params, chargeConfirmationId: confirmationId };
+  await expect(runtime.dispatch(method, { ...confirmed, nodeId: 'brief' })).rejects.toThrow('操作范围已变化');
+  expect(state.calls).toBe(0);
+  expect(await runtime.dispatch('run.list', { projectId: project.id })).toMatchObject({ items: [] });
+  expect(await runtime.dispatch('cost.list', { projectId: project.id })).toMatchObject({ items: [] });
+
+  const started = await runtime.dispatch(method, confirmed) as RunRecord;
+  await expect(runtime.dispatch(method, confirmed)).rejects.toThrow('费用确认已失效');
+  await runtime.waitForIdle();
+  expect(state.calls).toBe(1);
+  const [record] = await records(runtime, started.id);
+  const update = { id: record.id, revision: record.revision, actualAmount: 0.01, actualCurrency: 'CNY' };
+  await expect(runtime.dispatch('cost.update', update)).rejects.toThrow('请先确认此操作的费用影响');
+  const cost = chargeConfirmationSchema.parse(await runtime.dispatch('billing.prepare', { method: 'cost.update', params: update }));
+  await expect(runtime.dispatch('cost.update', { ...update, chargeConfirmationId: cost.confirmationId })).resolves.toMatchObject({ actualAmount: 0.01, actualCurrency: 'CNY' });
+});
 
 it('records official OpenAI usage counters without storing model parameters or creating monetary estimates', async () => {
   const { runtime, model, state, start } = await fixture();

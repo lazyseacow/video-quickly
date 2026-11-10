@@ -237,7 +237,7 @@ it('publishes generated video and its storyboard before export despite a save wi
   expect(await runtime.dispatch('run.get', { runId: run.id })).toMatchObject({ status: 'succeeded' });
 });
 
-it('can apply a saved video step with its missing storyboard when the project is back to its original content', async () => {
+it('restores the missing storyboard after workflow configuration changes while protecting authored content', async () => {
   const { runtime, directory, project, media } = await fixture();
   const videoStarted = Promise.withResolvers<void>(), resumeVideo = Promise.withResolvers<void>();
   const executeMedia = media.getMockImplementation()!;
@@ -253,8 +253,15 @@ it('can apply a saved video step with its missing storyboard when the project is
   await runtime.waitForIdle();
   const edited = await current(runtime, project.id);
   expect(edited).toMatchObject({ title: '制作期间修改的标题', shots: [] });
-  await expect(runtime.dispatch('node.apply', { runId: run.id, nodeId: 'video', revision: edited.revision })).rejects.toThrow();
-  const restored = projectSchema.parse(await runtime.dispatch('project.update', { projectId: project.id, revision: edited.revision, patch: { title: project.title } }));
+  await expect(runtime.dispatch('node.apply', { runId: run.id, nodeId: 'video', revision: edited.revision })).rejects.toThrow('生成素材对应的镜头已移除');
+  const workflow = { ...project.workflow, execution: { maxConcurrentShots: 2, modelLimits: {} },
+    production: { ...project.workflow.production, textModelId: undefined, videoModelId: undefined } };
+  const planningEdited = projectSchema.parse(await runtime.dispatch('project.update', { projectId: project.id, revision: edited.revision, patch: {
+    title: project.title, workflow: { ...workflow, production: { ...workflow.production, manualPlanningFields: { brief: planningFixtureFields('brief', '人工修改的策划主题') } } },
+  } }));
+  await expect(runtime.dispatch('node.apply', { runId: run.id, nodeId: 'video', revision: planningEdited.revision })).rejects.toThrow('生成素材对应的镜头已移除');
+  expect(await current(runtime, project.id)).toEqual(planningEdited);
+  const restored = projectSchema.parse(await runtime.dispatch('project.update', { projectId: project.id, revision: planningEdited.revision, patch: { workflow } }));
   const request = { runId: run.id, nodeId: 'video', revision: restored.revision };
   const reference = join(directory, 'image.fixture'), bytes = await readFile(reference);
   await writeFile(reference, Buffer.alloc(bytes.length));
@@ -263,6 +270,35 @@ it('can apply a saved video step with its missing storyboard when the project is
   await writeFile(reference, bytes);
   const applied = projectSchema.parse(await runtime.dispatch('node.apply', request));
   expect(applied).toMatchObject({ revision: restored.revision + 1, shots: [{ title: '水滴的旅程', assetId: 'generated-image', videoAssetId: 'generated-video' }] });
+  expect(applied.workflow.execution).toEqual(restored.workflow.execution);
+  expect(applied.workflow.nodes).toEqual(restored.workflow.nodes);
+  expect(applied.workflow.production.videoModelId).toBeUndefined();
+  expect(media.mock.calls.filter(([context]) => context.node.id === 'video')).toHaveLength(1);
+});
+
+it('keeps an edited storyboard duration on first video binding when the saved clip covers it', async () => {
+  const { runtime, project, media } = await fixture();
+  const videoInput = Promise.withResolvers<ProjectDocument>(), resumeVideo = Promise.withResolvers<void>();
+  const executeMedia = media.getMockImplementation()!;
+  media.mockImplementation(async context => {
+    if (context.node.id === 'video') { videoInput.resolve(context.project); await resumeVideo.promise; }
+    return executeMedia(context);
+  });
+  const run = runSchema.parse(await runtime.dispatch('run.start', { projectId: project.id }));
+  const withDuration = (shots: ProjectDocument['shots'], durationUs: number) => shots.map(shot => ({ ...shot, durationUs }));
+  try {
+    const input = await videoInput.promise;
+    await runtime.dispatch('project.update', { projectId: project.id, revision: project.revision, patch: { shots: withDuration(input.shots, 7_000_000) } });
+  } finally { resumeVideo.resolve(); }
+  await runtime.waitForIdle();
+  const before = await current(runtime, project.id);
+  const apply = (revision: number) => runtime.dispatch('node.apply', { runId: run.id, nodeId: 'video', revision });
+  await expect(apply(before.revision)).rejects.toThrow('素材或剪辑区间已在生成后修改');
+  expect(await current(runtime, project.id)).toEqual(before);
+
+  const edited = projectSchema.parse(await runtime.dispatch('project.update', { projectId: project.id, revision: before.revision, patch: { shots: withDuration(before.shots, 4_000_000) } }));
+  expect(await apply(edited.revision)).toMatchObject({ revision: edited.revision + 1, shots: [{ durationUs: 4_000_000, videoAssetId: 'generated-video', videoInUs: 0 }] });
+  expect(await runtime.dispatch('node.result', { runId: run.id, nodeId: 'video' })).toMatchObject({ assets: [{ durationUs: 6_000_000 }] });
   expect(media.mock.calls.filter(([context]) => context.node.id === 'video')).toHaveLength(1);
 });
 

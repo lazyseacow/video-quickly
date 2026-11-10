@@ -1,3 +1,4 @@
+import { confirmAction } from './confirmation-actions';
 import { productionStep, saveProduction } from './production-settings';
 import { openProjectFromList } from './workspace-navigation';
 import { expect, test, type APIRequestContext, type Page } from '@playwright/test';
@@ -93,7 +94,7 @@ test('freezes settings during start submission and saves subsequent task input f
     });
     await open(page, project.title); await page.getByRole('button', { name: '制作设置', exact: true }).click();
     const dialog = page.getByRole('dialog', { name: '制作设置', exact: true }); await dialog.locator('summary:visible').filter({ hasText: '高级设置' }).click(); const prompt = dialog.getByLabel('简报 A补充要求', { exact: true });
-    await prompt.fill('这次执行使用已保存的输入'); await saveProduction(dialog); await expect(dialog).toHaveCount(0); await page.getByRole('button', { name: '开始制作', exact: true }).click(); await accepted;
+    await prompt.fill('这次执行使用已保存的输入'); await saveProduction(dialog); await expect(dialog).toHaveCount(0); await page.getByRole('button', { name: '开始制作', exact: true }).click(); await confirmAction(page, '确认开始制作'); await accepted;
     await expect.poll(() => pending.length).toBe(1); await expect(page.locator('.project-heading-actions [data-guide="produce"]')).toBeDisabled(); release(); await expect(dialog).toHaveCount(0);
     await page.getByRole('button', { name: '制作设置', exact: true }).click(); await productionStep(dialog, '创作要求'); await dialog.locator('summary:visible').filter({ hasText: '高级设置' }).click(); await prompt.fill('请求在途期间补充的下一次输入');
     const inspection = await rpc<RunInspection>(request, 'run.inspect', { runId, nodeId: 'a' });

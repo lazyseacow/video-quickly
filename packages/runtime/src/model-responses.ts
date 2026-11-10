@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import { providerUsageSchema, type ModelResponseIssue } from '@video-quickly/contracts';
 import type { DocumentStore } from './database.js';
-import { textIncompleteReasonSchema, TextRequestRejectedError, type TextGenerationResult } from './providers.js';
+import { textIncompleteReasonSchema, textRateLimitSchema, TextRequestRejectedError, type TextGenerationResult } from './providers.js';
 
 /** Only safe, locally generated field descriptions cross the checkpoint boundary. */
 export class ModelResponseValidationError extends Error {
@@ -33,7 +33,7 @@ export function parseModelJson(text: string, label = '分镜'): unknown {
 const receiptSchema = z.object({
   attempt: z.number().int().positive(), inputHash: z.string(), submittedAt: z.string(),
   status: z.enum(['submitted', 'received', 'rejected']), receivedAt: z.string().optional(),
-  rejectedAt: z.string().optional(), rejection: z.object({ status: z.number().int(), unsupportedOutputFormat: z.boolean() }).optional(),
+  rejectedAt: z.string().optional(), rejection: z.object({ status: z.number().int(), unsupportedOutputFormat: z.boolean(), rateLimit: textRateLimitSchema.optional() }).optional(),
   response: z.object({ text: z.string(), usage: providerUsageSchema.optional(), incomplete: z.boolean().optional(), incompleteReason: textIncompleteReasonSchema.optional() }).optional(),
   issues: z.array(z.object({ path: z.string(), message: z.string() })).optional(),
 });
@@ -67,7 +67,7 @@ export function createModelResponses(store: DocumentStore) {
       const receipt = current(options.operationId);
       if (receipt && receipt.inputHash !== options.inputHash) throw new Error('已保存的模型返回与本次固定输入不一致。');
       if (receipt?.status === 'received' && receipt.response) return receipt.response;
-      if (receipt?.status === 'rejected' && receipt.rejection) throw new TextRequestRejectedError(receipt.rejection.status, receipt.rejection.unsupportedOutputFormat);
+      if (receipt?.status === 'rejected' && receipt.rejection) throw new TextRequestRejectedError(receipt.rejection.status, receipt.rejection.unsupportedOutputFormat, receipt.rejection.rateLimit);
       if (receipt) throw new Error('模型请求已提交，尚未保存完整返回；请先核对原请求。');
       const head = store.get<{ attempt: number }>('model-response-head', options.operationId);
       const submitted: Receipt = { attempt: head?.attempt ?? 1, inputHash: options.inputHash, status: 'submitted', submittedAt: new Date().toISOString() };
@@ -81,7 +81,7 @@ export function createModelResponses(store: DocumentStore) {
         save(options.operationId, { ...submitted, status: 'received', receivedAt: new Date().toISOString(), response });
         return response;
       } catch (error) {
-        if (error instanceof TextRequestRejectedError) save(options.operationId, { ...submitted, status: 'rejected', rejectedAt: new Date().toISOString(), rejection: { status: error.status, unsupportedOutputFormat: error.unsupportedOutputFormat } });
+        if (error instanceof TextRequestRejectedError) save(options.operationId, { ...submitted, status: 'rejected', rejectedAt: new Date().toISOString(), rejection: { status: error.status, unsupportedOutputFormat: error.unsupportedOutputFormat, rateLimit: error.rateLimit } });
         throw error;
       }
     },
@@ -89,11 +89,14 @@ export function createModelResponses(store: DocumentStore) {
       const receipt = current(operationId);
       if (receipt?.status === 'received') save(operationId, { ...receipt, issues });
     },
-    // Only an explicit retry advances the attempt. Resume reuses the received
-    // text after a crash, and an unresolved submission never opens a new attempt.
+    // Advance only after a confirmed rejection or recorded validation failure.
+    // An unresolved submission cannot open a new attempt.
     prepareRetry(operationId: string): (() => void) | undefined {
       const receipt = current(operationId);
       if (!receipt || !(receipt.status === 'rejected' || receipt.status === 'received' && receipt.issues?.length)) return undefined;
+      const rejection = receipt.rejection;
+      const retryAt = rejection?.rateLimit?.retryAt;
+      if (rejection?.status === 429 && retryAt && Date.parse(retryAt) > Date.now()) throw new TextRequestRejectedError(429, false, rejection.rateLimit);
       store.put('model-response-head', operationId, { attempt: receipt.attempt + 1 });
       return () => store.put('model-response-head', operationId, { attempt: receipt.attempt });
     },

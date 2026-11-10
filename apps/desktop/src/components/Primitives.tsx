@@ -23,7 +23,20 @@ export function Field({ label, hint, required = false, children, className = '' 
   return <label className={`field ${className}`}><span className="field__label">{label}{required && <span className="field__required" aria-hidden="true">*</span>}</span>{control}{hint && <span id={hintId} className="field__hint">{hint}</span>}</label>;
 }
 
-export function Dialog({ title, children, onClose, onDismissStart, className = '', role, descriptionId, initialFocus }: { title: string; children: ReactNode; onClose: () => void; onDismissStart?: () => void; className?: string; role?: 'dialog' | 'alertdialog'; descriptionId?: string; initialFocus?: RefObject<HTMLElement | null> }) {
+type DialogProps = {
+  title: string;
+  children: ReactNode;
+  onClose: () => void;
+  onDismissStart?: () => void;
+  className?: string;
+  role?: 'dialog' | 'alertdialog';
+  descriptionId?: string;
+  initialFocus?: RefObject<HTMLElement | null>;
+  dismissOnBackdrop?: boolean;
+  dismissDisabled?: boolean;
+};
+
+export function Dialog({ title, children, onClose, onDismissStart, className = '', role, descriptionId, initialFocus, dismissOnBackdrop = true, dismissDisabled = false }: DialogProps) {
   const titleId = useId();
   const ref = useRef<HTMLDialogElement>(null);
   const surface = useRef<HTMLDivElement>(null);
@@ -58,7 +71,18 @@ export function Dialog({ title, children, onClose, onDismissStart, className = '
     preference.addEventListener('change', updatePreference);
     return () => { preference.removeEventListener('change', updatePreference); enter.kill(); exit?.kill(); dismiss.current = undefined; content.inert = false; if (dialog.open) dialog.close(); };
   }, { scope: ref });
-  return <dialog ref={ref} role={role} className={`dialog ${className}`} aria-labelledby={titleId} aria-describedby={descriptionId} onCancel={event => { event.preventDefault(); event.stopPropagation(); dismiss.current?.(); }} onClick={event => { if (event.target === event.currentTarget) dismiss.current?.(); }}><div ref={surface} className="dialog__surface"><div className="dialog__header"><h2 id={titleId}>{title}</h2><IconButton label="关闭对话框" onClick={() => dismiss.current?.()}><X size={18} /></IconButton></div>{children}</div></dialog>;
+  const requestDismiss = () => { if (!dismissDisabled) dismiss.current?.(); };
+  return <dialog ref={ref} role={role} className={`dialog ${className}`} aria-labelledby={titleId} aria-describedby={descriptionId}
+    onCancel={event => { event.preventDefault(); event.stopPropagation(); requestDismiss(); }}
+    onClick={event => { if (dismissOnBackdrop && event.target === event.currentTarget) requestDismiss(); }}>
+    <div ref={surface} className="dialog__surface">
+      <div className="dialog__header">
+        <h2 id={titleId}>{title}</h2>
+        <IconButton label="关闭对话框" disabled={dismissDisabled} onClick={requestDismiss}><X size={18} /></IconButton>
+      </div>
+      {children}
+    </div>
+  </dialog>;
 }
 
 export function Notice({ kind = 'info', children }: { kind?: 'info' | 'error' | 'success'; children: ReactNode }) {

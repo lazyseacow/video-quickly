@@ -29,8 +29,7 @@ test('renders a completed project read while a later notification refresh is sti
   page.on('websocket', socket => socket.on('framereceived', frame => { if (String(frame.payload).includes('workspace.changed')) notifications++; }));
   const network = await page.context().newCDPSession(page); await network.send('Network.enable');
   network.on('Network.eventSourceMessageReceived', event => { if (event.data.includes('workspace.changed')) notifications++; });
-  await page.goto('/'); await expect(page.getByLabel('镜头标题', { exact: true })).toBeVisible();
-  await page.getByRole('button', { name: '我的项目', exact: true }).click();
+  await page.goto('/'); await expect(page.getByRole('heading', { name: '我的项目', exact: true })).toBeVisible();
   const card = page.locator('.project-card').filter({ has: page.getByRole('heading', { name: target.title, exact: true }) });
   await expect(card).toBeVisible(); await page.clock.install();
   const firstRead = gate(), laterRead = gate(), requested = gate(); let reads = 0;
@@ -62,7 +61,7 @@ async function targetProject(request: APIRequestContext, shotTitle: string) {
 test('opens the selected project while unrelated workspace metadata is delayed', async ({ page, request }) => {
   await page.emulateMedia({ reducedMotion: 'reduce' });
   const target = await targetProject(request, '摘要尚未返回的镜头');
-  await page.goto('/'); await expect(page.getByLabel('镜头标题', { exact: true })).toBeVisible(); await page.getByRole('button', { name: '我的项目', exact: true }).click();
+  await page.goto('/'); await expect(page.getByRole('heading', { name: '我的项目', exact: true })).toBeVisible();
   const hold = gate(); let summaries = 0;
   await page.route('**/__desktop_rpc', async route => {
     if (route.request().postDataJSON()?.method !== 'workspace.summary') { await route.continue(); return; }
@@ -78,7 +77,7 @@ test('opens the selected project while unrelated workspace metadata is delayed',
 test('keeps the newer selection when the previous project response arrives late', async ({ page, request }) => {
   await page.emulateMedia({ reducedMotion: 'reduce' });
   const first = await targetProject(request, '先选择的镜头'), second = await targetProject(request, '后选择的镜头');
-  await page.goto('/'); await expect(page.getByLabel('镜头标题', { exact: true })).toBeVisible();
+  await page.goto('/'); await expect(page.getByRole('heading', { name: '我的项目', exact: true })).toBeVisible();
   const hold = gate(), requested = gate(), finished = gate();
   await page.route('**/__desktop_rpc', async route => {
     const input = route.request().postDataJSON();
@@ -101,7 +100,7 @@ test('shows a failed selected-project read and recovers only after an explicit n
   const target = await targetProject(request, '读取恢复的镜头');
   const clockOrigin = new Date('2026-01-01T00:00:00Z');
   await page.clock.install({ time: clockOrigin });
-  await page.goto('/'); await expect(page.getByLabel('镜头标题', { exact: true })).toBeVisible();
+  await page.goto('/'); await expect(page.getByRole('heading', { name: '我的项目', exact: true })).toBeVisible();
   // Other workers can publish real workspace changes after recovery. Keep
   // their debounce outside this explicit-read count; notifications are tested below.
   await page.clock.pauseAt(new Date(clockOrigin.getTime() + 2 * test.info().timeout));
@@ -128,7 +127,7 @@ test('keeps a failed project read paused through actual workspace notifications 
   let notifications = 0, reads = 0;
   const network = await page.context().newCDPSession(page); await network.send('Network.enable');
   network.on('Network.eventSourceMessageReceived', event => { if (event.data.includes('workspace.changed')) notifications++; });
-  await page.goto('/'); await expect(page.getByLabel('镜头标题', { exact: true })).toBeVisible();
+  await page.goto('/'); await expect(page.getByRole('heading', { name: '我的项目', exact: true })).toBeVisible();
   const clockOrigin = new Date('2026-01-01T00:00:00Z');
   await page.clock.install({ time: clockOrigin }); await page.clock.pauseAt(new Date(clockOrigin.getTime() + 2 * test.info().timeout));
   const retryRequested = gate(), releaseRetry = gate(), conditionalRead = gate();
@@ -167,15 +166,16 @@ test('keeps a failed project read paused through actual workspace notifications 
     await expect.poll(() => notifications).toBeGreaterThan(beforeRecoveryNotification);
     await page.clock.runFor(300); releaseRetry.release(); await conditionalRead.promise;
     await expect(page.getByLabel('镜头标题', { exact: true })).toHaveValue('通知后仍需显式恢复的镜头');
-    expect(observed.filter(read => read.phase === 'failed').map(read => read.params)).toEqual([{ projectId: target.id }]);
+    const projectRead = { projectId: target.id, videoPreviewKey: '' };
+    expect(observed.filter(read => read.phase === 'failed').map(read => read.params)).toEqual([projectRead]);
     const retried = observed.filter(read => read.phase === 'retry'); expect(retried).toHaveLength(1);
-    expect(retried[0].params).toEqual({ projectId: target.id }); expect(retried[0].reply?.project).toEqual(target);
+    expect(retried[0].params).toEqual(projectRead); expect(retried[0].reply?.project).toEqual(target);
     const refreshed = observed.filter(read => read.phase === 'notification'); expect(refreshed.length).toBeGreaterThan(0);
     expect(refreshed[0].baseline).toEqual({ revision: retried[0].reply!.revision, assetsVersion: retried[0].reply!.assetsVersion });
     // Once explicitly recovered, notifications resume normal conditional reads.
     // A later asset-library update may advance the response's assetsVersion.
     for (const read of refreshed) {
-      expect(read.baseline).toBeDefined(); expect(read.params).toEqual({ projectId: target.id, ...read.baseline });
+      expect(read.baseline).toBeDefined(); expect(read.params).toEqual({ ...projectRead, ...read.baseline });
       expect(read.reply?.id).toBe(target.id); expect(read.reply?.revision).toBe(target.revision);
     }
     expect(writes).toEqual([]); expect((await rpc<{ project: ProjectDocument }>(request, 'project.get', { projectId: target.id })).project).toEqual(target);

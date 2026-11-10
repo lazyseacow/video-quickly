@@ -2,6 +2,7 @@ import { createServer, type Server } from 'node:http';
 import { randomUUID } from 'node:crypto';
 import { expect, test, type APIRequestContext, type Page } from '@playwright/test';
 import { runSchema, type ProjectDocument, type RunSummary } from '@video-quickly/contracts';
+import { confirmAction } from './confirmation-actions';
 
 async function rpc<T>(request: APIRequestContext, method: string, params: unknown = {}): Promise<T> {
   const response = await request.post('/__desktop_rpc', { data: { method, params } });
@@ -52,6 +53,7 @@ async function startProduction(page: Page, projectId: string) {
     return input.method === 'run.start' && input.params?.projectId === projectId;
   });
   await productionControl(page).click();
+  await confirmAction(page, '确认开始制作');
   const response = await accepted; expect(response.ok()).toBe(true);
   const payload = await response.json(); expect(payload.error).toBeUndefined();
   const run = runSchema.parse(payload.result); expect(run.projectId).toBe(projectId); return run;
@@ -108,7 +110,8 @@ for (const viewport of [{ width: 1536, height: 960, theme: 'dark' }, { width: 39
     await page.addStyleTag({ content: '.production-toggle__label { letter-spacing: .04em; }' });
     await expect(control).toHaveAccessibleName('开始制作'); await expect(control).toBeEnabled();
     const originalControl = await control.elementHandle(), startBounds = await control.boundingBox(); expect(startBounds).not.toBeNull();
-    await control.click(); await source.entered; await expect(control).toBeFocused();
+    await control.click(); await confirmAction(page, '确认开始制作');
+    await source.entered; await expect(control).toBeFocused();
     const panel = production(page); await expect(control).toHaveAccessibleName('停止制作'); await expect(control).toHaveText('停止'); await expect(control).toBeEnabled();
     await expect(page.getByRole('button', { name: '停止制作', exact: true })).toHaveCount(1); await expect(panel.getByRole('button', { name: '停止制作', exact: true })).toHaveCount(0);
     await expect(control).toHaveCSS('scale', 'none');
@@ -145,7 +148,9 @@ test('disables the shared production control during start submission and ignores
   try {
     await open(page, source.project); const control = productionControl(page);
     await expect(control).toHaveAccessibleName('开始制作'); await control.focus();
-    await control.evaluate((button: HTMLButtonElement) => { button.click(); button.click(); }); await entered.promise;
+    await control.evaluate((button: HTMLButtonElement) => { button.click(); button.click(); });
+    await confirmAction(page, '确认开始制作');
+    await entered.promise;
     await expect(control).toBeDisabled(); expect(starts).toBe(1);
     const title = page.getByLabel('镜头标题', { exact: true }); await title.focus();
     start.release(); await source.entered;

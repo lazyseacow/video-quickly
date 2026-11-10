@@ -5,6 +5,9 @@
 .preview-panel.preview-player .preview-chrome { position: absolute; left: 0; right: 0; z-index: 2; transition: opacity var(--motion-fast) var(--motion-ease), visibility var(--motion-fast); }
 .preview-panel.preview-player .preview-toolbar { top: 0; height: auto; min-height: 56px; padding: var(--space-2) var(--space-4); color: var(--on-media); background: linear-gradient(var(--media-overlay), transparent); }
 .preview-player .sample-chip { color: var(--on-media); }
+.preview-player .preview-source-toggle { margin-inline-start: auto; flex-shrink: 0; color: var(--on-media); }
+.preview-player .preview-source-toggle:hover { background: color-mix(in srgb, var(--on-media) 16%, transparent); }
+.preview-player .preview-source-toggle:focus-visible { outline-color: var(--on-media); }
 .preview-quality-control { display: flex; align-items: center; flex-shrink: 0; gap: var(--space-1); padding-inline-start: var(--space-3); border-radius: var(--radius-pill); color: var(--on-media); font-size: var(--text-size-caption); cursor: pointer; anchor-scope: --preview-quality-anchor; }
 .preview-quality-control .preview-quality { --text: var(--on-media); --text-secondary: var(--on-media); --surface: var(--media-player-background); --surface-hover: color-mix(in srgb, var(--on-media) 16%, var(--media-player-background)); --surface-selected: color-mix(in srgb, var(--on-media) 12%, var(--media-player-background)); --accent: var(--on-media); }
 .preview-panel.preview-player .preview-controls select.preview-quality { anchor-name: --preview-quality-anchor; width: 76px; min-width: 0; min-height: var(--control-hit-size); padding-inline: var(--space-2) var(--space-8); border-color: transparent; color: var(--on-media); background: transparent; box-shadow: none; font-size: var(--text-size-caption); }

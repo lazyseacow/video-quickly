@@ -8,6 +8,11 @@ export interface ModelParameterField {
 type Context = Pick<ModelProfile, 'provider' | 'capabilities' | 'textProtocol'>;
 type WithParameters = Context & { parameters: Record<string, JsonValue> };
 
+export function defaultVideoRequestSeconds(modelId: string, durationUs: number): number {
+  const minimum = /^doubao-seedance-2-0(?:-(?:fast|mini))?(?:-\d+)?$/i.test(modelId) ? 4 : 1;
+  return Math.max(minimum, Math.ceil(durationUs / 1_000_000));
+}
+
 export function getModelParameterFields(model: Context): ModelParameterField[] {
   const fields: ModelParameterField[] = [];
   const has = (capability: ModelCapability) => model.capabilities.includes(capability);

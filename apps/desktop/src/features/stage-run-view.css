@@ -5,8 +5,7 @@
 .stage-run-view__summary time { font-variant-numeric: tabular-nums; }
 .stage-run-view__completion { display: flex; align-items: baseline; gap: var(--space-2); margin: 0 0 var(--space-1); font-size: var(--text-size-caption); color: var(--text-secondary); }
 .stage-run-view__completion > strong { font-size: var(--text-size-number-compact); line-height: var(--line-height-number); font-weight: var(--font-weight-semibold); color: var(--text); font-variant-numeric: tabular-nums; }
-.stage-run-view__saved { flex-shrink: 0; margin-left: auto; color: var(--text-secondary); }
-.stage-run-view__summary-actions { display: flex; align-items: center; gap: var(--space-3); flex-shrink: 0; }
+.stage-run-view__summary > .icon-button { flex-shrink: 0; }
 .stage-run-view__failure > div { min-width: 0; }
 .stage-run-view__failure p { margin: var(--space-1) 0 0; overflow-wrap: anywhere; }
 .stage-run-view__failure > .button { flex-shrink: 0; }

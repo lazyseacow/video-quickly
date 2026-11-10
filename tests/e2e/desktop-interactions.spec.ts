@@ -1,9 +1,10 @@
 import { expect, test, type Locator, type Page } from '@playwright/test';
+import { openProjectFromList, sampleProjectTitle } from './workspace-navigation';
 
 async function openApp(page: Page) {
   await page.goto('/');
   await expect(page.getByRole('navigation', { name: '主导航', exact: true })).toBeVisible();
-  await expect(page.getByLabel('项目名称', { exact: true })).toBeVisible();
+  await openProjectFromList(page, sampleProjectTitle);
 }
 
 async function dragText(page: Page, target: Locator) {

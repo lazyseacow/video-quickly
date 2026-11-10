@@ -1,7 +1,7 @@
 import { useRef, useState } from 'react';
 import { LockKeyhole, Plus, Save } from 'lucide-react';
-import { formatPlanningDocument, MAX_STORYBOARD_SHOTS, planningDocumentSchemas, shotSchema, type CreativeContext } from '@video-quickly/contracts';
-import { CharacterPicker } from '../features/CharactersPage';
+import { formatFrameRate, formatPlanningDocument, MAX_STORYBOARD_SHOTS, planningDocumentSchemas, shotSchema, type CreativeContext } from '@video-quickly/contracts';
+import { CharacterPickerLibrary, CharacterPickerOptions } from '../features/CharactersPage';
 import { planningLabels, type PlanningChange, type PlanningProject, type PlanningSection, type PlanningShot, type StoryboardDraft } from '../lib/planning-edits';
 import CreativeContextEditor, { CreativeEntityPicker } from './CreativeContextEditor';
 import PlanningDocumentFields, { initialPlanningDocument } from './PlanningDocumentFields';
@@ -11,19 +11,6 @@ import './planning-result-editor.css';
 type DraftShot = PlanningShot & { seconds: string };
 const microseconds = 1_000_000;
 const duration = shotSchema.shape.durationUs;
-
-function ShotPlanningReferences({ shot, context, version, onChange }: {
-  shot: DraftShot; context?: CreativeContext | null; version: number; onChange(patch: Partial<DraftShot>): void;
-}) {
-  const [open, setOpen] = useState(false);
-  return <details onToggle={event => setOpen(event.currentTarget.open)}>
-    <summary>角色与创作设定</summary>
-    {open && <div className="planning-result-editor__references">
-      <CharacterPicker value={shot.characterIds} version={version} onChange={characterIds => onChange({ characterIds })} />
-      <CreativeEntityPicker value={shot.creativeEntityKeys} context={context} onChange={creativeEntityKeys => onChange({ creativeEntityKeys })} />
-    </div>}
-  </details>;
-}
 
 export default function PlanningResultEditor({ section, baseline, storyboard, structuredDocument, version, onSave, onClose }: {
   section: PlanningSection; baseline: PlanningProject; storyboard?: StoryboardDraft; structuredDocument?: boolean; version: number;
@@ -109,7 +96,8 @@ export default function PlanningResultEditor({ section, baseline, storyboard, st
       if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 's') { event.preventDefault(); event.currentTarget.requestSubmit(); }
     }}>
       <div className="dialog__body planning-result-editor__body">
-        <p className="planning-result-editor__hint">{storyboard ? '已填入 AI 草稿。可以逐项修改，保存到项目后制作将使用这些镜头。' : '保存到当前项目，供后续制作使用。'}</p>
+        {section === 'script' && <p className="planning-result-editor__hint"><strong>分镜全局参数</strong> · {baseline.profile.width} × {baseline.profile.height} · {formatFrameRate(baseline.profile.frameRate)} fps</p>}
+        <p className="planning-result-editor__hint">{storyboard ? '已填入分镜草稿。保存到项目后，下次开始制作将使用这些镜头。' : '保存到当前项目，供后续制作使用。'}</p>
         {error && <Notice kind="error">{error}</Notice>}
         <fieldset disabled={pending} className="planning-result-editor__fields">
           {section !== 'script' ? <>
@@ -118,7 +106,7 @@ export default function PlanningResultEditor({ section, baseline, storyboard, st
             {section === 'style' && <CreativeContextEditor value={context} version={version} usedEntityKeys={baseline.shots.flatMap(shot => shot.creativeEntityKeys ?? [])} onChange={setContext} />}
           </> : <>
             {storyboard && <CreativeContextEditor value={context} version={version} usedEntityKeys={shots.flatMap(shot => shot.creativeEntityKeys ?? [])} onChange={setContext} />}
-            {shots.length ? <ol className="planning-result-editor__shots">{shots.map((shot, index) => {
+            {shots.length ? <CharacterPickerLibrary version={version}>{library => <ol className="planning-result-editor__shots">{shots.map((shot, index) => {
               const original = originals.get(shot.id);
               return <li key={shot.id}>
                 <header>
@@ -131,12 +119,24 @@ export default function PlanningResultEditor({ section, baseline, storyboard, st
                     <Field label="镜头标题" hint="最多 160 个字符" required><input required maxLength={shotSchema.shape.title.maxLength ?? undefined} data-shot-title={shot.id} data-validation-message="请填写镜头标题，最多 160 个字符。" value={shot.title} onChange={event => updateShot(shot.id, { title: event.target.value })} /></Field>
                     <Field label="镜头时长（秒）" hint={original?.clipEdit ? '在时间轴调整' : '0.5 至 600 秒'} required={!original?.clipEdit}><input type="number" min={(duration.minValue ?? 0) / microseconds} max={(duration.maxValue ?? 600 * microseconds) / microseconds} step={1 / microseconds} required={!original?.clipEdit} disabled={Boolean(original?.clipEdit)} data-validation-message="镜头时长须在 0.5 至 600 秒之间，最多 6 位小数。" value={shot.seconds} onChange={event => updateShot(shot.id, { seconds: event.target.value })} /></Field>
                   </div>
-                  <Field label="旁白"><textarea rows={3} maxLength={shotSchema.shape.narration.maxLength ?? undefined} value={shot.narration} onChange={event => updateShot(shot.id, { narration: event.target.value })} /></Field>
-                  <details open={!original}><summary>画面与声音要求</summary><Field label="画面要求"><textarea rows={3} maxLength={shotSchema.shape.visualPrompt.maxLength ?? undefined} value={shot.visualPrompt} onChange={event => updateShot(shot.id, { visualPrompt: event.target.value })} /></Field><Field label="声音要求"><textarea rows={2} maxLength={shotSchema.shape.soundPrompt.unwrap().maxLength ?? undefined} value={shot.soundPrompt ?? ''} onChange={event => updateShot(shot.id, { soundPrompt: event.target.value })} /></Field></details>
-                  <ShotPlanningReferences shot={shot} context={context} version={version} onChange={patch => updateShot(shot.id, patch)} />
+                  <div className="planning-result-editor__shot-content">
+                    <Field label="旁白"><textarea rows={3} maxLength={shotSchema.shape.narration.maxLength ?? undefined} value={shot.narration} onChange={event => updateShot(shot.id, { narration: event.target.value })} /></Field>
+                    <details className="form-disclosure" open>
+                      <summary>画面与声音要求</summary>
+                      <Field label="画面要求"><textarea rows={3} maxLength={shotSchema.shape.visualPrompt.maxLength ?? undefined} value={shot.visualPrompt} onChange={event => updateShot(shot.id, { visualPrompt: event.target.value })} /></Field>
+                      <Field label="声音要求"><textarea rows={2} maxLength={shotSchema.shape.soundPrompt.unwrap().maxLength ?? undefined} value={shot.soundPrompt ?? ''} onChange={event => updateShot(shot.id, { soundPrompt: event.target.value })} /></Field>
+                    </details>
+                    <details className="form-disclosure" open>
+                      <summary>角色与创作设定</summary>
+                      <div className="planning-result-editor__references">
+                        <CharacterPickerOptions library={library} value={shot.characterIds} version={version} onChange={characterIds => updateShot(shot.id, { characterIds })} />
+                        <CreativeEntityPicker value={shot.creativeEntityKeys} context={context} onChange={creativeEntityKeys => updateShot(shot.id, { creativeEntityKeys })} />
+                      </div>
+                    </details>
+                  </div>
                 </fieldset>
               </li>;
-            })}</ol> : <p className="planning-result-editor__hint">添加镜头后，可逐项填写标题、时长、旁白和画面要求。</p>}
+            })}</ol>}</CharacterPickerLibrary> : <p className="planning-result-editor__hint">添加镜头后，可逐项填写标题、时长、旁白和画面要求。</p>}
             <Button static className="planning-result-editor__add" disabled={shots.length >= MAX_STORYBOARD_SHOTS} onClick={addShot}><Plus size={16} />添加镜头</Button>
           </>}
         </fieldset>

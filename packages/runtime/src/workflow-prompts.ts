@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { createSceneTemplate, creativeCharacterBindings, creativeContextSchema, generationFramePrompt, LockedShotChangeError, resolvePromptBindings, shotSchema, validateCreativeReferences, type CharacterProfile, type JsonValue, type ProjectDocument, type SkillPackage, type WorkflowNode } from '@video-quickly/contracts';
+import { createSceneTemplate, creativeCharacterBindings, creativeContextSchema, generationFramePrompt, LockedShotChangeError, projectCharacterIds, resolvePromptBindings, shotSchema, validateCreativeReferences, type CharacterProfile, type JsonValue, type ProjectDocument, type SkillPackage, type WorkflowNode } from '@video-quickly/contracts';
 import { ModelResponseValidationError, parseModelJson, responseIssues } from './model-responses.js';
 import { skillPromptContext } from '@video-quickly/contracts';
 import { legacyStoryboardJsonSchema, legacyStoryboardOutputSchema, productionDocumentContract, storyboardJsonSchema, storyboardOutputSchema, type WorkflowOutputVersion } from './workflow-outputs.js';
@@ -17,6 +17,11 @@ export interface StoryboardPromptStage {
   shots: PromptShot[];
 }
 
+export function withStoryboardTiming(prompt: string, kind: WorkflowNode['kind']): string {
+  if (kind !== 'script') return prompt;
+  return `${prompt}\n\n新生成或改写的视频镜头至少 4 秒，反应、过场和无台词镜头同样适用。大纲按此下限安排全片节奏。生成详细分镜时，durationUs 填写不小于 4000000 的整数微秒。短节拍可用动作延续或自然停顿来安排。已有锁定镜头保留原时长。`;
+}
+
 function promptUpstreamResult(result: WorkflowUpstreamResult): WorkflowUpstreamResult {
   if (result.kind === 'agent' || result.kind === 'subflow' || !result.output || typeof result.output !== 'object' || Array.isArray(result.output)) return result;
   const { providerUsage: _usage, source: _source, modelId: _model, ...output } = result.output;
@@ -31,7 +36,7 @@ function promptUpstreamResult(result: WorkflowUpstreamResult): WorkflowUpstreamR
   return { ...result, output };
 }
 
-export function buildWorkflowPrompt(project: ProjectDocument, node: WorkflowNode, skills: SkillPackage[], singleShot = false, characters: CharacterProfile[] = [], upstreamResults: WorkflowUpstreamResult[] = [], version?: WorkflowOutputVersion, storyboard?: StoryboardPromptStage): string {
+export function buildWorkflowPrompt(project: ProjectDocument, node: WorkflowNode, skills: SkillPackage[], singleShot = false, characters: CharacterProfile[] = [], upstreamResults: WorkflowUpstreamResult[] = [], version?: WorkflowOutputVersion, storyboard?: StoryboardPromptStage, unifiedShotProfile = true): string {
   const fixedOutputs = Boolean(version);
   const document = productionDocumentContract(node, version);
   const documentInstruction = document?.fieldOutput ? '分字段填写' : document ? '在 text 字段中写入' : '只返回';
@@ -74,7 +79,7 @@ export function buildWorkflowPrompt(project: ProjectDocument, node: WorkflowNode
     ...(upstreamResults.length ? [`上游已完成步骤的实际产物：\n${JSON.stringify(upstreamResults.map(promptUpstreamResult))}`] : []),
     skillPromptContext(node, skills),
     resolvePromptBindings(node, project, project.shots.length === 1 ? project.shots[0] : undefined, Object.fromEntries(upstreamResults.map(result => [result.nodeId, result.output]))).prompt,
-    ...(node.kind === 'style' || node.kind === 'script' ? [generationFramePrompt(project.profile)] : []),
+    ...(node.kind === 'style' || node.kind === 'script' ? [generationFramePrompt(project.profile, node.kind === 'script' && unifiedShotProfile)] : []),
     contract,
     ...(document ? [document.fieldOutput
       ? `最终回复只返回一个完整的 JSON 对象，字段名称按 Schema 填写，可选内容为空时用空字符串。机器校验的 JSON Schema：${JSON.stringify(document.jsonSchema)}`
@@ -104,6 +109,7 @@ export function parseWorkflowScript(text: string, project: ScriptProject, single
 }
 
 function invalid(path: string, message: string): never { throw new ModelResponseValidationError([{ path, message }]); }
+export const UNKNOWN_CHARACTER_KEY_MESSAGE = '分镜引用的角色键不在本次角色白名单中。';
 type ScriptOutput = z.infer<typeof legacyStoryboardOutputSchema>;
 type ScriptProject = Pick<ProjectDocument, 'shots' | 'scenePreset' | 'creativeContext'>;
 type Shot = ProjectDocument['shots'][number];
@@ -140,7 +146,9 @@ export function mergeStoryboardEntities(existing: ProjectDocument['creativeConte
 }
 
 export function materializeStoryboardBatch(shots: ScriptOutput['shots'], project: ScriptProject, characters: CharacterProfile[], placements: readonly StoryboardPlacement[]) {
-  return materializeScript({ shots, entities: [] }, project, false, characters, placements).shots;
+  // An empty library scope has no bindings to resolve. Story characters are still described in the shot text and entities.
+  const batch = projectCharacterIds(project).length ? shots : shots.map(shot => shot.characterKeys?.length ? { ...shot, characterKeys: [] } : shot);
+  return materializeScript({ shots: batch, entities: [] }, project, false, characters, placements).shots;
 }
 
 function materializeScript(parsed: ScriptOutput, project: ScriptProject, singleShot: boolean, characters: CharacterProfile[], placements?: readonly StoryboardPlacement[]) {
@@ -152,7 +160,7 @@ function materializeScript(parsed: ScriptOutput, project: ScriptProject, singleS
   const resolved = parsed.shots.map((shot, index) => {
     const characterIds = shot.characterKeys?.map((key, keyIndex) => {
       const id = bindings.get(key);
-      if (!id) invalid(`shots[${index}].characterKeys[${keyIndex}]`, '分镜引用的角色键不在本次角色白名单中。');
+      if (!id) invalid(`shots[${index}].characterKeys[${keyIndex}]`, UNKNOWN_CHARACTER_KEY_MESSAGE);
       return id;
     });
     for (const [keyIndex, key] of (shot.entityKeys ?? []).entries()) if (!entities.has(key)) invalid(`shots[${index}].entityKeys[${keyIndex}]`, '分镜引用的创作设定不存在。');

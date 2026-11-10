@@ -26,3 +26,17 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
+
+## Built-in drama template references
+
+The bundled creative instructions and sample shots are written for Video Quickly.
+They draw on episode and asset planning in [shuohao-skills](https://github.com/eternityspring/shuohao-skills),
+image-led storyboarding in [Canghe Manga Drama](https://github.com/freestylefly/canghe-skills/tree/master/skills/canghe-manga-drama),
+and shot continuity in [Drama Skills](https://github.com/zenstory-ai/drama-skills).
+
+The bundled scene reference JPEGs are web-size downloads from
+[The Metropolitan Museum of Art's Open Access program](https://www.metmuseum.org/hubs/open-access) under CC0.
+
+- `paris-alley.jpg` — Charles Marville, *Impasse Briare (de la Cité Coquenard)*, 2005.100.362. [Collection record](https://www.metmuseum.org/art/collection/search/285699)
+- `rain-on-the-bridge.jpg` — Utagawa Hiroshige, *Sudden Shower over Shin-Ōhashi Bridge and Atake*, JP644. [Collection record](https://www.metmuseum.org/art/collection/search/37094)
+- `mountains-and-clouds.jpg` — Attributed to Gong Xian, *Dwelling among mountains and clouds*, 1983.609. [Collection record](https://www.metmuseum.org/art/collection/search/49133)

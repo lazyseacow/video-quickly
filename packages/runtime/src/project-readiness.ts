@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { stat } from 'node:fs/promises';
-import { creativeReferenceAssetIds, projectCharacterIds, projectReadinessSchema, usesManualPlanning, usesVideoAudio, type AssetRecord, type CharacterProfile, type ModelProfile, type ProjectDocument, type ReadinessIssue, type RunSelection, type RuntimeSystem, type SkillPackage, type WorkflowNode } from '@video-quickly/contracts';
+import { creativeReferenceAssetIds, isCreativeReferenceAsset, projectCharacterIds, projectReadinessSchema, usesManualPlanning, usesVideoAudio, type AssetRecord, type CharacterProfile, type ModelProfile, type ProjectDocument, type ReadinessIssue, type RunSelection, type RuntimeSystem, type SkillPackage, type WorkflowNode } from '@video-quickly/contracts';
 import { fingerprint } from './activities.js';
 import { audioFileHash } from './audio-preview.js';
 import { ExecutionModelError, validateExecutionModel } from './execution-model.js';
@@ -68,7 +68,7 @@ export function createProjectReadiness(options: {
     }
     for (const assetId of creativeReferenceAssetIds(project)) {
       const asset = assets.get(assetId);
-      if (!asset?.active || asset.kind !== 'image' || asset.projectId !== undefined) add({ severity: 'error', category: 'media', assetId, message: '场景或道具的参考图不再是有效公共图片。', hint: '请在制作设置中重新选择参考图片。', fix: 'assets' }, `creative-asset:${assetId}`);
+      if (!isCreativeReferenceAsset(project, asset)) add({ severity: 'error', category: 'media', assetId, message: '创作设定的参考图缺失或不属于当前项目。', hint: '请恢复图片或重新选择参考素材。', fix: 'assets' }, `creative-asset:${assetId}`);
       else requireAsset(assetId, nodes[0]);
     }
     let futureShots = false, futureImages = false, futureVoice = false;
@@ -134,7 +134,7 @@ export function createProjectReadiness(options: {
         signal.throwIfAborted();
         const model = node.modelId ? models.get(node.modelId) : undefined;
         if (!model || invalidModels.has(node.id) || !['assets', 'animation'].includes(node.kind)) continue;
-        try { await options.preflight({ project, node, assets: saved.assets, model, characters: saved.characters.filter(character => characterIds.has(character.id)), signal, dataDirectory: options.directory }); }
+        try { await options.preflight({ project, node, assets: saved.assets, model, characters: saved.characters.filter(character => characterIds.has(character.id)), signal, dataDirectory: options.directory, pendingCastFrames: node.config.automaticCasting === true }); }
         catch (failure) { signal.throwIfAborted(); add({ severity: 'error', category: 'model', nodeId: node.id, modelId: model.id, message: failure instanceof Error ? failure.message : '媒体输入条件无法通过本地检查。', fix: 'models' }, `preflight:${node.id}`); }
       }
     }

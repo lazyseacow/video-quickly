@@ -4,6 +4,66 @@ import { fixture, latest, rpc, saved } from './native-video-fixture';
 import { openProjectFromList } from './workspace-navigation';
 import { confirmAction } from './confirmation-actions';
 
+test('renders validated videos in the workbench while later shots are still generating', async ({ page, request }, info) => {
+  test.setTimeout(90_000);
+  const second = Promise.withResolvers<void>(), third = Promise.withResolvers<void>();
+  let submitted = 0;
+  const source = await fixture(request, info, false, 3, { async beforeReply(_body, path) {
+    if (!path.includes('contents/generations/tasks')) return;
+    const index = submitted++;
+    if (index === 1) await second.promise;
+    if (index === 2) await third.promise;
+  } });
+  try {
+    const configured = await rpc<ProjectDocument>(request, 'project.update', { projectId: source.project.id, revision: source.project.revision, patch: {
+      shots: [{ id: 'existing-shot', title: '项目原镜头', narration: '', visualPrompt: '蓝色天空', durationUs: 2_000_000 }],
+      workflow: { ...source.project.workflow, production: { ...source.project.workflow.production, textModelId: source.models[0].id, videoModelId: source.video.id, referenceMode: 'none' } },
+    } });
+    await page.goto('/'); await openProjectFromList(page, configured.title);
+    const player = page.getByRole('region', { name: '视频预览播放器', exact: true });
+    const shots = page.locator('.outline-shot'), clips = page.locator('.timeline-clip--video');
+    const stage = page.getByRole('button', { name: '打开阶段：素材与配音', exact: true });
+    await expect(player).toContainText('本地示例');
+    await rpc(request, 'run.start', { projectId: configured.id, revision: configured.revision });
+    await expect(stage).toContainText('1/3', { timeout: 30_000 });
+    await expect(player.getByRole('button', { name: '编辑项目', exact: true })).toBeVisible();
+    await expect(shots).toHaveCount(3);
+    await expect(clips).toHaveCount(3);
+    for (const canvas of [player.locator('.preview-frame canvas'), shots.first().locator('canvas'), clips.first().locator('canvas')]) {
+      await expect.poll(() => canvas.evaluate((element: HTMLCanvasElement) => {
+        const [red, green, blue] = element.getContext('2d')!.getImageData(element.width / 2, element.height / 2, 1, 1).data;
+        return blue > 150 && red < 60 && green < 60;
+      })).toBe(true);
+    }
+    await expect(player.locator('.prepared-mix-preview')).toHaveAttribute('data-status', 'ready');
+    expect(await saved(request, configured.id)).toEqual(configured);
+
+    await clips.nth(1).getByRole('button', { name: /^定位镜头 2/ }).click();
+    await expect(player).toContainText('待生成');
+    second.resolve();
+    await expect(stage).toContainText('2/3', { timeout: 30_000 });
+    await expect(shots.nth(1)).toHaveAttribute('aria-pressed', 'true');
+    await expect(player).toContainText('视频素材');
+    await expect(player.locator('.prepared-mix-preview')).toHaveAttribute('data-status', 'ready');
+    await page.screenshot({ path: info.outputPath('live-video-preview.png') });
+    await page.setViewportSize({ width: 390, height: 844 });
+    await expect(player.getByRole('button', { name: '编辑项目', exact: true })).toBeVisible();
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+    await page.screenshot({ path: info.outputPath('live-video-preview-narrow.png') });
+    await page.setViewportSize({ width: 1536, height: 960 });
+
+    await player.getByRole('button', { name: '编辑项目', exact: true }).click();
+    await expect(page.getByLabel('镜头标题', { exact: true })).toHaveValue('项目原镜头');
+    await expect(shots).toHaveCount(1);
+    await player.getByRole('button', { name: '制作预览', exact: true }).click();
+    await expect(shots).toHaveCount(3);
+    third.resolve();
+    await expect.poll(async () => (await latest(request, configured.id))?.status, { timeout: 30_000 }).toBe('succeeded');
+    await expect(player.getByRole('button', { name: '编辑项目', exact: true })).toHaveCount(0);
+    expect((await saved(request, configured.id)).shots.every(shot => Boolean(shot.videoAssetId))).toBe(true);
+  } finally { second.resolve(); third.resolve(); await source.close(); }
+});
+
 test('automatically binds a completed video task to the open project', async ({ page, request }, info) => {
   const source = await fixture(request, info);
   try {

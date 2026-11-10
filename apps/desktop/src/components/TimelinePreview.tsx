@@ -17,7 +17,7 @@ interface Props {
   playing: boolean;
   buffering?: boolean;
   clock: PlaybackClock;
-  onRepair: (shot: Shot) => void;
+  onRepair?: (shot: Shot) => void;
 }
 
 interface SourceProps {
@@ -190,7 +190,7 @@ export const TimelinePreview = memo(function TimelinePreview({ project, draft, a
   const repairShot = state.shot ?? shot;
   return <span className="scene-preview timeline-preview" aria-busy={loading || Boolean(buffering)}>
     <canvas ref={canvas} role="img" aria-label={`${shot?.title ?? ''} · 镜头预览`} style={error || initialLoading ? { visibility: 'hidden' } : undefined} />
-    <ScenePreviewState loading={initialLoading} error={error} onRetry={() => setRetry(value => value + 1)} onRepair={repairShot ? () => onRepair(repairShot) : undefined} />
+    <ScenePreviewState loading={initialLoading} error={error} onRetry={() => setRetry(value => value + 1)} onRepair={repairShot && onRepair ? () => onRepair(repairShot) : undefined} />
     {showBuffering && !error && <span className="timeline-preview__buffering" role="status"><LoaderCircle className="spin" size={14} aria-hidden="true" />正在准备画面…</span>}
     {outgoing && sample?.outgoing && <PreviewSource key={sourceKey(outgoing)} sourceKey={sourceKey(outgoing)} project={project} shot={outgoing} shotIndex={sample.outgoing.shotIndex} assets={assets} timeUs={sample.outgoing.localTimeUs} playing={false} onFrame={receive} />}
     {shot && sample && <PreviewSource key={sourceKey(shot)} sourceKey={sourceKey(shot)} project={project} shot={shot} shotIndex={sample.shotIndex} assets={assets} timeUs={sample.effect && buffer ? preparedTimeUs : sample.localTimeUs} playing={sourcePlaying} buffering={buffering} preparation={sample.effect ? buffer : undefined} onFrame={receive} />}

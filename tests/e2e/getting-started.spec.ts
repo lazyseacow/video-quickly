@@ -1,4 +1,4 @@
-import { openProjectFromList } from './workspace-navigation';
+import { openProjectFromList, sampleProjectTitle } from './workspace-navigation';
 import { openCosts, openGuide, openWorkspaceSettings } from './workspace-settings';
 import { randomUUID } from 'node:crypto';
 import { createServer } from 'node:http';
@@ -30,6 +30,10 @@ async function nextStep(page: Page) {
   const previous = await guide(page).getByRole('heading').innerText();
   await guide(page).getByRole('button', { name: '下一步', exact: true }).click();
   await expect(guide(page).getByRole('heading')).not.toHaveText(previous);
+}
+async function openHighlightedProject(page: Page) {
+  await active(page).click();
+  await expect(guide(page).getByRole('heading')).toHaveText('制作设置');
 }
 function observe(page: Page) {
   const writes: string[] = [], errors: string[] = [];
@@ -85,13 +89,16 @@ async function walk(page: Page, info?: TestInfo, screenshotPrefix = '') {
     if (info && ['preview', 'timeline'].includes(target)) await page.screenshot({ path: info.outputPath(`${screenshotPrefix}tour-${target}.png`) });
     const done = guide(page).getByRole('button', { name: '完成引导', exact: true });
     if (await done.isVisible()) { await done.click(); await expect(guide(page)).toHaveCount(0); return seen; }
-    await nextStep(page);
+    if (target === 'project-open') await openHighlightedProject(page);
+    else await nextStep(page);
   }
   throw new Error('The tour did not finish within its configured target count');
 }
 async function reach(page: Page, heading: string) {
   for (let index = 0; index < 20; index++) {
-    if (await guide(page).getByRole('heading').innerText() === heading) { await anchored(page); return; }
+    const current = await guide(page).getByRole('heading').innerText();
+    if (current === heading) { await anchored(page); return; }
+    if (current === '进入创作工作台') { await openHighlightedProject(page); continue; }
     const next = guide(page).getByRole('button', { name: '下一步', exact: true });
     if (!await next.isVisible()) break;
     await nextStep(page);
@@ -223,6 +230,7 @@ test('moves away from a target that becomes hidden instead of leaving a stale cu
 
 test('targets panel toggles when their actual workbench panels are hidden', async ({ page }) => {
   const observed = observe(page); await page.emulateMedia({ reducedMotion: 'reduce' }); await dismissFirst(page);
+  await openProjectFromList(page, sampleProjectTitle);
   await page.locator('[data-guide="outline-toggle"]').click(); await page.locator('[data-guide="inspector-toggle"]').click();
   await expect(page.locator('[data-guide="shots"]')).toBeHidden(); await expect(page.locator('[data-guide="inspector"]')).toBeHidden();
   await openGuide(page); await opened(page); const seen = await walk(page);
@@ -233,6 +241,7 @@ test('targets panel toggles when their actual workbench panels are hidden', asyn
 
 test('does not navigate or target the hidden cached workbench when reopened from the asset library', async ({ page }) => {
   const observed = observe(page); await page.emulateMedia({ reducedMotion: 'reduce' }); await dismissFirst(page);
+  await openProjectFromList(page, sampleProjectTitle);
   await page.getByRole('button', { name: '素材库', exact: true }).click(); await expect(page.getByRole('heading', { name: '素材库', exact: true })).toBeVisible();
   await openGuide(page); await opened(page); const seen = await walk(page);
   expect(seen).toEqual(['create-project', 'models', 'projects', 'help']);
@@ -247,7 +256,7 @@ test('keeps the consolidated settings and scrollable navigation reachable at the
   await expect(dialog.getByRole('group', { name: '外观', exact: true })).toBeInViewport({ ratio: 1 }); await expect(dialog.getByRole('button', { name: 'Token 消耗', exact: true })).toBeInViewport({ ratio: 1 }); await expect(dialog.getByRole('button', { name: '使用指南', exact: true })).toBeInViewport({ ratio: 1 });
   await page.screenshot({ path: info.outputPath('workspace-settings-rail-1024x720.png') }); await page.keyboard.press('Escape'); await expect(dialog).toHaveCount(0); await expect(settings(page)).toBeFocused();
   await openGuide(page); await opened(page); await page.keyboard.press('Escape'); await expect(guide(page)).toHaveCount(0); await expect(settings(page)).toBeFocused();
-  await openCosts(page); await openProjectFromList(page); await expect(page.getByLabel('项目名称', { exact: true })).toBeVisible();
+  await openCosts(page); await openProjectFromList(page, sampleProjectTitle); await expect(page.getByLabel('项目名称', { exact: true })).toBeVisible();
   expect(observed.writes).toEqual([]); expect(observed.errors).toEqual([]);
 });
 
@@ -389,10 +398,11 @@ test('starts production only on the user click and advances only when the real r
     const project = await rpc<ProjectDocument>(request, 'project.update', { projectId: source.id, revision: source.revision, patch: { workflow: { id: 'guide-local-production', name: '导览本地制作', version: 1, production: { mode: 'native-video', referenceMode: 'none', soundPrompt: '', subtitleMode: 'off' }, nodes: [{ id: 'style', kind: 'style', label: '本地制作确认', modelId: model.id, requiresReview: true }], edges: [] } } });
     const observed = observe(page); await page.emulateMedia({ reducedMotion: 'reduce' }); await openProjectTour(page, project); await reach(page, '自动制作');
     expect(provider.calls).toEqual([]); expect(observed.writes).toEqual([]);
-    const failed = await holdNextRpc(page, 'run.start', '隔离的制作接收失败'); await active(page).click(); await failed.entered; await atStep(page, '自动制作'); failed.release();
+    const confirmProduction = page.getByRole('alertdialog').getByRole('button', { name: '确认开始制作', exact: true });
+    const failed = await holdNextRpc(page, 'run.start', '隔离的制作接收失败'); await active(page).click(); await confirmProduction.click(); await failed.entered; await atStep(page, '自动制作'); failed.release();
     await expect(page.getByText('隔离的制作接收失败', { exact: true })).toBeVisible(); await atStep(page, '自动制作'); expect(provider.calls).toEqual([]);
     const accepted = await holdNextRpc(page, 'run.start'), response = page.waitForResponse(response => response.url().endsWith('/__desktop_rpc') && response.request().postDataJSON()?.method === 'run.start');
-    await active(page).click(); await accepted.entered; await atStep(page, '自动制作'); accepted.release();
+    await active(page).click(); await confirmProduction.click(); await accepted.entered; await atStep(page, '自动制作'); accepted.release();
     const run: RunSummary = (await (await response).json()).result; expect(run.id).toBeTruthy(); await atStep(page, '导出成片');
     await expect.poll(async () => (await rpc<RunSummary>(request, 'run.get', { runId: run.id })).status, { timeout: 30_000 }).toBe('succeeded');
     expect(provider.calls.filter(call => call.method === 'POST')).toHaveLength(1); expect(observed.writes).toEqual(['run.start', 'run.start']); expect(observed.errors).toEqual([]);

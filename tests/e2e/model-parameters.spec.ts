@@ -1,3 +1,4 @@
+import { confirmAction } from './confirmation-actions';
 import { selectModel, addModelConnection, settingField } from './settings';
 import { createServer } from 'node:http';
 import { expect, test, type APIRequestContext, type Locator, type Page } from '@playwright/test';
@@ -92,10 +93,13 @@ test('offers branded platform presets and a persisted Gemini-compatible connecti
 test('round-trips image sizes and quality while retaining advanced JSON', async ({ page, request }, info) => {
   const errors = observe(page), name = '图片参数往返'; await openModels(page); let dialog = await configuredModel(page, request, name);
   await (await advanced(dialog)).fill(JSON.stringify({ vendor_extension: { mode: 'keep-me' }, size: '1280x720', quality: 'auto' }));
+  await dialog.locator('summary').filter({ hasText: '费用估算' }).click();
+  await dialog.getByLabel('每张图片单价', { exact: true }).fill('0.25');
   await (await settingField(dialog, '图片质量')).selectOption('high');
   await expect(dialog.getByRole('tab')).toHaveText(['基本连接', '图片参数', '高级设置']);
   await dialog.getByRole('button', { name: '保存连接', exact: true }).click(); await expect(dialog).toHaveCount(0);
   expect((await savedModel(request, name)).parameters).toEqual({ vendor_extension: { mode: 'keep-me' }, size: '1280x720', quality: 'high' });
+  expect((await savedModel(request, name)).pricing).toEqual({ currency: 'CNY', perImage: 0.25 });
   await page.reload(); await page.getByRole('button', { name: '模型连接', exact: true }).click(); dialog = await reopen(page, name);
   await (await settingField(dialog, '图片尺寸')).selectOption('custom'); await (await settingField(dialog, '自定义图片尺寸')).fill('1920x1080');
   await dialog.getByRole('button', { name: '保存连接', exact: true }).click(); await expect(dialog).toHaveCount(0);
@@ -171,7 +175,7 @@ for (const delayedProgress of [false, true]) test(`uses the saved structured con
         if (!response.url().endsWith('/__desktop_rpc') || response.request().method() !== 'POST') return false;
         const input = response.request().postDataJSON(); return input.method === 'shot.regenerate' && input.params.projectId === project.id && input.params.kind === kind;
       });
-      await dialog.getByRole('button', { name: '生成候选', exact: true }).click();
+      await dialog.getByRole('button', { name: '生成候选', exact: true }).click(); await confirmAction(page, '确认生成');
       const response = await generated, started = await response.json(); expect(response.ok()).toBe(true); expect(started.error).toBeUndefined();
       // Both text and image generation are asynchronous. Keep the normal UI
       // assertion timeout separate from startup, generation and progress reads.

@@ -92,7 +92,9 @@ function WorkEditor({ work, workspace, onClose, onSaved }: { work?: StoryWork; w
       const project = projectDetailSchema.parse(await rpc('project.get', { projectId: id })).project;
       if (!project) throw new Error('项目不可用。');
       const { referenceAudioAssetIds: _audio, manualPlanningFields: _planning, ...production } = project.workflow.production;
-      setDefaults(workDefaultsSchema.parse({ style: project.style, creativeContext: project.creativeContext, profile: project.profile, production }));
+      const creativeContext = project.creativeContext && { ...project.creativeContext,
+        entities: project.creativeContext.entities.map(entity => entity.kind === 'character' ? { ...entity, referenceAssetIds: undefined } : entity) };
+      setDefaults(workDefaultsSchema.parse({ style: project.style, creativeContext, profile: project.profile, production }));
     } catch (error) { setError(failure(error)); } finally { inFlight.current = false; setBusy(false); }
   }
   async function submit() {
@@ -105,7 +107,7 @@ function WorkEditor({ work, workspace, onClose, onSaved }: { work?: StoryWork; w
     <Field label="沿用项目的默认设置" hint="复制风格、角色、成片规格和统一模型；参考音频由每集独立选择。"><Select value="" onChange={event => void fromProject(event.target.value)}><option value="">选择项目以复制设置</option>{workspace.projects.filter(project => !project.archived).map(project => <option key={project.id} value={project.id}>{project.title}</option>)}</Select></Field>
     <Field label="作品默认风格"><textarea rows={3} maxLength={30000} value={defaults.style} onChange={event => setDefaults(value => ({ ...value, style: event.target.value }))} /></Field>
     <CreativeContextEditor label="作品默认角色池" value={defaults.creativeContext} version={workspace.version} usedEntityKeys={[]} onChange={creativeContext => setDefaults(value => ({ ...value, creativeContext }))} />
-    <details><summary>默认模型与声音</summary>{(['text', 'image', 'video'] as const).map(kind => <Field key={kind} label={`作品${{ text: '文本', image: '图片', video: '视频' }[kind]}模型`}><Select value={defaults.production[`${kind}ModelId`] ?? ''} onChange={event => setDefaults(value => ({ ...value, production: { ...value.production, [`${kind}ModelId`]: event.target.value || undefined } }))}><option value="">稍后配置</option>{workspace.models.filter(model => model.enabled && model.capabilities.includes(kind)).map(model => <option key={model.id} value={model.id}>{model.name}</option>)}</Select></Field>)}
+    <details className="form-disclosure"><summary>默认模型与声音</summary>{(['text', 'image', 'video'] as const).map(kind => <Field key={kind} label={`作品${{ text: '文本', image: '图片', video: '视频' }[kind]}模型`}><Select value={defaults.production[`${kind}ModelId`] ?? ''} onChange={event => setDefaults(value => ({ ...value, production: { ...value.production, [`${kind}ModelId`]: event.target.value || undefined } }))}><option value="">稍后配置</option>{workspace.models.filter(model => model.enabled && model.capabilities.includes(kind)).map(model => <option key={model.id} value={model.id}>{model.name}</option>)}</Select></Field>)}
       <Field label="作品参考图方式"><Select value={defaults.production.referenceMode} onChange={event => setDefaults(value => ({ ...value, production: { ...value.production, referenceMode: event.target.value as typeof value.production.referenceMode } }))}><option value="none">直接文生视频</option><option value="existing">每集选择已有参考图</option><option value="generate">先生成参考图</option></Select></Field><Field label="作品声音要求"><textarea rows={2} value={defaults.production.soundPrompt} onChange={event => setDefaults(value => ({ ...value, production: { ...value.production, soundPrompt: event.target.value } }))} /></Field>
     </details><p className="tiny-meta">保存后用于新分集。已有分集可选择后显式同步。</p></fieldset>{error && <Notice kind="error">{error}</Notice>}</div><div className="dialog__footer"><Button onClick={onClose}>取消</Button><Button type="submit" variant="primary" busy={busy}>保存作品</Button></div></form></Dialog>;
 }

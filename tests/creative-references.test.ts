@@ -48,7 +48,7 @@ async function imageService() {
 it('keeps legacy entities unchanged and bounds typed visual references', () => {
   const entity = { key: 'garden', kind: 'scene', name: '花园', description: '' };
   expect(creativeContextSchema.parse({ entities: [entity] }).entities).toEqual([entity]);
-  for (const invalid of [{ ...entity, referenceAssetIds: ['a', 'a'] }, { ...entity, referenceAssetIds: ['a', 'b', 'c', 'd', 'e'] }, { ...entity, kind: 'character', referenceAssetIds: ['a'] }]) expect(creativeContextSchema.safeParse({ entities: [invalid] }).success).toBe(false);
+  for (const invalid of [{ ...entity, referenceAssetIds: ['a', 'a'] }, { ...entity, referenceAssetIds: ['a', 'b', 'c', 'd', 'e'] }]) expect(creativeContextSchema.safeParse({ entities: [invalid] }).success).toBe(false);
   expect(creativeReferenceAssetIds({ creativeContext: context() }, shot())).toEqual(['scene-image', 'prop-image']);
   expect(creativeReferenceAssetIds({ creativeContext: context() })).toEqual(['scene-image', 'prop-image', 'unused-image']);
   expect(creativeReferenceAssetIds({ creativeContext: context() }, { creativeEntityKeys: [] })).toEqual([]);
@@ -93,6 +93,10 @@ it('validates project and work references and retains archived work defaults', a
   const source = await fixture(), [scene, prop] = source.assets;
   const privateImage = assetSchema.parse(await source.runtime.dispatch('asset.import', { path: source.path, kind: 'image', projectId: source.created.id }));
   await expect(source.runtime.dispatch('project.update', { projectId: source.created.id, revision: source.created.revision, patch: { creativeContext: context(privateImage.id, prop.id) } })).rejects.toThrow('公共素材库');
+  const appearance = creativeContextSchema.parse({ entities: [{ key: 'lead', kind: 'character', name: '小青', description: '', referenceAssetIds: [privateImage.id] }] });
+  await expect(source.runtime.dispatch('work.save', { title: '跨项目引用', defaults: { ...workDefaultsSchema.parse({}), creativeContext: appearance } })).rejects.toThrow('公共素材库');
+  const other = projectSchema.parse(await source.runtime.dispatch('project.create', { title: '其他项目' }));
+  await expect(source.runtime.dispatch('project.update', { projectId: other.id, revision: other.revision, patch: { creativeContext: appearance } })).rejects.toThrow('当前项目');
   const valid = creativeContextSchema.parse({ entities: context(scene.id, prop.id).entities.slice(0, 2) });
   const work = workSchema.parse(await source.runtime.dispatch('work.save', { title: '参考作品', defaults: { ...workDefaultsSchema.parse({}), creativeContext: valid } }));
   await expect(source.runtime.dispatch('asset.delete', { assetId: scene.id })).rejects.toThrow('正在使用');

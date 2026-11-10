@@ -11,6 +11,7 @@ import { PlaybackClock, usePlayback } from '../lib/playback';
 import PreparedMixPreview from './PreparedMixPreview';
 import './shot-regeneration-dialog.css';
 import ImageEditRegion from './ImageEditRegion';
+import { useChargeRpc } from './ConfirmationDialog';
 
 export interface ShotRegenerationDialogProps {
   project: ProjectDocument; shot: Shot; models: ModelProfile[]; assets: AssetRecord[];
@@ -24,6 +25,7 @@ const scriptFields: ShotCandidateField[] = ['title', 'narration', 'visualPrompt'
 const capabilities = { script: 'text', image: 'image', video: 'video' } as const;
 
 export default function ShotRegenerationDialog({ project, shot, models, assets, source, onClose, onGenerate, onApply }: ShotRegenerationDialogProps) {
+  const chargeRpc = useChargeRpc();
   const [kind, setKind] = useState<ShotCandidateKind>(source?.kind ?? 'script');
   const [editRectangle, setEditRectangle] = useState<ImageRectangle>();
   const [modelId, setModelId] = useState('');
@@ -123,8 +125,7 @@ export default function ShotRegenerationDialog({ project, shot, models, assets, 
         imageEdit = { sourceAssetId: shot.assetId, maskAssetId: mask.id };
       }
       const started = await onGenerate({ kind, ...(!source ? { modelId: selectedModelId } : {}), ...(imageEdit ? { imageEdit } : {}), ...(instruction.trim() ? { instruction: instruction.trim() } : {}) });
-      if (!alive.current) return;
-      if (!started) { setError('生成未开始，请核对保存状态和模型连接。'); return; }
+      if (!alive.current || !started) return;
       setRun(undefined); setRunId(started.id);
     } catch (error) { if (alive.current) setError(error instanceof Error ? error.message : String(error)); }
     finally { if (alive.current) setGenerating(false); }
@@ -139,7 +140,7 @@ export default function ShotRegenerationDialog({ project, shot, models, assets, 
   async function resume() {
     if (!runId) return;
     setResuming(true); setError('');
-    try { await rpc('run.resume', { runId }); if (alive.current) setProgressRefresh(value => value + 1); }
+    try { if (await chargeRpc('run.resume', { runId }) !== null && alive.current) setProgressRefresh(value => value + 1); }
     catch (error) { if (alive.current) setError(error instanceof Error ? error.message : String(error)); }
     finally { if (alive.current) setResuming(false); }
   }

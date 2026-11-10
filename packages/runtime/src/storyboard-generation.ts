@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { creativeCharacterBindings, MAX_STORYBOARD_SHOTS, shotSchema, sumProviderUsage, type CharacterProfile, type ProjectDocument, type ProviderUsage, type Shot, type StoryboardPart } from '@video-quickly/contracts';
+import { creativeCharacterBindings, MAX_STORYBOARD_SHOTS, projectCharacterIds, shotSchema, sumProviderUsage, type CharacterProfile, type ProjectDocument, type ProviderUsage, type Shot, type StoryboardPart } from '@video-quickly/contracts';
 import type { GithubTrendingRanking } from '@video-quickly/integrations/research';
 import type Database from 'better-sqlite3';
 import { fingerprint, type ActivityJournal, type ActivitySafety } from './activities.js';
@@ -8,7 +8,7 @@ import { ModelResponseValidationError, parseModelJson, responseIssues, type crea
 import { textIncompleteMessage, type TextGenerationResult } from './providers.js';
 import type { createRunProgress } from './run-progress.js';
 import { storyboardOutputSchema } from './workflow-outputs.js';
-import { materializeStoryboardBatch, mergeStoryboardEntities, storyboardPlacements, type StoryboardPromptStage } from './workflow-prompts.js';
+import { materializeStoryboardBatch, mergeStoryboardEntities, storyboardPlacements, UNKNOWN_CHARACTER_KEY_MESSAGE, type StoryboardPromptStage } from './workflow-prompts.js';
 
 export const STORYBOARD_BATCH_SIZE = 5;
 const outlineShotSchema = z.strictObject({
@@ -32,13 +32,22 @@ export function storyboardResponseId(runId: string, nodeId: string, part?: Story
   return `${runId}:${part ? partActivityId(nodeId, part) : nodeId}`;
 }
 
-export function storyboardOutlineStage(project: ProjectDocument, hasRanking: boolean): StoryboardPromptStage {
+export function canRevalidateStoryboardBatch(project: ProjectDocument, responses: ReturnType<typeof createModelResponses>, responseId: string): boolean {
+  if (projectCharacterIds(project).length) return false;
+  const receipt = responses.current(responseId);
+  const issue = receipt?.issues?.length === 1 ? receipt.issues[0] : undefined;
+  return receipt?.status === 'received' && !!receipt.response && !receipt.response.incomplete
+    && issue?.message === UNKNOWN_CHARACTER_KEY_MESSAGE && /^shots\[\d+\]\.characterKeys\[\d+\]$/.test(issue.path);
+}
+
+export function storyboardOutlineStage(project: ProjectDocument, hasRanking: boolean, automaticCasting = false): StoryboardPromptStage {
   return {
     shots: project.shots.map(shot => ({ ...shot, narration: shot.narration.slice(0, 160), visualPrompt: shot.visualPrompt.slice(0, 160), soundPrompt: undefined })),
     contract: [
       '分镜生成阶段：全片大纲。',
       '只返回合法 JSON 对象。outline 写全片的叙事主线、起承转合和连续性。shots 按最终播放顺序列出 1–100 个镜头。明确指定镜头数时按要求列出，每项只写 title 和简短的叙事要点 beat，详细旁白与画面在下一阶段填写。',
       '沿用已有镜头可填写其原 id，未填则按原位置匹配。新镜头省略 id。锁定镜头必须留在原位置。entities 只列全片需要新增的人物、场景或道具设定，后续各批共同使用。',
+      ...(automaticCasting ? ['根据完整剧本识别反复出镜的人物。角色白名单中已有的人物沿用对应角色；其他人物在 entities 中以 kind=character 建立统一设定。把名字、别名和称谓指向同一个人物 key，name 优先用剧本中的明确姓名，description 固定面貌、发型、体型和代表服装。只在画面中实际出现的人物才算出镜。'] : []),
       hasRanking ? '将榜单中的完整仓库名按原榜单顺序各分配一次到相应镜头的 repositories 数组。过渡镜头可以省略 repositories。' : '常规大纲省略 repositories。',
       `机器校验的 JSON Schema：${JSON.stringify(outlineJsonSchema)}`,
     ].join('\n'),
@@ -56,7 +65,7 @@ function checkOutline(outline: Outline, project: ProjectDocument, ranking?: Gith
   return { ...outline, creativeContext };
 }
 
-function batchStage(plan: Outline, offset: number, count: number, part: Extract<StoryboardPart, { kind: 'batch' }>, shots: StoryboardPromptStage['shots'], jsonSchema: Record<string, unknown>): StoryboardPromptStage {
+function batchStage(plan: Outline, offset: number, count: number, part: Extract<StoryboardPart, { kind: 'batch' }>, shots: StoryboardPromptStage['shots'], jsonSchema: Record<string, unknown>, automaticCasting?: boolean): StoryboardPromptStage {
   return {
     shots,
     contract: [
@@ -67,6 +76,7 @@ function batchStage(plan: Outline, offset: number, count: number, part: Extract<
       offset + count < plan.shots.length ? `下一个镜头要点：${plan.shots[offset + count].beat}` : '',
       `只返回合法 JSON 对象 {"shots":[…]}，严格按给定顺序返回这 ${count} 个镜头。每个镜头沿用计划的 number，只填写本批。已有镜头可使用对应 id，新镜头省略 id。`,
       '每项包含 title、narration、visualPrompt、durationUs，可提供 soundPrompt。时长用整数微秒，台词匹配单镜头时长。画面描述明确主体、动作、景别、构图和光线，沿用全片风格。用 characterKeys 引用角色白名单，无人出镜时用 []；用 entityKeys 引用已定稿的文字设定。按本批分配的 repositories 在对应旁白写出完整仓库名。',
+      automaticCasting ? '每个实际出镜的反复出现人物都要绑定。已选角色填写 characterKeys，其余人物填写全片大纲中对应的 entityKeys。即使镜头使用别名或只拍侧脸、背影，也引用同一人物；旁白提及但未出镜的人物省略。' : '',
       `机器校验的 JSON Schema：${JSON.stringify(jsonSchema)}`,
     ].filter(Boolean).join('\n'),
   };
@@ -94,7 +104,9 @@ interface StoryboardExecution {
   signal: AbortSignal;
   safety: ActivitySafety;
   outlinePrompt: string;
+  automaticCasting?: boolean;
   batchPrompt: (stage: StoryboardPromptStage, context: ProjectDocument['creativeContext'], repositories: GithubTrendingRanking['repositories']) => string;
+  canRetryWithPromptFormat: (response: TextGenerationResult) => boolean;
   request: (request: PartRequest) => Promise<string | TextGenerationResult>;
 }
 
@@ -103,17 +115,37 @@ type PartResult<T> = { data: T; usage?: ProviderUsage };
 export async function executeStoryboard(options: StoryboardExecution) {
   const { journal, responses, progress, runId, nodeId, project, characters, ranking, batchSize } = options;
   const progressId = `${runId}:${nodeId}`;
+  const hasCharacterBindings = projectCharacterIds(project).length > 0;
   async function executePart<P, T>(part: StoryboardPart, label: string, request: Pick<PartRequest, 'prompt' | 'outputSchema' | 'outputSchemaName'>, schema: z.ZodType<P>, validate: (payload: P) => T, batch?: { completed: number; total: number; count: number }) {
     options.signal.throwIfAborted();
     const id = partActivityId(nodeId, part);
     if (journal.get(runId, id)?.status !== 'completed') progress.storyboard(progressId, part, batch?.completed, batch?.total);
     const input = { parent: options.inputHash, prompt: request.prompt, outputSchema: request.outputSchema };
-    return journal.execute<PartResult<T>>(runId, id, input, options.safety, async activity => {
-      const issues = responses.retryIssues(activity.operationId);
-      const correction = issues?.length ? `\n\n上次${label}返回的字段校验错误：${JSON.stringify(issues)}\n请修正并返回本部分的完整 JSON 对象。` : '';
-      const generated = await responses.generate({ operationId: activity.operationId, inputHash: fingerprint(input), recordReceipt: activity.recordRemoteId, generate: () =>
-        options.request({ ...request, operationId: activity.operationId, attempt: responses.attempt(activity.operationId), prompt: request.prompt + correction }),
+    return journal.execute<PartResult<T>>(runId, id, input, options.safety, async ({ operationId, recordRemoteId }) => {
+      // Apply the guidance only at dispatch so existing activity and response hashes still match.
+      const characterGuidance = part.kind === 'batch' && !hasCharacterBindings
+        ? '\n\n本次角色库白名单为空，每个镜头的 characterKeys 都填 []。剧情人物的外观与动作写在画面描述中。引用已定稿的文字人物设定时，将对应 key 填入 entityKeys。' : '';
+      const inputHash = fingerprint(input);
+      const generate = () => responses.generate({
+        operationId, inputHash, recordReceipt: recordRemoteId,
+        generate: () => {
+          const issues = responses.retryIssues(operationId);
+          const correction = issues?.length ? `\n\n上次${label}返回的字段校验错误：${JSON.stringify(issues)}\n请修正并返回本部分的完整 JSON 对象。` : '';
+          return options.request({ ...request, operationId, attempt: responses.attempt(operationId), prompt: request.prompt + correction + characterGuidance });
+        },
       });
+      let generated = await generate();
+      if (options.canRetryWithPromptFormat(generated)) {
+        options.signal.throwIfAborted();
+        const retry = journal.database.transaction(() => {
+          const receipt = responses.current(operationId);
+          // A saved failure is handled by the explicit retry path.
+          if (receipt?.status !== 'received' || receipt.issues?.length) return false;
+          responses.validationFailed(operationId, [{ path: '$', message: '结构化请求未返回正文，已安排使用提示词约束重试。' }]);
+          return Boolean(responses.prepareRetry(operationId));
+        })();
+        if (retry) generated = await generate();
+      }
       progress.phase(progressId, 'validating', true);
       try {
         if (generated.incomplete) {
@@ -127,7 +159,7 @@ export async function executeStoryboard(options: StoryboardExecution) {
       } catch (error) {
         const issues = error instanceof z.ZodError ? responseIssues(error) : error instanceof ModelResponseValidationError ? error.issues : undefined;
         if (!issues) throw error;
-        responses.validationFailed(activity.operationId, issues);
+        responses.validationFailed(operationId, issues);
         throw new ModelResponseValidationError(issues, label);
       }
     }, batch ? () => progress.storyboard(progressId, part, batch.completed + batch.count, batch.total) : undefined);
@@ -150,7 +182,7 @@ export async function executeStoryboard(options: StoryboardExecution) {
     const existing = positions.flatMap(position => position.before ? [position.before] : []);
     const names = new Set(plan.shots.slice(offset, offset + positions.length).flatMap(shot => shot.repositories ?? []).map(name => name.toLowerCase()));
     const repositories = ranking?.repositories.filter(repo => names.has(repo.name.toLowerCase())) ?? [];
-    const prompt = options.batchPrompt(batchStage(plan, offset, positions.length, part, existing, outputSchema), plan.creativeContext, repositories);
+    const prompt = options.batchPrompt(batchStage(plan, offset, positions.length, part, existing, outputSchema, options.automaticCasting), plan.creativeContext, repositories);
     const batch = await executePart(part, `第 ${index}/${batches} 批分镜`, { prompt, outputSchema, outputSchemaName: 'video_storyboard_batch' }, schema, output => {
       const generated = output.shots.map(({ number, ...shot }, slot) => {
         if (number !== offset + slot + 1) throw new ModelResponseValidationError([{ path: `shots[${slot}].number`, message: '请按本批计划的镜头序号依次返回。' }]);

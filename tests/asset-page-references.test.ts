@@ -101,4 +101,28 @@ describe('asset-page character references', () => {
     for (const id of [...invalid.map(asset => asset.id), 'missing-image']) await expect(save(id, [id])).rejects.toThrow('公共素材库');
     await expect(save('有效参考', [assets[0].id])).resolves.toMatchObject({ referenceAssetIds: [assets[0].id] });
   });
+
+  it('removes a batch atomically and safely retries the same IDs', async () => {
+    const { assets: [first, legacy, inUse, retained], store, runtime, save } = await fixture(4);
+    store.put('asset', legacy.id, { ...legacy, active: undefined });
+    await save('使用中的参考', [inUse.id]);
+    await runtime.dispatch('asset.retain', { assetId: retained.id, retained: true });
+    const before = await runtime.dispatch('workspace.summary') as { version: number; assetsVersion: number };
+    const remove = (...assetIds: string[]) => runtime.dispatch('asset.deleteMany', { assetIds });
+
+    for (const blocked of [inUse, retained]) await expect(remove(first.id, blocked.id)).rejects.toThrow(blocked.name);
+    await expect(remove(first.id, 'missing-asset')).rejects.toThrow('素材不存在');
+    expect(store.get<AssetRecord>('asset', first.id)?.active).toBe(true);
+    expect(await runtime.dispatch('workspace.summary')).toMatchObject({ version: before.version, assetsVersion: before.assetsVersion });
+
+    await expect(remove(first.id, legacy.id, first.id)).resolves.toEqual({ deleted: true });
+    const page = assetsPageSchema.parse(await runtime.dispatch('asset.list', {}));
+    expect(page.items.map(asset => asset.id)).toEqual([retained.id, inUse.id]);
+    expect(store.get<AssetRecord>('asset', first.id)?.active).toBe(false);
+    expect(store.get<AssetRecord>('asset', legacy.id)?.active).toBe(false);
+    const after = await runtime.dispatch('workspace.summary') as { version: number; assetsVersion: number };
+    expect(after.version).toBe(before.version + 1);
+    await expect(remove(first.id, legacy.id)).resolves.toEqual({ deleted: true });
+    expect(await runtime.dispatch('workspace.summary')).toMatchObject({ version: after.version, assetsVersion: after.assetsVersion });
+  });
 });

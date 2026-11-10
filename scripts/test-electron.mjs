@@ -307,7 +307,20 @@ async function verifyGettingStarted() {
   assert.equal(await page.evaluate(() => localStorage.getItem('vq-onboarding-v1')), null);
   const empty = await rpc('workspace.snapshot');
   assert.deepEqual(empty.projects, []);
-  assert.deepEqual(empty.assets, []);
+  const library = await rpc('seriesTemplate.list');
+  assert.equal(library.items.length, 3);
+  assert.ok(library.items.every(template => template.creationDefaults?.skillIds.length === 1
+    && empty.skills.some(skill => skill.enabled && skill.id === template.creationDefaults.skillIds[0])));
+  assert.equal(empty.assets.length, 3);
+  for (const asset of empty.assets) {
+    assert.ok(!asset.projectId && asset.kind === 'image' && asset.provenance.includes('CC0'));
+    const response = await page.evaluate(async path => {
+      const result = await fetch(await window.videoQuickly.assetUrl(path));
+      return { status: result.status, bytes: (await result.arrayBuffer()).byteLength };
+    }, asset.path);
+    assert.deepEqual(response, { status: 200, bytes: asset.size });
+  }
+  checks.builtInDramaTemplates = true;
   await expect(page.getByRole('heading', { name: '我的项目', exact: true })).toBeVisible();
   await expect(page.getByLabel('搜索项目', { exact: true })).toBeVisible();
   checks.emptyWorkspaceStartup = true;
@@ -363,6 +376,8 @@ async function verifyGettingStarted() {
   await expect(page.locator('.workspace-shell')).toBeVisible({ timeout: 30_000 });
   await expect.poll(() => rpc('runtime.status'), { timeout: 20_000 }).toMatchObject({ state: 'ready' });
   await expect(guide).toHaveCount(0);
+  await expect(page.getByRole('heading', { name: '我的项目', exact: true })).toBeVisible();
+  await openProject(projectTitle);
   const help = page.getByRole('button', { name: '设置', exact: true });
   async function reopenGuide() {
     await help.click();
@@ -739,12 +754,25 @@ try {
   assert.equal((await projectDocument(project.id)).revision, beforeCheck.revision);
   checks.assetRecovery = true;
 
-  const exported = await rpc('render.export', { projectId: project.id });
-  await expect.poll(async () => {
-    const detail = await rpc('run.inspect', { runId: exported.runId });
-    if (['failed', 'needs_attention'].includes(detail.run.status)) throw new Error(detail.run.error ?? 'Native export failed');
-    return detail.run.status;
-  }, { timeout: 60_000 }).toBe('succeeded');
+  const exportedVideo = join(fixture, '完整视频.mp4');
+  // Substitute the selected path so the real IPC and renderer can save without manual input.
+  await application.evaluate(({ dialog }, path) => {
+    const original = dialog.showSaveDialog;
+    dialog.showSaveDialog = async (_window, options) => {
+      dialog.showSaveDialog = original;
+      globalThis.__vqVideoSaveOptions = options;
+      return { canceled: false, filePath: path };
+    };
+  }, exportedVideo);
+  await page.getByRole('button', { name: '我的项目', exact: true }).click();
+  await page.getByRole('button', { name: `下载“${project.title}”的完整视频`, exact: true }).click();
+  await expect(page.locator('.notice--success')).toContainText(exportedVideo, { timeout: 60_000 });
+  const saveOptions = await application.evaluate(() => globalThis.__vqVideoSaveOptions);
+  assert.equal(saveOptions.title, '保存完整视频');
+  assert.deepEqual(saveOptions.filters[0].extensions, ['mp4']);
+  assert.equal((await readFile(exportedVideo)).subarray(4, 8).toString('ascii'), 'ftyp');
+  await page.screenshot({ path: join(artifacts, 'desktop-project-video-download.png') });
+  await openProject(project.title);
   checks.actualExport = true;
 
   const before = await rpc('runtime.status');
@@ -810,6 +838,8 @@ try {
   await close(1);
   checks.confirmedQuit = true;
   await launch(); runtimePid = await findRuntime();
+  await expect(page.getByRole('heading', { name: '我的项目', exact: true })).toBeVisible();
+  checks.projectListStartup = true;
   await openProject(project.title);
   await expect(page.getByLabel('旁白', { exact: true })).toHaveValue('Electron 重启后恢复的未保存草稿');
   await expect(page.getByText('已恢复未保存的本地草稿，含撤销与重做历史。')).toBeVisible();

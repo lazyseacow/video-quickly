@@ -1,6 +1,8 @@
 import { randomUUID } from 'node:crypto';
+import { stat } from 'node:fs/promises';
 import { expect, test, type APIRequestContext } from '@playwright/test';
-import type { ProjectDocument } from '@video-quickly/contracts';
+import type { ProjectDocument, RecordPage, RunSummary } from '@video-quickly/contracts';
+import { probeMedia } from '../../packages/video/src/media-process';
 import { openProjectFromList } from './workspace-navigation';
 
 async function rpc<T>(request: APIRequestContext, method: string, params: unknown): Promise<T> {
@@ -76,28 +78,99 @@ for (const viewport of [{ width: 1536, height: 960, theme: 'dark' }, { width: 39
   expect(writes).toEqual([]); expect(errors).toEqual([]); await expect(page.locator('vite-error-overlay')).toHaveCount(0);
 });
 
-test('backs up a project from its card, retries failures and ignores repeated submissions', async ({ page, request }, info) => {
-  const project = await rpc<ProjectDocument>(request, 'project.create', { title: '项目卡片备份 ' + randomUUID().slice(0, 8) });
-  await page.setViewportSize({ width: 390, height: 844 }); await page.goto('/'); await page.getByRole('button', { name: '我的项目', exact: true }).click();
+test('downloads the whole saved project from its card and retains the MP4 after deleting its record', async ({ page, request }, info) => {
+  const created = await rpc<ProjectDocument>(request, 'project.create', { title: '完整视频 ' + randomUUID().slice(0, 8), profile: { width: 320, height: 180, frameRate: { numerator: 30, denominator: 1 }, previewScale: 1 } });
+  const project = await rpc<ProjectDocument>(request, 'project.update', { projectId: created.id, revision: created.revision, patch: {
+    workflow: { ...created.workflow, id: 'custom-download-test', stages: undefined, nodes: created.workflow.nodes.filter(node => node.kind === 'script'), edges: [] },
+    shots: [1, 2].map(index => ({ id: `download-shot-${index}`, title: `成片镜头 ${index}`, narration: '', visualPrompt: '', durationUs: 1_000_000 })),
+  } });
+  await page.setViewportSize({ width: 390, height: 844 }); await page.goto('/');
   const card = page.locator('.project-card').filter({ has: page.getByRole('heading', { name: project.title, exact: true }) });
-  const backup = card.getByRole('button', { name: `备份“${project.title}”`, exact: true });
+  const download = card.getByRole('button', { name: `下载“${project.title}”的完整视频`, exact: true });
   let attempts = 0, enter!: () => void, release!: () => void;
   const entered = new Promise<void>(resolve => { enter = resolve; }), pending = new Promise<void>(resolve => { release = resolve; });
   await page.route('**/__desktop_rpc', async route => {
-    if (route.request().postDataJSON()?.method !== 'project.backup') { await route.continue(); return; }
+    if (route.request().postDataJSON()?.method !== 'render.export') { await route.continue(); return; }
     attempts++;
-    if (attempts === 1) { await route.fulfill({ status: 400, json: { error: '隔离的备份失败' } }); return; }
+    if (attempts === 1) { await route.fulfill({ status: 400, json: { error: '隔离的导出失败' } }); return; }
     enter(); await pending; await route.continue();
   });
   try {
-    await backup.click(); await expect(page.getByRole('alert')).toContainText('隔离的备份失败'); await expect(backup).toBeEnabled();
-    const response = page.waitForResponse(value => value.url().endsWith('/__desktop_rpc') && value.request().postDataJSON()?.method === 'project.backup');
-    await backup.evaluate((button: HTMLButtonElement) => { button.click(); button.click(); }); await entered;
-    await expect(backup).toBeDisabled(); expect(attempts).toBe(2); release();
-    const result = (await (await response).json()).result;
-    await expect(page.locator('.notice--success')).toContainText(result.path); await expect(backup).toBeEnabled();
-    await card.scrollIntoViewIfNeeded(); expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
-    await page.screenshot({ path: info.outputPath('project-card-backup.png') });
+    await download.click(); await expect(page.getByRole('alert')).toContainText('隔离的导出失败'); await expect(download).toBeEnabled();
+    const response = page.waitForResponse(value => value.url().endsWith('/__desktop_rpc') && value.request().postDataJSON()?.method === 'render.export');
+    const downloaded = page.waitForEvent('download');
+    await download.evaluate((button: HTMLButtonElement) => { button.click(); button.click(); }); await entered;
+    await expect(download).toBeDisabled(); expect(attempts).toBe(2); release();
+    const { runId } = (await (await response).json()).result as { runId: string };
+    const file = await downloaded;
+    expect(file.suggestedFilename()).toBe(`${project.title}-成片.mp4`);
+    const media = await probeMedia(await file.path(), process.env.VIDEO_QUICKLY_FFPROBE);
+    expect(media).toMatchObject({ width: 320, height: 180, frameRate: '30/1' });
+    expect(media.videoDuration).toBeCloseTo(2, 2);
+    await expect(page.locator('.notice--success')).toContainText('完整视频已生成');
+    await expect(download).toBeEnabled();
+    expect(await page.locator('.page-body').evaluate(element => element.scrollWidth <= element.clientWidth)).toBe(true);
+    await page.locator('.notice--success').scrollIntoViewIfNeeded();
+    await page.screenshot({ path: info.outputPath('project-card-download.png') });
     expect((await rpc<{ project: ProjectDocument }>(request, 'project.get', { projectId: project.id })).project).toEqual(project);
+    const { videoPath } = await rpc<{ videoPath: string }>(request, 'node.result', { runId, nodeId: 'export' });
+    await page.getByRole('button', { name: '制作记录', exact: true }).click();
+    const row = page.locator(`[data-run-id="${runId}"]`);
+    const remove = row.getByRole('button', { name: '删除制作记录', exact: true });
+    await remove.click();
+    const confirmation = page.getByRole('alertdialog', { name: '删除制作记录？' });
+    await confirmation.getByRole('button', { name: '取消', exact: true }).click();
+    await expect(remove).toBeFocused();
+    await remove.click(); await confirmation.getByRole('button', { name: '删除记录', exact: true }).click();
+    await expect(row).toHaveCount(0);
+    expect((await rpc<RecordPage<RunSummary>>(request, 'run.list', { projectId: project.id })).items).toEqual([]);
+    expect((await stat(videoPath)).size).toBe((await stat(await file.path())).size);
+    await page.reload(); await page.getByRole('button', { name: '制作记录', exact: true }).click();
+    await page.getByLabel('制作项目', { exact: true }).selectOption(project.id);
+    await expect(page.getByRole('heading', { name: '这个项目还没有制作记录' })).toBeVisible();
   } finally { release(); }
+});
+
+test('starts on the project list and batch deletes only checked projects into the recycle bin', async ({ page, request }, info) => {
+  const group = `批量项目 ${randomUUID().slice(0, 8)}`;
+  const projects = [];
+  for (const suffix of ['甲', '乙', '丙']) projects.push(await rpc<ProjectDocument>(request, 'project.create', { title: `${group} ${suffix}` }));
+  const [first, second, third] = projects;
+  const card = (project: ProjectDocument) => page.locator('.project-card').filter({ has: page.getByRole('heading', { name: project.title, exact: true }) });
+  const calls: string[] = [];
+  page.on('request', request => { if (request.url().endsWith('/__desktop_rpc')) calls.push(request.postDataJSON().method); });
+  await page.setViewportSize({ width: 1024, height: 720 });
+  await page.goto('/');
+  const heading = page.getByRole('heading', { name: '我的项目', exact: true });
+  await expect(heading).toBeVisible(); await expect(card(first)).toBeVisible();
+  expect(calls).not.toContain('project.get');
+  await openProjectFromList(page, first.title); await page.reload();
+  await expect(heading).toBeVisible(); await expect(page.locator('.workbench')).toHaveCount(0);
+
+  const invalidBatch = await request.post('/__desktop_rpc', { data: { method: 'project.archiveMany', params: { projectIds: [first.id, 'missing-project'] } } });
+  expect((await invalidBatch.json()).error).toContain('项目不存在');
+  expect((await rpc<{ project: ProjectDocument }>(request, 'project.get', { projectId: first.id })).project).toEqual(first);
+
+  await page.getByLabel('搜索项目', { exact: true }).fill(group);
+  await page.getByRole('button', { name: '多选', exact: true }).click();
+  const selectAll = page.getByRole('checkbox', { name: '全选当前结果', exact: true });
+  await selectAll.check();
+  await card(third).getByRole('checkbox').uncheck();
+  await expect(selectAll).toHaveJSProperty('indeterminate', true);
+  await expect(page.getByText('已选 2 项', { exact: true })).toBeVisible();
+  await page.screenshot({ path: info.outputPath('project-card-selection.png') });
+  const remove = page.getByRole('button', { name: '批量删除', exact: true });
+  const confirmation = page.getByRole('alertdialog', { name: '批量删除项目？' });
+  await remove.click(); await expect(confirmation).toContainText('将 2 个项目移入回收站');
+  await confirmation.getByRole('button', { name: '取消', exact: true }).click();
+  await expect(remove).toBeFocused();
+  expect(calls).not.toContain('project.archiveMany');
+  await remove.click(); await confirmation.getByRole('button', { name: '移入回收站', exact: true }).click();
+  await expect(card(first)).toHaveCount(0); await expect(card(second)).toHaveCount(0); await expect(card(third)).toBeVisible();
+  expect(calls.filter(method => method === 'project.archiveMany')).toHaveLength(1);
+  await page.getByRole('button', { name: '回收站', exact: true }).click();
+  await expect(card(first)).toBeVisible(); await expect(card(second)).toBeVisible(); await expect(card(third)).toHaveCount(0);
+  await card(first).getByRole('button', { name: '恢复项目', exact: true }).click();
+  await page.getByRole('button', { name: '全部项目', exact: true }).click();
+  await expect(card(first)).toBeVisible(); await expect(card(third)).toBeVisible(); await expect(card(second)).toHaveCount(0);
 });

@@ -8,10 +8,11 @@ import { DocumentStore } from './database.js';
 const terminal = new Set(['succeeded', 'canceled', 'skipped']);
 const timestamp = () => new Date().toISOString();
 const reason = (error: unknown) => (error instanceof Error ? error.message : String(error)).slice(0, 1500);
-export function createProductionQueue({ database, store, project, work, busy, createRun, resumeRun, cancelRun, runConflict, changed }: {
+export function createProductionQueue({ database, store, project, work, busy, createRun, resumeRun, cancelRun, runConflict, changed, pauseOnStartup }: {
   database: Database.Database; store: DocumentStore; project(id: string): ProjectDocument; work(id: string): StoryWork;
   busy(projectId: string, exceptItemId?: string, exceptRunId?: string): boolean; createRun(item: ProductionQueueItem, queueRevision: number): Promise<RunRecord>;
   resumeRun(runId: string): void; cancelRun(runId: string): Promise<unknown>; runConflict(runId: string): boolean; changed(): void;
+  pauseOnStartup?: boolean;
 }) {
   let stopped = false, dirty = false, task: Promise<void> | undefined;
   function get(id: string): ProductionQueue {
@@ -25,6 +26,7 @@ export function createProductionQueue({ database, store, project, work, busy, cr
   function items(queueId: string): ProductionQueueItem[] {
     return (database.prepare("SELECT body FROM documents WHERE kind = 'production-queue-item' AND json_extract(body, '$.queueId') = ? ORDER BY json_extract(body, '$.position'), id").all(queueId) as { body: string }[]).map(row => productionQueueItemSchema.parse(JSON.parse(row.body)));
   }
+  function detail(queueId: string) { return { queue: get(queueId), items: items(queueId) }; }
   function running() {
     const row = database.prepare("SELECT body FROM documents WHERE kind = 'production-queue-item' AND json_extract(body, '$.status') = 'running' LIMIT 1").get() as { body: string } | undefined;
     return row ? productionQueueItemSchema.parse(JSON.parse(row.body)) : undefined;
@@ -115,10 +117,14 @@ export function createProductionQueue({ database, store, project, work, busy, cr
         AND json_extract(i.body, '$.status') IN ('queued', 'needs_attention', 'failed')
     `).all() as { body: string }[];
     for (const row of rows) updateItem(productionQueueItemSchema.parse(JSON.parse(row.body)), { status: 'canceled', error: undefined });
+    if (pauseOnStartup) {
+      const runningQueues = database.prepare("SELECT body FROM documents WHERE kind = 'production-queue' AND json_extract(body, '$.status') = 'running'").all() as { body: string }[];
+      for (const row of runningQueues) updateQueue(productionQueueSchema.parse(JSON.parse(row.body)), { status: 'paused' });
+    }
   })();
   notify();
   return {
-    notify, claim, activeForProject,
+    notify, claim, activeForProject, detail,
     async waitForIdle() { while (task) await task; },
     hasPending() { return Boolean(task || dirty); },
     close() { stopped = true; dirty = false; },
@@ -133,7 +139,7 @@ export function createProductionQueue({ database, store, project, work, busy, cr
         const rows = database.prepare("SELECT rowid AS cursor, body FROM documents WHERE kind = 'production-queue' AND (? IS NULL OR json_extract(body, '$.workId') = ?) AND (? IS NULL OR rowid < ?) ORDER BY rowid DESC LIMIT ?").all(input.workId ?? null, input.workId ?? null, input.before ?? null, input.before ?? null, input.limit + 1) as { cursor: number; body: string }[];
         return { items: rows.slice(0, input.limit).map(row => productionQueueSchema.parse(JSON.parse(row.body))), nextCursor: rows.length > input.limit ? rows[input.limit - 1].cursor : null };
       }
-      if (method === 'productionQueue.get') { const input = z.object({ queueId: z.string() }).parse(params); return { queue: get(input.queueId), items: items(input.queueId) }; }
+      if (method === 'productionQueue.get') return detail(z.object({ queueId: z.string() }).parse(params).queueId);
       if (method === 'productionQueue.enqueue') {
         const input = z.object({ workId: z.string(), workRevision: z.number().int().positive(), requestId: z.string().uuid(), projects: z.array(z.object({ projectId: z.string(), revision: z.number().int().positive() })).min(1).max(100) }).parse(params);
         const receipt = database.transaction(() => {

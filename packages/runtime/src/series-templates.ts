@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import type Database from 'better-sqlite3';
 import { z } from 'zod';
-import { pageInputSchema, seriesTemplateSchema, type RecordPage, type SeriesSettings, type SeriesTemplate } from '@video-quickly/contracts';
+import { pageInputSchema, seriesTemplateSchema, type RecordPage, type SeriesTemplate } from '@video-quickly/contracts';
 import { DocumentStore } from './database.js';
 
 export function createSeriesTemplateLibrary({ database, store, onChanged }: { database: Database.Database; store: DocumentStore; onChanged(): void }) {
@@ -16,11 +16,10 @@ export function createSeriesTemplateLibrary({ database, store, onChanged }: { da
     if (template.revision !== revision) throw new Error('系列模板已在其他视图修改，请刷新后重新保存。');
   }
   return {
-    settingsFor(id: string, revision: number | undefined): SeriesSettings {
+    forCreation(id: string, revision: number | undefined): SeriesTemplate {
       const template = get(id); requireRevision(template, revision);
       if (template.archived) throw new Error('系列模板已归档，请先恢复后再用于新项目。');
-      // Projects own copied settings. Library changes never alter existing work or runs.
-      return structuredClone(template.settings);
+      return template;
     },
     dispatch(method: string, rawParams: unknown = {}): SeriesTemplate | RecordPage<SeriesTemplate> {
       switch (method) {
@@ -36,7 +35,7 @@ export function createSeriesTemplateLibrary({ database, store, onChanged }: { da
             const previous = template.id ? get(template.id) : undefined;
             if (previous) requireRevision(previous, template.revision);
             const timestamp = new Date().toISOString();
-            const next = seriesTemplateSchema.parse({ ...template, id: previous?.id ?? randomUUID(), revision: previous ? previous.revision + 1 : 1, createdAt: previous?.createdAt ?? timestamp, updatedAt: timestamp, archived: previous?.archived ?? false });
+            const next = seriesTemplateSchema.parse({ ...previous, ...template, id: previous?.id ?? randomUUID(), revision: previous ? previous.revision + 1 : 1, createdAt: previous?.createdAt ?? timestamp, updatedAt: timestamp, archived: previous?.archived ?? false });
             store.put('series-template', next.id, next); return next;
           })();
           onChanged(); return saved;

@@ -2,7 +2,7 @@ import { createSceneTemplate, creativeContextSchema, formatPlanningDocument, MAX
 import { sameContent, type EditContent } from './project-edits';
 
 export type PlanningSection = 'brief' | 'style' | 'script';
-export type PlanningProject = Pick<ProjectDocument, 'brief' | 'style' | 'creativeContext' | 'shots'> & { title?: string; manualPlanningFields?: ManualPlanningFields };
+export type PlanningProject = Pick<ProjectDocument, 'brief' | 'style' | 'creativeContext' | 'shots' | 'profile'> & { title?: string; manualPlanningFields?: ManualPlanningFields };
 export const planningLabels = { brief: '创意简报', style: '风格与角色', script: '旁白与分镜' };
 const planningShotFields = ['title', 'narration', 'visualPrompt', 'soundPrompt'] as const;
 const storyboardFields = ['durationUs', 'characterIds', 'creativeEntityKeys'] as const;
@@ -11,9 +11,21 @@ export type PlanningChange = { kind: 'brief'; text: string; fields?: ManualPlann
   | { kind: 'style'; text: string; fields?: ManualPlanningFields['style']; creativeContext: CreativeContext | null }
   | { kind: 'script'; shots: PlanningShot[]; newShots?: PlanningShot[]; creativeContext?: CreativeContext | null };
 export type StoryboardDraft = Pick<PlanningProject, 'shots' | 'creativeContext'>;
-export interface PlanningEditOptions { storyboard: StoryboardDraft; onSaved(context: PlanningProject['creativeContext']): void }
+export const storyboardDraftSchema = projectSchema.pick({ shots: true, creativeContext: true });
+export interface PlanningEditOptions { storyboard?: StoryboardDraft; profile?: PlanningProject['profile']; onSaved?(context: PlanningProject['creativeContext']): void }
 export interface PlanningControls { project: PlanningProject; onEdit(section: PlanningSection, options?: PlanningEditOptions): void; disabledReason?: string }
 export const isPlanningSection = (kind: string): kind is PlanningSection => ['brief', 'style', 'script'].includes(kind);
+
+export function readRecordedStoryboardDraft(value: JsonValue, currentContext: PlanningProject['creativeContext']): StoryboardDraft | undefined {
+  const draft = storyboardDraftSchema.safeParse(value).data;
+  if (!draft?.shots.length) return;
+  if (!currentContext || !draft.creativeContext) return draft;
+
+  const missingKeys = new Set(draft.shots.flatMap(shot => shot.creativeEntityKeys ?? []));
+  for (const entity of currentContext.entities) missingKeys.delete(entity.key);
+  const restored = draft.creativeContext.entities.filter(entity => missingKeys.has(entity.key));
+  return { shots: draft.shots, creativeContext: { ...currentContext, entities: [...currentContext.entities, ...restored] } };
+}
 
 function changedField<T>(current: T, before: T, after: T, label: string): T {
   if (sameContent(before, after)) return current;
@@ -73,7 +85,7 @@ export function applyPlanningEdit(current: EditContent, baseline: PlanningProjec
 }
 
 export function planningResultValue(project: PlanningProject, section: PlanningSection): JsonValue {
-  if (section === 'script') return { shots: project.shots.map(shot => ({ id: shot.id, title: shot.title, durationUs: shot.durationUs, narration: shot.narration, visualPrompt: shot.visualPrompt, soundPrompt: shot.soundPrompt ?? '' })) };
+  if (section === 'script') return { profile: project.profile, shots: project.shots.map(shot => ({ id: shot.id, title: shot.title, durationUs: shot.durationUs, narration: shot.narration, visualPrompt: shot.visualPrompt, soundPrompt: shot.soundPrompt ?? '' })) };
   const text = project[section], fields = project.manualPlanningFields?.[section];
   const context = section === 'style' ? project.creativeContext : undefined;
   return { text, ...(fields && formatPlanningDocument(section, fields) === text ? { fields } : {}), ...(context ? { creativeContext: { characterIds: context.characterIds, continuity: context.continuity, entities: context.entities.map(entity => ({ key: entity.key, kind: entity.kind, name: entity.name, description: entity.description })) } } : {}) };

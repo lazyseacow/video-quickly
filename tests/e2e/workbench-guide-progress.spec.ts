@@ -1,3 +1,4 @@
+import { confirmAction } from './confirmation-actions';
 import { createServer, type ServerResponse } from 'node:http';
 import { randomUUID } from 'node:crypto';
 import { expect, type APIRequestContext, type Locator, type Page } from '@playwright/test';
@@ -121,7 +122,7 @@ for (const viewport of [{ width: 1536, height: 960, theme: 'dark' }, { width: 60
         await descriptionHelp(page, configuration.getByRole('list', { name: '制作阶段进度', exact: true }), stageLabels[2], '已有本地内容的阶段状态', { touch: viewport.width === 600 });
         await configuration.getByRole('button', { name: `打开阶段：${stageLabels[2]}`, exact: true }).click(); const settings = page.getByRole('dialog', { name: '本次制作', exact: true }); await expect(settings).toBeVisible(); await settings.getByRole('button', { name: '关闭对话框', exact: true }).click();
         await expect(configuration.locator('[aria-current="step"]')).toHaveCount(0); expect(observed.writes).toEqual([]); expect(source.calls()).toBe(0);
-        await page.getByRole('button', { name: '开始制作', exact: true }).click(); await expect.poll(source.calls).toBe(1);
+        await page.getByRole('button', { name: '开始制作', exact: true }).click(); await confirmAction(page, '确认开始制作'); await expect.poll(source.calls).toBe(1);
         const run = (await rpc<{ items: RunSummary[] }>(request, 'run.list', { projectId: source.project.id })).items[0]; expect(run).toBeDefined();
         await expect(cards(page)).toHaveCount(4); await expect(configuration).toHaveCount(0); await expect(progress(page)).toHaveClass(/workbench-guide__steps/); await currentStage(page, stageLabels[0], 'running');
         await card(page, stageLabels[2]).click(); const details = page.getByRole('dialog', { name: '本次制作', exact: true }); await expect(details).toBeVisible(); await expect(details.getByRole('navigation', { name: '本阶段制作步骤', exact: true })).toContainText('本地任务 3'); await details.getByRole('button', { name: '关闭对话框', exact: true }).click(); await currentStage(page, stageLabels[0], 'running');

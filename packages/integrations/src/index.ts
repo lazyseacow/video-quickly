@@ -4,9 +4,9 @@ import { mkdir, readFile, writeFile, rename } from 'node:fs/promises';
 import { dirname, extname, join, resolve } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { z } from 'zod';
-import { probeMedia, renderProject } from '@video-quickly/video/node';
-import { buildMediaPrompt, MediaRequestRejectedError, VideoGenerationError, isVideoGenerationNode, validateCreativeReferences, videoAspectRatioPreset } from '@video-quickly/contracts';
-import { providerReportedUsage, sumProviderUsage, requestModelParameters, validateModelParameters, type ProviderUsage, type AssetRecord, type CharacterProfile, type JsonValue, type ModelProfile, type PreparedAudioMix, type ProjectDocument, type Shot, type WorkflowNode } from '@video-quickly/contracts';
+import { prepareGeneratedVideo, renderProject } from '@video-quickly/video/node';
+import { buildMediaPrompt, characterSceneFirstFrame, needsComposedSceneFrame, MediaRequestRejectedError, isVideoGenerationNode, retryAfterMilliseconds, singleFrameVideoModel, usesVideoSceneImage, validateCreativeReferences, videoAspectRatioPreset } from '@video-quickly/contracts';
+import { defaultVideoRequestSeconds, providerReportedUsage, sumProviderUsage, requestModelParameters, validateModelParameters, type ProviderUsage, type AssetRecord, type CharacterProfile, type JsonValue, type ModelProfile, type PreparedAudioMix, type ProjectDocument, type Shot, type WorkflowNode } from '@video-quickly/contracts';
 import { MediaRequestQueue, mapMediaShots } from './media-concurrency.js';
 import { resolveCharacterReferences, type ResolvedCharacterReferences } from './character-references.js';
 import { resolveReferenceAudio } from './audio-references.js';
@@ -55,6 +55,8 @@ export interface MediaActivityContext {
   preparedAudioMix?: PreparedAudioMix;
   model?: ModelProfile;
   apiKey?: string;
+  unifiedShotProfile?: boolean;
+  ffmpegPath?: string;
   ffprobePath?: string;
   remoteTaskId?: string;
   persistRemoteTask(id: string): void;
@@ -120,16 +122,18 @@ function fillTemplate(value: JsonValue, values: Record<string, JsonValue>): Json
 }
 
 function visualPrompt(context: MediaActivityContext, shot: Shot, references: ResolvedCharacterReferences): string {
-  return appendSkillContext(buildMediaPrompt(context.project, context.node, shot, references.characters, context.model, Boolean(currentVideoImage(context, shot)), context.promptUpstream), context.node, context.skills ?? []);
+  return appendSkillContext(buildMediaPrompt(context.project, context.node, shot, references.characters, context.model, Boolean(currentVideoImage(context, shot)), context.promptUpstream, Boolean(context.unifiedShotProfile)), context.node, context.skills ?? []);
 }
 
 function comfyPrompt(context: MediaActivityContext, shot: Shot, references: ResolvedCharacterReferences): Record<string, unknown> {
   const model = context.model!;
   const workflow = structuredClone(objectSchema.parse(model.parameters.workflow));
+  const { width, height, frameRate } = context.project.profile;
   const values: Record<string, JsonValue> = {
     prompt: visualPrompt(context, shot, references), narration: shot.narration,
     character_images: references.images.map(image => image.dataUrl),
-    width: context.project.profile.width, height: context.project.profile.height,
+    width, height,
+    ...(context.unifiedShotProfile && isVideoGenerationNode(context.node) ? { fps: frameRate.numerator / frameRate.denominator } : {}),
     seed: parseInt(createHash('sha256').update(`${context.operationId}:${shot.id}`).digest('hex').slice(0, 10), 16),
   };
   const mapping = model.parameters.inputMapping;
@@ -147,14 +151,22 @@ function comfyPrompt(context: MediaActivityContext, shot: Shot, references: Reso
   return workflow;
 }
 
-type MediaPreflightContext = Pick<MediaActivityContext, 'project' | 'node' | 'assets' | 'model' | 'characters'> & Partial<Pick<MediaActivityContext, 'operationId' | 'dataDirectory' | 'signal'>>;
+type MediaPreflightContext = Pick<MediaActivityContext, 'project' | 'node' | 'assets' | 'model' | 'characters'> & Partial<Pick<MediaActivityContext, 'operationId' | 'dataDirectory' | 'signal'>> & { pendingCastFrames?: boolean };
 const mediaActivityDirectory = (dataDirectory: string, projectId: string, operationId: string) => resolve(dataDirectory, 'projects', projectId, 'activities', createHash('sha256').update(operationId).digest('hex').slice(0, 24));
 const mediaShotFileId = (shotId: string) => createHash('sha256').update(shotId).digest('hex').slice(0, 24);
 const imageMimeTypes = ['image/png', 'image/jpeg', 'image/webp'];
 function currentVideoImage(context: MediaPreflightContext, shot: Shot): AssetRecord | undefined {
-  if (isVideoGenerationNode(context.node) && context.project.workflow.production?.referenceMode === 'none') return;
+  if (isVideoGenerationNode(context.node) && !usesVideoSceneImage(context.project, context.node, context.model, shot, context.characters)) return;
   return context.assets.find(asset => asset.id === shot.assetId && asset.kind === 'image' && asset.active)
     ?? (context.node.config.operation === 'regenerate' ? undefined : context.assets.find(asset => asset.projectId === context.project.id && asset.shotId === shot.id && asset.kind === 'image' && asset.active));
+}
+
+function mediaReferences(context: MediaPreflightContext, shot: Shot) {
+  const sceneFrame = characterSceneFirstFrame(context.project, context.node, context.model, shot, context.characters);
+  const pendingFrame = context.pendingCastFrames && !shot.locked
+    && (context.project.workflow.production.referenceMode === 'generate' || needsComposedSceneFrame(context.project, shot, context.characters));
+  const includeImages = !sceneFrame || !(pendingFrame || currentVideoImage(context, shot));
+  return resolveCharacterReferences({ project: context.project, shot, characters: context.characters, assets: context.assets, includeImages });
 }
 function hasExactTemplateValue(value: JsonValue | undefined, placeholder: string): boolean {
   if (typeof value === 'string') return value === placeholder;
@@ -192,7 +204,7 @@ function validateReferenceProtocol(context: MediaPreflightContext, shot: Shot, r
   }
   const image = currentVideoImage(context, shot);
   const total = count + (image ? 1 : 0);
-  if (model.provider === 'openai-compatible' && total !== 1) throw new Error('当前 OpenAI 视频接口仅支持一张输入参考图；请仅保留一张角色图并移除镜头首帧，或改用支持多图的模型。');
+  if (model.provider === 'openai-compatible' && total !== 1) throw new Error('当前连接使用 OpenAI 兼容视频接口，每个镜头仅支持一张输入图。请配置图片模型并重新开始制作，以生成包含出镜角色的镜头首帧。');
   if (model.provider === 'seedance') {
     const referenceImages = model.parameters.characterReferenceMode === 'reference_image';
     if (referenceImages || context.project.workflow.production.referenceAudioAssetIds?.length) {
@@ -259,7 +271,11 @@ export async function validateMediaActivity(context: MediaPreflightContext): Pro
     const kind = context.node.kind === 'assets' ? 'image' : 'video';
     const existing = context.assets.find(asset => asset.projectId === context.project.id && asset.shotId === shot.id && asset.kind === kind && asset.active);
     if (context.node.config.operation !== 'regenerate' && shot.locked && existing && await validAsset(existing)) continue;
-    const references = await resolveCharacterReferences({ project: context.project, shot, characters: context.characters, assets: context.assets });
+    if (kind === 'video' && context.node.config.operation === 'regenerate' && shot.assetId && singleFrameVideoModel(model, context.project)) {
+      const frame = currentVideoImage(context, shot);
+      if (!frame || !await validAsset(frame)) throw new Error('已确认的镜头首帧缺失或损坏，请恢复素材或重新选择首帧。');
+    }
+    const references = await mediaReferences(context, shot);
     context.signal?.throwIfAborted();
     validateReferenceProtocol(context, shot, references);
   }
@@ -299,7 +315,7 @@ async function readReceipt(path: string): Promise<Receipt | undefined> {
   return JSON.parse(await readFile(path, 'utf8')) as Receipt;
 }
 
-async function assetFor(path: string, context: MediaActivityContext, kind: AssetRecord['kind'], shot?: Shot): Promise<AssetRecord> {
+async function assetFor(path: string, context: MediaActivityContext, kind: AssetRecord['kind'], shot?: Shot, video?: Pick<AssetRecord, 'width' | 'height' | 'durationUs'>): Promise<AssetRecord> {
   const hash = createHash('sha256');
   let size = 0;
   for await (const chunk of createReadStream(path, { signal: context.signal })) { hash.update(chunk); size += chunk.length; }
@@ -308,11 +324,7 @@ async function assetFor(path: string, context: MediaActivityContext, kind: Asset
     projectId: context.project.id, shotId: shot?.id, name: path.split(/[\\/]/).at(-1) ?? '媒体', kind, path,
     mimeType: kind === 'image' ? 'image/png' : kind === 'video' ? 'video/mp4' : kind === 'subtitle' ? 'application/x-subrip' : 'application/json',
     size, sha256: hash.digest('hex'), version: 1,
-    ...(kind === 'video' && isVideoGenerationNode(context.node) ? await (async () => {
-      const metadata = await probeMedia(path, context.ffprobePath, context.signal);
-      if (!metadata.width || !metadata.height || !metadata.audio) throw new VideoGenerationError();
-      return { width: metadata.width, height: metadata.height, durationUs: Math.round((metadata.videoDuration ?? metadata.duration) * 1_000_000) };
-    })() : {}),
+    ...video,
     createdAt: new Date().toISOString(), provenance: context.model ? `${context.model.provider}/${context.model.model}` : '本地渲染', retained: false, active: true,
   };
 }
@@ -330,12 +342,20 @@ function retryablePollError(error: unknown, depth = 0): boolean {
   if (error instanceof AggregateError && error.errors.length) return error.errors.every(cause => retryablePollError(cause, depth + 1));
   return retryablePollError(error.cause, depth + 1);
 }
-function retryAfterMilliseconds(value: string | null): number | undefined {
-  if (!value) return;
-  const seconds = Number(value);
-  if (Number.isFinite(seconds) && seconds >= 0) return seconds * 1000;
-  const date = Date.parse(value);
-  return Number.isFinite(date) ? Math.max(0, date - Date.now()) : undefined;
+
+async function outputImageModerationRejected(response: Response): Promise<boolean> {
+  let body: string;
+  try { body = new TextDecoder().decode(await boundedResponseBytes(response, 8 * 1024)); }
+  catch { return false; }
+  let payload: unknown;
+  try { payload = JSON.parse(body); }
+  catch { payload = body; }
+  const error = nested(payload, 'error') ?? payload;
+  const code = stringOrUndefined(nested(error, 'code')) ?? '';
+  const message = stringOrUndefined(nested(error, 'message') ?? error)?.trim() ?? '';
+  // Some relays strip the Ark error code. Only retain a fixed local reason.
+  return code === 'OutputImageSensitiveContentDetected' || code.startsWith('OutputImageSensitiveContentDetected.')
+    || /^(?:status_code\s*=\s*400,\s*)?The request failed because the output image may contain sensitive information\b/i.test(message);
 }
 
 async function requestJson(url: string, context: MediaActivityContext, init: RequestInit = {}): Promise<Record<string, unknown>> {
@@ -351,8 +371,12 @@ async function requestJson(url: string, context: MediaActivityContext, init: Req
     });
     statusCode = response.status;
     if (!response.ok) {
-      await response.body?.cancel().catch(() => undefined);
-      if (phase === 'submit' && rejectedPostStatuses.has(response.status)) throw new MediaRequestRejectedError(response.status);
+      const outputImageBlocked = phase === 'submit' && response.status === 400 && context.node.kind === 'assets'
+        && await outputImageModerationRejected(response);
+      if (!response.bodyUsed) await response.body?.cancel().catch(() => undefined);
+      if (phase === 'submit' && rejectedPostStatuses.has(response.status)) {
+        throw new MediaRequestRejectedError(response.status, outputImageBlocked ? 'output-image-moderation' : undefined);
+      }
       throw Object.assign(new Error(`模型请求未完成（HTTP ${response.status}），请检查服务配置`), { status: response.status, retryAfterMs: retryAfterMilliseconds(response.headers.get('retry-after')) });
     }
     const bytes = await boundedResponseBytes(response, 64 * 1024 * 1024);
@@ -390,7 +414,10 @@ async function downloadReceipt(path: string, receiptPath: string, receipt: Recei
   context.onDiagnostic?.({ event: 'media.download_completed', level: 'info', phase: 'download', byteSize: bytes.byteLength, durationMs: performance.now() - started });
   const validationStarted = performance.now();
   context.onDiagnostic?.({ event: 'media.validation_started', level: 'info', phase: 'validate' });
-  const asset = await assetFor(path, context, kind, shot);
+  const video = kind === 'video' && isVideoGenerationNode(context.node) ? await prepareGeneratedVideo(path, context.project.profile, {
+    conform: context.unifiedShotProfile, ffmpegPath: context.ffmpegPath, ffprobePath: context.ffprobePath, signal: context.signal,
+  }) : undefined;
+  const asset = await assetFor(path, context, kind, shot, video);
   await atomicJson(receiptPath, { state: 'completed', attempt: receipt.attempt, taskId: receipt.taskId, asset, providerUsage: receipt.providerUsage });
   context.onDiagnostic?.({ event: 'media.validation_completed', level: 'info', phase: 'validate', assetId: asset.id, byteSize: asset.size, durationMs: performance.now() - validationStarted });
   return asset;
@@ -424,7 +451,7 @@ async function seedanceVideoBody(context: MediaActivityContext & { model: ModelP
     { type: 'text', text: prompt },
     ...images.map(url => ({ type: 'image_url', image_url: { url }, role: multimodal ? 'reference_image' : 'first_frame' })),
     ...audio.map(reference => ({ type: 'audio_url', audio_url: { url: reference.dataUrl }, role: 'reference_audio' })),
-  ], duration: parameters.duration ?? Math.max(1, Math.ceil(shot.durationUs / 1_000_000)), ratio, resolution });
+  ], duration: parameters.duration ?? defaultVideoRequestSeconds(context.model.model, shot.durationUs), ratio, resolution });
   if (Buffer.byteLength(body) > 64_000_000) throw new Error('参考素材与提示词编码后超过 64 MB 请求限制，请压缩或减少素材。');
   return body;
 }
@@ -434,7 +461,7 @@ async function generateMedia(context: MediaActivityContext, directory: string, s
   if (!model) throw new Error('请为此步骤选择相应的生成模型，或先导入素材');
   const parameters = requestModelParameters(model, kind);
   if (kind === 'video') parameters.generate_audio = true;
-  const references = await resolveCharacterReferences({ project: context.project, shot, characters: context.characters, assets: context.assets });
+  const references = await mediaReferences(context, shot);
   const imageEdit = await resolveImageEdit(context);
   validateReferenceProtocol(context, shot, references);
   const prompt = visualPrompt(context, shot, references);
@@ -466,15 +493,20 @@ async function generateMedia(context: MediaActivityContext, directory: string, s
         const requestPath = z.string().min(1).parse(model.parameters.requestPath);
         const template = model.parameters.requestTemplate;
         if (template === undefined) throw new Error('请为自定义 HTTP 模型配置 requestTemplate');
+        const { width, height, frameRate } = context.project.profile;
         const result = await requestJson(endpoint(model.baseUrl, requestPath), context, {
           method: 'POST', headers: { 'Idempotency-Key': requestId },
-          body: JSON.stringify(fillTemplate(template, { prompt, character_images: references.images.map(image => image.dataUrl), narration: shot.narration, instruction, model: model.model, width: context.project.profile.width, height: context.project.profile.height, duration: shot.durationUs / 1_000_000 })),
+          body: JSON.stringify(fillTemplate(template, { prompt, character_images: references.images.map(image => image.dataUrl), narration: shot.narration, instruction, model: model.model, width, height, duration: shot.durationUs / 1_000_000,
+            ...(context.unifiedShotProfile && kind === 'video' ? { fps: frameRate.numerator / frameRate.denominator } : {}),
+          })),
         });
         const taskId = stringOrUndefined(atPath(result, model.parameters.taskIdPath));
         receipt = taskId ? { state: 'submitted', taskId } : { state: 'download', downloadUrl: stringOrUndefined(atPath(result, model.parameters.resultUrlPath)), base64: stringOrUndefined(atPath(result, model.parameters.resultBase64Path)) };
         receipt.providerUsage = providerReportedUsage(result);
       } else if (kind === 'image' && model.provider !== 'comfyui') {
-        const imageParameters = { ...parameters, model: model.model, prompt, n: 1, size: imageRequestSize(model, context.project.profile) };
+        const imageParameters: Record<string, JsonValue> = { ...parameters, model: model.model, prompt, size: imageRequestSize(model, context.project.profile) };
+        if (model.provider === 'seedream') delete imageParameters.n;
+        else imageParameters.n = 1;
         const editing = references.images.length > 0 && model.provider === 'openai-compatible';
         const imageBody = JSON.stringify({ ...imageParameters, ...(editing ? { images: references.images.map(image => ({ image_url: image.dataUrl })) } : references.images.length && model.provider === 'seedream' ? { image: references.images.map(image => image.dataUrl) } : {}) });
         let requestBody: string | FormData = imageBody;
@@ -507,7 +539,7 @@ async function generateMedia(context: MediaActivityContext, directory: string, s
           const image = currentVideoImage(context, shot);
           const form = formParameters(parameters);
           form.set('model', model.model); form.set('prompt', prompt);
-          form.set('seconds', String(parameters.seconds ?? Math.ceil(shot.durationUs / 1_000_000)));
+          form.set('seconds', String(parameters.seconds ?? defaultVideoRequestSeconds(model.model, shot.durationUs)));
           form.set('size', String(parameters.size ?? `${context.project.profile.width}x${context.project.profile.height}`));
           if (image) form.set('input_reference', new Blob([await readFile(image.path)], { type: image.mimeType }), `reference${extname(image.path)}`);
           else if (references.images[0]) form.set('input_reference', referenceBlob(references.images[0].dataUrl, references.images[0].mimeType), 'character-reference.png');
@@ -615,7 +647,7 @@ export function createActivityExecutor(options: { ffmpegPath?: string } = {}) {
   const requests = new MediaRequestQueue();
   return async (context: MediaActivityContext): Promise<JsonValue> => {
     const ffmpeg = options.ffmpegPath ?? process.env.VIDEO_QUICKLY_FFMPEG;
-    context = { ...context, ffprobePath: process.env.VIDEO_QUICKLY_FFPROBE ?? (ffmpeg ? join(dirname(ffmpeg), process.platform === 'win32' ? 'ffprobe.exe' : 'ffprobe') : undefined) };
+    context = { ...context, ffmpegPath: ffmpeg, ffprobePath: process.env.VIDEO_QUICKLY_FFPROBE ?? (ffmpeg ? join(dirname(ffmpeg), process.platform === 'win32' ? 'ffprobe.exe' : 'ffprobe') : undefined) };
     if (context.node.config.operation === 'prepare-edit') {
       if (context.model) throw new Error('剪辑准备使用本地时间轴，请移除此步骤的模型。');
       return { source: 'local', shots: context.project.shots.length, message: '动画与运镜参数已就绪，导出步骤将按当前时间轴渲染' };

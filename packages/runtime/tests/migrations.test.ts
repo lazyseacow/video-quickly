@@ -6,7 +6,8 @@ import { tmpdir } from 'node:os';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { INITIAL_SCHEMA, openDatabase, DocumentStore, WORKSPACE_MIGRATIONS, thumbnailShot } from '../src/database.js';
 import { DatabaseMigrationError, migrateDatabase } from '../src/migrations.js';
-import { createNativeVideoWorkflow, DEFAULT_CAPTION_STYLE, DEFAULT_VIDEO_PROFILE, projectDetailSchema, projectSchema, projectSummarySchema } from '@video-quickly/contracts';
+import { costSummarySchema, costTaskDetailSchema, costTaskSchema, createNativeVideoWorkflow, DEFAULT_CAPTION_STYLE, DEFAULT_VIDEO_PROFILE, projectDetailSchema, projectSchema, projectSummarySchema, recordPageSchema, usageRecordSchema } from '@video-quickly/contracts';
+import { createCostLedger } from '../src/costs.js';
 import { createReadModels } from '../src/read-models.js';
 
 const directories: string[] = [];
@@ -214,10 +215,87 @@ describe('workspace database upgrades', () => {
     try { expect(backup.pragma('user_version', { simple: true })).toBe(6); expect(new DocumentStore(backup).get('project', project.id)).toEqual(project); } finally { backup.close(); }
   });
 
+  it('backfills v23 task cursors for global and project pages without changing saved charges', async () => {
+    const path = await directory(), previous = new Database(join(path, 'workspace.sqlite'));
+    const charges = [
+      { id: 'old-a', runId: 'old', projectId: 'project-a' },
+      { id: 'new-b', runId: 'new', projectId: 'project-b' },
+      { id: 'old-b', runId: 'old', projectId: 'project-b' },
+    ].map(value => usageRecordSchema.parse({
+      ...value, operationId: value.id, revision: 1, nodeId: 'brief', modelId: 'fixture', modelName: 'Fixture',
+      provider: 'openai-compatible', model: 'fixture', capability: 'text', requestMetrics: { source: 'request' },
+      status: 'completed', createdAt: '2026-11-01T00:00:00Z', updatedAt: '2026-11-01T00:00:00Z',
+    }));
+    const cursors = new Map<string, number>();
+    try {
+      previous.function('vq_thumbnail', { deterministic: true }, body => JSON.stringify(thumbnailShot(JSON.parse(String(body)))));
+      previous.function('vq_upgrade_legacy_project', { deterministic: true }, body => String(body));
+      migrateDatabase(previous, path, WORKSPACE_MIGRATIONS.filter(migration => migration.version <= 23));
+      const documents = new DocumentStore(previous);
+      const readCursor = previous.prepare<[string], { cursor: number }>("SELECT rowid AS cursor FROM documents WHERE kind = 'usage-record' AND id = ?");
+      for (const charge of charges) {
+        documents.put('usage-record', charge.id, charge);
+        cursors.set(charge.id, readCursor.get(charge.id)!.cursor);
+      }
+    } finally { previous.close(); }
+
+    const database = openDatabase(path), store = new DocumentStore(database), ledger = createCostLedger({ database, store });
+    const page = recordPageSchema(costTaskSchema);
+    try {
+      const global = page.parse(ledger.dispatch('cost.tasks', { limit: 1 }));
+      const project = page.parse(ledger.dispatch('cost.tasks', { projectId: 'project-b', limit: 1 }));
+      expect(global).toMatchObject({ items: [{ id: 'new', summary: { total: 1 } }], nextCursor: cursors.get('new-b') });
+      expect(project).toMatchObject({ items: [{ id: 'old', summary: { total: 1 } }], nextCursor: cursors.get('old-b') });
+      expect(page.parse(ledger.dispatch('cost.tasks', { before: global.nextCursor })).items).toMatchObject([{ id: 'old', summary: { total: 2 } }]);
+      expect(page.parse(ledger.dispatch('cost.tasks', { projectId: 'project-b', before: project.nextCursor })).items).toMatchObject([{ id: 'new', summary: { total: 1 } }]);
+      expect(costTaskDetailSchema.parse(ledger.dispatch('cost.task.get', { runId: 'old' })).summary.total).toBe(2);
+      expect(costSummarySchema.parse(ledger.dispatch('cost.summary', {}))).toMatchObject({ total: 3, unknownEstimated: 3, unknownActual: 3 });
+      expect(store.list('usage-record')).toEqual(charges);
+
+      expect(database.transaction(() => {
+        store.put('usage-record', 'rolled-back', { ...charges[0], id: 'rolled-back', runId: 'rolled-back' });
+        throw new Error('roll back the ledger write');
+      })).toThrow('roll back the ledger write');
+      expect(database.prepare("SELECT count(*) FROM cost_task_order WHERE run_id = 'rolled-back'").pluck().get()).toBe(0);
+    } finally { database.close(); }
+  });
+
+  it('rebuilds a cached v25 overview from saved charges using exact decimals', async () => {
+    const path = await directory(), previous = new Database(join(path, 'workspace.sqlite'));
+    const charges = [0.1, 0.2].map((actualAmount, index) => usageRecordSchema.parse({
+      id: `charge-${index}`, operationId: `charge-${index}`, revision: 1, runId: `run-${index}`, projectId: 'project', nodeId: 'brief',
+      modelId: 'fixture', modelName: 'Fixture', provider: 'openai-compatible', model: 'fixture', capability: 'text',
+      requestMetrics: { source: 'request' }, status: 'completed', actualAmount, actualCurrency: 'USD', createdAt: '', updatedAt: '',
+    }));
+    try {
+      previous.function('vq_thumbnail', { deterministic: true }, body => JSON.stringify(thumbnailShot(JSON.parse(String(body)))));
+      previous.function('vq_upgrade_legacy_project', { deterministic: true }, body => String(body));
+      migrateDatabase(previous, path, WORKSPACE_MIGRATIONS.filter(migration => migration.version <= 25));
+      const store = new DocumentStore(previous);
+      const subtotal = previous.prepare("UPDATE cost_task_order SET overview_metrics = ? WHERE scope = 'all' AND run_id = ?");
+      for (const charge of charges) {
+        store.put('usage-record', charge.id, charge);
+        subtotal.run(JSON.stringify({ total: 1, USD_actualAmount: charge.actualAmount, USD_actualRecords: 1 }), charge.runId);
+      }
+      previous.prepare("INSERT INTO runtime_metadata(key, value) VALUES ('cost-overview-summary', ?)").run(JSON.stringify({ total: 2, USD_actualAmount: 0.30000000000000004, USD_actualRecords: 2 }));
+    } finally { previous.close(); }
+
+    const database = openDatabase(path), store = new DocumentStore(database);
+    try {
+      const ledger = createCostLedger({ database, store });
+      const overview = () => costSummarySchema.parse(ledger.dispatch('cost.summary', {}));
+      const first = overview();
+      expect(first).toMatchObject({ total: 2, currencies: [{ currency: 'USD', actualAmount: 0.3, actualRecords: 2 }] });
+      database.prepare("DELETE FROM runtime_metadata WHERE key = 'cost-overview-summary'").run();
+      expect(overview()).toEqual(first);
+      expect(store.list('usage-record')).toEqual(charges);
+    } finally { database.close(); }
+  });
+
   it('creates a versioned database and does not back up on every reopen', async () => {
     const path = await directory(); const db = openDatabase(path);
     expect(db.pragma('user_version', { simple: true })).toBe(currentVersion);
-    expect(db.prepare('SELECT name FROM schema_migrations ORDER BY version').all()).toEqual([{ name: 'workspace-baseline' }, { name: 'execution-event-index' }, { name: 'workspace-read-models' }, { name: 'audio-asset-references' }, { name: 'project-summary-caption-style' }, { name: 'clip-edit-references-and-first-frame' }, { name: 'workflow-composition-and-keyframe-capabilities' }, { name: 'active-project-runs-index' }, { name: 'workflow-layout' }, { name: 'native-video-production' }, { name: 'production-reference-audio' }, { name: 'project-creative-context' }, { name: 'prompt-workbench' }, { name: 'work-episodes-production-queue' }, { name: 'creative-reference-images-and-media-derivations' }, { name: 'single-step-retry-checkpoints' }, { name: 'script-response-receipts' }, { name: 'text-request-rejection-receipts' }, { name: 'media-request-rejection-receipts' }, { name: 'legacy-project-production-workflows' }, { name: 'asset-read-indexes' }, { name: 'manual-planning-inputs' }, { name: 'structured-planning-prefill' }]);
+    expect(db.prepare('SELECT name FROM schema_migrations ORDER BY version').all()).toEqual([{ name: 'workspace-baseline' }, { name: 'execution-event-index' }, { name: 'workspace-read-models' }, { name: 'audio-asset-references' }, { name: 'project-summary-caption-style' }, { name: 'clip-edit-references-and-first-frame' }, { name: 'workflow-composition-and-keyframe-capabilities' }, { name: 'active-project-runs-index' }, { name: 'workflow-layout' }, { name: 'native-video-production' }, { name: 'production-reference-audio' }, { name: 'project-creative-context' }, { name: 'prompt-workbench' }, { name: 'work-episodes-production-queue' }, { name: 'creative-reference-images-and-media-derivations' }, { name: 'single-step-retry-checkpoints' }, { name: 'script-response-receipts' }, { name: 'text-request-rejection-receipts' }, { name: 'media-request-rejection-receipts' }, { name: 'legacy-project-production-workflows' }, { name: 'asset-read-indexes' }, { name: 'manual-planning-inputs' }, { name: 'structured-planning-prefill' }, { name: 'cost-and-run-read-indexes' }, { name: 'incremental-cost-overview' }, { name: 'exact-cost-overview-deltas' }]);
     db.close(); openDatabase(path).close();
     expect(await readdir(path)).not.toContain('database-backups');
   });

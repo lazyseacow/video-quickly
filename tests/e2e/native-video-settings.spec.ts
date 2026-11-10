@@ -1,4 +1,5 @@
-import { productionStep, saveProduction, saveAndStartProduction } from './production-settings';
+import { openStoryboardProfile, productionStep, saveProduction, saveAndStartProduction } from './production-settings';
+import { confirmAction } from './confirmation-actions';
 import { expect, test } from '@playwright/test';
 import type { ProjectDocument, RunStepPayload, RunSummary } from '@video-quickly/contracts';
 import { rpc, fixture, saved, latest, open, pick } from './native-video-fixture';
@@ -15,7 +16,9 @@ test('prefills AI planning fields, validates drafts and uses the edited values i
     expect(source.requests).toHaveLength(0);
     await pick(dialog, '文本模型', source.models[0]); await pick(dialog, '视频模型', source.video);
     await productionStep(dialog, '创作要求');
+    await (await openStoryboardProfile(dialog)).getByLabel('视频帧率', { exact: true }).selectOption('60');
     await dialog.getByRole('button', { name: 'AI 填写简报', exact: true }).click();
+    await confirmAction(page, '确认填写');
     const topic = dialog.getByLabel('主题', { exact: true });
     await expect(topic).toHaveValue('AI 提出的主题');
     await expect(dialog.getByLabel('简报来源', { exact: true })).toHaveValue('manual');
@@ -25,6 +28,7 @@ test('prefills AI planning fields, validates drafts and uses the edited values i
     await topic.fill('人工修改后的主题');
     await dialog.getByLabel('核心信息', { exact: true }).fill('人工补充的核心信息');
     await dialog.getByRole('button', { name: 'AI 填写风格', exact: true }).click();
+    await confirmAction(page, '确认填写');
     await expect(dialog.getByLabel('画风', { exact: true })).toHaveValue('AI 提出的水彩画风');
     expect(JSON.stringify(source.requests[1])).toContain('人工修改后的主题');
     await dialog.getByLabel('色彩', { exact: true }).fill('人工选择的蓝白色');
@@ -34,13 +38,16 @@ test('prefills AI planning fields, validates drafts and uses the edited values i
     const scriptButton = dialog.getByRole('button', { name: 'AI 填写分镜', exact: true });
     const editor = page.getByRole('dialog', { name: '编辑旁白与分镜', exact: true });
     await scriptButton.click();
+    await confirmAction(page, '确认填写');
     await expect(dialog.getByRole('alert')).toContainText('第 1/1 批分镜结果校验失败');
     await expect(editor).toHaveCount(0);
     await expect(topic).toHaveValue('人工修改后的主题');
     expect(await saved(request, source.project.id)).toEqual(source.project);
 
     await scriptButton.click();
+    await confirmAction(page, '确认重试');
     await expect(editor.getByLabel('镜头标题', { exact: true })).toHaveValue('生成的蓝色镜头');
+    await expect(editor.getByText(/分镜全局参数.*160 × 90.*60 fps/)).toBeVisible();
     await expect(editor.getByLabel('镜头时长（秒）', { exact: true })).toHaveValue('1');
     expect((await saved(request, source.project.id)).shots).toEqual([]);
     await editor.getByLabel('旁白', { exact: true }).fill('这是人工修改的分镜旁白。');
@@ -106,7 +113,6 @@ test('fills each planning field, adds a storyboard shot and starts with only a v
     await expect(duration).toBeFocused();
     expect((await saved(request, project.id)).shots).toHaveLength(0);
     await duration.fill('1');
-    await editor.getByText('角色与创作设定', { exact: true }).click();
     await editor.getByRole('checkbox', { name: /晴朗天空/ }).check();
     await editor.locator('.planning-result-editor__body').evaluate(element => { element.scrollTop = 0; });
     await page.screenshot({ path: info.outputPath('manual-storyboard-fields.png') });
@@ -166,11 +172,14 @@ test('starts the default workflow, retries only the failed storyboard and finish
     expect(source.requests).toHaveLength(0);
     await pick(dialog, '文本模型', source.models[0]); await pick(dialog, '视频模型', source.video);
     await productionStep(dialog, '创作要求'); await dialog.getByLabel('创作要求', { exact: true }).fill('用一个镜头介绍蓝色天空，声音自然。');
-    await productionStep(dialog, '模型与素材'); await expect(dialog.getByLabel('参考素材', { exact: true })).toHaveValue('none'); await productionStep(dialog, '声音与成片'); await dialog.getByLabel('声音要求', { exact: true }).fill('轻声讲述，环境音克制。');
-    await productionStep(dialog, '声音与成片'); await expect(dialog.getByLabel('字幕', { exact: true })).toHaveValue('off');
+    await openStoryboardProfile(dialog);
     await dialog.getByLabel('画面比例', { exact: true }).selectOption('9:16');
     await dialog.getByLabel('分辨率', { exact: true }).selectOption('720');
+    await dialog.getByLabel('视频帧率', { exact: true }).selectOption('60');
     await dialog.getByLabel('素材适配', { exact: true }).selectOption('cover');
+    await productionStep(dialog, '模型与素材'); await expect(dialog.getByLabel('参考素材', { exact: true })).toHaveValue('none');
+    await productionStep(dialog, '声音与成片'); await dialog.getByLabel('声音要求', { exact: true }).fill('轻声讲述，环境音克制。');
+    await expect(dialog.getByLabel('字幕', { exact: true })).toHaveValue('off');
     await page.screenshot({ path: info.outputPath('native-settings-dark.png') });
     let writes = 0; page.on('request', value => { if (value.url().endsWith('/__desktop_rpc') && value.postDataJSON()?.method === 'project.update') writes++; });
     await saveProduction(dialog); await expect(dialog).toHaveCount(0); expect(writes).toBe(1);
@@ -191,6 +200,7 @@ test('starts the default workflow, retries only the failed storyboard and finish
     await expect(records.getByRole('region', { name: '已保存分镜' })).toContainText('全片大纲');
     await page.screenshot({ path: info.outputPath('native-production-step-retry.png') });
     await retry.click();
+    await confirmAction(page, '确认重试');
     await expect(records).toContainText('后续步骤尚未执行');
     const retried = await latest(request, source.project.id);
     expect(retried).toMatchObject({ id: failed.id, stepRetry: { nodeId: 'script', status: 'completed' } });
@@ -198,8 +208,10 @@ test('starts the default workflow, retries only the failed storyboard and finish
     expect(source.requests).toHaveLength(5);
     expect(JSON.stringify(source.requests[4])).toContain('自动视频制作步骤：旁白与分镜');
     expect(JSON.stringify(source.requests[4])).toContain('720 × 1280 像素（9:16）');
+    expect(JSON.stringify(source.requests[4])).toContain('分镜全局帧率为 60 fps');
     expect(JSON.stringify(source.requests[4])).toContain('素材适配采用裁剪填满');
     await records.getByRole('button', { name: '继续原制作', exact: true }).click();
+    await confirmAction(page, '确认继续制作');
     await records.getByRole('button', { name: '关闭对话框', exact: true }).click();
     await expect.poll(async () => (await latest(request, source.project.id))?.status, { timeout: 30_000 }).toBe('succeeded');
     expect((await latest(request, source.project.id)).id).toBe(failed.id);
@@ -209,6 +221,7 @@ test('starts the default workflow, retries only the failed storyboard and finish
     expect(videoRequests).toHaveLength(1);
     expect(videoRequests[0]).toMatchObject({ ratio: '9:16', resolution: '720p' });
     expect(JSON.stringify(videoRequests[0])).toContain('720 × 1280 像素（9:16）');
+    expect(JSON.stringify(videoRequests[0])).toContain('分镜全局帧率为 60 fps');
     expect(JSON.stringify(videoRequests[0])).toContain('素材适配采用裁剪填满');
     expect(errors).toEqual([]); await expect(page.locator('vite-error-overlay')).toHaveCount(0);
     await page.screenshot({ path: info.outputPath('native-production-complete.png') });

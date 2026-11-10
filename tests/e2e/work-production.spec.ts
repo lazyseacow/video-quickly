@@ -50,6 +50,8 @@ async function createWork(page: Page, project: ProjectDocument) {
   await dialog.getByRole('textbox', { name: '作品名称', exact: true }).fill(title);
   await dialog.getByRole('combobox', { name: '沿用项目的默认设置', exact: true }).selectOption(project.id);
   await expect(dialog.getByRole('textbox', { name: '作品默认风格', exact: true })).toHaveValue('样例水彩');
+  await dialog.getByText('默认模型与声音', { exact: true }).press('Enter');
+  await expect(dialog.getByLabel('作品文本模型', { exact: true })).toHaveValue(project.workflow.production.textModelId!);
   await dialog.getByRole('textbox', { name: '作品默认风格', exact: true }).fill('作品中的统一水彩花园');
   await dialog.getByRole('button', { name: '保存作品', exact: true }).click();
   await expect(page.getByRole('heading', { name: title, exact: true })).toBeVisible();

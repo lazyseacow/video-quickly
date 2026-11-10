@@ -45,7 +45,7 @@ export function createImageTools({ store, directory, changed }: { store: Documen
     const { imageDimensions } = await import('@video-quickly/video/image-tools');
     return { assetId, sha256: asset!.sha256, ...await imageDimensions(bytes) };
   }
-  async function create(raw: unknown, kind: 'grid-crop' | 'edit-mask') {
+  async function create(raw: unknown, kind: 'grid-crop' | 'edit-mask', names?: readonly string[]) {
     const input = kind === 'grid-crop'
       ? assetInput.extend({ rows: z.number().int().min(1).max(8), columns: z.number().int().min(1).max(8) }).strict().parse(raw)
       : assetInput.extend({ rectangle: imageRectangleSchema }).strict().parse(raw);
@@ -80,7 +80,8 @@ export function createImageTools({ store, directory, changed }: { store: Documen
         const id = unchanged?.id ?? (previous ? `${baseId}-${sha256}` : baseId);
         const path = unchanged?.path ?? join(folder, `${id}.png`);
         await writeFile(`${path}.part`, output); await rename(`${path}.part`, path);
-        const asset = unchanged ? { ...unchanged, active: true } : assetSchema.parse({ id, projectId: source!.projectId, name: kind === 'grid-crop' ? `${source!.name} · 切图 ${index + 1}` : `${source!.name} · 修改区域`, kind: 'image', mimeType: 'image/png', path, size: output.length, sha256, version: 1,
+        const name = names?.[index] ?? (kind === 'grid-crop' ? `${source!.name} · 切图 ${index + 1}` : `${source!.name} · 修改区域`);
+        const asset = unchanged ? { ...unchanged, active: true } : assetSchema.parse({ id, projectId: source!.projectId, name, kind: 'image', mimeType: 'image/png', path, size: output.length, sha256, version: 1,
           width: kind === 'grid-crop' ? rectangle.width : size.width, height: kind === 'grid-crop' ? rectangle.height : size.height,
           provenance: kind === 'grid-crop' ? '网格切图' : '局部改图遮罩', createdAt: new Date().toISOString(), active: true, retained: false,
           derivation: { kind, sourceAssetId: source!.id, sourceSha256: source!.sha256, rectangle, sourceWidth: size.width, sourceHeight: size.height, ...('rows' in input ? { grid: { rows: input.rows, columns: input.columns, index } } : {}) } });
@@ -97,5 +98,5 @@ export function createImageTools({ store, directory, changed }: { store: Documen
     const next = operation(); pending.set(key, next);
     try { return await next; } finally { pending.delete(key); }
   }
-  return { dimensions, assetsInUse, cutGrid: (input: unknown) => create(input, 'grid-crop'), async mask(input: unknown) { return (await create(input, 'edit-mask'))[0]; } };
+  return { dimensions, assetsInUse, cutGrid: (input: unknown, names?: readonly string[]) => create(input, 'grid-crop', names), async mask(input: unknown) { return (await create(input, 'edit-mask'))[0]; } };
 }

@@ -92,6 +92,11 @@ test('edits real music through the UI, restores history and follows project time
   const asset = await rpc<AssetRecord>(request, 'asset.import', { projectId: project.id, path, kind: 'audio' });
   await openProject(page, project.title);
   let dialog = await musicEditor(page);
+  const importMusic = dialog.getByText('导入音乐文件', { exact: true });
+  await importMusic.press('Enter');
+  await expect(dialog.getByLabel('音乐文件路径', { exact: true })).toBeVisible();
+  await page.screenshot({ path: info.outputPath('music-import-fields.png') });
+  await importMusic.press('Enter');
   await dialog.getByLabel('从素材库添加音乐', { exact: true }).selectOption(asset.id);
   for (const [field, value] of [
     ['项目起点（秒）', '1'], ['素材入点（秒）', '0.5'], ['时长（秒）', '4'],
@@ -185,7 +190,7 @@ test('edits real music through the UI, restores history and follows project time
   await expectHealthy(page, errors);
 });
 
-test('protects referenced public music and restores it as an independent asset through the backup UI', async ({ page, request }, info) => {
+test('protects referenced public music and restores it as an independent asset through the import UI', async ({ page, request }, info) => {
   const errors = observeErrors(page);
   const project = await createProject(request, '公共音乐备份与保护验收');
   const path = info.outputPath('music-public.wav'), bytes = wav(); await writeFile(path, bytes);
@@ -203,11 +208,7 @@ test('protects referenced public music and restores it as an independent asset t
   await expect(card.getByRole('button', { name: `移除素材“${asset.name}”`, exact: true })).toBeDisabled();
   const rejected = await request.post('/__desktop_rpc', { data: { method: 'asset.delete', params: { assetId: asset.id } } });
   expect((await rejected.json()).error).toContain('正在使用或已保留');
-  await page.getByRole('button', { name: '我的项目', exact: true }).click();
-  const projectCard = page.locator('.project-card').filter({ has: page.getByRole('heading', { name: project.title, exact: true }) });
-  const pendingBackup = page.waitForResponse(response => response.url().endsWith('/__desktop_rpc') && response.request().postDataJSON()?.method === 'project.backup');
-  await projectCard.getByRole('button', { name: `备份“${project.title}”`, exact: true }).click();
-  const backup = (await (await pendingBackup).json()).result as { path: string; assets: number };
+  const backup = await rpc<{ path: string; assets: number }>(request, 'project.backup', { projectId: project.id, destination: info.outputPath('public-music-backup') });
   expect(backup.assets).toBe(1);
   const portable = JSON.parse(await readFile(`${backup.path}/project.json`, 'utf8'));
   expect(portable.project.musicClips).toEqual(saved.musicClips);

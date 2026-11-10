@@ -1,5 +1,5 @@
 import { expect, test, type APIRequestContext, type Page, type TestInfo } from '@playwright/test';
-import { type ProjectDocument } from '@video-quickly/contracts';
+import { type CharacterProfile, type ProjectDocument } from '@video-quickly/contracts';
 import { fixture, latest, rpc, saved } from './native-video-fixture';
 import { openProjectFromList } from './workspace-navigation';
 
@@ -58,16 +58,56 @@ for (const { width, theme } of [{ width: 1536, theme: 'dark' }, { width: 1024, t
       await steps.getByRole('button', { name: /风格与角色/ }).click(); await dialog.getByRole('button', { name: '编辑风格与角色', exact: true }).click();
       const styleEditor = page.getByRole('dialog', { name: '编辑风格与角色', exact: true });
       await styleEditor.getByLabel('画风', { exact: true }).fill('修改后的漫画风格');
-      await styleEditor.getByLabel('连续性要求', { exact: true }).fill('全片保留同一件蓝色外套');
+      const continuity = styleEditor.getByLabel('连续性要求', { exact: true });
+      await continuity.fill('全片保留同一件蓝色外套');
+      const entities = styleEditor.locator('.creative-context-editor__entities');
+      await entities.scrollIntoViewIfNeeded();
+      const styleBox = (await styleEditor.getByLabel('场景连续性', { exact: true }).boundingBox())!;
+      const rolePoolBox = (await styleEditor.getByText('项目角色池', { exact: true }).boundingBox())!;
+      expect(rolePoolBox.y - styleBox.y - styleBox.height).toBeCloseTo(16, 0);
+      const fieldBox = (await continuity.boundingBox())!, entitiesBox = (await entities.boundingBox())!;
+      expect(entitiesBox.y - fieldBox.y - fieldBox.height).toBeCloseTo(8, 0);
+      await page.screenshot({ path: info.outputPath(`planning-style-editor-${width}.png`) });
       await styleEditor.getByRole('button', { name: '保存到项目', exact: true }).click(); await expect(styleEditor).toHaveCount(0);
       await expect(dialog.getByRole('region', { name: '当前项目内容', exact: true })).toContainText('全片保留同一件蓝色外套');
 
+      const characters = await Promise.all(['分镜角色甲', '分镜角色乙', '本镜头负责解说并演示操作的长名角色'].map(name =>
+        rpc<CharacterProfile>(request, 'character.save', { character: { name: `${name} ${width}`, description: '', referenceAssetIds: [] } })));
       await steps.getByRole('button', { name: /分镜生成/ }).click(); await dialog.getByRole('button', { name: '编辑旁白与分镜', exact: true }).click();
       const scriptEditor = page.getByRole('dialog', { name: '编辑旁白与分镜', exact: true }), first = scriptEditor.getByRole('group', { name: '镜头 1 内容', exact: true });
+      const visual = first.getByLabel('画面要求', { exact: true });
+      const sound = first.getByLabel('声音要求', { exact: true });
+      const roles = first.getByRole('group', { name: '镜头角色', exact: true });
+      await expect(visual).toBeVisible();
+      await expect(sound).toBeVisible();
+      const disclosureGaps = await first.locator('.planning-result-editor__shot-content').evaluate(group => {
+        const [narration, prompts, references] = group.children;
+        const [visual, sound] = prompts.querySelectorAll('.field');
+        const gap = (before: Element, after: Element) => Math.round(after.getBoundingClientRect().top - before.getBoundingClientRect().bottom);
+        return [gap(narration, prompts), gap(prompts.firstElementChild!, visual), gap(visual, sound), gap(prompts, references)];
+      });
+      expect(disclosureGaps).toEqual([8, 8, 8, 8]);
+      const rows = await Promise.all(characters.map(async ({ name }) => {
+        const option = roles.getByRole('checkbox', { name, exact: true });
+        await expect(option).toBeVisible();
+        return (await option.boundingBox())!.y;
+      }));
+      if (width === 390) expect(new Set(rows).size).toBeGreaterThan(1);
+      else expect(new Set(rows).size).toBe(1);
+
+      const visualDisclosure = first.getByText('画面与声音要求', { exact: true });
+      const rolesDisclosure = first.getByText('角色与创作设定', { exact: true });
+      await visualDisclosure.press('Enter');
+      await rolesDisclosure.press('Enter');
       await first.getByLabel('镜头标题', { exact: true }).fill('人工调整的第一镜');
       await first.getByLabel('旁白', { exact: true }).fill('修改后的旁白，先讲最重要的一点。');
-      await first.getByText('画面与声音要求', { exact: true }).click(); await first.getByLabel('画面要求', { exact: true }).fill('主角站在窗边演示操作');
-      await first.getByLabel('声音要求', { exact: true }).fill('自然的讲述声');
+      await expect(visual).toBeHidden();
+      await expect(roles).toBeHidden();
+      await visualDisclosure.press('Enter');
+      await rolesDisclosure.press('Enter');
+      await visual.fill('主角站在窗边演示操作');
+      await sound.fill('自然的讲述声');
+      await roles.scrollIntoViewIfNeeded();
       expect(await scriptEditor.evaluate(element => element.scrollWidth <= element.clientWidth)).toBe(true);
       await expect(scriptEditor.locator('.dialog__surface')).toHaveCSS('opacity', '1');
       await page.screenshot({ path: info.outputPath(`planning-script-editor-${width}.png`) });
@@ -185,8 +225,28 @@ test('shows the saved storyboard during video generation and after stopping befo
     await expect.poll(async () => (await latest(request, source.project.id))?.status).toBe('canceled');
     runId = '';
     await expect(storyboard).toContainText('2 个镜头');
-    await expect(dialog.getByRole('button', { name: '编辑旁白与分镜', exact: true })).toBeEnabled();
+    const edit = dialog.getByRole('button', { name: '编辑旁白与分镜', exact: true });
+    await edit.click();
+    const editor = page.getByRole('dialog', { name: '编辑旁白与分镜', exact: true });
+    await expect(editor.getByLabel('镜头标题', { exact: true })).toHaveCount(2);
+    await expect(editor.getByLabel('镜头标题', { exact: true }).first()).toHaveValue('生成的蓝色镜头 1');
+    await expect(editor.getByLabel('旁白', { exact: true }).first()).toHaveValue('天空是蓝色的。');
+    await page.screenshot({ path: info.outputPath('storyboard-from-run-editor.png') });
+    await editor.getByRole('button', { name: '取消', exact: true }).click();
     expect(await saved(request, source.project.id)).toEqual(before);
+
+    await edit.click();
+    await editor.getByLabel('旁白', { exact: true }).first().fill('从本次制作取回后编辑的旁白。');
+    await editor.getByRole('button', { name: '保存到项目', exact: true }).click();
+    await expect(editor).toHaveCount(0);
+    const after = await saved(request, source.project.id);
+    expect(after.shots).toMatchObject([
+      { title: '生成的蓝色镜头 1', narration: '从本次制作取回后编辑的旁白。', visualPrompt: '蓝色天空', soundPrompt: '自然讲述', durationUs: 1_000_000 },
+      { title: '生成的蓝色镜头 2', narration: '天空是蓝色的。' },
+    ]);
+    expect(after.workflow.production.manualPlanningSteps).toContain('script');
+    await expect(storyboard).toContainText('天空是蓝色的。');
+    await expect(storyboard).not.toContainText('从本次制作取回后编辑的旁白。');
   } finally {
     try { if (runId) await rpc(request, 'run.cancel', { runId }); }
     finally { video.resolve(); await source.close(); }

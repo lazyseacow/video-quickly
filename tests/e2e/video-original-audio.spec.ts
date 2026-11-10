@@ -128,8 +128,11 @@ test('keeps the original-sound toggle, actual playback, mute and undo across rel
   await expect(main.locator('.audio-level-meter, .prepared-mix-preview__warnings')).toHaveCount(0);
   await expect(main.locator('.preview-audio')).toHaveCSS('height', '0px');
   const amplitude = await amplitudeOfPlayedMix(main, request, info, 'main'); expect(amplitude).toBeGreaterThan(.17); expect(amplitude).toBeLessThan(.24);
-  await expect(page.locator('.track--original .audio-waveform')).toHaveAttribute('data-status', 'ready');
-  await expect(page.locator('.track--original .audio-waveform')).toHaveAttribute('data-source-in-us', '250000');
+  const waveform = page.locator('.track--original .audio-waveform');
+  await expect(waveform).toHaveAttribute('data-status', 'ready');
+  await expect(waveform).toHaveAttribute('data-source-in-us', '250000');
+  await expect(waveform.locator('.audio-waveform__label')).toHaveText('0.25 – 1.75 秒');
+  await expect(waveform.getByRole('img', { name: '视频原声真实音频波形，0.25 – 1.75 秒', exact: true })).toBeVisible();
   await expect(page.getByLabel('轨道信息', { exact: true })).toContainText('A1');
   await expect(page.getByLabel('轨道信息', { exact: true })).not.toContainText('旁白');
   await page.getByRole('button', { name: '静音预览声音', exact: true }).click(); expect(await main.locator('audio').evaluate((element: HTMLAudioElement) => element.muted)).toBe(true);

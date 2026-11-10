@@ -1,3 +1,4 @@
+import { confirmAction } from './confirmation-actions';
 import { createServer, type Server } from 'node:http';
 import { randomUUID } from 'node:crypto';
 import { expect, test, type APIRequestContext, type Locator } from '@playwright/test';
@@ -45,7 +46,7 @@ for (const viewport of [{ width: 1536, height: 960, theme: 'dark' }, { width: 39
     await expect(instruction).toHaveCSS('resize', 'none');
     await instruction.fill('加强人物动作，镜头节奏更从容');
     await dialog.getByRole('combobox', { name: '建议生成模型', exact: true }).selectOption(source.model.id);
-    await dialog.getByRole('button', { name: '生成修改预览', exact: true }).click();
+    await dialog.getByRole('button', { name: '生成修改预览', exact: true }).click(); await confirmAction(page, '确认生成');
     await expect(dialog.getByRole('region', { name: '修改预览', exact: true })).toContainText('缓慢推近木盒');
     await expect(dialog.getByText(/已记录 1 次用量/)).toBeVisible(); expect(source.prompts).toHaveLength(1); expect(await source.current()).toEqual(source.project);
     expect(await dialog.evaluate(element => element.scrollWidth <= element.clientWidth + 1)).toBe(true);
@@ -66,7 +67,7 @@ for (const mode of ['hold-first', 'fail-first'] as const) test(`requires review 
     const settings = await openProduction(page, source.project), dialog = await openAssistant(settings);
     await dialog.getByRole('textbox', { name: '修改要求', exact: true }).fill('保留未知任务，核对后再创建新建议');
     await dialog.getByRole('combobox', { name: '建议生成模型', exact: true }).selectOption(source.model.id);
-    await dialog.getByRole('button', { name: '生成修改预览', exact: true }).click();
+    await dialog.getByRole('button', { name: '生成修改预览', exact: true }).click(); await confirmAction(page, '确认生成');
     await expect.poll(() => source.prompts.length).toBe(1);
     const list = () => rpc<{ items: Array<{ id: string; status: string }> }>(request, 'run.list', { projectId: source.project.id, purpose: 'workflow-assistant' });
     const oldRun = (await list()).items[0];
@@ -98,7 +99,7 @@ for (const mode of ['hold-first', 'fail-first'] as const) test(`requires review 
     expect(source.prompts).toHaveLength(1); expect((await list()).items).toHaveLength(1);
     expect(await rpc(request, 'run.get', { runId: oldRun.id })).toEqual(before);
     expect(await rpc(request, 'run.activities', { runId: oldRun.id })).toEqual(receipt);
-    await dialog.getByRole('button', { name: '生成修改预览', exact: true }).click();
+    await dialog.getByRole('button', { name: '生成修改预览', exact: true }).click(); await confirmAction(page, '确认生成');
     await expect(dialog.getByRole('region', { name: '修改预览', exact: true })).toContainText('缓慢推近木盒');
     expect(source.prompts).toHaveLength(2); expect((await list()).items).toHaveLength(2);
     expect(await rpc(request, 'run.get', { runId: oldRun.id })).toEqual(before);
@@ -116,7 +117,7 @@ test('reuses a lost start response and keeps manual model selection as a reversi
     const settings = await openProduction(page, source.project), dialog = await openAssistant(settings);
     await dialog.getByRole('textbox', { name: '修改要求', exact: true }).fill('补充动作与节奏');
     await dialog.getByRole('combobox', { name: '建议生成模型', exact: true }).selectOption(source.model.id);
-    await dialog.getByRole('button', { name: '生成修改预览', exact: true }).click();
+    await dialog.getByRole('button', { name: '生成修改预览', exact: true }).click(); await confirmAction(page, '确认生成');
     await expect(dialog.getByRole('button', { name: '重试读取建议任务', exact: true })).toBeVisible();
     await dialog.getByRole('button', { name: '重试读取建议任务', exact: true }).click();
     await expect(dialog.getByRole('region', { name: '修改预览', exact: true })).toContainText('缓慢推近木盒');
@@ -139,7 +140,7 @@ test('restores a saved suggestion after reopening and rejects applying it after 
     let settings = await openProduction(page, source.project), dialog = await openAssistant(settings);
     await dialog.getByRole('textbox', { name: '修改要求', exact: true }).fill('保留可恢复的建议输入');
     await dialog.getByRole('combobox', { name: '建议生成模型', exact: true }).selectOption(source.model.id);
-    await dialog.getByRole('button', { name: '生成修改预览', exact: true }).click();
+    await dialog.getByRole('button', { name: '生成修改预览', exact: true }).click(); await confirmAction(page, '确认生成');
     await expect(dialog.getByRole('region', { name: '修改预览', exact: true })).toContainText('缓慢推近木盒');
     await dialog.getByRole('button', { name: '关闭', exact: true }).click(); await expect(dialog).toHaveCount(0);
     await settings.getByRole('button', { name: '关闭对话框', exact: true }).click(); await expect(settings).toHaveCount(0);
@@ -166,7 +167,7 @@ test('restores a saved suggestion after reopening and rejects applying it after 
     await dialog.getByRole('button', { name: '新建建议', exact: true }).click();
     await expect(dialog.getByRole('textbox', { name: '修改要求', exact: true })).toHaveValue('保留可恢复的建议输入');
     await dialog.getByRole('textbox', { name: '修改要求', exact: true }).fill('基于当前修订再生成');
-    await dialog.getByRole('button', { name: '生成修改预览', exact: true }).click();
+    await dialog.getByRole('button', { name: '生成修改预览', exact: true }).click(); await confirmAction(page, '确认生成');
     await expect(dialog.getByRole('region', { name: '修改预览', exact: true })).toContainText('缓慢推近木盒');
     await expect(dialog.getByRole('button', { name: '应用到任务草稿', exact: true })).toBeEnabled(); expect(source.prompts).toHaveLength(2);
     await dialog.getByRole('button', { name: '关闭', exact: true }).click(); await expect(dialog).toHaveCount(0);

@@ -83,6 +83,13 @@ export function isVideoGenerationNode(node: Pick<WorkflowNode, 'kind' | 'config'
   return node.kind === 'animation' && node.config.operation !== 'prepare-edit';
 }
 
+export function supportsAutomaticCasting(workflow: Pick<WorkflowDefinition, 'id' | 'nodes'>): boolean {
+  return workflow.id === 'native-video'
+    && workflow.nodes.some(node => node.id === 'script' && node.kind === 'script')
+    && workflow.nodes.some(node => node.id === 'assets' && node.kind === 'assets' && node.config.operation === 'prepare-references')
+    && workflow.nodes.some(node => node.id === 'video' && isVideoGenerationNode(node));
+}
+
 export function isModelGenerationNode(node: Pick<WorkflowNode, 'kind' | 'config' | 'modelId'>): boolean {
   if (node.config.operation === 'prepare-edit' || node.config.operation === 'prepare-references' && node.config.referenceMode !== 'generate') return false;
   return ['brief', 'style', 'script', 'research', 'agent', 'assets', 'animation'].includes(node.kind)

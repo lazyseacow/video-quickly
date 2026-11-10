@@ -79,6 +79,7 @@ test('restores an unsaved multi-field draft and resolves external edits without 
     return new Promise<boolean>(resolve => { const query = db.transaction('projects').objectStore('projects').getAll(); query.onsuccess = () => { resolve(query.result.some(value => value.present.shots[0]?.narration === '重启后仍保留的旁白')); db.close(); }; });
   })).toBe(true);
   page.once('dialog', dialog => dialog.accept()); await page.reload();
+  await openProjectFromList(page, project.title);
   await expect(page.getByLabel('项目名称', { exact: true })).toHaveValue(project.title);
   await expect(page.getByLabel('镜头标题')).toHaveValue('草稿标题');
   await expect(page.getByLabel('旁白', { exact: true })).toHaveValue('重启后仍保留的旁白');

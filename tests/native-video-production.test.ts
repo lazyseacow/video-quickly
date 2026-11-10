@@ -5,7 +5,7 @@ import { mkdtemp, readFile, rm, unlink } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { afterEach, expect, it } from 'vitest';
-import { captionsEnabled, createNativeVideoWorkflow, getModelParameterFields, modelSchema, projectSchema, resolveProductionWorkflow, runInspectionSchema, runSchema, type ProjectDocument, type ShotCandidate } from '@video-quickly/contracts';
+import { captionsEnabled, createNativeVideoWorkflow, getModelParameterFields, modelSchema, projectSchema, resolveProductionWorkflow, runInspectionSchema, runSchema, type AssetRecord, type ProjectDocument, type ShotCandidate } from '@video-quickly/contracts';
 import { validateExecutionModel } from '../packages/runtime/src/execution-model';
 import { matchingStepModels } from '../apps/desktop/src/lib/workflow-guidance';
 import { createRuntime, SimulatedProcessExit, type RuntimeOptions } from '../packages/runtime/src';
@@ -72,7 +72,7 @@ it('keeps explicit model edits from the workflow editor when unified defaults ch
   expect(project.workflow.nodes.find(node => node.id === 'style')).toMatchObject({ modelId: 'next-shared', config: { modelOverride: false } });
 });
 
-async function fixture(audio = true, failpoint?: RuntimeOptions['failpoint']) {
+async function fixture(audio = true, failpoint?: RuntimeOptions['failpoint'], shotCount = 1) {
   const directory = await mkdtemp(join(tmpdir(), 'vq-native-video-')); directories.push(directory);
   const source = join(directory, 'source.mp4');
   await runMedia(ffmpeg, ['-hide_banner', '-loglevel', 'error', '-y', '-f', 'lavfi', '-i', 'color=c=blue:s=160x90:r=30:d=1', ...(audio ? ['-f', 'lavfi', '-i', 'sine=frequency=440:sample_rate=48000:duration=1'] : []), '-c:v', 'libx264', '-pix_fmt', 'yuv420p', ...(audio ? ['-c:a', 'aac', '-shortest'] : ['-an']), source]);
@@ -83,14 +83,15 @@ async function fixture(audio = true, failpoint?: RuntimeOptions['failpoint']) {
     response.setHeader('content-type', 'application/json');
     if (request.method === 'POST') {
       let body = ''; for await (const chunk of request) body += chunk;
-      received.push(JSON.parse(body)); submissions++; response.end(JSON.stringify({ id: 'native-task' }));
+      received.push(JSON.parse(body)); submissions++; response.end(JSON.stringify({ id: `native-task-${submissions}` }));
     } else if (request.url === '/video.mp4') { response.setHeader('content-type', 'video/mp4'); response.end(bytes); }
     else response.end(JSON.stringify({ status: 'succeeded', content: { video_url: `${baseUrl}/video.mp4` } }));
   });
   servers.push(server); await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
   const address = server.address(); if (!address || typeof address === 'string') throw new Error('Fixture server unavailable'); baseUrl = `http://127.0.0.1:${address.port}`;
+  const storyboard = JSON.stringify({ shots: Array.from({ length: shotCount }, (_, index) => ({ title: `视频镜头 ${index + 1}`, narration: '雨落下了。', visualPrompt: '蓝色天空', soundPrompt: '轻声讲述，雨声', durationUs: 2_000_000 })) });
   const options: RuntimeOptions = { dataDirectory: directory, seed: false, ffmpegPath: ffmpeg, preflightActivity: validateMediaActivity, executeActivity: createActivityExecutor({ ffmpegPath: ffmpeg }), failpoint,
-    provider: async ({ prompt }) => { textCalls++; return prompt.includes('自动视频制作步骤：旁白与分镜') ? storyboardFixtureResponse(prompt, JSON.stringify({ shots: [{ title: '视频镜头', narration: '雨落下了。', visualPrompt: '蓝色天空', soundPrompt: '轻声讲述，雨声', durationUs: 2_000_000 }] })) : planningFixtureResponse(prompt, '连续的蓝色画面与自然声音。'); } };
+    provider: async ({ prompt }) => { textCalls++; return prompt.includes('自动视频制作步骤：旁白与分镜') ? storyboardFixtureResponse(prompt, storyboard) : planningFixtureResponse(prompt, '连续的蓝色画面与自然声音。'); } };
   const runtime = createRuntime(options); runtimes.add(runtime);
   const project = projectSchema.parse(await runtime.dispatch('project.create', { title: '视频制作', brief: '讲述雨水', profile: { width: 160, height: 90, frameRate: { numerator: 30, denominator: 1 } } }));
   const text = modelSchema.parse(await runtime.dispatch('model.save', { model: { name: '文本夹具', provider: 'ollama', model: 'text', connectionType: 'text', capabilities: ['text'], baseUrl } }));
@@ -99,15 +100,34 @@ async function fixture(audio = true, failpoint?: RuntimeOptions['failpoint']) {
   return { runtime, options, configured, received, counts: () => ({ submissions, textCalls }), current: async (target = runtime) => (await target.dispatch('project.get', { projectId: project.id }) as { project: ProjectDocument }).project };
 }
 
-it.skipIf(!mediaAvailable)('generates, previews through the sound projection, and exports native sound with two models and empty subtitles', async () => {
-  const source = await fixture();
+it.skipIf(!mediaAvailable)('uses one storyboard profile for every generated clip and exports their native sound', async () => {
+  const source = await fixture(true, undefined, 2);
+  const profile = { ...source.configured.profile, width: 180, height: 320, frameRate: { numerator: 60, denominator: 1 }, fitMode: 'blur' };
+  await source.runtime.dispatch('project.update', { projectId: source.configured.id, revision: source.configured.revision, patch: { profile } });
   const ready = await source.runtime.dispatch('project.readiness', { projectId: source.configured.id }) as { ready: boolean }; expect(ready.ready).toBe(true);
   const started = runSchema.parse(await source.runtime.dispatch('run.start', { projectId: source.configured.id })); await source.runtime.waitForIdle();
   const inspection = runInspectionSchema.parse(await source.runtime.dispatch('run.inspect', { runId: started.id }));
   expect(inspection.run.status, inspection.run.error).toBe('succeeded'); expect(inspection.steps.every(step => step.status === 'succeeded')).toBe(true);
-  const project = await source.current(); expect(project.shots[0]).toMatchObject({ soundPrompt: '轻声讲述，雨声', durationUs: 1_000_000, audioProcessing: { version: 2, videoAudio: { enabled: true } } });
-  expect(project.shots[0].audioAssetId).toBeUndefined(); expect(source.counts()).toEqual({ submissions: 1, textCalls: 4 });
-  expect(source.received[0]).toMatchObject({ generate_audio: true }); expect(JSON.stringify(source.received[0])).toContain('雨落下了。'); expect(JSON.stringify(source.received[0])).toContain('轻声讲述');
+  const project = await source.current(); expect(project.shots).toHaveLength(2);
+  for (const shot of project.shots) {
+    expect(shot).toMatchObject({ soundPrompt: '轻声讲述，雨声', durationUs: 1_000_000, audioProcessing: { version: 2, videoAudio: { enabled: true } } });
+    expect(shot.audioAssetId).toBeUndefined();
+  }
+  expect(source.counts()).toEqual({ submissions: 2, textCalls: 4 });
+  for (const body of source.received) {
+    expect(body).toMatchObject({ generate_audio: true, ratio: '9:16' });
+    expect(JSON.stringify(body)).toContain('分镜全局帧率为 60 fps');
+    expect(JSON.stringify(body)).toContain('雨落下了。');
+    expect(JSON.stringify(body)).toContain('轻声讲述');
+  }
+  const script = await source.runtime.dispatch('run.step.payload', { runId: started.id, nodeId: 'script', kind: 'output' });
+  expect(script).toMatchObject({ value: { profile } });
+  const { value: { assets } } = await source.runtime.dispatch('run.step.payload', { runId: started.id, nodeId: 'video', kind: 'output' }) as { value: { assets: AssetRecord[] } };
+  expect(assets.map(asset => asset.id)).toEqual(project.shots.map(shot => shot.videoAssetId));
+  for (const asset of assets) {
+    expect(asset).toMatchObject({ width: 180, height: 320, durationUs: 1_000_000 });
+    expect(await probeMedia(asset.path, ffprobe)).toMatchObject({ width: 180, height: 320, frameRate: '60/1', audio: true });
+  }
   const payload = await source.runtime.dispatch('run.step.payload', { runId: started.id, nodeId: 'export', kind: 'output' }) as { value: { videoPath: string; subtitlePath: string } };
   expect((await probeMedia(payload.value.videoPath, ffprobe)).audio).toBe(true); expect(await readFile(payload.value.subtitlePath, 'utf8')).toBe('');
   const backup = await source.runtime.dispatch('project.backup', { projectId: project.id }) as { path: string };
@@ -121,7 +141,10 @@ it.skipIf(!mediaAvailable)('recovers a committed native video without submitting
   await runMedia(ffmpeg, ['-hide_banner', '-loglevel', 'error', '-y', '-f', 'lavfi', '-i', 'sine=frequency=440:sample_rate=44100:duration=2', path]);
   const bytes = await readFile(path);
   const asset = await source.runtime.dispatch('asset.import', { projectId: source.configured.id, path, kind: 'audio', purpose: 'reference-audio' }) as { id: string };
-  await source.runtime.dispatch('project.update', { projectId: source.configured.id, revision: source.configured.revision, patch: { workflow: { ...source.configured.workflow, production: { ...source.configured.workflow.production, referenceAudioAssetIds: [asset.id] } } } });
+  await source.runtime.dispatch('project.update', { projectId: source.configured.id, revision: source.configured.revision, patch: {
+    profile: { ...source.configured.profile, frameRate: { numerator: 60, denominator: 1 } },
+    workflow: { ...source.configured.workflow, production: { ...source.configured.workflow.production, referenceAudioAssetIds: [asset.id] } },
+  } });
   await unlink(path);
   const started = runSchema.parse(await source.runtime.dispatch('run.start', { projectId: source.configured.id })); await source.runtime.waitForIdle(); await source.runtime.close(); runtimes.delete(source.runtime);
   const recovered = createRuntime({ ...source.options, failpoint: undefined }); runtimes.add(recovered);

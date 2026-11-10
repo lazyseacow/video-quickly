@@ -4,6 +4,7 @@ import { expect, test, type APIRequestContext } from '@playwright/test';
 import type { ProjectDocument, RunInspection, RunSummary } from '@video-quickly/contracts';
 import { openProjectFromList } from './workspace-navigation';
 import { test as isolatedTest } from './isolated-workspace';
+import { confirmAction } from './confirmation-actions';
 
 async function rpc<T>(request: APIRequestContext, method: string, params: unknown = {}): Promise<T> {
   const response = await request.post('/__desktop_rpc', { data: { method, params } });
@@ -79,6 +80,7 @@ for (const failure of ['download', 'rejection'] as const) for (const surface of 
       expect(source.counts().textCalls).toBe(1); expect(source.counts().submissions).toEqual(['shot-1', 'shot-2']);
       await page.screenshot({ path: info.outputPath('failed-step.png') });
       source.ready(); await retry.focus(); await retry.press('Enter');
+      await confirmAction(page, '确认重试');
       await expect.poll(async () => (await source.inspect()).steps.find(step => step.id === 'images')?.status).toBe('succeeded');
       await expect(dialog).toContainText('后续步骤尚未执行'); await expect(retry).toHaveCount(0);
       await expect(dialog.getByRole('region', { name: '步骤详情：镜头图片生成', exact: true })).toBeVisible();
@@ -121,6 +123,7 @@ for (const failure of ['download', 'rejection'] as const) for (const surface of 
       if (surface === 'flat') {
         const stop = failure === 'rejection', footer = dialog.locator('.dialog__footer');
         await footer.getByRole('button', { name: stop ? '停止' : '继续原制作', exact: true }).click();
+        if (!stop) await confirmAction(page, '确认继续制作');
         await expect.poll(async () => (await source.inspect()).run.status).toBe(stop ? 'canceled' : 'succeeded');
         expect(writes).toEqual(['run.step.retry', stop ? 'run.cancel' : 'run.resume']);
         await expect(footer).not.toBeVisible();

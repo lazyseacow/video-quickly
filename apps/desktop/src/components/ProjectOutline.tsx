@@ -17,7 +17,7 @@ interface ProjectOutlineProps {
   onSelectAll?: () => void;
   onClearSelection?: () => void;
   onBulkEdit?: () => void;
-  onAddShot: () => Promise<void>;
+  onAddShot?: () => Promise<void>;
 }
 
 export default memo(function ProjectOutline({ project, assets, selectedShotId, selectedIds, onSelectShot, onSelectAll, onClearSelection, onBulkEdit, onAddShot }: ProjectOutlineProps) {
@@ -33,7 +33,7 @@ export default memo(function ProjectOutline({ project, assets, selectedShotId, s
   }
 
   return <>
-    <div className="outline-selection" role="group" aria-label="镜头操作" onKeyDown={selectionKey}><span aria-live="polite">已选 {selected.size}</span><IconButton label="添加镜头" onClick={() => void onAddShot()}><Plus size={15} /></IconButton>{onSelectAll && <IconButton label="全选镜头" disabled={!project.shots.length || selected.size === project.shots.length} onClick={onSelectAll}><ListChecks size={15} /></IconButton>}{onClearSelection && <IconButton label="清除镜头选择" disabled={!selected.size} onClick={onClearSelection}><X size={15} /></IconButton>}{onBulkEdit && <IconButton label="批量编辑镜头" disabled={!selected.size} onClick={onBulkEdit}><SlidersHorizontal size={15} /></IconButton>}</div>
+    <div className="outline-selection" role="group" aria-label="镜头操作" onKeyDown={selectionKey}><span aria-live="polite">已选 {selected.size}</span>{onAddShot && <IconButton label="添加镜头" onClick={() => void onAddShot()}><Plus size={15} /></IconButton>}{onSelectAll && <IconButton label="全选镜头" disabled={!project.shots.length || selected.size === project.shots.length} onClick={onSelectAll}><ListChecks size={15} /></IconButton>}{onClearSelection && <IconButton label="清除镜头选择" disabled={!selected.size} onClick={onClearSelection}><X size={15} /></IconButton>}{onBulkEdit && <IconButton label="批量编辑镜头" disabled={!selected.size} onClick={onBulkEdit}><SlidersHorizontal size={15} /></IconButton>}</div>
     <div className="shot-list outline-list" role="region" aria-label="镜头列表" tabIndex={0} onKeyDown={selectionKey}>
       {project.shots.length ? project.shots.map((shot, index) => <OutlineShotRow key={shot.id} project={previewContext} shot={shot} index={index} assets={assets} selected={selected.has(shot.id)} primary={selected.has(shot.id) && shot.id === selectedShotId} multipleSelected={selected.size > 1 && selected.has(shot.id)} modifierLabel={modifierLabel} onSelectShot={selectShot} />) : <div className="outline-empty"><Film size={20} aria-hidden="true" /><p>还没有镜头</p><span>添加镜头，开始安排画面与旁白。</span></div>}
     </div>

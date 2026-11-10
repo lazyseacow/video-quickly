@@ -25,15 +25,26 @@ for (const kind of ['image', 'video'] as const) for (const viewport of [{ width:
       await page.goto('/'); await openProjectFromList(page, source.project.title);
       const trigger = page.getByRole('button', { name: '打开阶段：素材与配音', exact: true });
       await expect(trigger).toContainText('1/3'); await expect(trigger.locator('.spin')).toBeVisible(); await trigger.click();
-      const dialog = page.getByRole('dialog', { name: '本次制作', exact: true }), progress = dialog.getByRole('region', { name: '步骤进度', exact: true });
+      const dialog = page.getByRole('dialog', { name: '本次制作', exact: true });
+      const detail = dialog.getByRole('region', { name: /^步骤详情：/ });
+      const heading = detail.locator('.run-inspector__step-heading');
+      const progress = detail.getByRole('region', { name: '步骤进度', exact: true });
       await expect(dialog).toBeVisible(); await expect(progress).toContainText('1 / 3');
+      await expect(heading).toHaveCount(kind === 'video' ? 0 : 1);
+      await expect(dialog.getByRole('region', { name: '步骤进度', exact: true })).toHaveCount(1);
+      await expect(dialog.getByText('制作中', { exact: true })).toHaveCount(0);
+      await expect(dialog.getByRole('button', { name: '刷新制作记录', exact: true })).toBeVisible();
       await expect(progress.getByRole('progressbar')).toHaveAttribute('aria-valuenow', '33');
       await expect(progress).toContainText('已等待'); await expect(dialog).not.toContainText('这个步骤尚未保存产物');
+      await expect(dialog.getByRole('navigation', { name: '本次制作步骤' })).not.toContainText('1/3');
       const gallery = dialog.getByRole('group', { name: '选择预览素材', exact: true });
       await expect(gallery.getByRole('button', { name: /^预览/ })).toHaveCount(3);
       await expect(gallery.locator('[data-generation-state="completed"]')).toHaveCount(1);
       const second = gallery.getByRole('button', { name: /^预览/ }).nth(1); await second.click();
-      const preview = dialog.locator('.step-result__preview'); await expect(preview).toContainText('等待模型返回');
+      const preview = dialog.locator('.step-result__preview');
+      await expect(progress.getByRole('status')).toHaveText('第 02 镜 · 等待模型返回');
+      await expect(preview).not.toContainText('等待模型返回');
+      await expect(second).not.toContainText('等待模型返回');
       if (kind === 'video') { await expect(preview.getByText('参考图', { exact: true })).toBeVisible(); await expect(preview.locator('img')).toBeVisible(); }
       const bounds = await preview.boundingBox(), requests = source.requests.length;
       await expect.poll(async () => progress.locator('.step-progress__time').innerText()).not.toContain('已等待 00:00');
@@ -44,7 +55,10 @@ for (const kind of ['image', 'video'] as const) for (const viewport of [{ width:
       held.release(); await expect.poll(async () => (await latest(request, source.project.id))?.status, { timeout: 30000 }).toBe('succeeded');
       expect(runInspectionSchema.parse(await rpc(request, 'run.inspect', { runId: run.id })).steps.find(step => step.id === 'export')?.progress).toMatchObject({ phase: 'completed', fraction: 1 });
       await expect(second).toHaveAttribute('aria-pressed', 'true'); await expect(preview).toContainText('生成的蓝色镜头 2');
-      await expect(preview.getByText('已保存', { exact: true })).toBeVisible();
+      await expect(preview.locator(kind === 'video' ? 'video' : 'img')).toBeVisible();
+      await expect(second).toContainText('已完成');
+      await expect(heading).toContainText('已完成');
+      await expect(heading.getByRole('heading')).toHaveCount(kind === 'video' ? 0 : 1);
       await expect(dialog.getByRole('button', { name: /^重新生成镜头/ })).toHaveCount(3);
       await expect(dialog.locator('.step-progress__time')).toHaveCount(0); expect(source.requests).toHaveLength(10); expect(errors).toEqual([]);
       await page.screenshot({ path: info.outputPath(`completed-${kind}-${viewport.width}.png`) });
@@ -63,11 +77,15 @@ test('shows an indeterminate text wait and keeps the chosen step during backgrou
     await expect(progress).toContainText('等待模型返回'); await expect(progress.getByRole('progressbar')).not.toHaveAttribute('aria-valuenow');
     await expect(dialog).not.toContainText('这个步骤尚未保存产物');
     const steps = dialog.getByRole('navigation', { name: '本次制作步骤', exact: true });
-    await steps.getByRole('button', { name: /风格与角色生成/ }).click();
+    const styleStep = steps.getByRole('button', { name: /风格与角色生成/ });
+    const heading = dialog.getByRole('region', { name: '步骤详情：风格与角色', exact: true }).locator('.run-inspector__step-heading');
+    await styleStep.click();
     await expect(dialog).toContainText('等待上游步骤完成后执行。');
+    await expect(heading).toContainText('待执行'); await expect(styleStep).not.toContainText('待执行');
+    await expect(dialog.getByText('制作中', { exact: true })).toHaveCount(0);
     source.release(); await expect.poll(async () => (await latest(request, source.project.id))?.status, { timeout: 30000 }).toBe('succeeded');
-    await expect(steps.getByRole('button', { name: /风格与角色生成/ })).toHaveAttribute('aria-current', 'step');
-    await expect(dialog.getByRole('region', { name: '步骤详情：风格与角色', exact: true })).toBeVisible();
+    await expect(styleStep).toHaveAttribute('aria-current', 'step');
+    await expect(heading).toContainText('已完成'); await expect(styleStep).not.toContainText('已完成');
   } finally { source.release(); await source.close(); }
 });
 

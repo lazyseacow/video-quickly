@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import type Database from 'better-sqlite3';
 import { z } from 'zod';
-import { assetSchema, characterProfileSchema, creativeReferenceAssetIds, pageInputSchema, projectCharacterIds, type AssetRecord, type CharacterProfile, type CreativeContext, type RecordPage, type Shot } from '@video-quickly/contracts';
+import { assetSchema, characterProfileSchema, creativeReferenceAssetIds, isCreativeReferenceAsset, pageInputSchema, projectCharacterIds, type AssetRecord, type CharacterProfile, type CreativeContext, type RecordPage, type Shot } from '@video-quickly/contracts';
 import { DocumentStore } from './database.js';
 
 export interface CharacterBundle { characters: CharacterProfile[]; assets: AssetRecord[] }
@@ -20,7 +20,7 @@ function publicReference(asset: AssetRecord | undefined, label = '角色'): Asse
 const retainedReferenceIds = [
   "SELECT reference.value AS asset_id FROM documents profile, json_each(profile.body, '$.referenceAssetIds') reference WHERE profile.kind = 'character'",
   "SELECT reference.value AS asset_id FROM documents snapshot, json_each(snapshot.body, '$.characters') profile, json_each(profile.value, '$.referenceAssetIds') reference WHERE snapshot.kind IN ('run-snapshot','export-batch-snapshot')",
-  ...[['project', '$.creativeContext.entities'], ['story-work', '$.defaults.creativeContext.entities'], ['run-snapshot', '$.project.creativeContext.entities'], ['run-snapshot', '$.trial.inputProject.creativeContext.entities'], ['export-batch-snapshot', '$.project.creativeContext.entities']].map(([kind, path]) => `SELECT reference.value AS asset_id FROM documents profile, json_each(profile.body, '${path}') entity, json_each(entity.value, '$.referenceAssetIds') reference WHERE profile.kind = '${kind}'`),
+  ...[['project', '$.creativeContext.entities'], ['story-work', '$.defaults.creativeContext.entities'], ['run-snapshot', '$.project.creativeContext.entities'], ['run-snapshot', '$.trial.inputProject.creativeContext.entities'], ['run-snapshot', '$.sourceGeneration.inputProject.creativeContext.entities'], ['node-project', '$.creativeContext.entities'], ['export-batch-snapshot', '$.project.creativeContext.entities']].map(([kind, path]) => `SELECT reference.value AS asset_id FROM documents profile, json_each(profile.body, '${path}') entity, json_each(entity.value, '$.referenceAssetIds') reference WHERE profile.kind = '${kind}'`),
 ].join(' UNION ALL ');
 
 export function createCharacterLibrary({ database, store, onChanged }: CharacterLibraryOptions) {
@@ -48,7 +48,7 @@ export function createCharacterLibrary({ database, store, onChanged }: Character
     const rows = database.prepare(`SELECT DISTINCT asset_id FROM (${retainedReferenceIds}) WHERE asset_id IN (SELECT value FROM json_each(?))`).all(JSON.stringify(ids)) as { asset_id: string }[];
     return new Set(rows.map(row => row.asset_id));
   }
-  function profilesFor(project: { creativeContext?: CreativeContext | null; shots: ReadonlyArray<Pick<Shot, 'characterIds'>> }): CharacterBundle {
+  function profilesFor(project: { id?: string; creativeContext?: CreativeContext | null; shots: ReadonlyArray<Pick<Shot, 'characterIds'>> }): CharacterBundle {
     const ids = projectCharacterIds(project);
     const assets = new Map<string, AssetRecord>();
     const characters = [...ids].map(id => {
@@ -58,7 +58,8 @@ export function createCharacterLibrary({ database, store, onChanged }: Character
       return profile;
     });
     for (const id of creativeReferenceAssetIds(project)) {
-      const asset = publicReference(store.get<AssetRecord>('asset', id), '场景与道具');
+      const asset = store.get<AssetRecord>('asset', id);
+      if (!isCreativeReferenceAsset(project, asset)) throw new Error('创作参考图须使用公共素材库中的有效图片或当前项目的人物定妆图。');
       assets.set(asset.id, asset);
     }
     return { characters, assets: [...assets.values()] };

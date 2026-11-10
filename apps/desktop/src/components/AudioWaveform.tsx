@@ -27,7 +27,9 @@ function readWaveform(asset: AssetRecord, key: string): Promise<Waveform> {
   return request;
 }
 
-export default memo(function AudioWaveform({ asset, sourceInUs, durationUs, spans, mappingError, loop = false, label = '旁白' }: { asset?: AssetRecord; sourceInUs: number; durationUs: number; spans?: readonly WaveformSpan[]; mappingError?: string; loop?: boolean; label?: string }) {
+export default memo(function AudioWaveform({ asset, sourceInUs, durationUs, spans, mappingError, loop = false, label = '旁白', showSourceLabel = true }: {
+  asset?: AssetRecord; sourceInUs: number; durationUs: number; spans?: readonly WaveformSpan[]; mappingError?: string; loop?: boolean; label?: string; showSourceLabel?: boolean;
+}) {
   const container = useRef<HTMLSpanElement>(null);
   const [visible, setVisible] = useState(false);
   const [width, setWidth] = useState(0);
@@ -56,8 +58,9 @@ export default memo(function AudioWaveform({ asset, sourceInUs, durationUs, span
   const error = mappingError || (!asset?.active ? '关联音频素材缺失' : current?.error);
   const state = error ? 'error' : current?.waveform ? 'ready' : visible ? 'loading' : 'waiting';
   const range = spans ? `剪后 ${(durationUs / 1_000_000).toFixed(2)} 秒 · ${spans.length} 段源区间` : loop ? `从 ${(sourceInUs / 1_000_000).toFixed(2)} 秒起 · ${(durationUs / 1_000_000).toFixed(2)} 秒循环` : `${(sourceInUs / 1_000_000).toFixed(2)} – ${((sourceInUs + durationUs) / 1_000_000).toFixed(2)} 秒`;
-  return <span ref={container} className={`audio-waveform audio-waveform--${state}`} data-status={state} data-asset-id={asset?.id} data-source-in-us={sourceInUs} data-duration-us={durationUs} data-span-count={spans?.length} title={error || `${label} · ${range}`}>
+  const description = `${label} · ${range}`;
+  return <span ref={container} className={`audio-waveform audio-waveform--${state}`} data-status={state} data-asset-id={asset?.id} data-source-in-us={sourceInUs} data-duration-us={durationUs} data-span-count={spans?.length} title={error || description}>
     {current?.waveform && !error ? <svg role="img" aria-label={`${label}真实音频波形，${range}`} viewBox={`0 0 ${peaks.length || 1} 32`} preserveAspectRatio="none"><line x1="0" y1="16" x2={peaks.length} y2="16" className="audio-waveform__zero" /><path d={path} /></svg> : <span className="audio-waveform__status" role={error ? 'status' : undefined}>{error ? '波形读取失败' : visible ? '正在读取波形…' : '波形待载入'}</span>}
-    <span className="audio-waveform__label">{error ? error : `${label} · ${range}`}</span>
+    <span className="audio-waveform__label">{error || (showSourceLabel ? description : range)}</span>
   </span>;
 });

@@ -3,13 +3,15 @@ import { rpc } from './client';
 
 const active = new Set(['queued', 'running', 'waiting_external', 'retry_scheduled']);
 
-export async function readPlanningPrefill(draft: PromptDraft, requestId: string, current: () => boolean, settled: () => void) {
-  let run = runSummarySchema.parse(await rpc('planning.prefill.start', { ...draft, requestId }));
+export async function readPlanningPrefill(draft: PromptDraft, requestId: string, current: () => boolean, settled: () => void, submit: (method: string, params: unknown) => Promise<unknown>) {
+  const started = await submit('planning.prefill.start', { ...draft, requestId });
+  if (started === null) return undefined;
+  let run = runSummarySchema.parse(started);
   if (current() && draft.node.kind === 'script' && ['failed', 'needs_attention'].includes(run.status)) {
     const inspection = runInspectionSchema.parse(await rpc('run.inspect', { runId: run.id }));
     const step = inspection.steps.find(step => step.id === draft.node.id);
     if (current() && step?.progress?.storyboard && step.retry?.allowed) {
-      await rpc('run.step.retry', { runId: run.id, nodeId: step.id });
+      if (await submit('run.step.retry', { runId: run.id, nodeId: step.id }) === null) return undefined;
       run = runSummarySchema.parse(await rpc('run.get', { runId: run.id }));
     }
   }

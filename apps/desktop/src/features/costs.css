@@ -15,8 +15,6 @@
 .cost-task-table { width: 100%; border-collapse: collapse; text-align: left; font-size: var(--text-size-label); }
 .cost-task-table th { padding: var(--space-3); color: var(--text-subtle); font-weight: var(--font-weight-medium); white-space: nowrap; border-bottom: 1px solid var(--border); }
 .cost-task-table td { padding: var(--space-5) var(--space-3); border-bottom: 1px solid var(--border); vertical-align: middle; }
-.cost-task-table th:first-child, .cost-task-table td:first-child { padding-left: 0; }
-.cost-task-table th:last-child, .cost-task-table td:last-child { padding-right: 0; }
 .cost-task-table tbody tr:hover { background: var(--costs-row-hover); }
 .cost-task__name { width: 25%; overflow-wrap: anywhere; }
 .cost-task__name p { margin: var(--space-2) 0 0; color: var(--text-secondary); font-size: var(--text-size-caption); }
@@ -106,7 +104,7 @@
 @media (max-width: 1150px) {
   .cost-task-table, .cost-task-table tbody { display: block; }
   .cost-task-table thead { display: none; }
-  .cost-task-table .cost-task { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: var(--space-4); padding-block: var(--space-5); border-bottom: 1px solid var(--border); }
+  .cost-task-table .cost-task { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: var(--space-4); padding: var(--space-5) var(--space-3); border-bottom: 1px solid var(--border); }
   .cost-task-table td { padding: 0; border: 0; }
   .cost-task-table .cost-task__name { width: auto; grid-column: 1 / -1; }
   .cost-task__date, .cost-task__action { grid-column: 1 / -1; }

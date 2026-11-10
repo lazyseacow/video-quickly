@@ -40,7 +40,7 @@ export default function SeriesTemplatesPage({ workspace, action, onCreate }: { w
     <div className="series-template-cards">{templates.map(template => <article className="series-template-card" key={template.id}>
       <h3>{template.name}</h3>
       <p>{template.description || '尚未填写说明'}</p>
-      <span className="tiny-meta">修订 {template.revision} · {new Date(template.updatedAt).toLocaleDateString('zh-CN')}</span>
+      <span className="tiny-meta">{template.creationDefaults ? '系统内置' : new Date(template.updatedAt).toLocaleDateString('zh-CN')}</span>
       <div className="pill-row"><span className="pill">{template.settings.captionStyle ? '自定义字幕' : '默认字幕'}</span><span className="pill">{template.settings.scenePreset ? scenePresetLabels[template.settings.scenePreset.kind] : '无画面预设'}</span></div>
       <div className="series-template-card__actions">
         {!archived && <Button className="series-template-card__create" disabled={Boolean(readingId)} onClick={() => onCreate(template)}>用此模板新建</Button>}

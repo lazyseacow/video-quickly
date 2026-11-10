@@ -1,3 +1,4 @@
+import { confirmAction } from './confirmation-actions';
 import { planningFixtureResponse } from '../fixtures/planning-response';
 import { createServer, type Server } from 'node:http';
 import { randomUUID } from 'node:crypto';
@@ -90,7 +91,7 @@ test('runs a frozen experiment, restores its output, and uses the existing expli
     await dialog.getByRole('button', { name: '保存实验草稿', exact: true }).click();
     await expect(dialog.getByText('实验草稿已保存。', { exact: true })).toBeVisible();
     await dialog.getByRole('button', { name: '查看试运行', exact: true }).click();
-    await dialog.getByRole('button', { name: '试运行（产生用量）', exact: true }).click();
+    await dialog.getByRole('button', { name: '试运行（产生用量）', exact: true }).click(); await confirmAction(page, '确认试运行');
     await expect(dialog.getByRole('article', { name: '创作简报', exact: true }).getByRole('heading', { name: '实验生成的创意简报正文', exact: true })).toBeVisible();
     expect(source.prompts).toEqual([prompt]); expect(await source.current()).toEqual(source.project);
     await expect(dialog.getByLabel('实验费用', { exact: true })).toContainText('1 条用量记录');
@@ -148,7 +149,7 @@ test('opens a reference image trial in the project candidate comparison', async 
     await dialog.getByRole('button', { name: '保存实验草稿', exact: true }).click();
     await expect(dialog.getByText('实验草稿已保存。', { exact: true })).toBeVisible();
     await dialog.getByRole('button', { name: '查看试运行', exact: true }).click();
-    await dialog.getByRole('button', { name: '试运行（产生用量）', exact: true }).click();
+    await dialog.getByRole('button', { name: '试运行（产生用量）', exact: true }).click(); await confirmAction(page, '确认试运行');
     await dialog.getByRole('button', { name: '在镜头候选中对比', exact: true }).click();
     const candidates = page.getByRole('dialog', { name: '镜头候选', exact: true });
     await expect(candidates.getByRole('button', { name: '应用所选候选', exact: true })).toBeEnabled();
@@ -188,7 +189,7 @@ test('preserves the project when a trial is canceled and exposes experiment hist
     const launcher = await openLauncher(page, source.project), dialog = await openExperiment(launcher);
     await dialog.getByRole('button', { name: '离线预览', exact: true }).click(); await dialog.getByRole('button', { name: '保存实验草稿', exact: true }).click();
     await expect(dialog.getByText('实验草稿已保存。', { exact: true })).toBeVisible(); await dialog.getByRole('button', { name: '查看试运行', exact: true }).click();
-    await dialog.getByRole('button', { name: '试运行（产生用量）', exact: true }).click(); await expect.poll(() => source.prompts.length).toBe(1);
+    await dialog.getByRole('button', { name: '试运行（产生用量）', exact: true }).click(); await confirmAction(page, '确认试运行'); await expect.poll(() => source.prompts.length).toBe(1);
     await dialog.getByRole('button', { name: '停止试运行', exact: true }).click(); await expect(dialog.getByText('已停止', { exact: true })).toBeVisible();
     expect(await source.current()).toEqual(source.project); source.release();
     await page.goto('/'); await page.getByRole('button', { name: '制作记录', exact: true }).click();

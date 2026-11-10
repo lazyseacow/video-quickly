@@ -115,7 +115,7 @@ test('keeps history filters aligned and keyboard accessible in dark desktop and 
   await page.screenshot({ path: info.outputPath('run-filters-dark-default-1536.png') });
   await filter.selectOption(data.first.id); await expect.poll(() => visibleIds(page)).toEqual(data.firstIds);
   await expectAlignedFilters();
-  await expect(page.locator('.run-card__actions').getByRole('button')).toHaveText(['查看步骤', '打开项目']);
+  await expect(page.locator('.run-card__actions').getByRole('button')).toHaveText(['查看步骤', '打开项目', '删除']);
   await filter.focus(); await expect(filter).toBeFocused();
   const clear = page.getByRole('button', { name: '清除制作记录筛选', exact: true }); await clear.focus(); await clear.press('Enter'); await expect(filter).toHaveValue('');
   await expectAlignedFilters();

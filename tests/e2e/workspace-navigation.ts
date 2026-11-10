@@ -1,5 +1,7 @@
 import { expect, type Page } from '@playwright/test';
 
+export const sampleProjectTitle = '一纸登科，改变了什么？';
+
 export async function openProjectFromList(page: Page, title?: string, { waitForReady = true }: { waitForReady?: boolean } = {}) {
   const name = title ?? await page.locator('.project-title-input').inputValue();
   await page.getByRole('button', { name: '我的项目', exact: true }).click();

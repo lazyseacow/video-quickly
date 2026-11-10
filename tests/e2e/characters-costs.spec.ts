@@ -2,6 +2,7 @@ import { confirmAction } from './confirmation-actions';
 import { openProjectFromList } from './workspace-navigation';
 import { openCosts, setWorkspaceTheme } from './workspace-settings';
 import { settingField } from './settings';
+import { fixtureCharacterViews } from '../fixtures/character-views';
 import { createServer } from 'node:http';
 import { writeFile } from 'node:fs/promises';
 import { expect, test, type APIRequestContext, type Page } from '@playwright/test';
@@ -29,6 +30,142 @@ function observeErrors(page: Page) {
   return errors;
 }
 const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+a5mQAAAAASUVORK5CYII=', 'base64');
+
+for (const viewport of [{ width: 1536, height: 960, theme: 'dark', useReference: true, rejectFirst: true }, { width: 390, height: 844, theme: 'light', useReference: false, rejectFirst: false }]) {
+  test(`generates, previews and saves four views in one form at ${viewport.width}px`, async ({ page, request }, info) => {
+    const board = await fixtureCharacterViews();
+    const calls: { path?: string; body: Record<string, unknown> }[] = [];
+    let release!: () => void;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    const server = createServer((incoming, response) => { void (async () => {
+      let raw = '';
+      for await (const chunk of incoming) raw += String(chunk);
+      calls.push({ path: incoming.url, body: JSON.parse(raw) });
+      const reject = viewport.rejectFirst && calls.length === 1;
+      await gate;
+      response.setHeader('content-type', 'application/json');
+      if (reject) {
+        response.statusCode = 400;
+        response.end(JSON.stringify({ error: { message: 'status_code=400, The request failed because the output image may contain sensitive information. Request id: fixture-private-detail' } }));
+        return;
+      }
+      response.end(JSON.stringify({ data: [{ b64_json: board.toString('base64') }] }));
+    })().catch(error => response.destroy(error)); });
+    await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
+    try {
+      const address = server.address(); if (!address || typeof address === 'string') throw new Error('图片夹具未启动。');
+      const model = await rpc<ModelProfile>(request, 'model.save', { model: { name: `定妆夹具 ${viewport.width}`, provider: 'openai-compatible',
+        baseUrl: `http://127.0.0.1:${address.port}/v1`, model: 'gpt-image-fixture', connectionType: 'image', capabilities: ['image'],
+        ...(viewport.useReference ? { pricing: { currency: 'CNY', perImage: 0.25 } } : {}) } });
+      const name = `青衣旅人 ${viewport.width}`;
+      await page.setViewportSize(viewport);
+      await page.addInitScript(theme => localStorage.setItem('vq-theme', theme), viewport.theme);
+      await page.goto('/');
+      await page.getByRole('button', { name: '角色参考库', exact: true }).click();
+      await page.getByRole('button', { name: '新建角色', exact: true }).click();
+      const dialog = page.getByRole('dialog', { name: '新建角色', exact: true });
+      const nameField = dialog.getByLabel('角色名称', { exact: true });
+      const descriptionField = dialog.getByLabel('角色设定', { exact: true });
+      const modelField = dialog.getByLabel('图片模型', { exact: true });
+      const description = '蓝绿色长外套、橙色围巾、黑色短发。';
+      await nameField.fill(name);
+      await descriptionField.fill(description);
+      await page.mouse.click(2, 2);
+      await expect(nameField).toHaveValue(name);
+      const optionalReference = dialog.locator('.character-reference-disclosure');
+      const summary = optionalReference.locator('summary');
+      await expect(optionalReference).toHaveJSProperty('open', false);
+      if (viewport.useReference) {
+        const path = info.outputPath('role-anchor.png');
+        await writeFile(path, png);
+        await (await settingField(dialog, '角色参考图路径')).fill(path);
+        await dialog.getByRole('button', { name: '导入参考图片', exact: true }).click();
+        await expect(summary).toContainText('已选 1 张');
+        await summary.click();
+      }
+      await modelField.selectOption(model.id);
+      const generate = dialog.getByRole('button', { name: '生成四视角', exact: true });
+      const billing = page.getByRole('alertdialog', { name: '生成角色四视角？', exact: true });
+      const estimate = billing.getByRole('region', { name: '生成与费用预估' });
+      if (viewport.rejectFirst) {
+        await generate.click();
+        await expect(billing).toContainText('可能产生费用');
+        await expect(estimate).toContainText('¥0.25');
+        await expect(billing.getByRole('button', { name: '取消', exact: true })).toBeFocused();
+        await expect(page.locator('.character-editor').getByText('等待确认…', { exact: true })).toBeVisible();
+        expect(calls).toHaveLength(0);
+        await expect(billing.locator('.dialog__surface')).toHaveCSS('opacity', '1');
+        await page.screenshot({ path: info.outputPath('character-charge-estimate.png') });
+        await page.keyboard.press('Enter');
+        await expect(billing).toHaveCount(0);
+        await expect(generate).toBeEnabled();
+        await expect(nameField).toHaveValue(name);
+        await expect(modelField).toHaveValue(model.id);
+        expect(calls).toHaveLength(0);
+      }
+      await generate.click();
+      await expect(estimate).toContainText(model.name);
+      await expect(estimate).toContainText(model.model);
+      await expect(estimate).toContainText('1 张四宫格原图，裁出 4 张参考图');
+      await expect(estimate).toContainText(viewport.useReference ? '¥0.25' : '暂无法估算');
+      await expect(estimate).toContainText('以服务商实际计费为准');
+      await confirmAction(page, '确认生成');
+      await expect(generate).toBeDisabled();
+      await expect(dialog.getByText('正在为同一个角色绘制四个视角。')).toBeVisible();
+      await expect(dialog.getByRole('button', { name: '关闭对话框', exact: true })).toBeDisabled();
+      await expect(dialog.getByRole('button', { name: '取消', exact: true })).toBeDisabled();
+      await page.mouse.click(2, 2);
+      await page.keyboard.press('Escape');
+      await expect(nameField).toHaveValue(name);
+      release();
+      if (viewport.rejectFirst) {
+        await expect(dialog.getByRole('alert')).toHaveText('模型服务的内容审核拦截了生成的图片（HTTP 400）。请调整生成描述或参考图后重试。');
+        await page.mouse.click(2, 2);
+        await expect(nameField).toHaveValue(name);
+        await expect(descriptionField).toHaveValue(description);
+        await expect(modelField).toHaveValue(model.id);
+        await expect(summary).toContainText('已选 1 张');
+        expect(calls).toHaveLength(1);
+        await page.screenshot({ path: info.outputPath('character-views-review-rejection.png') });
+        await descriptionField.fill(`${description}风格为手绘动画。`);
+        await generate.click();
+        await confirmAction(page, '确认生成');
+        await expect(dialog.getByRole('alert')).toHaveCount(0);
+      }
+      const views = dialog.getByRole('group', { name: '生成的四视角参考图' });
+      await expect(views.locator('img')).toHaveCount(4);
+      await page.mouse.click(2, 2);
+      await expect.poll(() => views.locator('img').evaluateAll(images => images.every(image => (image as HTMLImageElement).naturalWidth > 0))).toBe(true);
+      await views.scrollIntoViewIfNeeded();
+      await expect.poll(() => dialog.evaluate(element => element.scrollWidth <= element.clientWidth + 2)).toBe(true);
+      const evidence = info.outputPath(`character-views-${viewport.width}.png`);
+      await page.screenshot({ path: evidence });
+      await info.attach('character-views', { path: evidence, contentType: 'image/png' });
+
+      await dialog.getByRole('button', { name: '选用这组参考图', exact: true }).click();
+      await expect(summary).toContainText('已选 4 张');
+      await expect(views.locator('img')).toHaveCount(4);
+      await summary.click();
+      const references = dialog.getByRole('group', { name: '参考图片（最多 4 张）' });
+      await expect(references.locator('input:checked')).toHaveCount(4);
+      await dialog.getByRole('button', { name: '保存角色', exact: true }).click();
+      await expect(dialog).toHaveCount(0);
+      const library = await rpc<{ items: CharacterProfile[] }>(request, 'character.list');
+      const character = library.items.find(item => item.name === name)!;
+      expect(character.referenceAssetIds).toHaveLength(4);
+      expect((await rpc<AssetRecord[]>(request, 'character.references', { characterId: character.id })).every(asset => asset.projectId === undefined)).toBe(true);
+      expect(calls).toHaveLength(viewport.rejectFirst ? 2 : 1);
+      expect(calls[0].body.prompt).toContain('蓝绿色长外套、橙色围巾、黑色短发');
+      if (viewport.rejectFirst) expect(calls[1].body.prompt).toContain('风格为手绘动画');
+      expect(calls[0].path).toBe(viewport.useReference ? '/v1/images/edits' : '/v1/images/generations');
+      if (viewport.useReference) expect(calls[0].body.images).toEqual([{ image_url: `data:image/png;base64,${png.toString('base64')}` }]);
+    } finally {
+      release();
+      server.closeAllConnections();
+      await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
+    }
+  });
+}
 
 test('can remove an archived character from an unsaved draft without losing other shot edits', async ({ page, request }) => {
   const project = await createProject(request, '草稿归档角色恢复验收');
@@ -115,6 +252,7 @@ test('sends frozen character settings into generation and records provider token
     await candidate.getByLabel('生成模型', { exact: true }).selectOption(model.id);
     const started = page.waitForResponse(response => response.url().endsWith('/__desktop_rpc') && response.request().postDataJSON()?.method === 'shot.regenerate');
     await candidate.getByRole('button', { name: '生成候选', exact: true }).click();
+    await confirmAction(page, '确认生成');
     const generated = await (await started).json(); expect(generated.error).toBeUndefined();
     await expect.poll(async () => (await rpc<RunSummary>(request, 'run.get', { runId: generated.result.id })).status, { timeout: 30_000 }).toBe('succeeded');
     await expect(candidate.locator('.shot-regeneration__comparison')).toContainText('候选旁白');

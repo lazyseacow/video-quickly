@@ -1,4 +1,6 @@
 import { createContext, useCallback, useContext, useEffect, useId, useRef, useState, type ReactNode } from 'react';
+import { chargeActionRequestSchema, chargeConfirmationSchema, isChargeAction, type ChargeEstimate } from '@video-quickly/contracts';
+import { rpc } from '../lib/client';
 import { Button, Dialog } from './Primitives';
 import './confirmation-dialog.css';
 
@@ -7,10 +9,48 @@ interface ConfirmationOptions {
   description: string;
   confirmLabel: string;
   variant?: 'danger' | 'primary';
+  estimate?: ChargeEstimate;
 }
 type Confirm = (options: ConfirmationOptions) => Promise<boolean>;
 interface PendingConfirmation extends ConfirmationOptions { resolve: (confirmed: boolean) => void; }
 const ConfirmationContext = createContext<Confirm | undefined>(undefined);
+
+const countFormat = new Intl.NumberFormat('zh-CN', { maximumFractionDigits: 3 });
+const currencyFormats = {
+  CNY: new Intl.NumberFormat('zh-CN', { style: 'currency', currency: 'CNY', maximumFractionDigits: 6 }),
+  USD: new Intl.NumberFormat('zh-CN', { style: 'currency', currency: 'USD', maximumFractionDigits: 6 }),
+};
+function formatCharge({ currency, amount }: NonNullable<ChargeEstimate['totals']>[number]) {
+  const format = currencyFormats[currency];
+  return amount > 0 && amount < 0.000001 ? `小于 ${format.format(0.000001)}` : format.format(amount);
+}
+function generationQuantity(item: ChargeEstimate['items'][number]) {
+  if (item.referenceViews) return `1 张四宫格原图，裁出 ${item.referenceViews} 张参考图`;
+  const units = { text: '项文本任务', image: '张图片', video: '段视频' };
+  if (item.count === undefined) return `${{ text: '文本', image: '图片', video: '视频' }[item.kind]}生成量待确定`;
+  const count = `${countFormat.format(item.count)} ${units[item.kind]}`;
+  return item.videoSeconds === undefined ? count : `${count} · 共 ${countFormat.format(item.videoSeconds)} 秒`;
+}
+
+export function ChargeEstimateDetails({ estimate }: { estimate: ChargeEstimate }) {
+  const { batch, items, totals } = estimate;
+  return <section className="charge-estimate" aria-label="生成与费用预估">
+    <h3>模型与生成量</h3>
+    {items.length ? <ul className="charge-estimate__models">{items.map((item, index) => <li key={index}>
+      <div className="charge-estimate__model">
+        <strong>{item.modelName ?? '模型待确定'}</strong>
+        {item.model && item.model !== item.modelName && <small>{item.model}</small>}
+        <span>{generationQuantity(item)}</span>
+      </div>
+      {(items.length > 1 || !totals) && item.estimated && <span className="charge-estimate__amount">{formatCharge(item.estimated)}</span>}
+    </li>)}</ul> : <p className="charge-estimate__hint">模型与生成量待确定。</p>}
+    <dl className="charge-estimate__total">
+      <dt>{batch ? '预估总费用' : '预计费用'}</dt>
+      <dd>{totals?.map(formatCharge).join(' · ') ?? '暂无法估算'}</dd>
+    </dl>
+    <p className="charge-estimate__hint">{totals ? '按模型连接中配置的单价估算，以服务商实际计费为准。' : '当前费用无法完整估算，以服务商实际计费为准。'}</p>
+  </section>;
+}
 
 export function ConfirmationProvider({ children }: { children: ReactNode }) {
   const [request, setRequest] = useState<PendingConfirmation>();
@@ -31,8 +71,8 @@ export function ConfirmationProvider({ children }: { children: ReactNode }) {
     setRequest(undefined);
     current.resolve(confirmed);
   }
-  return <ConfirmationContext.Provider value={confirm}>{children}{request && <Dialog role="alertdialog" title={request.title} descriptionId={descriptionId} initialFocus={cancel} className="confirmation-dialog" onClose={() => settle(false)}>
-    <div className="dialog__body"><p id={descriptionId}>{request.description}</p></div>
+  return <ConfirmationContext.Provider value={confirm}>{children}{request && <Dialog role="alertdialog" title={request.title} descriptionId={descriptionId} initialFocus={cancel} className={`confirmation-dialog${request.estimate ? ' confirmation-dialog--estimate' : ''}`} onClose={() => settle(false)}>
+    <div className="dialog__body"><p id={descriptionId}>{request.description}</p>{request.estimate && <ChargeEstimateDetails estimate={request.estimate} />}</div>
     <div className="dialog__footer"><Button ref={cancel} onClick={() => settle(false)}>取消</Button><Button variant={request.variant ?? 'danger'} onClick={() => settle(true)}>{request.confirmLabel}</Button></div>
   </Dialog>}</ConfirmationContext.Provider>;
 }
@@ -41,4 +81,26 @@ export function useConfirmation() {
   const confirm = useContext(ConfirmationContext);
   if (!confirm) throw new Error('确认操作需要位于 ConfirmationProvider 中。');
   return confirm;
+}
+
+export function useChargeRpc() {
+  const confirm = useConfirmation();
+  return useCallback(async <T = unknown,>(method: string, params: unknown = {}, onSubmit?: () => void): Promise<T | null> => {
+    let payload = params;
+    if (isChargeAction(method)) {
+      const request = chargeActionRequestSchema.parse({ method, params });
+      const prepared = chargeConfirmationSchema.nullable().parse(await rpc('billing.prepare', request));
+      if (prepared) {
+        const { confirmationId, ...prompt } = prepared;
+        if (!await confirm({ ...prompt, variant: 'primary' })) {
+          // An abandoned confirmation also expires in the runtime if the connection closes.
+          void rpc('billing.cancel', { chargeConfirmationId: confirmationId }).catch(() => undefined);
+          return null;
+        }
+        payload = { ...request.params, chargeConfirmationId: confirmationId };
+      }
+    }
+    onSubmit?.();
+    return rpc<T>(method, payload);
+  }, [confirm]);
 }

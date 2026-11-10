@@ -14,9 +14,11 @@ import { useScenePreviewContext } from '../lib/scene-preview-context';
 import { useCommittedCallback } from '../lib/use-committed-callback';
 import './timeline.css';
 
+const THUMBNAIL_WIDTH_PX = 72;
+
 interface Props {
   project: ProjectDocument; assets: AssetRecord[]; shots: Shot[]; timeline: TimelineClip[]; selectedId?: string; selectedIds?: readonly string[]; rate: FrameRate; clock: PlaybackClock;
-  sourceDurationUs?: number; sourceStatus: 'none' | 'loading' | 'ready' | 'error'; editingDisabled: boolean;
+  sourceDurationUs?: number; sourceStatus: 'none' | 'loading' | 'ready' | 'error'; editingDisabled: boolean; readOnly?: boolean;
   onSelect: (id: string, modifiers?: SelectionModifiers) => void | Promise<void>; onMove: (offset: number) => Promise<void>;
   onSelectAll?: () => void; onClearSelection?: () => void; onBulkEdit?: () => void;
   onDuplicate: () => Promise<void>; onRemove: () => Promise<void>; onSplit: () => Promise<void>;
@@ -26,7 +28,7 @@ interface Props {
 }
 type Gesture = { pointerId: number; element: HTMLButtonElement; id: string; ids: readonly string[]; mode: 'move' | 'in' | 'out'; shot: Shot; x: number; width: number; totalUs: number; startUs: number; revision: number; previousTimeUs: number; moved: boolean; targetIndex: number; inUs: number; outUs: number; snappedUs?: number };
 
-export default memo(function Timeline({ project, assets, shots, timeline, selectedId, selectedIds, rate, clock, sourceDurationUs, sourceStatus, editingDisabled, onSelect, onSelectAll, onClearSelection, onBulkEdit, onMove, onDuplicate, onRemove, onSplit, onReorder, onTrim, onOpenMusic }: Props) {
+export default memo(function Timeline({ project, assets, shots, timeline, selectedId, selectedIds, rate, clock, sourceDurationUs, sourceStatus, editingDisabled, readOnly = false, onSelect, onSelectAll, onClearSelection, onBulkEdit, onMove, onDuplicate, onRemove, onSplit, onReorder, onTrim, onOpenMusic }: Props) {
   const [zoom, setZoom] = useState(1);
   const [snapping, setSnapping] = useState(true);
   const [drag, setDrag] = useState<DragView>();
@@ -39,6 +41,7 @@ export default memo(function Timeline({ project, assets, shots, timeline, select
   const suppressClick = useRef(false);
   const anchor = useRef<{ time: number; x: number } | undefined>(undefined);
   const totalUs = timeline.at(-1)?.endUs ?? 0;
+  const pixelsPerUs = totalUs ? trackWidth / totalUs : 0;
   const selectedIndex = shots.findIndex(shot => shot.id === selectedId);
   const selected = useMemo(() => { const ids = new Set(selectedIds ?? (selectedId ? [selectedId] : [])); return new Set(shots.filter(shot => ids.has(shot.id)).map(shot => shot.id)); }, [shots, selectedIds, selectedId]);
   const draggingIds = useMemo(() => new Set(drag?.ids), [drag?.ids]);
@@ -57,6 +60,14 @@ export default memo(function Timeline({ project, assets, shots, timeline, select
     observer.observe(track.current); return () => observer.disconnect();
   }, []);
   useEffect(() => () => { const current = gesture.current; gesture.current = undefined; if (current?.element.hasPointerCapture(current.pointerId)) current.element.releasePointerCapture(current.pointerId); }, []);
+  useLayoutEffect(() => {
+    const current = gesture.current;
+    if (!readOnly || !current) return;
+    gesture.current = undefined;
+    suppressClick.current = current.moved;
+    setDrag(undefined);
+    if (current.element.hasPointerCapture(current.pointerId)) current.element.releasePointerCapture(current.pointerId);
+  }, [readOnly]);
   function changeZoom(value: number) {
     if (value === zoom) return;
     const element = scroller.current;
@@ -77,7 +88,7 @@ export default memo(function Timeline({ project, assets, shots, timeline, select
   }, [zoom]);
   function begin(event: PointerEvent<HTMLButtonElement>, shot: Shot, index: number, mode: Gesture['mode']) {
     suppressClick.current = false;
-    if (event.button !== 0 || event.ctrlKey || event.metaKey || event.shiftKey || editingDisabled || !track.current || (mode !== 'move' && trimmingDisabled)) return;
+    if (event.button !== 0 || event.ctrlKey || event.metaKey || event.shiftKey || editingDisabled || readOnly || !track.current || (mode !== 'move' && trimmingDisabled)) return;
     const width = track.current.getBoundingClientRect().width;
     if (!width || !totalUs) return;
     event.currentTarget.setPointerCapture(event.pointerId);
@@ -89,7 +100,7 @@ export default memo(function Timeline({ project, assets, shots, timeline, select
   }
   function move(event: PointerEvent<HTMLButtonElement>) {
     const current = gesture.current;
-    if (!current || current.pointerId !== event.pointerId) return;
+    if (!current || current.pointerId !== event.pointerId || readOnly) return;
     const delta = event.clientX - current.x;
     if (!current.moved && Math.abs(delta) < 4) return;
     current.moved = true;
@@ -127,6 +138,7 @@ export default memo(function Timeline({ project, assets, shots, timeline, select
     if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
     if (!current.moved) return;
     suppressClick.current = true;
+    if (readOnly) return;
     if (event.type !== 'pointerup') { clock.seek(current.previousTimeUs); return; }
     if (current.mode === 'move') void onReorder(current.id, current.targetIndex, current.revision, current.ids);
     else void onTrim(current.id, current.inUs, current.outUs, current.revision);
@@ -160,10 +172,10 @@ export default memo(function Timeline({ project, assets, shots, timeline, select
   const rowSelect = useCommittedCallback(selectClip), rowTrimKey = useCommittedCallback(trimKey);
   const rowHandlers = useMemo<TimelineRowHandlers>(() => ({ begin: rowBegin, move: rowMove, finish: rowFinish, select: rowSelect, trimKey: rowTrimKey }), [rowBegin, rowMove, rowFinish, rowSelect, rowTrimKey]);
   const zoomPercent = `${Math.round(zoom * 100)}%`;
-  return <section data-guide="timeline" className="timeline" aria-label="项目时间轴" onKeyDown={selectionKey}>
+  return <section data-guide="timeline" className="timeline" aria-label={readOnly ? '制作时间轴' : '项目时间轴'} data-read-only={readOnly || undefined} onKeyDown={selectionKey}>
     <div className="timeline-toolbar">
       <div className="timeline-heading"><h2>时间轴</h2><span className="timeline-summary">{shots.length} 个镜头</span><span className="timeline-selection-count" aria-live="polite">已选 {selected.size} 个镜头</span></div>
-      <div className="timeline-edit-actions" role="group" aria-label="镜头操作">
+      {!readOnly && <div className="timeline-edit-actions" role="group" aria-label="镜头操作">
         {onSelectAll && <IconButton label="全选镜头" disabled={!shots.length || selected.size === shots.length} onClick={onSelectAll}><ListChecks size={15} /></IconButton>}
         {onClearSelection && <IconButton label="清除镜头选择" disabled={!selected.size} onClick={onClearSelection}><X size={15} /></IconButton>}
         {onBulkEdit && <Button className="timeline-bulk-button" aria-label="批量编辑镜头" disabled={editingDisabled || !selected.size} onClick={onBulkEdit}><SlidersHorizontal size={14} />批量编辑</Button>}
@@ -173,7 +185,7 @@ export default memo(function Timeline({ project, assets, shots, timeline, select
         <IconButton label="复制镜头" disabled={editingDisabled || !selected.size} onClick={() => void onDuplicate()}><Copy size={15} /></IconButton>
         <IconButton label="移除所选镜头" disabled={editingDisabled || !selected.size} onClick={() => void onRemove()}><Trash2 size={15} /></IconButton>
         <IconButton label="时间轴吸附" aria-pressed={snapping} title="吸附到镜头边界和播放头；按住 Alt 临时关闭" onClick={() => setSnapping(value => !value)}><Magnet size={15} /></IconButton>
-      </div>
+      </div>}
       {drag ? <output className="timeline-drag-readout">{drag.mode === 'move' ? '调整镜头顺序' : `${(drag.inUs / 1e6).toFixed(3)} – ${(drag.outUs / 1e6).toFixed(3)} 秒`}</output> : <TimelineReadout clock={clock} rate={rate} />}
       <div className="timeline-view-actions" role="group" aria-label="时间轴视图">
         <IconButton label="适配完整时间轴" onClick={() => changeZoom(1)}><ScanLine size={16} /></IconButton>
@@ -203,10 +215,12 @@ export default memo(function Timeline({ project, assets, shots, timeline, select
             const durationUs = active && active.mode !== 'move' ? active.outUs - active.inUs : clip.durationUs;
             // Keep the captured handle mounted until even a narrow trim gesture finishes.
             const trimming = active?.mode === 'in' || active?.mode === 'out';
-            const handles = kind === 'video' && singleSelected && shot.id === selectedId && (trimming || trackWidth * durationUs / (totalUs || 1) > 84);
+            const handles = !readOnly && kind === 'video' && singleSelected && shot.id === selectedId && (trimming || durationUs * pixelsPerUs > 84);
+            // Sample the committed clip so a trim gesture can resize the strip without decoding new frames.
+            const thumbnailCount = kind === 'video' ? Math.max(1, Math.round(clip.durationUs * pixelsPerUs / THUMBNAIL_WIDTH_PX)) : 0;
             const sounding = kind === 'audio' ? Boolean(shot.audioAssetId) : kind === 'original' && usesVideoAudio(shot);
             const soundAsset = assetById.get((kind === 'original' ? shot.videoAssetId : shot.audioAssetId) ?? '');
-            return <TimelineShotRow key={shot.id} project={previewContext} assets={assets} shot={shot} index={index} kind={kind} selected={selected.has(shot.id)} active={active} startUs={startUs} durationUs={durationUs} totalUs={totalUs} handles={handles} trimmingDisabled={handles && trimmingDisabled} editingDisabled={editingDisabled} sourceOutLimit={handles ? sourceOutLimit : undefined} sourceDurationUs={sourceDurationUs} rate={rate} sounding={sounding} soundAsset={soundAsset} modifierLabel={modifierLabel} handlers={rowHandlers} />;
+            return <TimelineShotRow key={shot.id} project={previewContext} assets={assets} shot={shot} index={index} kind={kind} selected={selected.has(shot.id)} active={active} startUs={startUs} durationUs={durationUs} totalUs={totalUs} thumbnailCount={thumbnailCount} handles={handles} trimmingDisabled={handles && trimmingDisabled} editingDisabled={editingDisabled} sourceOutLimit={handles ? sourceOutLimit : undefined} sourceDurationUs={sourceDurationUs} rate={rate} sounding={sounding} soundAsset={soundAsset} modifierLabel={modifierLabel} handlers={rowHandlers} />;
           })}
         </div></div>)}
         {musicClips.length > 0 && <div className="track track--audio track--music" style={{ backgroundSize: `${100 / divisions}% 100%` }}><div className="track-clips">

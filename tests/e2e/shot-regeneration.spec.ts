@@ -1,3 +1,4 @@
+import { confirmAction } from './confirmation-actions';
 import { openProjectFromList } from './workspace-navigation';
 import { setWorkspaceTheme } from './workspace-settings';
 import { execFileSync } from 'node:child_process';
@@ -91,7 +92,7 @@ test('generates only the selected shot, compares chosen fields, and keeps the ap
     let dialog = await openCandidates(page);
     await dialog.getByLabel('生成模型', { exact: true }).selectOption(connection.id);
     await dialog.getByLabel('本次调整要求', { exact: true }).fill('只重写当前镜头的旁白');
-    await dialog.getByRole('button', { name: '生成候选', exact: true }).click();
+    await dialog.getByRole('button', { name: '生成候选', exact: true }).click(); await confirmAction(page, '确认生成');
     await expect(dialog.locator('.shot-regeneration__comparison')).toContainText('候选旁白 1');
     await expect(dialog.locator('.shot-regeneration__comparison')).toContainText('基线旁白 2');
     await expect(dialog.getByRole('checkbox', { name: '应用候选时长', exact: true })).not.toBeChecked();
@@ -130,7 +131,7 @@ test('recovers background generation, offers explicit resume, and retains the di
     const connection = await model(request, service.url, 'script'); service.hold();
     await openProject(page, project.title); let dialog = await openCandidates(page);
     await dialog.getByLabel('生成模型', { exact: true }).selectOption(connection.id);
-    await dialog.getByRole('button', { name: '生成候选', exact: true }).click();
+    await dialog.getByRole('button', { name: '生成候选', exact: true }).click(); await confirmAction(page, '确认生成');
     await expect(dialog.getByRole('button', { name: '停止生成', exact: true })).toBeVisible();
     await expect.poll(() => service.requests.length).toBe(1);
     const pending = await rpc<{ activeRun: RunSummary }>(request, 'shot.candidates', { projectId: project.id, shotId: 'target-1' });
@@ -151,12 +152,12 @@ test('recovers background generation, offers explicit resume, and retains the di
     await expect(dialog.getByRole('button', { name: '继续生成', exact: true })).toBeVisible();
     await expect(dialog.locator('.shot-regeneration__run')).toContainText('上次执行已中断');
     await expect(dialog.locator('.shot-regeneration__run')).not.toContainText('生成在后台继续');
-    await dialog.getByRole('button', { name: '继续生成', exact: true }).click();
+    await dialog.getByRole('button', { name: '继续生成', exact: true }).click(); await confirmAction(page, '确认继续制作');
     expect(resumes).toBe(1); service.release();
     await expect(dialog.locator('.shot-regeneration__comparison')).toContainText('候选旁白 1');
     expect(service.requests).toHaveLength(1);
     service.fail(true); await dialog.getByLabel('生成模型', { exact: true }).selectOption(connection.id);
-    await dialog.getByRole('button', { name: '生成候选', exact: true }).click();
+    await dialog.getByRole('button', { name: '生成候选', exact: true }).click(); await confirmAction(page, '确认生成');
     await expect(dialog.getByRole('alert')).toContainText('外部调用未完成，结果需要核对。');
     expect(service.requests).toHaveLength(2);
     expect((await rpc<{ total: number }>(request, 'shot.candidates', { projectId: project.id, shotId: 'target-1' })).total).toBe(1);
@@ -165,7 +166,7 @@ test('recovers background generation, offers explicit resume, and retains the di
     await dialog.getByRole('button', { name: '应用所选候选', exact: true }).click();
     await expect(dialog.getByRole('alert')).toContainText('已修改'); expect(await savedProject(request, project.id)).toEqual(remote);
     service.fail(false); service.hold();
-    await dialog.getByRole('button', { name: '生成候选', exact: true }).click();
+    await dialog.getByRole('button', { name: '生成候选', exact: true }).click(); await confirmAction(page, '确认生成');
     await expect.poll(() => service.requests.length).toBe(3);
     await dialog.getByRole('button', { name: '停止生成', exact: true }).click();
     await expect(dialog.locator('.shot-regeneration__run')).toContainText('已请求停止'); service.release();
@@ -198,7 +199,7 @@ test('previews image and native video candidates within the clip window and appl
     await openProject(page, project.title);
     let dialog = await openCandidates(page);
     await dialog.getByLabel('生成内容', { exact: true }).selectOption('image'); await dialog.getByLabel('生成模型', { exact: true }).selectOption(connections.image.id);
-    await dialog.getByRole('button', { name: '生成候选', exact: true }).click();
+    await dialog.getByRole('button', { name: '生成候选', exact: true }).click(); await confirmAction(page, '确认生成');
     await expect(dialog.getByAltText('候选画面')).toBeVisible();
     expect(await dialog.getByAltText('候选画面').evaluate(image => (image as HTMLImageElement).naturalWidth)).toBe(64);
     await expect.poll(() => dialog.getByLabel('当前视频', { exact: true }).evaluate(video => (video as HTMLVideoElement).currentTime)).toBeCloseTo(.2, 2);
@@ -210,9 +211,9 @@ test('previews image and native video candidates within the clip window and appl
     await expect.poll(async () => (await savedProject(request, project.id)).shots[0].videoAssetId).toBe(oldVideo.id);
     dialog = await openCandidates(page);
     await dialog.getByLabel('生成内容', { exact: true }).selectOption('video'); await dialog.getByLabel('生成模型', { exact: true }).selectOption(connections.video.id);
-    await dialog.getByRole('button', { name: '生成候选', exact: true }).click();
+    await dialog.getByRole('button', { name: '生成候选', exact: true }).click(); await confirmAction(page, '确认生成');
     const video = dialog.getByLabel('候选视频', { exact: true });
-    await expect.poll(() => video.evaluate(element => (element as HTMLVideoElement).videoWidth)).toBe(64);
+    await expect.poll(() => video.evaluate(element => (element as HTMLVideoElement).videoWidth)).toBe(project.profile.width);
     await video.evaluate(element => { (element as HTMLVideoElement).currentTime = 1.8; });
     await expect.poll(() => video.evaluate(element => (element as HTMLVideoElement).currentTime)).toBeLessThanOrEqual(1);
     expect(await dialog.locator('audio,video').count()).toBe(2);

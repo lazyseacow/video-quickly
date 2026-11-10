@@ -1,6 +1,6 @@
 import { expect, type Locator, type Page } from '@playwright/test';
 import { test } from './isolated-workspace';
-import { openProduction, productionFixture, productionStep } from './production-settings';
+import { openProduction, openStoryboardProfile, productionFixture, productionStep } from './production-settings';
 
 // Browser plugin not available: inspect real controls in the isolated Playwright preview.
 async function resetControlFocus(dialog: Locator) {
@@ -65,7 +65,10 @@ for (const scenario of scenarios) test(`keeps control corners consistent across 
   await fieldStates(page, dialog, scene.getByLabel('固定特征', { exact: true }), radius);
   await disclosureStates(page, dialog, dialog.getByRole('tab', { name: '场景 · 庭院', exact: true }), radius);
   const references = scene.locator('.creative-reference-picker__disclosure > summary');
-  await disclosureStates(page, dialog, references, radius, radius, 'Shift+Tab'); await references.click();
+  await disclosureStates(page, dialog, references, radius, radius, 'Shift+Tab');
+  const referenceBox = (await references.locator('..').boundingBox())!, featureBox = (await scene.getByLabel('固定特征', { exact: true }).boundingBox())!;
+  expect(referenceBox.y - featureBox.y - featureBox.height).toBeCloseTo(8, 0);
+  await references.click();
   await fieldStates(page, dialog, scene.getByLabel('场景参考图路径', { exact: true }), radius, 'Shift+Tab');
   await references.click(); await dialog.getByRole('button', { name: '返回创作要求', exact: true }).click();
   await disclosureStates(page, dialog, dialog.getByText('剪辑 Agent 设置', { exact: true }), radius);
@@ -82,6 +85,10 @@ for (const scenario of scenarios) test(`keeps control corners consistent across 
   await textModel.press('ArrowDown'); await expect(modelMenu.locator('.combobox__option--active')).toHaveCSS('border-radius', optionRadius);
   await page.screenshot({ path: info.outputPath('model-picker-states.png') }); await textModel.press('Enter');
   const referenceMode = dialog.getByLabel('参考素材', { exact: true });
+  const imageModel = dialog.getByRole('combobox', { name: '图片模型', exact: true });
+  await expect(referenceMode).toHaveValue('none');
+  await expect(imageModel).toBeVisible();
+  await expect(imageModel).not.toHaveAttribute('aria-required', 'true');
   await fieldStates(page, dialog, referenceMode, radius); await referenceMode.press('Space');
   await expect(referenceMode.getByRole('option', { name: '先生成参考图', exact: true })).toBeVisible();
   expect(await referenceMode.evaluate(element => getComputedStyle(element, '::picker(select)').borderRadius)).toBe(radius);
@@ -89,15 +96,26 @@ for (const scenario of scenarios) test(`keeps control corners consistent across 
   await nativeOption.hover(); await expect(nativeOption).toHaveCSS('border-radius', optionRadius);
   await page.screenshot({ path: info.outputPath('native-picker-states.png') });
   await page.keyboard.press('End'); await page.keyboard.press('Enter'); await expect(referenceMode).toHaveValue('generate');
-  await fieldStates(page, dialog, dialog.getByRole('combobox', { name: '图片模型', exact: true }), radius);
+  await fieldStates(page, dialog, imageModel, radius);
   await fieldStates(page, dialog, dialog.getByLabel('参考音频文件路径', { exact: true }), radius);
   await fieldStates(page, dialog, dialog.getByLabel('镜头同时处理数', { exact: true }), radius);
   await productionStep(dialog, '声音与成片');
-  for (const label of ['声音要求', '字幕', '画面比例', '分辨率', '素材适配']) await fieldStates(page, dialog, dialog.getByLabel(label, { exact: true }), radius);
+  for (const label of ['声音要求', '字幕']) await fieldStates(page, dialog, dialog.getByLabel(label, { exact: true }), radius);
+  await productionStep(dialog, '创作要求');
+  await disclosureStates(page, dialog, dialog.locator('.production-settings__storyboard > summary'), radius);
+  const storyboard = await openStoryboardProfile(dialog);
+  for (const label of ['画面比例', '分辨率', '视频帧率', '素材适配']) await fieldStates(page, dialog, storyboard.getByLabel(label, { exact: true }), radius);
   const outputDetails = dialog.locator('.video-settings__advanced > summary');
-  await disclosureStates(page, dialog, outputDetails, radius); await outputDetails.click();
-  for (const label of ['视频宽度', '视频高度', '视频帧率']) await fieldStates(page, dialog, dialog.getByLabel(label, { exact: true }), radius);
-  await page.screenshot({ path: info.outputPath('output-control-states.png') });
+  await disclosureStates(page, dialog, outputDetails, radius);
+  const outputBox = (await outputDetails.locator('..').boundingBox())!;
+  const fitBox = (await storyboard.getByLabel('素材适配', { exact: true }).locator('..').boundingBox())!;
+  expect(outputBox.y - fitBox.y - fitBox.height).toBeCloseTo(8, 0);
+  await outputDetails.click();
+  const summaryBox = (await outputDetails.boundingBox())!;
+  const widthBox = (await storyboard.getByLabel('视频宽度', { exact: true }).locator('..').boundingBox())!;
+  expect(widthBox.y - summaryBox.y - summaryBox.height).toBeCloseTo(8, 0);
+  for (const label of ['视频宽度', '视频高度']) await fieldStates(page, dialog, storyboard.getByLabel(label, { exact: true }), radius);
+  await page.screenshot({ path: info.outputPath('storyboard-profile-controls.png') });
   expect(await dialog.evaluate(element => element.scrollWidth <= element.clientWidth + 1)).toBe(true);
   await dialog.getByRole('button', { name: '关闭对话框', exact: true }).click(); await expect(dialog).toHaveCount(0);
   expect((await source.saved()).revision).toBe(source.project.revision);

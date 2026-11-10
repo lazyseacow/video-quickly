@@ -22,12 +22,6 @@ export const seriesSettingsSchema = z.object({
   style: z.string().max(30_000), captionStyle: captionStyleSchema.nullable(), scenePreset: scenePresetSchema.nullable(),
 });
 export type SeriesSettings = z.infer<typeof seriesSettingsSchema>;
-export const seriesTemplateSchema = z.object({
-  id: z.string().min(1).max(128), name: z.string().trim().min(1).max(120), description: z.string().max(10_000),
-  revision: z.number().int().positive(), createdAt: z.string(), updatedAt: z.string(), archived: z.boolean().default(false),
-  settings: seriesSettingsSchema,
-});
-export type SeriesTemplate = z.infer<typeof seriesTemplateSchema>;
 
 /** Null/absence means inheritance. Absence at both levels retains the legacy renderer. */
 export function effectiveCaptionStyle(project: { captionStyle?: CaptionStyle | null }, shot?: { captionStyle?: CaptionStyle | null }): CaptionStyle | undefined {

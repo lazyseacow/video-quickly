@@ -2,6 +2,7 @@ import { openCosts, setWorkspaceTheme } from './workspace-settings';
 import { expect, test, type Page } from '@playwright/test';
 import { writeFile } from 'node:fs/promises';
 import { addModelConnection } from './settings';
+import { openProjectFromList, sampleProjectTitle } from './workspace-navigation';
 
 test.use({ storageState: async ({ baseURL }, use) => {
   if (!baseURL) throw new Error('Design-system tests require a local application origin');
@@ -11,7 +12,7 @@ test.use({ storageState: async ({ baseURL }, use) => {
 async function openApp(page: Page) {
   await page.goto('/');
   await expect(page.getByRole('navigation', { name: '主导航', exact: true })).toBeVisible();
-  await expect(page.getByLabel('项目名称', { exact: true })).toBeVisible();
+  await openProjectFromList(page, sampleProjectTitle);
 }
 
 test('starts in light mode and preserves an explicit dark preference after reload', async ({ page }) => {

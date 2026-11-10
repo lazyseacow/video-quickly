@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from 'react';
 import { GitBranch, Play, RefreshCw } from 'lucide-react';
-import { runPlanSchema, runSchema, type RunRecord, type RunSelection } from '@video-quickly/contracts';
+import { chargeConfirmationSchema, runPlanSchema, runSchema, type RunRecord, type RunSelection } from '@video-quickly/contracts';
 import { Button, Dialog, Notice } from './Primitives';
+import { ChargeEstimateDetails } from './ConfirmationDialog';
 import { rpc } from '../lib/client';
 import { useRuntimeRead } from '../lib/use-runtime-read';
 import './run-scope.css';
@@ -20,13 +21,16 @@ export default function RunScopeDialog({ projectId, selection, parentRunId, vers
     if (!plan || busy || read.error || plan.blockedReason) return;
     setBusy(true); setError('');
     try {
-      const run = runSchema.parse(await rpc('run.start', { projectId, selection: { ...plan.selection, previewDigest: plan.digest }, parentRunId }));
+      const params = { projectId, selection: { ...plan.selection, previewDigest: plan.digest }, parentRunId };
+      const charge = chargeConfirmationSchema.nullable().parse(await rpc('billing.prepare', { method: 'run.start', params }));
+      if (!mounted.current) return;
+      const run = runSchema.parse(await rpc('run.start', { ...params, ...(charge ? { chargeConfirmationId: charge.confirmationId } : {}) }));
       onStarted(run); if (mounted.current) onClose();
     } catch (error) {
       if (mounted.current) { setError(error instanceof Error ? error.message : String(error)); read.refresh(); }
     } finally { if (mounted.current) setBusy(false); }
   }
-  return <Dialog title="执行范围" onClose={onClose} className="dialog--wide run-scope-dialog">
+  return <Dialog title="执行范围" onClose={onClose} dismissDisabled={busy} className="dialog--wide run-scope-dialog">
     <div className="dialog__body">
       {error && <Notice kind="error">{error}</Notice>}
       {read.error && <Notice kind="error">{read.error}</Notice>}
@@ -36,6 +40,7 @@ export default function RunScopeDialog({ projectId, selection, parentRunId, vers
         <dl className="run-scope-summary"><div><dt>项目修订</dt><dd>{plan.projectRevision}</dd></div><div><dt>流程版本</dt><dd>{plan.workflowVersion}</dd></div><div><dt>涉及步骤</dt><dd>{plan.steps.length}</dd></div><div><dt>锁定镜头</dt><dd>{plan.lockedShotCount}</dd></div></dl>
         {plan.blockedReason && <Notice>{plan.blockedReason}</Notice>}
         {plan.hasConditions && <Notice>条件分支显示全部可能受影响的步骤，实际按条件执行。</Notice>}
+        {plan.chargeEstimate ? <ChargeEstimateDetails estimate={plan.chargeEstimate} /> : plan.steps.some(step => step.modelName) && <Notice>此范围内的模型请求可能产生费用。</Notice>}
         <ol className="run-scope-steps" aria-label="将执行的步骤">{plan.steps.map((step, index) => <li key={step.id}><span className="run-scope-index">{index + 1}</span><div><strong>{step.label}</strong><small>{step.modelName ?? '本地处理'}</small></div>{step.kind === 'export' && <span className="run-scope-tag">导出文件</span>}</li>)}</ol>
         {plan.boundary.length > 0 && <details className="run-scope-boundary">
           <summary><GitBranch size={14} aria-hidden="true" />沿用已保存的上游内容</summary>

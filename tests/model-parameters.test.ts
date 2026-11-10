@@ -106,18 +106,19 @@ it('uses configured Seedance duration and real multi-reference roles without sil
 });
 
 it.each([
-  { model: 'doubao-seedance-2-0-260128', width: 5040, height: 2160, ratio: '21:9', resolution: '4k', firstFrame: false },
-  { model: 'doubao-seedance-2-0-fast-260128', width: 864, height: 1080, ratio: 'adaptive', resolution: '720p', firstFrame: false },
-  { model: 'doubao-seedance-2-5-260628', width: 2560, height: 1440, ratio: 'adaptive', resolution: '1080p', firstFrame: true },
-  { model: 'ep-fixture', width: 1920, height: 1080, ratio: '16:9', resolution: undefined, firstFrame: false },
-])('derives compatible Seedance request framing for $model', async ({ model, width, height, ratio, resolution, firstFrame }) => {
+  { model: 'doubao-seedance-2-0-260128', width: 5040, height: 2160, ratio: '21:9', resolution: '4k', duration: 4, firstFrame: false },
+  { model: 'doubao-seedance-2-0-fast-260128', width: 864, height: 1080, ratio: 'adaptive', resolution: '720p', duration: 4, firstFrame: false },
+  { model: 'doubao-seedance-2-5-260628', width: 2560, height: 1440, ratio: 'adaptive', resolution: '1080p', shotSeconds: 5, duration: 5, firstFrame: true },
+  { model: 'ep-fixture', width: 1920, height: 1080, ratio: '16:9', resolution: undefined, duration: 2, firstFrame: false },
+])('derives Seedance request parameters for $model', async ({ model, width, height, ratio, resolution, shotSeconds = 2, duration, firstFrame }) => {
   const { context, requests } = await fixture('seedance', 'animation');
   context.model = { ...context.model!, model };
   context.project.profile = { ...context.project.profile, width, height };
+  context.project.shots[0].durationUs = shotSeconds * 1_000_000;
   if (firstFrame) await addCharacter(context);
   await validateMediaActivity(context);
   await createActivityExecutor()(context);
-  expect(requests[0].body).toMatchObject({ ratio });
+  expect(requests[0].body).toMatchObject({ ratio, duration });
   if (resolution) expect(requests[0].body).toHaveProperty('resolution', resolution);
   else expect(requests[0].body).not.toHaveProperty('resolution');
 });

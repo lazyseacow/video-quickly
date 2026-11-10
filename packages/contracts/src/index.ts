@@ -3,16 +3,18 @@ import { imageDerivationSchema } from './image-tools.js';
 export { imageRectangleSchema, imageDerivationSchema, imageEditInputSchema, imageGridRectangles, type ImageRectangle, type ImageEditInput } from './image-tools.js';
 export * from './workflow-patches.js';
 export { sameJsonContent } from './json-content.js';
+export { chargeActionRequestSchema, isChargeAction, type ChargeAction } from './charge-confirmation.js';
+export { retryAfterMilliseconds } from './http-retry.js';
 export * from './model-alternatives.js';
 import { sceneTemplateSchema } from './scene-templates.js';
 import { claimSchema, researchSourceSchema } from './research.js';
-import { captionStyleSchema, scenePresetSchema } from './caption-style.js';
+import { captionStyleSchema, scenePresetSchema, seriesSettingsSchema } from './caption-style.js';
 import { audioMixSettingsSchema, audioProcessingSchema } from './audio-processing.js';
 import { motionKeyframesSchema } from './keyframes.js';
 import { creativeContextSchema, creativeEntityKeysSchema } from './creative-context.js';
-export { creativeContextSchema, creativeEntitySchema, creativeEntityKeysSchema, creativeCharacterBindings, projectCharacterIds, validateCreativeReferences, shotCreativePrompt, creativeEntityLabels, creativeReferenceAssetIds, type CreativeContext, type CreativeEntity } from './creative-context.js';
+export { creativeContextSchema, creativeEntitySchema, creativeEntityKeysSchema, creativeCharacterBindings, projectCharacterIds, validateCreativeReferences, shotCreativePrompt, creativeEntityLabels, creativeReferenceAssetIds, hasCharacterAppearance, isCreativeReferenceAsset, type CreativeContext, type CreativeEntity } from './creative-context.js';
 import { productionSettingsSchema, resolveProductionWorkflow } from './production.js';
-export { productionSettingsSchema, resolveProductionWorkflow, isVideoGenerationNode, isModelGenerationNode, captionsEnabled, productionEditingStep, productionEditingSkillIds, productionModelSetting, supportsProductionAgent, productionPlanningSteps, productionPlanningStep, usesManualPlanning, MAX_REFERENCE_AUDIO_BYTES, MAX_REFERENCE_AUDIOS, type ProductionPlanningStep, type ProductionSettings } from './production.js';
+export { productionSettingsSchema, resolveProductionWorkflow, isVideoGenerationNode, isModelGenerationNode, captionsEnabled, productionEditingStep, productionEditingSkillIds, productionModelSetting, supportsProductionAgent, supportsAutomaticCasting, productionPlanningSteps, productionPlanningStep, usesManualPlanning, MAX_REFERENCE_AUDIO_BYTES, MAX_REFERENCE_AUDIOS, type ProductionPlanningStep, type ProductionSettings } from './production.js';
 export { MAX_STORYBOARD_SHOTS, planningDocumentSchemas, planningDocumentSections, formatPlanningDocument, type ManualPlanningFields, type PlanningDocumentKind } from './planning-fields.js';
 export * from './asset-recovery.js';
 export { skillPromptContext, appendSkillContext, supportsSkillScript } from './skill-context.js';
@@ -22,7 +24,7 @@ export { textProtocols, mediaAdapters, getMediaAdapters } from './model-protocol
 export { modelConnectionTypes, getModelConnectionType, modelToolProtocolIssue, validateModelConnection } from './model-connections.js';
 export { providerReportedUsage, sumProviderUsage } from './provider-usage.js';
 export { audioProcessingSchema, audioMixSettingsSchema, usesVideoAudio, DEFAULT_AUDIO_PROCESSING, DEFAULT_AUDIO_MIX_SETTINGS, preparedAudioMixSchema, audioMixJobSchema, audioMixPrepareResultSchema, audioLevelWindowSchema, silenceDetectionSchema, type PreparedAudioMix, type AudioMixJob, type AudioMixPrepareResult, type AudioLevelWindow, type SilenceDetection } from './audio-processing.js';
-export { captionStyleSchema, DEFAULT_CAPTION_STYLE, effectiveCaptionStyle, seriesSettingsSchema, seriesTemplateSchema, type CaptionStyle, type ScenePreset, type SeriesSettings, type SeriesTemplate } from './caption-style.js';
+export { captionStyleSchema, DEFAULT_CAPTION_STYLE, effectiveCaptionStyle, seriesSettingsSchema, type CaptionStyle, type ScenePreset, type SeriesSettings } from './caption-style.js';
 export { claimSchema, researchSourceSchema, researchResultSchema, validateResearchContent, applyResearchClaims, type Claim, type ResearchSource, type ResearchResult, type ShotClaims } from './research.js';
 export { sceneTemplateSchema, processSceneTemplateSchema, comparisonSceneTemplateSchema, barChartSceneTemplateSchema, createSceneTemplate, type SceneTemplate, type SceneTemplateKind } from './scene-templates.js';
 export { clipSourceAssetIds, validateClipEditContent, validateClipEditHistory } from './clip-editing.js';
@@ -32,8 +34,10 @@ export class VideoGenerationError extends Error {
   constructor() { super('生成结果缺少有效画面或音轨，已保留下载文件，请核对原任务。'); }
 }
 export class MediaRequestRejectedError extends Error {
-  constructor(readonly status: number) {
-    super(`模型服务已拒绝素材生成请求（HTTP ${status}），请核对模型、尺寸和请求参数。`);
+  constructor(readonly status: number, readonly reason?: 'output-image-moderation') {
+    super(reason === 'output-image-moderation'
+      ? `模型服务的内容审核拦截了生成的图片（HTTP ${status}）。请调整生成描述或参考图后重试。`
+      : `模型服务已拒绝素材生成请求（HTTP ${status}），请核对模型、尺寸和请求参数。`);
     this.name = 'MediaRequestRejectedError';
   }
 }
@@ -57,6 +61,13 @@ export const videoProfileSchema = z.object({
 });
 export type FrameRate = z.infer<typeof frameRateSchema>;
 export type VideoProfile = z.infer<typeof videoProfileSchema>;
+export const seriesTemplateSchema = z.object({
+  id: z.string().min(1).max(128), name: z.string().trim().min(1).max(120), description: z.string().max(10_000),
+  revision: z.number().int().positive(), createdAt: z.string(), updatedAt: z.string(), archived: z.boolean().default(false),
+  settings: seriesSettingsSchema,
+  creationDefaults: z.object({ profile: videoProfileSchema, skillIds: z.array(z.string().min(1)).max(500) }).optional(),
+});
+export type SeriesTemplate = z.infer<typeof seriesTemplateSchema>;
 export const exportTargetSchema = z.object({
   id: z.string().min(1).max(64), label: z.string().min(1).max(100), profile: videoProfileSchema,
 });
@@ -159,6 +170,8 @@ export const audioWaveformSchema = z.object({
 }).refine(value => value.peaks.length === Math.ceil(value.durationUs / 10_000), { message: '波形峰值数量须与音频时长一致', path: ['peaks'] });
 export type AudioWaveform = z.infer<typeof audioWaveformSchema>;
 
+export const CHARACTER_REFERENCE_VIEW_LABELS = ['正面', '四分之三侧面', '侧面', '背面'] as const;
+
 export const characterProfileSchema = z.object({
   id: z.string().min(1), name: z.string().trim().min(1).max(120), description: z.string().max(10000),
   referenceAssetIds: z.array(z.string().min(1)).max(4).refine(value => new Set(value).size === value.length, '角色参考图不能重复'),
@@ -218,7 +231,7 @@ export const shotCandidateSchema = z.object({
 }).refine(value => value.baseline.id === value.shotId && value.shot.id === value.shotId, '候选与原始镜头编号须一致');
 export type ShotCandidate = z.infer<typeof shotCandidateSchema>;
 export { applyShotCandidate } from './shot-candidates.js';
-export { getModelParameterFields, modelParameterValue, withModelParameter, validateModelParameters, requestModelParameters } from './model-parameters.js';
+export { defaultVideoRequestSeconds, getModelParameterFields, modelParameterValue, withModelParameter, validateModelParameters, requestModelParameters } from './model-parameters.js';
 export const nodeKindSchema = z.enum(['brief', 'research', 'style', 'script', 'assets', 'animation', 'review', 'export', 'agent', 'condition', 'join', 'subflow']);
 export const workflowValueBindingSchema = z.union([
   z.object({ literal: jsonValueSchema }),
@@ -326,6 +339,22 @@ export const productionQueueEnqueueResultSchema = z.object({ queue: productionQu
 export const modelCapabilitySchema = z.enum(['text', 'image', 'video', 'vision', 'tools', 'structured-output']);
 export type ModelCapability = z.infer<typeof modelCapabilitySchema>;
 export const currencySchema = z.enum(['USD', 'CNY']);
+const chargeAmountSchema = z.object({ currency: currencySchema, amount: z.number().nonnegative() });
+export const chargeEstimateSchema = z.object({
+  batch: z.boolean(),
+  items: z.array(z.object({
+    modelName: z.string().optional(), model: z.string().optional(),
+    kind: z.enum(['text', 'image', 'video']),
+    count: z.number().int().nonnegative().optional(), videoSeconds: z.number().nonnegative().optional(),
+    referenceViews: z.number().int().positive().optional(), estimated: chargeAmountSchema.optional(),
+  })),
+  totals: z.array(chargeAmountSchema).optional(),
+});
+export type ChargeEstimate = z.infer<typeof chargeEstimateSchema>;
+export const chargeConfirmationSchema = z.object({
+  confirmationId: z.string().uuid(), title: z.string(), description: z.string(), confirmLabel: z.string(),
+  estimate: chargeEstimateSchema.optional(),
+});
 export const modelPricingSchema = z.object({
   currency: currencySchema,
   inputPerMillionTokens: z.number().nonnegative().optional(), outputPerMillionTokens: z.number().nonnegative().optional(),
@@ -403,6 +432,7 @@ export type CostSummary = z.infer<typeof costSummarySchema>;
 export const skillSchema = z.object({
   id: z.string(), name: z.string(), description: z.string(), source: z.string(), version: z.string(),
   enabled: z.boolean(), instructions: z.string().default(''), resources: z.array(z.string()).default([]),
+  autoDiscover: z.boolean().optional(),
   referenceContents: z.record(z.string(), z.string()).optional(),
   tools: z.array(z.object({ id: z.string(), label: z.string(), enabled: z.boolean(), permissions: z.array(z.string()) })).default([]),
   contentHash: z.string(), importedAt: z.string(),
@@ -441,6 +471,9 @@ export const mcpServerSchema = z.object({
 });
 export type MCPServer = z.infer<typeof mcpServerSchema>;
 export const runStatusSchema = z.enum(['queued', 'running', 'waiting_review', 'waiting_external', 'retry_scheduled', 'needs_attention', 'succeeded', 'failed', 'canceled']);
+export function isRunActive(status: z.infer<typeof runStatusSchema>) {
+  return status === 'queued' || status === 'running' || status === 'waiting_review' || status === 'waiting_external' || status === 'retry_scheduled';
+}
 export const activitySchema = z.object({
   id: z.string(), runId: z.string(), nodeId: z.string(), shotId: z.string().optional(),
   status: z.enum(['prepared', 'submitted', 'completed', 'failed', 'unknown', 'canceled']),
@@ -461,6 +494,7 @@ export const runPlanSchema = z.object({
   steps: z.array(z.object({ id: z.string(), label: z.string(), kind: nodeKindSchema, requiresReview: z.boolean(), modelName: z.string().optional() })),
   boundary: z.array(z.object({ sourceId: z.string(), sourceLabel: z.string(), targetId: z.string(), targetLabel: z.string() })),
   shotCount: z.number().int().nonnegative(), lockedShotCount: z.number().int().nonnegative(), hasConditions: z.boolean(), blockedReason: z.string(),
+  chargeEstimate: chargeEstimateSchema.optional(),
 });
 export type RunPlan = z.infer<typeof runPlanSchema>;
 export const readinessIssueSchema = z.object({
@@ -547,7 +581,7 @@ export const promptSessionSchema = z.object({
 });
 export type PromptSession = z.infer<typeof promptSessionSchema>;
 export { resolvePromptBindings, applyPromptLibraryItem, supportsPromptExperiment } from './prompt-bindings.js';
-export { buildMediaPrompt, characterReferencePrompt, generationFramePrompt } from './media-prompts.js';
+export { buildMediaPrompt, characterReferencePrompt, generationFramePrompt, singleFrameVideoModel, needsComposedSceneFrame, usesVideoSceneImage, characterSceneFirstFrame } from './media-prompts.js';
 export const runStepStatusSchema = z.enum(['pending', 'running', 'waiting_review', 'waiting_external', 'retry_scheduled', 'needs_attention', 'succeeded', 'failed', 'canceled', 'skipped', 'not_recorded']);
 export const modelResponseIssueSchema = z.object({ path: z.string(), message: z.string() });
 export type ModelResponseIssue = z.infer<typeof modelResponseIssueSchema>;
@@ -632,6 +666,7 @@ export type WorkspaceSummary = z.infer<typeof workspaceSummarySchema>;
 export const projectDetailSchema = z.object({
   id: z.string(), revision: z.number().int().positive(), assetsVersion: z.number().int().nonnegative(),
   project: projectSchema.optional(), assets: z.array(assetSchema).optional(), latestRun: runSummarySchema.optional(), activeRun: runSummarySchema.optional(),
+  videoPreview: z.object({ runId: z.string(), key: z.string(), project: projectSchema.optional() }).optional(),
 });
 export type ProjectDetail = z.infer<typeof projectDetailSchema>;
 export const pageInputSchema = z.object({ before: z.number().int().positive().optional(), limit: z.number().int().min(1).max(100).default(100) });

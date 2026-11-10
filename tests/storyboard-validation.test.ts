@@ -65,7 +65,7 @@ it('saves invalid raw text, exposes exact redacted errors, and retries only scri
   expect(f.provider).toHaveBeenCalledTimes(4); expect(f.tail).not.toHaveBeenCalled();
   expect(f.provider.mock.calls[3][0]).toMatchObject({ outputSchema: { type: 'object' } });
   const request = f.provider.mock.calls[3][0];
-  for (const content of ['本次已完成的简报', '本次已完成的风格', 'shots[0].narration', '上次分镜返回的字段校验错误']) expect(request.prompt).toContain(content);
+  for (const content of ['本次已完成的简报', '本次已完成的风格', 'shots[0].narration', '上次分镜返回的字段校验错误', 'durationUs 填写不小于 4000000']) expect(request.prompt).toContain(content);
   expect(request.operationId).not.toBe(f.provider.mock.calls[2][0].operationId);
   expect(['brief', 'style'].map(id => store.get('node-result', `${f.run.id}:${id}`))).toEqual(upstream);
   expect(store.get('model-response', `${f.run.id}:script:1`)).toBeDefined(); expect((await f.output()).modelResponse).toMatchObject({ attempt: 2, text: valid });

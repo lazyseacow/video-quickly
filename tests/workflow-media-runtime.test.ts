@@ -4,10 +4,11 @@ import { mkdtemp, rm, writeFile, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { afterEach, expect, it } from 'vitest';
-import { projectSchema, workflowSchema, workflowNodeSchema, type ModelProfile, type ProjectDocument, type RunRecord, type RunInspection } from '@video-quickly/contracts';
+import { projectSchema, workflowSchema, workflowNodeSchema, type AssetRecord, type ModelProfile, type ProjectDocument, type RunRecord, type RunInspection, type WorkspaceSnapshot } from '@video-quickly/contracts';
 import { createRuntime, SimulatedProcessExit } from '../packages/runtime/src/index';
 import { createActivityExecutor, validateMediaActivity, type MediaActivityContext } from '../packages/integrations/src/index';
 import { openDatabase, DocumentStore } from '../packages/runtime/src/database';
+import { fixtureNativeVideo } from './fixtures/native-video';
 
 const directories: string[] = [], servers: Server[] = [], runtimes: ReturnType<typeof createRuntime>[] = [];
 afterEach(async () => { await Promise.allSettled(runtimes.splice(0).map(value => value.close())); await Promise.all(servers.splice(0).map(server => new Promise<void>(resolve => { server.closeAllConnections(); server.close(() => resolve()); }))); await Promise.all(directories.splice(0).map(path => rm(path, { recursive: true, force: true }))); });
@@ -42,6 +43,66 @@ it('recovers a rejected image in the same run and retains the completed sibling 
   const completed = await recovered.dispatch('run.inspect', { runId: run.id }) as RunInspection;
   expect(completed.run.status).toBe('succeeded'); expect(completed.steps[0].status).toBe('succeeded');
   expect(posts).toEqual([{ shot: 'shot-0', key: `${run.id}:images:shot-0` }, { shot: 'shot-1', key: `${run.id}:images:shot-1` }, { shot: 'shot-1', key: `${run.id}:images:shot-1:attempt:2` }]);
+});
+it('retries only the rejected short Seedance video with the corrected request duration', async () => {
+  const clip = fixtureNativeVideo();
+  const posts: { key: string | string[] | undefined; seconds: number }[] = [];
+  const baseUrl = await service(async (request, response) => {
+    if (request.method === 'POST') {
+      const chunks: Buffer[] = [];
+      for await (const chunk of request) chunks.push(Buffer.from(chunk));
+      const form = await new Request('http://fixture.local', { method: 'POST', headers: { 'content-type': request.headers['content-type']! }, body: Buffer.concat(chunks) }).formData();
+      const seconds = Number(form.get('seconds'));
+      posts.push({ key: request.headers['idempotency-key'], seconds });
+      if (seconds < 4) { response.writeHead(400).end(); return; }
+      response.end(JSON.stringify({ id: 'video-task' }));
+    } else if (request.url === '/videos/video-task/content') {
+      response.writeHead(200, { 'content-type': 'video/mp4' }).end(clip);
+    } else response.end(JSON.stringify({ status: 'completed' }));
+  });
+  const directory = await mkdtemp(join(tmpdir(), 'vq-video-duration-')); directories.push(directory);
+  const execute = createActivityExecutor();
+  const runtime = createRuntime({ dataDirectory: directory, seed: false, preflightActivity: validateMediaActivity,
+    executeActivity: context => {
+      // Reproduce the previous adapter's 3s request without editing the frozen model configuration.
+      if (context.model && context.project.shots[0]?.id === 'shot-7') return execute({ ...context, model: { ...context.model, parameters: { seconds: 3 } } });
+      return execute(context);
+    },
+  });
+  runtimes.push(runtime);
+  const project = projectSchema.parse(await runtime.dispatch('project.create', { title: '补拍短镜头', profile: { width: 160, height: 90, frameRate: { numerator: 30, denominator: 1 } } }));
+  const model = await runtime.dispatch('model.save', { model: { name: 'Seedance 兼容网关', provider: 'openai-compatible', model: 'doubao-seedance-2-0-260128', baseUrl, connectionType: 'video', capabilities: ['video'] } }) as ModelProfile;
+  const video = project.workflow.nodes.find(node => node.id === 'video')!;
+  await runtime.dispatch('project.update', { projectId: project.id, revision: project.revision, patch: {
+    shots: [
+      { id: 'shot-1', title: '已生成镜头', narration: '', visualPrompt: '主角缓步走近', durationUs: 4_000_000 },
+      { id: 'shot-7', title: '主角错愕反应', narration: '', visualPrompt: '主角错愕地抬头', durationUs: 3_000_000 },
+    ],
+    workflow: { ...project.workflow, id: 'video-retry', production: { ...project.workflow.production, videoModelId: model.id }, stages: undefined, nodes: [video], edges: [], execution: { maxConcurrentShots: 1, modelLimits: { [model.id]: 1 } } },
+  } });
+  const run = await runtime.dispatch('run.start', { projectId: project.id }) as RunRecord;
+  await runtime.waitForIdle();
+  await runtime.dispatch('run.step.retry', { runId: run.id, nodeId: 'video' });
+  await runtime.waitForIdle();
+  const failed = await runtime.dispatch('run.inspect', { runId: run.id }) as RunInspection;
+  expect(failed.run).toMatchObject({ status: 'needs_attention', error: expect.stringContaining('HTTP 400') });
+  const { assets: before } = await runtime.dispatch('workspace.snapshot') as WorkspaceSnapshot;
+  expect(before).toEqual([expect.objectContaining({ shotId: 'shot-1', kind: 'video' })]);
+  await runtime.close();
+
+  const recovered = restart(directory);
+  await recovered.dispatch('run.step.retry', { runId: run.id, nodeId: 'video' });
+  await recovered.waitForIdle();
+  const completed = await recovered.dispatch('run.inspect', { runId: run.id }) as RunInspection;
+  expect(completed.run.status, completed.run.error).toBe('succeeded');
+  const { value: { assets } } = await recovered.dispatch('run.step.payload', { runId: run.id, nodeId: 'video', kind: 'output' }) as { value: { assets: AssetRecord[] } };
+  expect(assets).toEqual([before[0], expect.objectContaining({ shotId: 'shot-7', kind: 'video' })]);
+  expect(posts).toEqual([
+    { key: `${run.id}:video:shot-1`, seconds: 4 },
+    { key: `${run.id}:video:shot-7`, seconds: 3 },
+    { key: `${run.id}:video:shot-7:attempt:2`, seconds: 3 },
+    { key: `${run.id}:video:shot-7:attempt:3`, seconds: 4 },
+  ]);
 });
 it('checks the whole batch before any fresh sibling POST when another shot has a prepared or unknown receipt', async () => {
   const posts: string[] = []; let release!: () => void, submitted!: () => void;

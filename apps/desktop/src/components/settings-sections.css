@@ -27,9 +27,6 @@
 .settings-sections .series-settings-editor__group > legend { margin-bottom: var(--space-5); }
 .settings-sections .model-parameters fieldset:first-child { margin-top: 0; padding-top: 0; border: 0; }
 .settings-sections .model-parameters legend { margin-bottom: var(--space-5); }
-.character-reference-preview { display: grid; gap: var(--space-3); }
-.character-reference-preview > img { display: block; width: 100%; max-height: 220px; object-fit: contain; border-radius: var(--radius-small); outline: 1px solid var(--image-outline); outline-offset: -1px; }
-.character-reference-preview .empty-state { padding: var(--space-8) var(--space-3); }
 @media (max-width: 800px) {
   .settings-sections, .settings-sections--preview { display: flex; flex-direction: column; }
   .settings-sections__nav { flex: 0 0 auto; flex-direction: row; padding: var(--space-2) var(--space-4); border: 0; border-bottom: 1px solid var(--border); overflow-x: auto; }

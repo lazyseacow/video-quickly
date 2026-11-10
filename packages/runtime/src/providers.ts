@@ -1,4 +1,4 @@
-import { getModelConnectionType, modelParameterValue, requestModelParameters, textProtocols, withModelParameter, type JsonValue, type ModelCapability, type ModelConnectionType, type ModelDiscovery, type ModelProfile, type ProviderUsage } from '@video-quickly/contracts';
+import { getModelConnectionType, modelParameterValue, requestModelParameters, retryAfterMilliseconds, textProtocols, withModelParameter, type JsonValue, type ModelCapability, type ModelConnectionType, type ModelDiscovery, type ModelProfile, type ProviderUsage } from '@video-quickly/contracts';
 import { z } from 'zod';
 
 export type ModelRequestPhase = 'prepare' | 'send' | 'headers' | 'read' | 'parse' | 'validate';
@@ -34,10 +34,23 @@ export function textIncompleteMessage(reason: TextIncompleteReason, output?: 'st
   }
 }
 
+export const textRateLimitSchema = z.object({ kind: z.enum(['rate', 'quota', 'unknown']), retryAt: z.iso.datetime().optional() });
+type TextRateLimit = z.infer<typeof textRateLimitSchema>;
+
+function textRateLimitMessage(limit?: TextRateLimit) {
+  const reason = limit?.kind === 'quota' ? '模型服务的用量额度已达上限'
+    : limit?.kind === 'rate' ? '模型服务触发了请求频率或吞吐限制' : '模型服务触发了限流或额度限制';
+  const wait = limit?.retryAt ? `请在 ${new Date(limit.retryAt).toLocaleString('zh-CN', { hour12: false })} 后重试。` : '';
+  const guidance = limit?.kind === 'quota' ? `请核对服务端用量额度。${wait}`
+    : wait || (limit?.kind === 'rate' ? '请稍后重试。' : '请稍后重试，若持续出现请核对服务端用量额度。');
+  return `${reason}（HTTP 429）。${guidance}`;
+}
+
 /** An explicit request rejection is distinct from an unconfirmed submission. */
 export class TextRequestRejectedError extends Error {
-  constructor(readonly status: number, readonly unsupportedOutputFormat = false) {
-    super(unsupportedOutputFormat ? `模型服务不支持本次输出格式（HTTP ${status}），请求已被拒绝。` : `模型服务已拒绝请求（HTTP ${status}），请核对请求参数、模型及访问权限。`);
+  constructor(readonly status: number, readonly unsupportedOutputFormat = false, readonly rateLimit?: TextRateLimit) {
+    super(status === 429 ? textRateLimitMessage(rateLimit)
+      : unsupportedOutputFormat ? `模型服务不支持本次输出格式（HTTP ${status}），请求已被拒绝。` : `模型服务已拒绝请求（HTTP ${status}），请核对请求参数、模型及访问权限。`);
     this.name = 'TextRequestRejectedError';
   }
 }
@@ -194,6 +207,26 @@ export async function readModelResponse(response: Response, onRequestPhase?: Tex
   return JSON.parse(text);
 }
 
+const quotaCodes = new Set<unknown>(['insufficient_quota', 'organization_spend_limit_exceeded', 'billing_hard_limit_reached']);
+async function textRateLimitError(response: Response) {
+  const now = Date.now();
+  const wait = retryAfterMilliseconds(response.headers.get('retry-after'), now);
+  const deadline = wait ? new Date(now + wait) : undefined;
+  const retryAt = deadline && deadline.getUTCFullYear() <= 9999 ? deadline.toISOString() : undefined;
+  let kind: TextRateLimit['kind'] = 'unknown';
+  try {
+    const value = await readModelResponse(response);
+    if (value && typeof value === 'object') {
+      const body = value as Record<string, unknown>;
+      const error = body.error && typeof body.error === 'object' ? body.error as Record<string, unknown> : body;
+      const codes = [error.code, error.type];
+      if (codes.some(code => quotaCodes.has(code))) kind = 'quota';
+      else if (codes.includes('rate_limit_exceeded')) kind = 'rate';
+    }
+  } catch { /* The HTTP 429 and its retry header remain known even if the body is unreadable. */ }
+  return new TextRequestRejectedError(429, false, { kind, retryAt });
+}
+
 export const generateText: TextProvider = async ({ model, secret, prompt, operationId, signal, onRequestPhase, outputSchema, outputSchemaName, promptOutputFormat, onOutputFormatFallback }) => {
   onRequestPhase?.('prepare');
   const ollama = model.provider === 'ollama';
@@ -216,6 +249,7 @@ export const generateText: TextProvider = async ({ model, secret, prompt, operat
   onRequestPhase?.('headers');
   if (!response.ok) {
     const status = response.status;
+    if (status === 429) throw await textRateLimitError(response);
     let formatRejected = false, maasFormatProbe = false;
     if (status === 400 || status === 422) {
       try {
@@ -239,6 +273,7 @@ export const generateText: TextProvider = async ({ model, secret, prompt, operat
     }
   }
   if (!response.ok) {
+    if (response.status === 429) throw await textRateLimitError(response);
     await response.body?.cancel();
     if (rejectedTextStatuses.has(response.status)) throw new TextRequestRejectedError(response.status);
     throw Object.assign(new Error(`模型服务返回 HTTP ${response.status}，请检查服务地址、模型及访问权限。`), { status: response.status });

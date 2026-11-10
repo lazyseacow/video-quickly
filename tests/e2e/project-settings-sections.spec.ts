@@ -1,4 +1,4 @@
-import { productionStep, saveProduction } from './production-settings';
+import { openStoryboardProfile, productionStep, saveProduction } from './production-settings';
 import { openProjectFromList } from './workspace-navigation';
 import { expect, test, type APIRequestContext } from '@playwright/test';
 import type { ProjectDocument } from '@video-quickly/contracts';
@@ -17,7 +17,7 @@ for (const grouped of [true, false]) test('keeps global project settings availab
   await page.locator('.project-heading-actions').getByRole('button', { name: '制作设置', exact: true }).click();
   const dialog = page.getByRole('dialog', { name: '制作设置', exact: true });
   await productionStep(dialog, '创作要求'); await productionStep(dialog, '创作要求'); await dialog.getByLabel('创作要求', { exact: true }).fill('自定义流程共用的创作要求');
-  await productionStep(dialog, '声音与成片'); await dialog.getByLabel('分辨率', { exact: true }).selectOption('720');
+  await (await openStoryboardProfile(dialog)).getByLabel('分辨率', { exact: true }).selectOption('720');
   await saveProduction(dialog); await expect(dialog).toHaveCount(0);
   const saved = (await rpc<{ project: ProjectDocument }>(request, 'project.get', { projectId: project.id })).project;
   expect(saved.brief).toBe('自定义流程共用的创作要求'); expect(saved.workflow.stages).toEqual(stages); expect(Math.min(saved.profile.width, saved.profile.height)).toBe(720);
@@ -65,7 +65,8 @@ for (const viewport of [{ width: 1536, height: 960, theme: 'dark' }, { width: 10
     await music.getByRole('button', { name: '关闭对话框', exact: true }).click(); await settings.click();
     await expect(nav.getByRole('button', { name: '确认保存', exact: true })).toHaveAttribute('aria-current', 'step');
     await nav.getByRole('button', { name: '声音与成片', exact: true }).focus(); await page.keyboard.press('Tab');
-    await expect(nav.getByRole('button', { name: '确认保存', exact: true })).toBeFocused(); await productionStep(dialog, '声音与成片');
+    await expect(nav.getByRole('button', { name: '确认保存', exact: true })).toBeFocused(); await productionStep(dialog, '创作要求');
+    await openStoryboardProfile(dialog);
     await dialog.getByLabel('画面比例', { exact: true }).selectOption('9:16');
     await expect(dialog.getByLabel('分辨率', { exact: true }).locator('selectedcontent')).toContainText('180 × 320');
     await productionStep(dialog, '确认保存');

@@ -143,14 +143,14 @@ export default function CreativeContextEditor({ value, version, usedEntityKeys, 
       }))} />
     </> : <>
       {roleFields}
-      <details ref={entities} className="creative-context-editor__entities creative-context-editor__disclosure">
+      <details ref={entities} className="form-disclosure creative-context-editor__entities creative-context-editor__disclosure">
         <summary>{entitySummary}</summary>
         <div className="creative-context-editor__entity-content">
           {entityActions}
           {context.entities.length > 0 && <div className="creative-context-editor__entity-list">{context.entities.map((entity, index) => {
             const Icon = entityIcons[entity.kind];
             return <section key={entity.key} data-entity-key={entity.key} className="creative-context-editor__entity" aria-label={`${creativeEntityLabels[entity.kind]}设定 ${index + 1}`}>
-              <details name={`${id}-entity`}>
+              <details className="form-disclosure" name={`${id}-entity`}>
                 <summary><Icon size={18} aria-hidden="true" /><span className="creative-context-editor__summary-copy"><strong>{entity.name.trim() || `未命名${creativeEntityLabels[entity.kind]}`}</strong>{entity.description.trim() && <span>{entity.description}</span>}</span><span className="creative-context-editor__badge">{creativeEntityLabels[entity.kind]}</span><ChevronRight size={16} aria-hidden="true" /></summary>
                 <div className="creative-context-editor__entity-fields">{entityFields(entity, index)}</div>
               </details>

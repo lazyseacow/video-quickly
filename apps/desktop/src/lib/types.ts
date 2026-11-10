@@ -1,5 +1,5 @@
-import type { AssetRecord, RunSummary, WorkspaceSummary, WorkflowNode } from '@video-quickly/contracts';
+import type { AssetRecord, ProjectDetail, RunSummary, WorkspaceSummary, WorkflowNode } from '@video-quickly/contracts';
 
 export type Action = <T = unknown>(method: string, params?: unknown, message?: string) => Promise<T | null>;
-export type WorkspaceView = WorkspaceSummary & { assets: AssetRecord[]; runs: RunSummary[] };
+export type WorkspaceView = WorkspaceSummary & { assets: AssetRecord[]; runs: RunSummary[]; videoPreview?: ProjectDetail['videoPreview'] };
 export interface StepOutputSelection { projectId: string; runId: string; nodeId: string; kind: WorkflowNode['kind']; candidateShotId?: string; regeneration?: { shotId: string; kind: 'image' | 'video'; modelName: string } }

@@ -4,7 +4,7 @@ import { createRefreshQueue } from './refresh-queue';
 
 /** Refreshing a query keeps completed responses usable; only changing its identity
  * or unmounting invalidates a response. Reads never retry a failed operation. */
-export function useRuntimeRead<T>(method: string, params: Record<string, unknown>, version: number, schema: { parse: (value: unknown) => T }) {
+export function useRuntimeRead<T>(method: string, params: Record<string, unknown>, version: number, schema: { parse: (value: unknown) => T }, enabled = true) {
   const parameters = JSON.stringify(params);
   const query = useMemo(() => {
     let state: { data?: T; error: string; busy: boolean } = { error: '', busy: true };
@@ -33,6 +33,6 @@ export function useRuntimeRead<T>(method: string, params: Record<string, unknown
   }, [method, parameters, schema]);
   const current = useSyncExternalStore(query.subscribe, query.snapshot);
   // Strict Mode's effect reattachment observes the same version and reuses its read.
-  useEffect(() => { query.observe(version); }, [query, version]);
+  useEffect(() => { if (enabled) query.observe(version); }, [query, version, enabled]);
   return { ...current, refresh: query.refresh };
 }

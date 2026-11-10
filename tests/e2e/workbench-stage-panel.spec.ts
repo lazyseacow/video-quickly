@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test';
-import { openProduction, pickProductionModel, productionFixture, productionStep, saveProduction } from './production-settings';
+import { openProduction, openStoryboardProfile, pickProductionModel, productionFixture, productionStep, saveProduction } from './production-settings';
 
 const stageLabels = ['策划与分镜', '素材与配音', '剪辑与动画', '审阅与导出'];
 const configurationSteps = ['创作要求', '模型与素材', '声音与成片', '确认保存'];
@@ -23,12 +23,18 @@ for (const viewport of [{ width: 1536, height: 960, theme: 'dark' }, { width: 10
     await expect(footer.getByRole('button')).toHaveText(['下一步']);
     await expect(dialog.locator('.dialog__surface')).toHaveCSS('opacity', '1');
     const content = dialog.locator('.production-settings__content');
+    const profileSummary = dialog.locator('.production-settings__storyboard > summary');
+    await expect(profileSummary).toContainText('1920 × 1080 · 30 fps');
     if (viewport.width >= 1024) {
       await expect(dialog.getByLabel('创作要求', { exact: true })).toBeInViewport({ ratio: 1 });
       await expect(dialog.getByLabel('视觉风格', { exact: true })).toBeInViewport({ ratio: 1 });
     }
     await expect(footer.getByRole('button', { name: '下一步', exact: true })).toBeInViewport({ ratio: 1 });
     await page.screenshot({ path: info.outputPath('configuration-first-' + viewport.width + '.png') });
+    const storyboard = await openStoryboardProfile(dialog);
+    for (const label of ['画面比例', '分辨率', '视频帧率', '素材适配']) await expect(storyboard.getByLabel(label, { exact: true })).toBeInViewport();
+    await page.screenshot({ path: info.outputPath('storyboard-global-profile-' + viewport.width + '.png') });
+    await profileSummary.click();
     await dialog.getByRole('button', { name: '下一步', exact: true }).click();
     await expect(dialog.getByRole('combobox', { name: '文本模型', exact: true })).toBeVisible();
     await expect(dialog.getByRole('listbox')).toHaveCount(0);
@@ -41,7 +47,6 @@ for (const viewport of [{ width: 1536, height: 960, theme: 'dark' }, { width: 10
     await page.screenshot({ path: info.outputPath('configuration-models-' + viewport.width + '.png') });
     await productionStep(dialog, '声音与成片');
     await expect(dialog.getByLabel('声音要求', { exact: true })).toBeVisible();
-    for (const label of ['画面比例', '分辨率', '素材适配']) await expect(dialog.getByLabel(label, { exact: true })).toBeInViewport();
     await dialog.getByLabel('字幕', { exact: true }).selectOption('script');
     if (viewport.width >= 1024) expect(await content.evaluate(element => element.scrollHeight - element.clientHeight)).toBeLessThanOrEqual(1);
     await page.screenshot({ path: info.outputPath('configuration-delivery-' + viewport.width + '.png') });
@@ -137,9 +142,11 @@ test('checks required fields before advancing and commits configuration once fro
   await next.click();
   await dialog.getByLabel('声音要求', { exact: true }).fill('自然中文解说，轻柔海浪声');
   await dialog.getByLabel('字幕', { exact: true }).selectOption('script');
+  await productionStep(dialog, '创作要求');
+  await openStoryboardProfile(dialog);
   await dialog.getByLabel('画面比例', { exact: true }).selectOption('9:16'); await dialog.getByLabel('分辨率', { exact: true }).selectOption('720');
   await dialog.getByLabel('素材适配', { exact: true }).selectOption('cover');
-  await dialog.getByRole('button', { name: '下一步', exact: true }).click();
+  await productionStep(dialog, '确认保存');
   await expect(dialog.getByRole('region', { name: '确认保存', exact: true })).toContainText(source.text.name);
   await expect(dialog.getByRole('region', { name: '确认保存', exact: true })).toContainText('9:16 · 720 × 1280');
   await expect(dialog.getByRole('region', { name: '确认保存', exact: true })).toContainText('裁剪填满');
@@ -199,11 +206,13 @@ test('retains every step after a failed save and retries only through the final 
 
 test('returns final validation errors to the relevant step and reveals the invalid field', async ({ page, request }) => {
   const source = await productionFixture(request), dialog = await openProduction(page, source.project);
-  await productionStep(dialog, '声音与成片');
+  await productionStep(dialog, '创作要求');
+  await openStoryboardProfile(dialog);
   await dialog.locator('.video-settings__advanced > summary').click();
   await dialog.getByLabel('视频宽度', { exact: true }).fill('63');
+  await dialog.locator('.production-settings__storyboard > summary').click();
   await productionStep(dialog, '确认保存'); await dialog.getByRole('button', { name: '保存设置', exact: true }).click();
-  await expect(dialog.getByRole('button', { name: '声音与成片', exact: true })).toHaveAttribute('aria-current', 'step');
+  await expect(dialog.getByRole('button', { name: '创作要求', exact: true })).toHaveAttribute('aria-current', 'step');
   await expect(dialog.getByLabel('视频宽度', { exact: true })).toBeVisible(); await expect(dialog.getByLabel('视频宽度', { exact: true })).toBeFocused();
   expect((await source.saved()).revision).toBe(source.project.revision);
   await dialog.getByLabel('视频宽度', { exact: true }).fill('1280'); await saveProduction(dialog); await expect(dialog).toHaveCount(0);

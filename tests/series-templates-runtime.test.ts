@@ -1,11 +1,12 @@
 import { fixtureNativeVideo } from './fixtures/native-video';
 import { storyboardFixtureResponse } from './fixtures/planning-response';
+import { createHash } from 'node:crypto';
 import { createServer, type Server } from 'node:http';
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, expect, it } from 'vitest';
-import { createSceneTemplate, DEFAULT_CAPTION_STYLE, projectSchema, runSchema, seriesTemplateSchema, type CaptionStyle, type ModelProfile, type ProjectDocument, type RecordPage, type SeriesSettings, type SeriesTemplate, type ShotCandidate, type ShotCandidateKind } from '@video-quickly/contracts';
+import { createSceneTemplate, DEFAULT_CAPTION_STYLE, projectSchema, promptPreviewSchema, runSchema, seriesTemplateSchema, type AssetRecord, type CaptionStyle, type ModelProfile, type ProjectDocument, type RecordPage, type SeriesSettings, type SeriesTemplate, type ShotCandidate, type ShotCandidateKind } from '@video-quickly/contracts';
 import { createActivityExecutor } from '../packages/integrations/src';
 import { createRuntime } from '../packages/runtime/src';
 
@@ -13,13 +14,62 @@ const directories: string[] = [], servers: Server[] = [];
 const runtimes = new Set<ReturnType<typeof createRuntime>>();
 afterEach(async () => { await Promise.all([...runtimes].map(runtime => runtime.close())); runtimes.clear(); await Promise.all(servers.splice(0).map(server => new Promise<void>((resolve, reject) => { server.closeAllConnections(); server.close(error => error ? reject(error) : resolve()); }))); await Promise.all(directories.splice(0).map(path => rm(path, { recursive: true, force: true }))); });
 const settings: SeriesSettings = { style: '固定的系列画风与文字口吻', captionStyle: { ...DEFAULT_CAPTION_STYLE, fontSizeRatio: .04, textColor: '#E0F0FF' }, scenePreset: { kind: 'process', palette: 'amber', motion: 'none' } };
-function open(directory: string) { const runtime = createRuntime({ dataDirectory: directory, seed: false, ffmpegPath: '/unused-by-series-tests', executeActivity: createActivityExecutor() }); runtimes.add(runtime); return runtime; }
+function open(directory: string, seedBuiltInTemplates = false) { const runtime = createRuntime({ dataDirectory: directory, seed: false, seedBuiltInTemplates, ffmpegPath: '/unused-by-series-tests', executeActivity: createActivityExecutor() }); runtimes.add(runtime); return runtime; }
 async function fixture() {
   const directory = await mkdtemp(join(tmpdir(), 'video-quickly-series-')); directories.push(directory); const runtime = open(directory);
   return { runtime, directory };
 }
 async function save(runtime: ReturnType<typeof createRuntime>, name: string, extra: Partial<SeriesTemplate> = {}) { return seriesTemplateSchema.parse(await runtime.dispatch('seriesTemplate.save', { template: { name, description: '可复用设置，不含题目事实', settings, ...extra } })); }
 async function current(runtime: ReturnType<typeof createRuntime>, projectId: string) { return (await runtime.dispatch('project.get', { projectId }) as { project: ProjectDocument }).project; }
+
+it('adds built-in drama templates, Skills and readable scene references to an existing workspace once', async () => {
+  const { runtime, directory } = await fixture();
+  const custom = await save(runtime, '已有系列模板');
+  await runtime.close(); runtimes.delete(runtime);
+
+  const upgraded = open(directory, true);
+  const library = await upgraded.dispatch('seriesTemplate.list') as RecordPage<SeriesTemplate>;
+  expect(library.items.map(item => item.name)).toEqual([
+    'AI 漫剧 · 国风水墨', 'AI 漫剧 · 动态条漫', 'AI 短剧 · 竖屏真人', custom.name,
+  ]);
+  const template = library.items[1];
+  const selection = { seriesTemplateId: template.id, seriesTemplateRevision: template.revision };
+  const project = projectSchema.parse(await upgraded.dispatch('project.create', { title: '新的条漫故事', ...selection }));
+  const skillIds = template.creationDefaults!.skillIds;
+  expect(project).toMatchObject({ ...template.settings, shots: [], profile: { width: 1080, height: 1920 } });
+  expect(project.workflow.production.agentSkillIds).toEqual(skillIds);
+  const node = project.workflow.nodes.find(node => node.kind === 'script')!;
+  expect(node.skillIds).toEqual(skillIds);
+  const preview = promptPreviewSchema.parse(await upgraded.dispatch('prompt.preview', { projectId: project.id, projectRevision: project.revision, node }));
+  expect(preview.prompt).toContain('动态条漫制作卡');
+  expect(preview.prompt).toContain('雨中来客');
+
+  const assets = await upgraded.dispatch('asset.list', { kind: 'image' }) as RecordPage<AssetRecord>;
+  expect(assets.items).toHaveLength(3);
+  for (const asset of assets.items) {
+    expect(asset.projectId).toBeUndefined();
+    expect(asset.provenance).toContain('CC0');
+    const { dataUrl } = await upgraded.dispatch('asset.read', { assetId: asset.id }) as { dataUrl: string };
+    expect(dataUrl).toMatch(/^data:image\/jpeg;base64,\/9j\//);
+    expect(createHash('sha256').update(Buffer.from(dataUrl.split(',')[1], 'base64')).digest('hex')).toBe(asset.sha256);
+  }
+
+  const manual = projectSchema.parse(await upgraded.dispatch('project.create', { title: '手动清空配套 Skill', skillIds: [], ...selection }));
+  expect(manual.workflow.production.agentSkillIds).toEqual([]);
+  await upgraded.dispatch('skill.toggle', { skillId: skillIds[0], enabled: false });
+  const disabled = projectSchema.parse(await upgraded.dispatch('project.create', { title: '配套 Skill 已停用', ...selection }));
+  expect(disabled.workflow.production.agentSkillIds).toEqual([]);
+  const edited = await save(upgraded, '工作区自用漫剧模板', { id: template.id, revision: template.revision });
+  expect(edited.creationDefaults).toEqual(template.creationDefaults);
+  const archived = await upgraded.dispatch('seriesTemplate.archive', { templateId: edited.id, revision: edited.revision });
+  await upgraded.close(); runtimes.delete(upgraded);
+
+  const reopened = open(directory, true);
+  expect(await reopened.dispatch('seriesTemplate.get', { templateId: custom.id })).toEqual(custom);
+  expect(await reopened.dispatch('seriesTemplate.get', { templateId: edited.id })).toEqual(archived);
+  expect((await reopened.dispatch('seriesTemplate.list') as RecordPage<SeriesTemplate>).items).toHaveLength(3);
+  expect((await reopened.dispatch('asset.list', { kind: 'image' }) as RecordPage<AssetRecord>).items).toEqual(assets.items);
+});
 
 it('persists a bounded template library with stable cursor pages, optimistic revisions and reversible archival', async () => {
   const { runtime, directory } = await fixture(); const first = await save(runtime, '一号'), second = await save(runtime, '二号');

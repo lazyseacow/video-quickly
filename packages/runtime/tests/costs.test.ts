@@ -19,6 +19,7 @@ it('derives media request units from actual adapter parameters, leaving custom p
   const video = workflowNodeSchema.parse({ id: 'video', kind: 'animation', label: '视频' });
   expect(requestCostMetrics(project, video, model('openai-compatible', { seconds: 6 })).videoSeconds).toBe(6);
   expect(requestCostMetrics(project, video, model('seedance', { duration: 8 })).videoSeconds).toBe(8);
+  expect(requestCostMetrics(project, video, { ...model('openai-compatible'), model: 'doubao-seedance-2-0-260128' }).videoSeconds).toBe(4);
   expect(requestCostMetrics(project, video, model('custom-http', { requestTemplate: { duration: '{{duration}}' } })).videoSeconds).toBeUndefined();
   expect(requestCostMetrics({ ...project, shots: project.shots.map(shot => ({ ...shot, locked: true })) }, video, model('openai-compatible'))).toEqual({ source: 'request' });
 });

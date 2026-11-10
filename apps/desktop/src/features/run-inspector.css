@@ -23,11 +23,12 @@
 .run-inspector__steps strong { font-size: var(--run-detail-font); font-weight: var(--font-weight-medium); overflow-wrap: anywhere; }
 .run-inspector__index { color: var(--text-subtle); font-size: var(--text-size-caption); font-variant-numeric: tabular-nums; }
 .run-inspector__state { color: var(--text-secondary); font-size: var(--text-size-caption); }
-.run-inspector__output-mark { flex-shrink: 0; width: var(--space-2); height: var(--space-2); border-radius: 50%; margin-left: auto; background: var(--text-secondary); }
+.run-inspector__output-mark { flex-shrink: 0; margin-left: auto; color: var(--text-secondary); }
 .run-inspector__detail { min-width: 0; padding: var(--space-4) 0 var(--space-4) var(--space-6); }
 .run-inspector .run-inspector__detail { min-height: 0; overflow-y: auto; overscroll-behavior: contain; scrollbar-gutter: stable; }
 .run-inspector__history { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; }
 .run-inspector__step-heading h3 { margin: 0; font-size: var(--text-size-body); font-weight: var(--font-weight-semibold); }
+.run-inspector__step-title { display: flex; align-items: center; flex-wrap: wrap; gap: var(--space-1) var(--space-3); }
 .run-inspector__tabs { display: flex; gap: var(--space-3); margin: var(--space-4) 0; border-bottom: 1px solid var(--border); overflow-x: auto; }
 .run-inspector__tabs > button { flex-shrink: 0; min-height: var(--control-hit-size); padding: 0 var(--space-2); border: 0; border-bottom: 2px solid transparent; background: transparent; color: var(--text-secondary); font-size: var(--run-detail-font); }
 .run-inspector__tabs > button[aria-selected='true'] { color: var(--text); border-bottom-color: var(--text); }

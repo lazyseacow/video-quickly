@@ -1,3 +1,4 @@
+import { confirmAction } from './confirmation-actions';
 import { expect, test } from '@playwright/test';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -58,7 +59,7 @@ test('persists pending concurrency across reload while the active production kee
     await dialog.getByRole('button', { name: '关闭对话框', exact: true }).click();
     source.release(); await expect.poll(async () => (await latest(request, project.id))?.status, { timeout: 30000 }).toBe('succeeded');
     expect((await saved(request, project.id)).workflow.execution).toBeUndefined();
-    await page.getByRole('button', { name: '开始制作', exact: true }).click();
+    await page.getByRole('button', { name: '开始制作', exact: true }).click(); await confirmAction(page, '确认开始制作');
     await expect.poll(async () => (await latest(request, project.id))?.id).not.toBe(run.id);
     await expect.poll(async () => (await latest(request, project.id))?.status, { timeout: 30000 }).toBe('succeeded');
     project = await saved(request, project.id); expect(project.workflow.execution).toEqual({ maxConcurrentShots: 3, modelLimits: { [source.video.id]: 2 } });

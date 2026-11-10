@@ -42,7 +42,7 @@ function developmentBridge(browserTest: boolean): Plugin {
     const waveforms = createWaveformReader({ dataDirectory, ffmpegPath });
     const diagnostics = browserTest && process.env.VIDEO_QUICKLY_RPC_DIAGNOSTICS ? createRpcDiagnostics(process.env.VIDEO_QUICKLY_RPC_DIAGNOSTICS) : undefined;
     let runtime: ReturnType<typeof createRuntime>;
-    try { runtime = await createRuntime({ dataDirectory, seed: browserTest, mode: 'development', logger, ffmpegPath, readAudioWaveform: asset => waveforms.read(asset),
+    try { runtime = await createRuntime({ dataDirectory, seed: browserTest, seedBuiltInTemplates: true, mode: 'development', requireChargeConfirmation: !browserTest, logger, ffmpegPath, readAudioWaveform: asset => waveforms.read(asset),
       provider: diagnostics?.textProvider(generateText),
       webResearch: browserTest ? undefined : readStoryboardWebResearch,
       audioMix: { projectionKey: audioMixProjectionKey, prepare: options => prepareAudioMix({ ...options, ffmpegPath }), levels: readAudioLevelWindow, silence: options => detectAudioSilence({ ...options, ffmpegPath }) },

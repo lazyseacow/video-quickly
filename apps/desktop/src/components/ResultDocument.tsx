@@ -8,7 +8,7 @@ function InlineResult({ text }: { text: string }) {
     : part.startsWith('`') && part.endsWith('`') ? <code key={index}>{part.slice(1, -1)}</code> : part);
 }
 
-function ProfileResult({ profile }: { profile: VideoProfile }) {
+export function VideoProfileResult({ profile }: { profile: VideoProfile }) {
   return <dl className="result-document__specs" aria-label="成片规格">
     <div><dt>分辨率</dt><dd>{profile.width} × {profile.height}</dd></div>
     <div><dt>帧率</dt><dd>{formatFrameRate(profile.frameRate)} fps</dd></div>
@@ -18,7 +18,7 @@ function ProfileResult({ profile }: { profile: VideoProfile }) {
 
 function DocumentBody({ text }: { text: string }) {
   return resultBlocks(text).map((block, index) => {
-    if (block.kind === 'profile') return <ProfileResult key={index} profile={block.profile} />;
+    if (block.kind === 'profile') return <VideoProfileResult key={index} profile={block.profile} />;
     if (block.kind === 'code') return <pre key={index}>{block.text}</pre>;
     if (block.kind === 'list') {
       const items = block.items.map((item, index) => <li key={index} value={item.ordinal}><InlineResult text={item.text} /></li>);

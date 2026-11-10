@@ -1,3 +1,4 @@
+import { confirmAction } from './confirmation-actions';
 import { randomUUID } from 'node:crypto';
 import { expect, type APIRequestContext, type Locator, type Page } from '@playwright/test';
 import type { ModelProfile, ProjectDocument } from '@video-quickly/contracts';
@@ -26,13 +27,18 @@ export async function pickProductionModel(dialog: Locator, label: string, model:
 export async function productionStep(dialog: Locator, label: '创作要求' | '模型与素材' | '声音与成片' | '确认保存') {
   await dialog.getByRole('navigation', { name: '制作设置步骤', exact: true }).getByRole('button', { name: label, exact: true }).click();
 }
+export async function openStoryboardProfile(dialog: Locator) {
+  const disclosure = dialog.locator('.production-settings__storyboard');
+  if (await disclosure.getAttribute('open') === null) await disclosure.locator(':scope > summary').click();
+  return dialog.getByRole('group', { name: '分镜全局参数', exact: true });
+}
 export async function saveProduction(dialog: Locator) {
   await productionStep(dialog, '确认保存');
   await dialog.getByRole('button', { name: /^(保存设置|保存待用配置)$/ }).click();
 }
 export async function saveAndStartProduction(dialog: Locator) {
   await saveProduction(dialog); await expect(dialog).toHaveCount(0);
-  await dialog.page().getByRole('button', { name: '开始制作', exact: true }).click();
+  await dialog.page().getByRole('button', { name: '开始制作', exact: true }).click(); await confirmAction(dialog.page(), '确认开始制作');
 }
 export async function openProduction(page: Page, project: ProjectDocument) {
   await page.goto('/'); await openProjectFromList(page, project.title);
