@@ -1,7 +1,7 @@
 import { confirmAction } from './confirmation-actions';
 import { openProjectFromList } from './workspace-navigation';
 import { openCosts, setWorkspaceTheme } from './workspace-settings';
-import { settingField, settingControl } from './settings';
+import { settingField } from './settings';
 import { createServer } from 'node:http';
 import { writeFile } from 'node:fs/promises';
 import { expect, test, type APIRequestContext, type Page } from '@playwright/test';
@@ -48,7 +48,8 @@ test('can remove an archived character from an unsaved draft without losing othe
 test('creates a visual character library, binds a shot with durable undo, and protects references through backup', async ({ page, request }, info) => {
   const errors = observeErrors(page);
   const project = await createProject(request, '角色参考库与编辑恢复验收');
-  const path = info.outputPath('public-character.png'); await writeFile(path, png);
+  const fileName = 'public-character.png';
+  const path = info.outputPath(fileName); await writeFile(path, png);
   await openProject(page, project.title);
   await page.getByRole('button', { name: '角色参考库', exact: true }).click();
   await page.getByRole('button', { name: '新建角色', exact: true }).click();
@@ -57,16 +58,16 @@ test('creates a visual character library, binds a shot with durable undo, and pr
   await (await settingField(dialog, '角色设定')).fill('青色长衫，圆眼镜，保持人物服饰与面部特征。');
   await (await settingField(dialog, '角色参考图路径')).fill(path);
   await dialog.getByRole('button', { name: '导入参考图片', exact: true }).click();
-  await expect((await settingControl(dialog, 'checkbox'))).toBeChecked();
+  await expect(dialog.getByRole('checkbox', { name: fileName })).toBeChecked();
   await dialog.getByRole('button', { name: '保存角色', exact: true }).click(); await expect(dialog).toHaveCount(0);
   const library = await rpc<{ items: CharacterProfile[] }>(request, 'character.list', { archived: false });
   const character = library.items.find(value => value.name === '稳定角色小青'); expect(character).toBeTruthy();
   await expect(page.getByAltText('稳定角色小青参考图')).toBeVisible();
   await page.screenshot({ path: info.outputPath('character-library-dark.png') });
   await page.getByRole('button', { name: '素材库', exact: true }).click();
-  const referencedImage = page.locator('.asset-card').filter({ hasText: 'public-character.png' });
+  const referencedImage = page.locator('.asset-card').filter({ hasText: fileName });
   await expect(referencedImage).toContainText('使用中');
-  await expect(referencedImage.getByRole('button', { name: '移除素材“public-character.png”', exact: true })).toBeDisabled();
+  await expect(referencedImage.getByRole('button', { name: `移除素材“${fileName}”`, exact: true })).toBeDisabled();
   await openProjectFromList(page);
   await page.getByRole('checkbox', { name: '稳定角色小青', exact: true }).check();
   await page.getByRole('button', { name: '保存镜头', exact: true }).click();
@@ -133,17 +134,20 @@ test('sends frozen character settings into generation and records provider token
     await page.getByLabel('用量项目').selectOption(project.id);
     await page.getByRole('button', { name: `查看任务用量详情：${ledger.items[0].runId}`, exact: true }).click();
     const row = page.locator('.cost-record').filter({ hasText: '费用计量服务' });
-    await expect(row.locator('[data-metric="inputTokens"] dd')).toHaveText('100');
-    await expect(row.locator('[data-metric="outputTokens"] dd')).toHaveText('50');
-    await expect(row.locator('[data-metric="cachedOutputTokens"] dd')).toHaveText('—');
+    await expect(row.locator('[data-metric="inputTokens"] .token-amount')).toHaveText('100');
+    await expect(row.locator('[data-metric="outputTokens"] .token-amount')).toHaveText('50');
+    await expect(row.locator('[data-metric="cachedOutputTokens"] .token-amount')).toHaveText('—');
     const saved = (await rpc<{ items: UsageRecord[] }>(request, 'cost.list', { projectId: project.id })).items[0];
     expect(saved.pricing).toBeUndefined(); expect(saved.actualAmount).toBeUndefined();
     await setWorkspaceTheme(page, 'light'); await page.setViewportSize({ width: 600, height: 900 });
+    const records = page.getByRole('table', { name: '调用明细', exact: true });
+    await expect(records.getByRole('columnheader', { name: '输入 Token', exact: true })).toHaveCount(1);
+    await expect(row.getByText('输入 Token', { exact: true })).toBeVisible();
     await page.screenshot({ path: info.outputPath('cost-records-light-600.png') });
-    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1)).toBe(true);
+    expect(await page.locator('.page-body').evaluate(element => element.scrollWidth <= element.clientWidth + 1)).toBe(true);
     await page.reload(); await openCosts(page); await page.getByLabel('用量项目').selectOption(project.id);
     await page.getByRole('button', { name: `查看任务用量详情：${ledger.items[0].runId}`, exact: true }).click();
-    await expect(page.locator('.cost-record [data-metric="inputTokens"] dd')).toHaveText('100');
+    await expect(row.locator('[data-metric="inputTokens"] .token-amount')).toHaveText('100');
     expect(errors).toEqual(['Failed to load resource: the server responded with a status of 400 (Bad Request)']); await expect(page.locator('vite-error-overlay')).toHaveCount(0);
   } finally { server.closeAllConnections(); await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve())); }
 });

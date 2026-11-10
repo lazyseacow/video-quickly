@@ -1,6 +1,6 @@
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState } from 'react';
 import { ChartNoAxesCombined, ChevronRight, RefreshCw, ChevronDown, ArrowLeft } from 'lucide-react';
-import { costSummarySchema, costTaskDetailSchema, costTaskSchema, modelPlatforms, recordPageSchema, tokenMetrics, usageRecordSchema, type CostSummary, type CostTaskDetail, type TokenMetric } from '@video-quickly/contracts';
+import { costSummarySchema, costTaskDetailSchema, costTaskSchema, modelPlatforms, recordPageSchema, tokenMetrics, usageRecordSchema, type CostSummary, type CostTaskDetail, type TokenMetric, type UsageRecord } from '@video-quickly/contracts';
 import { Button, EmptyState, Field, Notice, Select, Status } from '../components/Primitives';
 import { rpc } from '../lib/client';
 import { useContentMotion } from '../lib/motion';
@@ -76,6 +76,7 @@ function TokenTotals({ summary, busy = false, feedback }: { summary?: CostSummar
 
 export function TaskUsage({ runId, version, onBack, onTaskUpdated, backLabel = '返回任务归档' }: { runId: string; version: number; onBack: () => void; onTaskUpdated: (task: CostTaskDetail) => void; backLabel?: string }) {
   const records = useRecordPage('cost.list', { runId, limit: 30 }, version, recordsSchema);
+  const recordsHeading = useId();
   const [task, setTask] = useState<CostTaskDetail>();
   const [taskLoading, setTaskLoading] = useState(true);
   const [error, setError] = useState('');
@@ -89,23 +90,87 @@ export function TaskUsage({ runId, version, onBack, onTaskUpdated, backLabel = '
     return () => { active = false; };
   }, [runId, version, reload, onTaskUpdated]);
   function refresh() { records.refresh(); setReload(value => value + 1); }
+  const refreshing = records.busy || taskLoading;
   return <div className="cost-task-detail">
-    <button aria-label={backLabel} ref={back} type="button" className="button button--ghost cost-back" onClick={onBack}><ArrowLeft size={16} />{backLabel}</button>
-    <div className="page-heading"><div><h1>任务用量详情</h1><p>{task ? task.title : taskLoading ? '正在读取任务用量…' : '任务用量未能读取'}</p></div><Button aria-label="刷新详情" variant="ghost" busy={records.busy || taskLoading} onClick={refresh}><RefreshCw size={15} />刷新</Button></div>
+    <header className="cost-task-toolbar">
+      <Button ref={back} variant="ghost" className="cost-back" onClick={onBack}><ArrowLeft size={16} aria-hidden="true" />{backLabel}</Button>
+      <h1>任务用量详情</h1>
+      <Button aria-label="刷新详情" variant="ghost" busy={refreshing} onClick={refresh}>{!refreshing && <RefreshCw size={15} aria-hidden="true" />}刷新</Button>
+    </header>
     {(records.error || error) && <Notice kind="error">{records.error || error}</Notice>}
-    {task && <section className="cost-task-overview" aria-label="任务 Token 汇总"><div className="cost-record__heading"><h2>{task.projectTitle}</h2>{task.status && <Status value={task.status} />}</div><dl className="cost-task-meta"><div><dt>任务编号</dt><dd>{task.id}</dd></div><div><dt>开始时间</dt><dd>{date(task.createdAt)}</dd></div>{task.projectRevision !== undefined && <div><dt>项目修订</dt><dd>{task.projectRevision} · 流程 v{task.workflowVersion}</dd></div>}{task.parentRunId && <div><dt>来源任务</dt><dd>{task.parentRunId}</dd></div>}</dl><TokenTotals summary={task.summary} />{!task.runAvailable && <Notice>原任务记录已不可用，已归档用量仍可查看。</Notice>}</section>}
-    <div className="cost-records-heading"><h2>调用明细</h2></div>
-    <div className="cost-record-list" aria-label="任务调用明细" aria-busy={records.busy}>
-      {!records.items.length && records.busy && <p className="cost-loading" role="status">正在读取调用明细…</p>}
-      {!records.items.length && records.hasLoaded && !records.busy && !records.error && <EmptyState icon={<ChartNoAxesCombined size={25} />} title="还没有调用明细" description="此任务尚未记录模型调用。" />}
-      {records.items.map(record => <article className="cost-record" key={record.id}>
-        <div className="cost-record__body"><div className="cost-record__heading"><h3>{task?.nodes.find(node => node.id === record.nodeId)?.label ?? record.nodeId}</h3><Status value={status[record.status]} /></div><p>{record.modelName} · {record.model}</p>{record.shotId && <p>镜头：{task?.shots.find(shot => shot.id === record.shotId)?.title ?? record.shotId}</p>}
-          <dl className="token-record-grid">{tokenMetrics.map(metric => <div key={metric} data-metric={metric}><dt>{labels[metric]}</dt><dd>{record.providerUsage?.[metric] === undefined ? '—' : count.format(record.providerUsage[metric])}</dd></div>)}</dl>
-          {record.note && <p className="cost-record__note">{record.note}</p>}
-          <details className="cost-evidence"><summary>调用详情</summary><dl><dt>平台</dt><dd>{modelPlatforms.find(item => item.id === record.platform)?.label ?? record.provider}</dd><dt>用量编号</dt><dd>{record.id}</dd><dt>操作编号</dt><dd>{record.operationId}</dd><dt>步骤／镜头编号</dt><dd>{record.nodeId}{record.shotId ? ` / ${record.shotId}` : ''}</dd><dt>记录时间</dt><dd>{date(record.createdAt)} · 更新于 {date(record.updatedAt)}</dd></dl></details>
-        </div>
-      </article>)}
-    </div>
-    {records.nextCursor !== null && <Button aria-label="加载更多明细" busy={records.loadingMore} disabled={!records.canLoadMore} onClick={() => void records.loadMore()}><ChevronDown size={14} />加载更多</Button>}
+    {task ? <section className="cost-task-overview" aria-label="任务 Token 汇总">
+      <div className="cost-task-identity">
+        <h2>{task.projectTitle}</h2>
+        <span className="cost-task-kind">{task.title}</span>
+        {task.status && <Status value={task.status} />}
+      </div>
+      <dl className="cost-task-meta">
+        <div><dt>开始时间</dt><dd>{date(task.createdAt)}</dd></div>
+        {task.projectRevision !== undefined && <div><dt>项目修订</dt><dd>{task.projectRevision}{task.workflowVersion !== undefined && ` · 流程 v${task.workflowVersion}`}</dd></div>}
+        <div><dt>任务编号</dt><dd>{task.id}</dd></div>
+        {task.parentRunId && <div><dt>来源任务</dt><dd>{task.parentRunId}</dd></div>}
+      </dl>
+      <TokenTotals summary={task.summary} />
+      {!task.runAvailable && <Notice>原任务记录已不可用，已归档用量仍可查看。</Notice>}
+    </section> : <p className="cost-task-feedback" role={taskLoading ? 'status' : undefined}>{taskLoading ? '正在读取任务用量…' : '任务用量未能读取'}</p>}
+    <section aria-labelledby={recordsHeading}>
+      <div className="cost-records-heading">
+        <h2 id={recordsHeading}>调用明细</h2>
+        {task && <span>{count.format(task.summary.total)} 次调用</span>}
+      </div>
+      <div className="cost-record-list" aria-busy={records.busy}>
+        {!records.items.length && records.busy && <p className="cost-loading" role="status">正在读取调用明细…</p>}
+        {!records.items.length && records.hasLoaded && !records.busy && !records.error && <EmptyState icon={<ChartNoAxesCombined size={25} />} title="还没有调用明细" description="此任务尚未记录模型调用。" />}
+        {/* Preserve the table roles when narrow rows switch to CSS grid. */}
+        {records.items.length > 0 && <table className="cost-record-table" role="table" aria-labelledby={recordsHeading}>
+          <thead role="rowgroup"><tr role="row">
+            <th role="columnheader" scope="col">步骤 / 模型</th>
+            <th role="columnheader" scope="col" className="cost-call__status">状态</th>
+            {tokenMetrics.map(metric => <th role="columnheader" scope="col" className="cost-call__amount" key={metric}>{labels[metric]}</th>)}
+            <th role="columnheader" scope="col" className="cost-call__action"><span className="cost-sr-only">操作</span></th>
+          </tr></thead>
+          {records.items.map(record => <UsageRecordRow key={record.id} record={record} task={task} />)}
+        </table>}
+      </div>
+      {records.nextCursor !== null && <Button className="cost-record-more" aria-label="加载更多明细" busy={records.loadingMore} disabled={!records.canLoadMore} onClick={() => void records.loadMore()}><ChevronDown size={14} />加载更多</Button>}
+    </section>
   </div>;
+}
+
+function UsageRecordRow({ record, task }: { record: UsageRecord; task?: CostTaskDetail }) {
+  const detailsId = useId();
+  const [expanded, setExpanded] = useState(false);
+  return <tbody className="cost-record" role="rowgroup">
+    <tr className="cost-call" role="row">
+      <th className="cost-call__identity" role="rowheader" scope="row">
+        <h3>{task?.nodes.find(node => node.id === record.nodeId)?.label ?? record.nodeId}</h3>
+        <p>{record.modelName} · {record.model}</p>
+        {record.shotId && <p>镜头：{task?.shots.find(shot => shot.id === record.shotId)?.title ?? record.shotId}</p>}
+      </th>
+      <td className="cost-call__status" role="cell"><Status value={status[record.status]} /></td>
+      {tokenMetrics.map(metric => {
+        const value = record.providerUsage?.[metric];
+        return <td className="cost-call__amount" role="cell" key={metric} data-metric={metric}>
+          <span className="cost-call__label" aria-hidden="true">{labels[metric]}</span>
+          <span className="token-amount" title={value === undefined ? '服务未返回此项用量' : undefined}>{value === undefined ? '—' : count.format(value)}</span>
+        </td>;
+      })}
+      <td className="cost-call__action" role="cell">
+        <Button variant="ghost" static aria-label="调用详情" aria-expanded={expanded} aria-controls={detailsId} onClick={() => setExpanded(value => !value)}>详情<ChevronDown size={14} aria-hidden="true" /></Button>
+      </td>
+    </tr>
+    <tr id={detailsId} className="cost-call-detail" role="row" hidden={!expanded}>
+      <td role="cell" colSpan={tokenMetrics.length + 3}>
+        {expanded && <dl className="cost-evidence">
+          <div><dt>平台</dt><dd>{modelPlatforms.find(item => item.id === record.platform)?.label ?? record.provider}</dd></div>
+          <div><dt>记录时间</dt><dd>{date(record.createdAt)}</dd></div>
+          <div><dt>用量编号</dt><dd>{record.id}</dd></div>
+          <div><dt>更新时间</dt><dd>{date(record.updatedAt)}</dd></div>
+          <div><dt>操作编号</dt><dd>{record.operationId}</dd></div>
+          <div><dt>步骤／镜头编号</dt><dd>{record.nodeId}{record.shotId ? ` / ${record.shotId}` : ''}</dd></div>
+          {record.note && <div className="cost-evidence__note"><dt>备注</dt><dd>{record.note}</dd></div>}
+        </dl>}
+      </td>
+    </tr>
+  </tbody>;
 }

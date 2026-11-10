@@ -154,7 +154,7 @@ test('preserves a known summary after a failed refresh and recovers detail reads
   } finally { await close(source.server); }
 });
 
-test('archives all four token counters with task and record pagination, retaining counts across reload', async ({ page, request }) => {
+test('archives all four token counters with task and record pagination, retaining counts across reload', async ({ page, request }, info) => {
   test.setTimeout(60_000);
   const errors: string[] = []; page.on('pageerror', error => errors.push(error.message));
   const source = await fixture(request, '任务 Token 分页验收');
@@ -173,13 +173,22 @@ test('archives all four token counters with task and record pagination, retainin
     await expect(summary).toContainText(older.id); await expect(summary).not.toContainText(newer.id);
     for (const [metric, value] of Object.entries({ inputTokens: '3,200', outputTokens: '1,600', cachedInputTokens: '960', cachedOutputTokens: '64' })) await expect(summary.locator(`[data-metric="${metric}"] > .token-amount`)).toHaveText(value);
     await expect(page.locator('.cost-record')).toHaveCount(30);
+    await page.screenshot({ path: info.outputPath('cost-records-dark-desktop.png'), animations: 'disabled' });
     await page.getByRole('button', { name: '加载更多明细', exact: true }).click(); await expect(page.locator('.cost-record')).toHaveCount(32);
     const row = page.locator('.cost-record').filter({ has: page.getByRole('heading', { name: '归档步骤 1', exact: true }) });
-    await expect(row.locator('[data-metric="inputTokens"] dd')).toHaveText('100');
-    await expect(row.locator('[data-metric="cachedOutputTokens"] dd')).toHaveText('2');
-    await row.getByText('调用详情', { exact: true }).click();
+    await expect(row.locator('[data-metric="inputTokens"] .token-amount')).toHaveText('100');
+    await expect(row.locator('[data-metric="cachedOutputTokens"] .token-amount')).toHaveText('2');
+    const disclosure = row.getByRole('button', { name: '调用详情', exact: true });
+    await expect(disclosure).toHaveAttribute('aria-expanded', 'false');
+    await disclosure.press('Enter');
+    await expect(disclosure).toHaveAttribute('aria-expanded', 'true');
+    await expect(row.getByText('用量编号', { exact: true })).toBeVisible();
     await expect(row).toContainText(source.model.name); await expect(row).not.toContainText('改名后的模型');
     await expect(page.locator('body')).not.toContainText('do-not-expose-parameters');
+    await disclosure.press('Space');
+    await expect(disclosure).toHaveAttribute('aria-expanded', 'false');
+    await expect(disclosure).toBeFocused();
+    await expect(row.getByText('用量编号', { exact: true })).toBeHidden();
     await page.getByRole('button', { name: '返回任务归档', exact: true }).click();
     await expect(card.getByRole('button')).toBeFocused(); await expect(card).toContainText('3,200');
     await page.reload(); await openCostsPage(page); await page.getByLabel('用量项目').selectOption(source.project.id);
