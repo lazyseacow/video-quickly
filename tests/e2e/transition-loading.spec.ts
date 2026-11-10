@@ -119,16 +119,26 @@ async function liveVideos(page: Page, paths: string[]) {
 }
 
 async function assertTransition(page: Page, canvas: Locator, samples: Sample[], reference: Awaited<ReturnType<typeof oracle>>, points: PixelPoint[], info: TestInfo) {
-  const visible = samples.filter(sample => sample.visible && sample.frame >= 45 && sample.frame <= 51), frames = new Set(visible.map(sample => sample.frame));
-  expect(frames.has(45), 'Recovery must start with the beginning of the transition.').toBe(true); expect(frames.size).toBeGreaterThanOrEqual(3);
+  const entrance = samples.findIndex(sample => sample.visible && sample.frame >= 45);
+  expect(samples[entrance]?.frame, 'Recovery must start with the beginning of the transition.').toBe(45);
+  const interior = samples.slice(entrance).filter(sample => sample.uiMs > 1500 && sample.uiMs < 1700);
+  for (const sample of interior) {
+    expect(sample.visible && sample.buffered, `Cached picture at ${sample.uiMs} ms`).toBe(true);
+    expect(sample.frame, `Presented frame at ${sample.uiMs} ms`).toBe(Math.round(sample.uiMs * 30 / 1000));
+  }
+  const visible = samples.filter(sample => sample.visible && sample.frame >= 45 && sample.frame <= 51);
   for (const sample of visible) expect(difference(sample.pixels, transitionPixels(reference.get(sample.frame)!, 320, points)), `Visible frame ${sample.frame}`).toBeLessThanOrEqual(12);
-  // Real-time playback can skip the final frame when a runner stalls. Verify
-  // that exact frame separately without slowing the live clock to show it.
-  await seek(page, 51); await expect(canvas).toHaveAttribute('data-rendered-frame', '51'); await expect(canvas).toBeVisible();
-  const expected = transitionPixels(reference.get(51)!, 320, points);
+  // Sample the authored midpoint and ending without depending on the runner's
+  // repaint cadence during real-time playback.
   const read = () => canvas.evaluate((element: HTMLCanvasElement, points) => points.map(({ x, y }) => [...element.getContext('2d')!.getImageData(Math.floor(x * element.width / 320), Math.floor(y * element.height / 180), 1, 1).data].slice(0, 3) as Rgb), points);
-  await expect.poll(async () => difference(await read(), expected), { message: 'The exact transition ending must match its exported frame.' }).toBeLessThanOrEqual(12);
-  await info.attach('paused-transition-ending', { body: JSON.stringify({ frame: 51, pixels: await read(), expected, playbackFrames: [...frames] }), contentType: 'application/json' });
+  const pausedFrames = [];
+  for (const frame of [48, 51]) {
+    await seek(page, frame); await expect(canvas).toHaveAttribute('data-rendered-frame', String(frame)); await expect(canvas).toBeVisible();
+    const expected = transitionPixels(reference.get(frame)!, 320, points);
+    await expect.poll(async () => difference(await read(), expected), { message: `Paused frame ${frame} must match the export.` }).toBeLessThanOrEqual(12);
+    pausedFrames.push({ frame, pixels: await read(), expected });
+  }
+  await info.attach('paused-transition-reference', { body: JSON.stringify({ pausedFrames, playbackFrames: [...new Set(visible.map(sample => sample.frame))] }), contentType: 'application/json' });
 }
 
 for (const transition of ['fade', 'wipe'] as const) test(`holds the visible picture and audio clock for a cold ${transition}, then presents its complete transition`, async ({ page, request }, info) => {

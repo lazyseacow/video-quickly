@@ -98,19 +98,34 @@ export async function verifyNativeTransitionLoading({ page, rpc, openProject, fi
           await page.getByRole('button', { name: '暂停预览', exact: true }).click(); const ruler = page.getByRole('slider', { name: '预览播放位置', exact: true }), pausedMs = await ruler.getAttribute('aria-valuenow'); gate.release();
           await page.waitForTimeout(800); await expect(page.getByRole('button', { name: '播放预览', exact: true })).toBeVisible(); await expect(ruler).toHaveAttribute('aria-valuenow', pausedMs); assert.equal((await handle.evaluate(state => state.samples.at(-1))).audioPaused, true);
           record.pausePreserved = true; if (record.protocolGateSupported) checks.nativeBufferedPause = true; else checks.nativeColdPauseNoResume = true;
+          record.samples = await stopCapture(handle); handle = undefined;
         } else {
           gate.release(); await expect.poll(() => handle.evaluate(state => state.samples.some(sample => sample.visible && sample.frame >= 52)), { timeout: 20_000 }).toBe(true);
           const pause = page.getByRole('button', { name: '暂停预览', exact: true }); if (await pause.isVisible()) await pause.click();
-          const samples = await handle.evaluate(state => state.samples), transition = samples.filter(sample => sample.visible && sample.frame >= 45 && sample.frame <= 51), frames = new Set(transition.map(sample => sample.frame));
-          assert.ok(frames.has(45) && frames.has(51) && frames.size >= 3, `A complete native ${scenario} must be presented: ${[...frames]}`);
-          for (const sample of transition) for (const [point, { x, y }] of points.entries()) {
-            const offset = (sample.frame - 45) * 320 * 180 * 3 + (y * 320 + x) * 3;
-            assert.ok(sample.pixels[point].every((value, channel) => Math.abs(value - reference[offset + channel]) <= 12), `Native cold ${scenario} frame ${sample.frame}, point ${point}: ${sample.pixels[point]} vs ${[...reference.subarray(offset, offset + 3)]}`);
+          const samples = await stopCapture(handle); handle = undefined; record.samples = samples;
+          const entrance = samples.findIndex(sample => sample.visible && sample.frame >= 45);
+          assert.equal(samples[entrance]?.frame, 45, `Native cold ${scenario} must present its entrance`);
+          const interior = samples.slice(entrance).filter(sample => sample.uiMs > 1500 && sample.uiMs < 1700);
+          for (const sample of interior) assert.equal(sample.frame, Math.round(sample.uiMs * 30 / 1000), `Native cold ${scenario} must present the requested frame at ${sample.uiMs} ms`);
+          const transition = samples.filter(sample => sample.visible && sample.frame >= 45 && sample.frame <= 51);
+          const assertPixels = ({ frame, pixels }) => {
+            for (const [point, { x, y }] of points.entries()) {
+              const offset = (frame - 45) * 320 * 180 * 3 + (y * 320 + x) * 3;
+              assert.ok(pixels[point].every((value, channel) => Math.abs(value - reference[offset + channel]) <= 12), `Native cold ${scenario} frame ${frame}, point ${point}: ${pixels[point]} vs ${[...reference.subarray(offset, offset + 3)]}`);
+            }
+          };
+          for (const sample of transition) assertPixels(sample);
+          assert.ok(samples.filter(sample => sample.uiMs > 0).every(sample => sample.visible), 'The visible picture must survive real continuous playback');
+          record.transitionFrames = [...new Set(transition.map(sample => sample.frame))];
+          record.pausedFrames = [];
+          for (const frame of [48, 51]) {
+            await seek(frame); await expect(canvas).toHaveAttribute('data-rendered-frame', String(frame)); await expect(canvas).toBeVisible();
+            const pixels = await canvas.evaluate((element, points) => points.map(({ x, y }) => [...element.getContext('2d').getImageData(x, y, 1, 1).data].slice(0, 3)), points);
+            assertPixels({ frame, pixels }); record.pausedFrames.push({ frame, pixels });
           }
-          assert.ok(samples.filter(sample => sample.uiMs > 0).every(sample => sample.visible), 'The visible picture must survive real continuous playback'); record.transitionFrames = [...frames].sort((a, b) => a - b);
           await page.screenshot({ path: join(artifacts, `desktop-cold-${scenario}-recovered.png`) });
         }
-        record.samples = await stopCapture(handle); handle = undefined; record.routes = gate.attempts; record.requestEvents = gate.observed; record.routeSetupErrors = gate.errors;
+        record.routes = gate.attempts; record.requestEvents = gate.observed; record.routeSetupErrors = gate.errors;
         assert.deepEqual((await rpc('project.get', { projectId: project.id })).project, project);
         const control = await rpc('project.create', { title: `原生解码释放 ${randomUUID().slice(0, 6)}` }); await openProject(control.title); await expect.poll(async () => (await videos(page, paths)).length).toBe(0); record.resourcesReleased = true;
         checks.nativeColdTransitionResources = true;
