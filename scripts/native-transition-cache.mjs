@@ -140,15 +140,21 @@ export async function verifyNativeTransitionCache({ page, rpc, openProject, fixt
     assert.equal(record.observerError, undefined);
     assert.ok(record.decoderSnapshots.some(snapshot => snapshot.videos.length === 2 && snapshot.videos.every(video => video.width === 1920 && video.height === 1080)), 'Observe the real full-resolution native video decoders');
     assert.ok(record.samples.some(sample => !sample.audioPaused), 'The prepared mixed audio must actually play');
+    const requestedFrame = sample => Math.round(sample.uiMs * record.projectProfile.fps / 1000);
     for (const join of joins) {
       const transition = record.samples.filter(sample => sample.frame >= join.first && sample.frame < join.first + prefixFrames), visible = transition.filter(sample => sample.pixels), frames = [...new Set(visible.map(sample => sample.frame))];
       // A retained picture can lag the requested UI at a handoff. Classify the
       // event by requested timeline time so a post-transition seek is not called
       // a seek inside the old still-visible cached frame.
-      const interior = event => event.uiMs > Math.round(join.first * 1000 / 60) && event.uiMs < Math.round((join.first + prefixFrames - 1) * 1000 / 60);
-      const summary = { kind: join.kind, frames, audioPauses: record.audioEvents.filter(event => event.type === 'pause' && interior(event)), videoSeeks: record.videoEvents.filter(event => event.type === 'seeking' && interior(event)), badges: record.badgeEvents.filter(event => event.type === 'show' && interior(event)) };
+      const interior = event => requestedFrame(event) > join.first && requestedFrame(event) < join.first + prefixFrames - 1;
+      const stalePictures = record.samples.filter(sample => interior(sample) && sample.frame !== requestedFrame(sample));
+      const summary = { kind: join.kind, frames, stalePictures, audioPauses: record.audioEvents.filter(event => event.type === 'pause' && interior(event)), videoSeeks: record.videoEvents.filter(event => event.type === 'seeking' && interior(event)), badges: record.badgeEvents.filter(event => event.type === 'show' && interior(event)) };
       record.scenarios.push(summary);
-      assert.ok(frames.includes(join.first) && frames.length >= 8, `Native ${join.kind} must present its entrance and at least eight cached frames: ${frames}`);
+      // Display refresh can sample fewer frames than the project's 60 fps. Check
+      // progression through the prefix and match every interior sample to the playhead.
+      const middleStart = join.first + prefixFrames / 3, tailStart = middleStart + prefixFrames / 3;
+      assert.ok(frames[0] === join.first && frames.some(frame => frame >= middleStart && frame < tailStart) && frames.at(-1) >= tailStart, `Native ${join.kind} must present the entrance, middle and tail of its cached prefix: ${frames}`);
+      assert.deepEqual(stalePictures, [], `Native ${join.kind} must present the requested picture at each sampled interior frame`);
       assert.ok(transition.every(sample => sample.visible && sample.buffered), `Native ${join.kind} must use the visible immutable prefix throughout`);
       assert.equal(summary.audioPauses.length, 0, `Native ${join.kind} must not pause mixed audio for individual cached frames`);
       assert.equal(summary.videoSeeks.length, 0, `Native ${join.kind} must not seek a decoder for individual cached frames`);
