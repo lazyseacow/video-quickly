@@ -59,7 +59,8 @@ export function createReadModels(database: Database.Database, store: DocumentSto
     `).all(id).map(row => JSON.parse(row.body) as AssetRecord);
     return { id, revision: summary.revision, assetsVersion: version, project: revision === summary.revision ? undefined : store.get<ProjectDocument>('project', id), assets, latestRun: latest ? runSummary(JSON.parse(latest.body)) : undefined, activeRun: activeRecord?.regenerationSource ? runSummary(activeRecord) : undefined };
   }
-  function runs(before: number | undefined, limit: number, projectId?: string, filter: { promptSessionId?: string; purpose?: RunRecord['purpose']; status?: RunRecord['status']; createdAfter?: string; createdBefore?: string } = {}): RecordPage<RunSummary> {
+  function runs(before: number | undefined, limit: number, projectId?: string, filter: { promptSessionId?: string; purpose?: RunRecord['purpose']; status?: RunRecord['status'] } = {}): RecordPage<RunSummary> {
+    // Earlier versions hid runs from listings without discarding their execution data.
     const conditions = ["kind = 'run'", "NOT EXISTS (SELECT 1 FROM documents removed WHERE removed.kind = 'run-history-deletion' AND removed.id = documents.id)"], parameters: Record<string, string | number> = { limit: limit + 1 };
     if (before !== undefined) { conditions.push('rowid < @before'); parameters.before = before; }
     if (projectId !== undefined) {
@@ -69,8 +70,6 @@ export function createReadModels(database: Database.Database, store: DocumentSto
     if (filter.status !== undefined) { conditions.push("json_extract(body, '$.status') = @status"); parameters.status = filter.status; }
     if (filter.promptSessionId !== undefined) { conditions.push("json_extract(body, '$.promptSessionId') = @promptSessionId"); parameters.promptSessionId = filter.promptSessionId; }
     if (filter.purpose !== undefined) { conditions.push("coalesce(json_extract(body, '$.purpose'), 'production') = @purpose"); parameters.purpose = filter.purpose; }
-    if (filter.createdAfter !== undefined) { conditions.push("julianday(json_extract(body, '$.createdAt')) >= julianday(@createdAfter)"); parameters.createdAfter = filter.createdAfter; }
-    if (filter.createdBefore !== undefined) { conditions.push("julianday(json_extract(body, '$.createdAt')) < julianday(@createdBefore)"); parameters.createdBefore = filter.createdBefore; }
     const rows = database.prepare(`SELECT rowid AS cursor, body FROM documents WHERE ${conditions.join(' AND ')} ORDER BY rowid DESC LIMIT @limit`).all(parameters) as DocumentRow[];
     const { items, nextCursor } = page(rows, limit, row => JSON.parse(row.body) as RunRecord);
     if (!items.length) return { items: [], nextCursor };

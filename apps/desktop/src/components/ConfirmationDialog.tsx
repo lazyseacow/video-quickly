@@ -1,6 +1,6 @@
 import { createContext, useCallback, useContext, useEffect, useId, useRef, useState, type ReactNode } from 'react';
-import { chargeActionRequestSchema, chargeConfirmationSchema, isChargeAction, type ChargeEstimate } from '@video-quickly/contracts';
-import { rpc } from '../lib/client';
+import { chargeActionRequestSchema, chargeConfirmationSchema, isChargeAction, type ChargeEstimate, type VideoReferenceReview } from '@video-quickly/contracts';
+import { getAssetUrl, rpc } from '../lib/client';
 import { Button, Dialog } from './Primitives';
 import './confirmation-dialog.css';
 
@@ -10,6 +10,7 @@ interface ConfirmationOptions {
   confirmLabel: string;
   variant?: 'danger' | 'primary';
   estimate?: ChargeEstimate;
+  videoReferences?: VideoReferenceReview;
 }
 type Confirm = (options: ConfirmationOptions) => Promise<boolean>;
 interface PendingConfirmation extends ConfirmationOptions { resolve: (confirmed: boolean) => void; }
@@ -25,7 +26,6 @@ function formatCharge({ currency, amount }: NonNullable<ChargeEstimate['totals']
   return amount > 0 && amount < 0.000001 ? `小于 ${format.format(0.000001)}` : format.format(amount);
 }
 function generationQuantity(item: ChargeEstimate['items'][number]) {
-  if (item.referenceViews) return `1 张四宫格原图，裁出 ${item.referenceViews} 张参考图`;
   const units = { text: '项文本任务', image: '张图片', video: '段视频' };
   if (item.count === undefined) return `${{ text: '文本', image: '图片', video: '视频' }[item.kind]}生成量待确定`;
   const count = `${countFormat.format(item.count)} ${units[item.kind]}`;
@@ -52,6 +52,29 @@ export function ChargeEstimateDetails({ estimate }: { estimate: ChargeEstimate }
   </section>;
 }
 
+function ReferenceThumbnail({ path }: { path: string }) {
+  const [url, setUrl] = useState<string>();
+  useEffect(() => {
+    let active = true;
+    void getAssetUrl(path).then(value => { if (active) setUrl(value); }, () => { if (active) setUrl(undefined); });
+    return () => { active = false; };
+  }, [path]);
+  return url ? <img alt="" src={url} loading="lazy" onError={() => setUrl(undefined)} /> : null;
+}
+
+function VideoReferenceDetails({ review }: { review: VideoReferenceReview }) {
+  return <section className="video-reference-review" aria-label="视频参考图">
+    <h3>视频参考图</h3>
+    {review.status === 'pending' ? <p className="charge-estimate__hint">{review.until === 'storyboard' ? '生成分镜后确定各镜头的参考图。' : '素材准备完成后确定各镜头的参考图。'}</p> : <>
+      <ul className="video-reference-review__shots">{review.shots.map(shot => <li key={shot.id}>
+        <strong>{shot.title}</strong> <small>{shot.mode === 'single' ? '单图输入' : '多图参考'}</small>
+        <ul className="video-reference-review__images">{shot.images.map(file => <li key={file.id}><ReferenceThumbnail path={file.path} /><span>{file.name}</span></li>)}</ul>
+      </li>)}</ul>
+      {review.textShots > 0 && <p className="charge-estimate__hint">{review.textShots} 个镜头使用文字生成。</p>}
+    </>}
+  </section>;
+}
+
 export function ConfirmationProvider({ children }: { children: ReactNode }) {
   const [request, setRequest] = useState<PendingConfirmation>();
   const pending = useRef<PendingConfirmation | undefined>(undefined);
@@ -72,7 +95,7 @@ export function ConfirmationProvider({ children }: { children: ReactNode }) {
     current.resolve(confirmed);
   }
   return <ConfirmationContext.Provider value={confirm}>{children}{request && <Dialog role="alertdialog" title={request.title} descriptionId={descriptionId} initialFocus={cancel} className={`confirmation-dialog${request.estimate ? ' confirmation-dialog--estimate' : ''}`} onClose={() => settle(false)}>
-    <div className="dialog__body"><p id={descriptionId}>{request.description}</p>{request.estimate && <ChargeEstimateDetails estimate={request.estimate} />}</div>
+    <div className="dialog__body"><p id={descriptionId}>{request.description}</p>{request.estimate && <ChargeEstimateDetails estimate={request.estimate} />}{request.videoReferences && <VideoReferenceDetails review={request.videoReferences} />}</div>
     <div className="dialog__footer"><Button ref={cancel} onClick={() => settle(false)}>取消</Button><Button variant={request.variant ?? 'danger'} onClick={() => settle(true)}>{request.confirmLabel}</Button></div>
   </Dialog>}</ConfirmationContext.Provider>;
 }

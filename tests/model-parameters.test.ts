@@ -97,11 +97,11 @@ it('sends real image controls and the reference bytes through image edits, prese
 
 
 
-it('uses configured Seedance duration and real multi-reference roles without silently replacing the current frame', async () => {
+it('uses configured Seedance duration and references a shared character and scene image once', async () => {
   const { context, requests } = await fixture('seedance', 'animation', { duration: 8, resolution: '720p', ratio: '9:16', characterReferenceMode: 'reference_image' });
   const assets = await addCharacter(context, 2); context.project.shots[0].assetId = assets[1].id; context.project.workflow.production.referenceMode = 'existing';
   await validateMediaActivity(context); await createActivityExecutor()(context);
-  const body = requests[0].body; expect(body).toMatchObject({ duration: 8, resolution: '720p', ratio: '9:16', content: [{ type: 'text', text: expect.stringContaining('图片 3 为当前场景构图参考') }, ...[0, 1, 1].map(index => ({ type: 'image_url', role: 'reference_image', image_url: { url: expect.stringContaining(Buffer.from(`reference image ${index}`).toString('base64')) } }))] });
+  const body = requests[0].body; expect(body).toMatchObject({ duration: 8, resolution: '720p', ratio: '9:16', content: [{ type: 'text', text: expect.stringContaining('图片 2 为当前场景构图参考') }, ...[0, 1].map(index => ({ type: 'image_url', role: 'reference_image', image_url: { url: expect.stringContaining(Buffer.from(`reference image ${index}`).toString('base64')) } }))] });
   expect(body).not.toHaveProperty('characterReferenceMode');
 });
 
@@ -124,8 +124,12 @@ it.each([
 });
 
 it('rejects unsupported reference combinations before any journal receipt, then explicitly maps a custom request', async () => {
-  const { context, requests } = await fixture('openai-compatible', 'animation'); await addCharacter(context, 2);
-  await expect(validateMediaActivity(context)).rejects.toThrow('仅支持一张'); await expect(createActivityExecutor()(context)).rejects.toThrow('仅支持一张'); expect(requests).toEqual([]); expect(await readdir(context.dataDirectory)).toEqual(['reference-0.png', 'reference-1.png']);
+  const { context, requests } = await fixture('openai-compatible', 'animation');
+  const [first, second] = await addCharacter(context, 2);
+  const character = context.characters![0];
+  context.characters = [{ ...character, referenceAssetIds: [first.id] }, { ...character, id: 'character-2', name: '阿诚', referenceAssetIds: [second.id] }];
+  context.project.shots[0].characterIds = context.characters.map(profile => profile.id);
+  await expect(validateMediaActivity(context)).rejects.toThrow('每镜头接收一张图'); await expect(createActivityExecutor()(context)).rejects.toThrow('每镜头接收一张图'); expect(requests).toEqual([]); expect(await readdir(context.dataDirectory)).toEqual(['reference-0.png', 'reference-1.png']);
   context.model = { ...context.model!, provider: 'custom-http', parameters: { requestPath: 'custom', requestTemplate: { prompt: '{{prompt}}' }, resultBase64Path: 'data' } };
   await expect(validateMediaActivity(context)).rejects.toThrow('{{character_images}}'); expect(requests).toEqual([]);
   context.model.parameters.requestTemplate = { prompt: '{{prompt}}', reference_images: '{{character_images}}' };

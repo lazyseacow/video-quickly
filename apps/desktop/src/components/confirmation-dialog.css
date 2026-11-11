@@ -3,8 +3,8 @@
 .confirmation-dialog--estimate > .dialog__surface { display: flex; flex-direction: column; max-height: calc(100dvh - var(--space-8)); overflow: hidden; }
 .confirmation-dialog--estimate :is(.dialog__header, .dialog__footer) { flex-shrink: 0; }
 .confirmation-dialog--estimate .dialog__body { min-height: 0; overflow-y: auto; }
-.charge-estimate { margin-block: var(--space-4) 0; padding-block-start: var(--space-3); border-top: 1px solid var(--border); overflow-wrap: anywhere; }
-.charge-estimate h3 { margin: 0; font-size: var(--text-size-label); font-weight: var(--font-weight-semibold); }
+:is(.charge-estimate, .video-reference-review) { margin-block: var(--space-4) 0; padding-block-start: var(--space-3); border-top: 1px solid var(--border); overflow-wrap: anywhere; }
+:is(.charge-estimate, .video-reference-review) h3 { margin: 0; font-size: var(--text-size-label); font-weight: var(--font-weight-semibold); }
 .charge-estimate__models { list-style: none; margin: 0; padding: 0; }
 .charge-estimate__models li { display: flex; flex-wrap: wrap; justify-content: space-between; gap: var(--space-2); padding-block: var(--space-2); }
 .charge-estimate__model { display: grid; gap: var(--space-1); min-width: 0; }
@@ -13,3 +13,9 @@
 .charge-estimate__total { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: baseline; gap: var(--space-2); margin: var(--space-2) 0 0; padding-block-start: var(--space-3); border-top: 1px solid var(--border); font-weight: var(--font-weight-semibold); }
 .charge-estimate__total dd { margin: 0; }
 .charge-estimate__total dd, .charge-estimate__amount { font-variant-numeric: tabular-nums; }
+.video-reference-review__shots, .video-reference-review__images { list-style: none; margin: var(--space-2) 0 0; padding: 0; }
+.video-reference-review__shots { display: grid; gap: var(--space-3); font-size: var(--text-size-label); }
+.video-reference-review__shots small { color: var(--text-secondary); font-size: var(--text-size-caption); }
+.video-reference-review__images { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 140px), 1fr)); gap: var(--space-2); }
+.video-reference-review__images li { display: flex; align-items: center; gap: var(--space-2); min-width: 0; font-size: var(--text-size-caption); }
+.video-reference-review__images img { flex: none; inline-size: var(--space-8); block-size: var(--space-8); object-fit: contain; border: 1px solid var(--border); border-radius: var(--radius-small); }

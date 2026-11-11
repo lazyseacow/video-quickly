@@ -1,6 +1,6 @@
 import { useEffect, useId, useRef, useState } from 'react';
 import { ChevronDown, Download, FileCheck2, FolderOpen, PencilLine, RefreshCw, RotateCcw } from 'lucide-react';
-import { activitySchema, recordPageSchema, runDiagnosticsSchema, runEventSchema, runInspectionSchema, runStepPayloadSchema, type RunInspection, type RunStepSummary, type RunSummary } from '@video-quickly/contracts';
+import { activitySchema, recordPageSchema, runDiagnosticsSchema, runEventSchema, runInspectionSchema, runStepPayloadSchema, type RunInspection, type RunStepSummary } from '@video-quickly/contracts';
 import { Button, Dialog, Notice, Select, Status } from '../components/Primitives';
 import { nativeDesktop, revealFile } from '../components/PathPicker';
 import { getAssetUrl } from '../lib/client';
@@ -8,7 +8,6 @@ import { useChargeRpc } from '../components/ConfirmationDialog';
 import { useRecordPage } from '../lib/use-record-page';
 import { useRuntimeRead } from '../lib/use-runtime-read';
 import type { StepOutputSelection } from '../lib/types';
-import RunActions from './RunActions';
 import StepResultView from '../components/StepResultView';
 import StepProgress, { ProgressIcon } from '../components/StepProgress';
 import { runningStep, showsStepProgress, stepProgressText, stepRetryLabel } from '../lib/run-progress';
@@ -27,10 +26,9 @@ function historyStepLabel(step: RunStepSummary, workflowId?: string) {
     ? generationLabel(step.label) : step.label;
 }
 
-export default function RunInspector({ runId, initialNodeId, version, onClose, onChanged, onOpenOutput, onRestart }: {
+export default function RunInspector({ runId, initialNodeId, version, onClose, onChanged, onOpenOutput }: {
   runId: string; initialNodeId?: string; version: number; onClose: () => void; onChanged: () => void;
   onOpenOutput: (selection: StepOutputSelection) => void;
-  onRestart: (run: RunSummary) => void;
 }) {
   const inspection = useRuntimeRead('run.inspect', { runId }, version, runInspectionSchema);
   const chargeRpc = useChargeRpc();
@@ -79,7 +77,8 @@ export default function RunInspector({ runId, initialNodeId, version, onClose, o
     </div>
     <div className="dialog__footer run-inspector__footer">
       <details className="run-inspector__tools"><summary>更多选项</summary><div><Button static busy={pending === 'run.diagnostics'} disabled={Boolean(pending) || !data} onClick={() => void perform('run.diagnostics')}><Download size={16} />导出诊断</Button><Button static aria-label="刷新详情" busy={inspection.busy} disabled={Boolean(pending)} onClick={inspection.refresh}><RefreshCw size={16} />刷新</Button></div></details>
-      {data && <RunActions inspection={data} pending={pending} onPerform={(method, params) => void perform(method, params)} onRestart={onRestart} />}
+      {data?.recovery.resume && <Button static aria-label="继续执行" variant="primary" busy={pending === 'run.resume'} disabled={Boolean(pending)} onClick={() => void perform('run.resume')}>继续</Button>}
+      {data?.recovery.cancel && <Button static aria-label="停止制作" disabled={Boolean(pending)} onClick={() => void perform('run.cancel')}>停止</Button>}
       <Button onClick={onClose}>关闭</Button>
     </div>
   </Dialog>;

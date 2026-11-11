@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { barChartSceneTemplateSchema, clipEditPlanSchema, clipEditSourceSchema, comparisonSceneTemplateSchema, musicClipSchema, processSceneTemplateSchema, projectSchema, sameJsonContent as sameContent, shotSchema, videoProfileSchema, workflowNodeSchema, workflowSchema, type ProjectDocument, type Shot } from '@video-quickly/contracts';
+import { barChartSceneTemplateSchema, clipEditPlanSchema, clipEditSourceSchema, comparisonSceneTemplateSchema, musicClipSchema, processSceneTemplateSchema, projectOriginalText, projectSchema, sameJsonContent as sameContent, shotSchema, videoProfileSchema, workflowNodeSchema, workflowSchema, type ProjectDocument, type Shot } from '@video-quickly/contracts';
 
 // Preserve unfinished input, including values the commit schema will reject.
 const draftComparisonSide = comparisonSceneTemplateSchema.shape.left.extend({ title: z.string(), points: z.array(z.string()).min(1).max(5) });
@@ -11,7 +11,7 @@ const draftSceneTemplateSchema = z.discriminatedUnion('kind', [
 const draftShotSchema = shotSchema.extend({ title: z.string(), narration: z.string(), visualPrompt: z.string(), durationUs: z.number().finite(), sceneTemplate: draftSceneTemplateSchema.optional() });
 const draftProfileSchema = videoProfileSchema.extend({ width: z.number().finite(), height: z.number().finite(), frameRate: z.object({ numerator: z.number().finite(), denominator: z.number().finite() }) });
 const draftWorkflowSchema = workflowSchema.extend({ nodes: z.array(workflowNodeSchema.extend({ label: z.string() })).max(100) });
-const editContentSchema = projectSchema.pick({ title: true, brief: true, profile: true, style: true, creativeContext: true, claims: true, shots: true, musicClips: true, researchSources: true, referenceDisplay: true, captionStyle: true, scenePreset: true, audioMix: true, clipEditSources: true, clipEditPlans: true }).extend({ creativeContext: projectSchema.shape.creativeContext.default(null), title: z.string(), brief: z.string(), profile: draftProfileSchema, shots: z.array(draftShotSchema), workflow: draftWorkflowSchema, musicClips: z.array(musicClipSchema).default([]), researchSources: projectSchema.shape.researchSources.unwrap().default([]), referenceDisplay: projectSchema.shape.referenceDisplay.unwrap().default('hidden'), captionStyle: projectSchema.shape.captionStyle.default(null), scenePreset: projectSchema.shape.scenePreset.default(null), audioMix: projectSchema.shape.audioMix.default(null), clipEditSources: projectSchema.shape.clipEditSources.unwrap().default([]), clipEditPlans: projectSchema.shape.clipEditPlans.unwrap().default([]) });
+const editContentSchema = projectSchema.pick({ title: true, brief: true, originalText: true, profile: true, style: true, creativeContext: true, claims: true, shots: true, musicClips: true, researchSources: true, referenceDisplay: true, captionStyle: true, scenePreset: true, audioMix: true, clipEditSources: true, clipEditPlans: true }).extend({ creativeContext: projectSchema.shape.creativeContext.default(null), title: z.string(), brief: z.string(), originalText: z.string().optional(), profile: draftProfileSchema, shots: z.array(draftShotSchema), workflow: draftWorkflowSchema, musicClips: z.array(musicClipSchema).default([]), researchSources: projectSchema.shape.researchSources.unwrap().default([]), referenceDisplay: projectSchema.shape.referenceDisplay.unwrap().default('hidden'), captionStyle: projectSchema.shape.captionStyle.default(null), scenePreset: projectSchema.shape.scenePreset.default(null), audioMix: projectSchema.shape.audioMix.default(null), clipEditSources: projectSchema.shape.clipEditSources.unwrap().default([]), clipEditPlans: projectSchema.shape.clipEditPlans.unwrap().default([]) });
 export type EditContent = z.infer<typeof editContentSchema>;
 const shotPatchSchema = z.object({ put: z.array(draftShotSchema), remove: z.array(z.string()), order: z.array(z.string()).optional() });
 const workflowPatchSchema = z.object({
@@ -40,10 +40,10 @@ export const savedEditsSchema = currentSavedEditsSchema;
 export type SavedEdits = z.infer<typeof savedEditsSchema>;
 type EditorState = z.infer<typeof currentSavedEditsSchema> & { conflict?: ProjectDocument; recovered: boolean; busy: boolean };
 type EditConflict = { path: string; label: string; local: unknown; remote: unknown };
-const keys = ['title', 'brief', 'profile', 'style', 'creativeContext', 'claims', 'musicClips', 'researchSources', 'referenceDisplay', 'captionStyle', 'scenePreset', 'audioMix'] as const;
+const keys = ['title', 'brief', 'originalText', 'profile', 'style', 'creativeContext', 'claims', 'musicClips', 'researchSources', 'referenceDisplay', 'captionStyle', 'scenePreset', 'audioMix'] as const;
 export { sameContent };
 export function editContent(project: ProjectDocument): EditContent {
-  return { title: project.title, brief: project.brief, profile: project.profile, style: project.style, creativeContext: project.creativeContext ?? null, claims: project.claims, shots: project.shots, workflow: project.workflow, musicClips: project.musicClips ?? [], researchSources: project.researchSources ?? [], referenceDisplay: project.referenceDisplay ?? 'hidden', captionStyle: project.captionStyle ?? null, scenePreset: project.scenePreset ?? null, audioMix: project.audioMix ?? null, clipEditSources: project.clipEditSources ?? [], clipEditPlans: project.clipEditPlans ?? [] };
+  return { title: project.title, brief: project.brief, originalText: projectOriginalText(project) ?? '', profile: project.profile, style: project.style, creativeContext: project.creativeContext ?? null, claims: project.claims, shots: project.shots, workflow: project.workflow, musicClips: project.musicClips ?? [], researchSources: project.researchSources ?? [], referenceDisplay: project.referenceDisplay ?? 'hidden', captionStyle: project.captionStyle ?? null, scenePreset: project.scenePreset ?? null, audioMix: project.audioMix ?? null, clipEditSources: project.clipEditSources ?? [], clipEditPlans: project.clipEditPlans ?? [] };
 }
 
 export function sameWorkflow(left: EditContent['workflow'], right: EditContent['workflow']) {
@@ -102,7 +102,7 @@ function apply(content: EditContent, patch: EditPatch): EditContent {
   return { ...content, ...settings, ...collections, shots: (changes.order ?? [...shots.keys()]).flatMap(id => { const shot = shots.get(id); return shot ? [shot] : []; }) };
 }
 
-const fieldLabels: Record<string, string> = { creativeContext: '创作设定', creativeEntityKeys: '镜头创作引用', continuity: '连续性要求', entities: '文字设定', clipEdit: '文稿剪辑', clipEditSources: '原始镜头', clipEditPlans: '剪辑计划', audioProcessing: '镜头声音处理', audioMix: '项目混音', captionStyle: '字幕样式', scenePreset: '新镜头模板默认', researchSources: '资料正文', referenceDisplay: '成片引用编号', claimIds: '镜头引用', musicClips: '背景音乐', characterIds: '镜头角色', sceneTemplate: '科普画面模板', captionTrack: '字幕', sourceInUs: '素材入点', audioInUs: '旁白入点', videoInUs: '视频入点', sceneInUs: '场景入点', sceneDurationUs: '原场景时长', title: '标题', brief: '创意简报', profile: '视频规格', width: '宽度', height: '高度', frameRate: '帧率', style: '系列风格', claims: '事实主张', narration: '旁白', visualPrompt: '画面要求', soundPrompt: '镜头声音要求', durationUs: '时长', animation: '运镜', zoom: '缩放', panX: '水平移动', panY: '垂直移动', transition: '转场', assetId: '画面素材', videoAssetId: '视频素材', audioAssetId: '旁白音频', locked: '锁定状态' };
+const fieldLabels: Record<string, string> = { creativeContext: '创作设定', creativeEntityKeys: '镜头创作引用', continuity: '连续性要求', entities: '文字设定', clipEdit: '文稿剪辑', clipEditSources: '原始镜头', clipEditPlans: '剪辑计划', audioProcessing: '镜头声音处理', audioMix: '项目混音', captionStyle: '字幕样式', scenePreset: '新镜头模板默认', researchSources: '资料正文', referenceDisplay: '成片引用编号', claimIds: '镜头引用', musicClips: '背景音乐', characterIds: '镜头角色', sceneTemplate: '科普画面模板', captionTrack: '字幕', sourceInUs: '素材入点', audioInUs: '旁白入点', videoInUs: '视频入点', sceneInUs: '场景入点', sceneDurationUs: '原场景时长', title: '标题', brief: '创意简报', originalText: '项目原文', profile: '视频规格', width: '宽度', height: '高度', frameRate: '帧率', style: '系列风格', claims: '事实主张', narration: '旁白', visualPrompt: '画面要求', soundPrompt: '镜头声音要求', durationUs: '时长', animation: '运镜', zoom: '缩放', panX: '水平移动', panY: '垂直移动', transition: '转场', assetId: '画面素材', videoAssetId: '视频素材', audioAssetId: '旁白音频', locked: '锁定状态' };
 export function mergeEdits(base: EditContent, local: EditContent, remote: EditContent, choices: Record<string, 'local' | 'remote'> = {}) {
   const conflicts: EditConflict[] = [];
   function merge(original: unknown, mine: unknown, theirs: unknown, path: string, label: string): unknown {
@@ -153,6 +153,10 @@ export class ProjectEditSession {
     const content = editContent(project);
     const restored = saved?.projectId === project.id ? saved : undefined;
     this.state = { version: 2, projectId: project.id, revision: project.revision, base: content, present: content, undo: [], redo: [], selectedShotId: project.shots[0]?.id, recovered: false, busy: false, ...restored };
+    if (restored && restored.base.originalText === undefined && restored.present.originalText === undefined) {
+      this.state.base = { ...restored.base, originalText: content.originalText };
+      this.state.present = { ...restored.present, originalText: content.originalText };
+    }
     this.state.recovered = this.dirty;
     this.receive(project);
   }

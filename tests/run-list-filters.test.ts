@@ -13,59 +13,49 @@ afterEach(async () => {
 });
 const pageSchema = recordPageSchema(runSummarySchema);
 async function fixture() {
-  const directory = await mkdtemp(join(tmpdir(), 'vq-run-history-filters-')), database = openDatabase(directory), store = new DocumentStore(database);
+  const directory = await mkdtemp(join(tmpdir(), 'vq-run-list-filters-')), database = openDatabase(directory), store = new DocumentStore(database);
   const first = seedLargeWorkspace(store, 10, { assets: 0, runs: 0, eventsPerRun: 0 }), other = seedLargeWorkspace(store, 11, { assets: 0, runs: 0, eventsPerRun: 0 });
   function put(id: string, createdAt: string, status: RunRecord['status'] = 'failed', projectId = first.id) {
-    const run: RunRecord = { id, projectId, projectRevision: 1, workflowVersion: 1, snapshotDigest: 'history-filter-fixture', status, createdAt, updatedAt: createdAt, events: [], activities: [] };
+    const run: RunRecord = { id, projectId, projectRevision: 1, workflowVersion: 1, snapshotDigest: 'run-list-filter-fixture', status, createdAt, updatedAt: createdAt, events: [], activities: [] };
     store.put('run', id, run); return run;
   }
-  put('before-start', '2026-03-08T04:59:59.999Z');
-  put('at-start', '2026-03-08T05:00:00.000Z');
-  put('inside-without-milliseconds', '2026-03-08T17:30:00Z');
-  put('at-end', '2026-03-09T04:00:00.000Z');
+  put('older', '2026-03-08T05:00:00.000Z');
+  put('newer', '2026-03-08T17:30:00.000Z');
+  const trial = put('prompt-trial', '2026-03-08T18:00:00.000Z');
+  store.put('run', trial.id, { ...trial, purpose: 'prompt-trial', promptSessionId: 'session' });
   put('different-status', '2026-03-08T17:30:00.000Z', 'succeeded');
   put('different-project', '2026-03-08T17:30:00.000Z', 'failed', other.id);
   const runtime = createRuntime({ dataDirectory: directory, seed: false }); fixtures.push({ directory, database, runtime });
   return { database, store, runtime, first, other, put };
 }
 
-describe('run-history filters', () => {
-  it('combines project, status and half-open UTC dates before cursor pagination', async () => {
+describe('run list filters', () => {
+  it('combines project, purpose and status before cursor pagination', async () => {
     const { runtime, first, put } = await fixture();
-    const filter = { projectId: first.id, status: 'failed', createdAfter: '2026-03-08T05:00:00Z', createdBefore: '2026-03-09T04:00:00Z', limit: 1 };
+    const filter = { projectId: first.id, status: 'failed', purpose: 'production', limit: 1 };
     const page = pageSchema.parse(await runtime.dispatch('run.list', filter));
-    expect(page.items.map(run => run.id)).toEqual(['inside-without-milliseconds']); expect(page.nextCursor).not.toBeNull();
+    expect(page.items.map(run => run.id)).toEqual(['newer']); expect(page.nextCursor).not.toBeNull();
     put('newer-insert', '2026-03-08T20:00:00.000Z');
     const next = pageSchema.parse(await runtime.dispatch('run.list', { ...filter, before: page.nextCursor }));
-    expect(next.items.map(run => run.id)).toEqual(['at-start']); expect(next.nextCursor).toBeNull();
+    expect(next.items.map(run => run.id)).toEqual(['older']); expect(next.nextCursor).toBeNull();
     const refreshed = pageSchema.parse(await runtime.dispatch('run.list', { ...filter, limit: 100 }));
-    expect(refreshed.items.map(run => run.id)).toEqual(['newer-insert', 'inside-without-milliseconds', 'at-start']);
+    expect(refreshed.items.map(run => run.id)).toEqual(['newer-insert', 'newer', 'older']);
   });
 
-  it('preserves unfiltered calls and supports either date bound and empty results', async () => {
+  it('preserves unfiltered calls and reads results for the selected experiment', async () => {
     const { runtime, first } = await fixture();
-    expect(pageSchema.parse(await runtime.dispatch('run.list', {})).items).toHaveLength(6);
-    expect(pageSchema.parse(await runtime.dispatch('run.list', { projectId: first.id })).items).toHaveLength(5);
+    expect(pageSchema.parse(await runtime.dispatch('run.list', {})).items).toHaveLength(5);
+    expect(pageSchema.parse(await runtime.dispatch('run.list', { projectId: first.id })).items).toHaveLength(4);
     expect(pageSchema.parse(await runtime.dispatch('run.list', { status: 'succeeded' })).items.map(run => run.id)).toEqual(['different-status']);
-    expect(pageSchema.parse(await runtime.dispatch('run.list', { createdBefore: '2026-03-08T05:00:00Z' })).items.map(run => run.id)).toEqual(['before-start']);
-    expect(pageSchema.parse(await runtime.dispatch('run.list', { createdAfter: '2026-03-09T04:00:00Z' })).items.map(run => run.id)).toEqual(['at-end']);
+    expect(pageSchema.parse(await runtime.dispatch('run.list', { projectId: first.id, purpose: 'prompt-trial', promptSessionId: 'session' })).items.map(run => run.id)).toEqual(['prompt-trial']);
+    expect(pageSchema.parse(await runtime.dispatch('run.list', { projectId: first.id, purpose: 'prompt-trial', promptSessionId: 'other' }))).toEqual({ items: [], nextCursor: null });
     expect(pageSchema.parse(await runtime.dispatch('run.list', { projectId: first.id, status: 'canceled' }))).toEqual({ items: [], nextCursor: null });
-    for (const createdAfter of ['2026-03-08T05:00:00Z', '2026-03-08T05:00:00.0Z', '2026-03-08T05:00:00.00Z', '2026-03-08T05:00:00.000Z']) {
-      const page = pageSchema.parse(await runtime.dispatch('run.list', { projectId: first.id, status: 'failed', createdAfter, createdBefore: '2026-03-09T04:00:00Z' }));
-      expect(page.items.map(run => run.id)).toEqual(['inside-without-milliseconds', 'at-start']);
-    }
-    expect(pageSchema.parse(await runtime.dispatch('run.list', { projectId: first.id, status: 'failed', createdAfter: '2026-03-08T05:00:00.001Z', createdBefore: '2026-03-08T17:30:00Z' })).items).toEqual([]);
   });
 
-  it('rejects invalid statuses, non-UTC instants and empty or reversed intervals before reading', async () => {
+  it('rejects unsupported statuses and purposes before reading', async () => {
     const { runtime } = await fixture();
     for (const input of [
-      { status: "failed' OR 1=1--" }, { createdAfter: 'not-a-date' }, { createdAfter: '2026-02-30T00:00:00Z' },
-      { createdAfter: '2026-03-08T05:00Z' },
-      { createdAfter: '2026-03-08T05:00:00.0001Z' }, { createdBefore: '2026-03-09T04:00:00.0000Z' },
-      { createdBefore: '2026-03-08T06:00:00+01:00' },
-      { createdAfter: '2026-03-08T05:00:00Z', createdBefore: '2026-03-08T05:00:00.000Z' },
-      { createdAfter: '2026-03-09T04:00:00Z', createdBefore: '2026-03-08T05:00:00Z' },
+      { status: 'unsupported' }, { purpose: 'unsupported' },
     ]) await expect(runtime.dispatch('run.list', input)).rejects.toThrow();
   });
 

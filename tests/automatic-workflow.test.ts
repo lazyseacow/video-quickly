@@ -3,8 +3,9 @@ import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, expect, it, vi } from 'vitest';
-import { createNativeVideoWorkflow, assetSchema, projectSchema, runInspectionSchema, runSchema, runStepPayloadSchema, shotSchema, type ProjectDocument } from '@video-quickly/contracts';
+import { createNativeVideoWorkflow, assetSchema, projectSchema, promptPreviewSchema, runInspectionSchema, runSchema, runStepPayloadSchema, shotSchema, type ProjectDocument } from '@video-quickly/contracts';
 import { createRuntime, SimulatedProcessExit, type ActivityExecutionContext, type RuntimeOptions } from '../packages/runtime/src';
+import { DocumentStore, openDatabase } from '../packages/runtime/src/database';
 import { planningFixtureFields, planningFixtureResponse, storyboardFixtureResponse } from './fixtures/planning-response';
 
 const directories: string[] = [], runtimes = new Set<ReturnType<typeof createRuntime>>();
@@ -68,6 +69,84 @@ it('automatically chains all seven tasks, forwards generated text and media, and
   expect((await runtime.dispatch('run.get', { runId: run.id }) as { events?: { type: string }[] }).events?.some(event => event.type === 'review.waiting')).not.toBe(true);
 });
 
+it('preserves legacy original text and uses the latest project original in a production storyboard', async () => {
+  const { runtime, project, provider, directory } = await fixture();
+  const initialText = '旧版：阿雨把信交给邮差。';
+  const originalText = '阿雨等雨停。\n她把信交给撑黄伞的来客。';
+  const database = openDatabase(directory);
+  try { new DocumentStore(database).put('project', project.id, { ...project, episode: { workId: 'legacy-work', number: 1, originalText: initialText } }); }
+  finally { database.close(); }
+  const preview = promptPreviewSchema.parse(await runtime.dispatch('prompt.preview', {
+    projectId: project.id, projectRevision: project.revision, node: project.workflow.nodes.find(node => node.kind === 'script')!,
+  }));
+  expect(preview.prompt).toContain(`项目原文：\n${initialText}`);
+  const brief = '无需联网，水彩短片，六秒，保留关键动作。';
+  const edited = projectSchema.parse(await runtime.dispatch('project.update', { projectId: project.id, revision: project.revision, patch: { brief, originalText } }));
+  expect(edited.brief).toBe(brief);
+
+  const run = runSchema.parse(await runtime.dispatch('run.start', { projectId: edited.id }));
+  await runtime.waitForIdle();
+  const { run: completed } = runInspectionSchema.parse(await runtime.dispatch('run.inspect', { runId: run.id }));
+  expect(completed.status, completed.error).toBe('succeeded');
+  expect(provider).toHaveBeenCalledTimes(4);
+  const [briefCall, styleCall, outlineCall, batchCall] = provider.mock.calls.map(([call]) => call);
+  expect(briefCall.prompt).toContain(`当前创意简报：${brief}`);
+  expect(styleCall.prompt).not.toContain('项目原文：');
+  expect(outlineCall.outputSchemaName).toBe('video_storyboard_outline');
+  expect(batchCall.outputSchemaName).toBe('video_storyboard_batch');
+  for (const { prompt } of [briefCall, outlineCall, batchCall]) {
+    expect(prompt).toContain(`项目原文：\n${originalText}`);
+    expect(prompt).not.toContain(initialText);
+  }
+  const generatedBrief = await runtime.dispatch('node.result', { runId: run.id, nodeId: 'brief' }) as { text: string };
+  expect(outlineCall.prompt).toContain(`当前创意简报：${generatedBrief.text}`);
+  expect(batchCall.prompt).toContain(`当前创意简报：${generatedBrief.text}`);
+});
+
+it('freezes the project original from the current form for a storyboard draft retry', async () => {
+  const { runtime, project, provider, media, options } = await fixture();
+  const originalText = '原文初版：旅人沿石阶上山。';
+  const revisedText = '原文修订：旅人从河边坐船进城。';
+  const node = project.workflow.nodes.find(node => node.kind === 'script')!;
+  const draft = { projectId: project.id, node, context: { brief: '四秒水彩短片。', originalText } };
+  const shots = Array.from({ length: 6 }, (_, index) => ({ title: `旅人入城 ${index + 1}`, narration: '', visualPrompt: '水彩绘制的旅人', durationUs: 4_000_000 }));
+  const output = JSON.stringify({ shots });
+  let rejectBatch = true;
+  provider.mockImplementation(async ({ prompt, operationId }) => {
+    if (rejectBatch && operationId.endsWith(':storyboard:2:response:1')) { rejectBatch = false; return '{}'; }
+    return storyboardFixtureResponse(prompt, output);
+  });
+  const failed = runSchema.parse(await runtime.dispatch('planning.prefill.start', { ...draft, projectRevision: project.revision, requestId: randomUUID() }));
+  await runtime.waitForIdle();
+  const inspection = runInspectionSchema.parse(await runtime.dispatch('run.inspect', { runId: failed.id }));
+  expect(inspection.steps[0]).toMatchObject({ status: 'failed', retry: { allowed: true }, progress: { storyboard: { kind: 'batch', index: 2 } } });
+  const revised = projectSchema.parse(await runtime.dispatch('project.update', { projectId: project.id, revision: project.revision, patch: { originalText: revisedText } }));
+
+  await runtime.close(); runtimes.delete(runtime);
+  const reopened = createRuntime(options); runtimes.add(reopened);
+  await reopened.dispatch('run.step.retry', { runId: failed.id, nodeId: node.id });
+  await reopened.waitForIdle();
+  expect(await reopened.dispatch('node.result', { runId: failed.id, nodeId: node.id })).toMatchObject({ shots });
+  const frozenCalls = provider.mock.calls.map(([call]) => call);
+  expect(frozenCalls.map(call => call.operationId.split(':storyboard:')[1])).toEqual(['outline:response:1', '1:response:1', '2:response:1', '2:response:2']);
+  for (const { prompt } of frozenCalls) {
+    expect(prompt).toContain(`项目原文：\n${originalText}`);
+    expect(prompt).toContain('当前创意简报：四秒水彩短片。');
+    expect(prompt).not.toContain(revisedText);
+  }
+
+  provider.mockClear();
+  const fresh = runSchema.parse(await reopened.dispatch('planning.prefill.start', { ...draft, context: { brief: draft.context.brief }, projectRevision: revised.revision, requestId: randomUUID() }));
+  await reopened.waitForIdle();
+  expect(await reopened.dispatch('node.result', { runId: fresh.id, nodeId: node.id })).toMatchObject({ shots });
+  expect(provider).toHaveBeenCalledTimes(3);
+  for (const [{ prompt }] of provider.mock.calls) {
+    expect(prompt).toContain(`项目原文：\n${revisedText}`);
+    expect(prompt).not.toContain(originalText);
+  }
+  expect(media).not.toHaveBeenCalled();
+});
+
 it('generates a field draft once for the same request and leaves production and project content untouched', async () => {
   const { runtime, project, provider, media } = await fixture();
   const input = { projectId: project.id, projectRevision: project.revision, node: project.workflow.nodes.find(node => node.id === 'brief')!, context: { brief: '表单中未保存的主题' }, requestId: randomUUID() };
@@ -119,7 +198,7 @@ it('reports missing manual inputs during readiness and blocks the run before cal
   expect(provider).not.toHaveBeenCalled(); expect(media).not.toHaveBeenCalled();
 });
 
-it('round-trips manual source choices through the project backup format', async () => {
+it('exports manual source choices with the project backup', async () => {
   const { runtime, project } = await fixture();
   const brief = { topic: '雨水循环', audience: '初学者', coreMessage: '雨水的旅程', narrativeOrder: '', targetDuration: '6 秒', expression: '' };
   await runtime.dispatch('project.update', { projectId: project.id, revision: project.revision, patch: {
@@ -129,11 +208,7 @@ it('round-trips manual source choices through the project backup format', async 
   const manifestPath = join(backup.path, 'project.json');
   const manifest = JSON.parse(await readFile(manifestPath, 'utf8'));
   expect(manifest.schemaVersion).toBe(9);
-  const imported = projectSchema.parse(await runtime.dispatch('project.importBackup', { path: backup.path }));
-  expect(imported.workflow.production.manualPlanningSteps).toEqual(['brief']);
-  expect(imported.workflow.production.manualPlanningFields).toEqual({ brief });
-  await writeFile(manifestPath, JSON.stringify({ ...manifest, schemaVersion: 8 }));
-  await expect(runtime.dispatch('project.importBackup', { path: backup.path })).rejects.toThrow('需要格式 9 备份');
+  expect(projectSchema.parse(manifest.project).workflow.production).toMatchObject({ manualPlanningSteps: ['brief'], manualPlanningFields: { brief } });
 });
 
 it.each(['brief', 'style'] as const)('blocks downstream work until the %s output passes its schema', async nodeId => {

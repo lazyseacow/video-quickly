@@ -20,11 +20,11 @@ for (const viewport of [{ width: 1536, height: 960, theme: 'light' }, { width: 1
       for (let index = 0; index < 6; index++) await rpc(request, 'project.create', { title: `最近项目 ${index} ${randomUUID().slice(0, 8)}` });
       await page.setViewportSize(viewport); await page.emulateMedia({ reducedMotion: 'reduce' }); await page.goto('/'); await expect(page).toHaveTitle(/Video Quickly/);
       const sidebar = page.getByRole('complementary', { name: '工作空间导航', exact: true }), settings = sidebar.getByRole('button', { name: '设置', exact: true });
-      for (const [label, names] of [['主导航', ['我的项目', '制作记录']], ['资源导航', ['素材库', '角色参考库', '系列模板']], ['工具导航', ['模型连接', 'Skill 工作室']]] as const) {
+      for (const [label, names] of [['主导航', ['我的项目']], ['资源导航', ['素材库', '系列模板']], ['工具导航', ['模型连接', 'Skill 工作室']]] as const) {
         const navigation = sidebar.getByRole('navigation', { name: label, exact: true }); await expect(navigation.getByRole('button')).toHaveCount(names.length);
         for (const name of names) await expect(navigation.getByRole('button', { name, exact: true })).toHaveCount(1);
       }
-      for (const name of ['我的项目', '制作记录', '素材库', '角色参考库', '系列模板', '模型连接', 'Skill 工作室']) {
+      for (const name of ['我的项目', '素材库', '系列模板', '模型连接', 'Skill 工作室']) {
         const control = sidebar.locator('.sidebar-rail').getByRole('button', { name, exact: true }); await expect(control.locator('span')).toHaveCount(0); await control.hover(); await expect(page.getByRole('tooltip')).toHaveText(name); await expect(page.getByRole('tooltip')).toBeInViewport({ ratio: 1 }); await page.mouse.move(viewport.width - 1, viewport.height - 1); await expect(page.getByRole('tooltip')).toHaveCount(0);
       }
       const assets = sidebar.getByRole('button', { name: '素材库', exact: true }); await assets.focus(); await expect(page.getByRole('tooltip')).toHaveText('素材库'); await page.keyboard.press('Escape'); await expect(page.getByRole('tooltip')).toHaveCount(0);

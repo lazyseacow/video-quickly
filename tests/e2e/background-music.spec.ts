@@ -1,4 +1,3 @@
-import { closeProjectSettings } from './settings';
 import { openProjectFromList } from './workspace-navigation';
 import { setWorkspaceTheme } from './workspace-settings';
 import { projectSettingAction } from './settings';
@@ -190,14 +189,14 @@ test('edits real music through the UI, restores history and follows project time
   await expectHealthy(page, errors);
 });
 
-test('protects referenced public music and restores it as an independent asset through the import UI', async ({ page, request }, info) => {
+test('protects referenced public music and includes it in the project backup', async ({ page, request }, info) => {
   const errors = observeErrors(page);
   const project = await createProject(request, '公共音乐备份与保护验收');
   const path = info.outputPath('music-public.wav'), bytes = wav(); await writeFile(path, bytes);
   const asset = await rpc<AssetRecord>(request, 'asset.import', { path, kind: 'audio' });
   expect(asset.projectId).toBeUndefined();
   await openProject(page, project.title);
-  let dialog = await musicEditor(page);
+  const dialog = await musicEditor(page);
   await dialog.getByLabel('从素材库添加音乐', { exact: true }).selectOption(asset.id);
   await dialog.getByRole('button', { name: '应用背景音乐', exact: true }).click();
   await expect.poll(async () => (await savedProject(request, project.id)).musicClips?.length).toBe(1);
@@ -213,24 +212,8 @@ test('protects referenced public music and restores it as an independent asset t
   const portable = JSON.parse(await readFile(`${backup.path}/project.json`, 'utf8'));
   expect(portable.project.musicClips).toEqual(saved.musicClips);
   expect(portable.assets[0].sha256).toBe(asset.sha256);
-  await closeProjectSettings(page); await page.getByRole('button', { name: '我的项目', exact: true }).click();
-  await page.getByRole('button', { name: '导入项目', exact: true }).click();
-  dialog = page.getByRole('dialog', { name: '导入项目备份', exact: true });
-  await dialog.getByLabel('项目备份路径', { exact: true }).fill(backup.path);
-  const pendingImport = page.waitForResponse(response => response.url().endsWith('/__desktop_rpc') && response.request().postDataJSON()?.method === 'project.importBackup');
-  await dialog.getByRole('button', { name: '导入备份', exact: true }).click();
-  const restored = (await (await pendingImport).json()).result as ProjectDocument;
-  await expect(dialog).toHaveCount(0);
-  await expect(page.getByLabel('项目名称', { exact: true })).toHaveValue(restored.title);
-  expect(restored.id).not.toBe(project.id);
-  const music = restored.musicClips?.[0];
-  if (!music) throw new Error('恢复项目未保留背景音乐设置');
-  expect(music.assetId).not.toBe(asset.id);
-  const detail = await rpc<{ project: ProjectDocument; assets: AssetRecord[] }>(request, 'project.get', { projectId: restored.id });
-  const restoredAsset = detail.assets.find(value => value.id === music.assetId);
-  expect(restoredAsset).toMatchObject({ projectId: restored.id, sha256: asset.sha256 });
-  if (!restoredAsset) throw new Error('恢复项目未包含公共音乐');
-  expect(await readFile(restoredAsset.path)).toEqual(bytes);
+  expect(await readFile(backup.path + '/' + portable.assets[0].path)).toEqual(bytes);
+  await openProject(page, project.title);
   await expect(page.locator('.track--music .audio-waveform')).toHaveAttribute('data-status', 'ready');
   await expectHealthy(page, errors);
 });

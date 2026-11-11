@@ -277,6 +277,7 @@ const projectFieldNames = {
   creativeContext: '创作设定',
   episode: '分集信息',
   episodeSource: '分集来源',
+  originalText: '项目原文',
   musicClips: '背景音乐',
   researchSources: '资料来源',
   referenceDisplay: '成片引用编号',

@@ -62,7 +62,7 @@ it('classifies frozen failures and never permits a new run for uncertain, active
   expect(classifyModelFailure({ error: 'HTTP 429' })).toBe('rate-limit');
   expect(classifyModelFailure({ error: 'HTTP 503' })).toBe('service');
   expect(classifyModelFailure({ error: 'HTTP 422' })).toBe('configuration');
-  for (const failure of [{ unknownSubmission: true }, { queueOwned: true }, { trial: true }, { runStatus: 'waiting_external' }]) expect(modelAlternatives(node, [first, second], failure).canCreateRun).toBe(false);
+  for (const failure of [{ unknownSubmission: true }, { trial: true }, { runStatus: 'waiting_external' }]) expect(modelAlternatives(node, [first, second], failure).canCreateRun).toBe(false);
   expect(modelAlternatives(node, [first, second], { error: 'HTTP 429', runStatus: 'failed' }).canCreateRun).toBe(true);
 });
 it('offers only enabled compatible connections, shows configured prices and prioritizes another service after service failures', () => {

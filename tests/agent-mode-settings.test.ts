@@ -1,15 +1,13 @@
 import { expect, it } from 'vitest';
-import { createNativeVideoWorkflow, DEFAULT_VIDEO_PROFILE, productionEditingSkillIds, productionSettingsSchema, workDefaultsSchema, workflowSchema } from '@video-quickly/contracts';
+import { createNativeVideoWorkflow, DEFAULT_VIDEO_PROFILE, productionEditingSkillIds, productionSettingsSchema, workflowSchema } from '@video-quickly/contracts';
 import { applyStageConfigurationDraft, updateProductionConfigurationDraft } from '../apps/desktop/src/lib/stage-configuration-draft';
 
-it('reads historical project and work settings without retaining a production mode', () => {
+it('reads historical project settings without retaining a production mode', () => {
   const historical = { mode: 'native-video', referenceMode: 'none', soundPrompt: '', subtitleMode: 'off' };
   expect(productionSettingsSchema.parse(historical)).toMatchObject({ agentSkillIds: [], agentMcpServerIds: [] });
   for (const executionMode of ['workflow', 'agent']) {
     const production = { ...historical, executionMode, agentSkillIds: ['method'], agentMcpServerIds: ['tool'] };
     const configured = workflowSchema.parse({ ...createNativeVideoWorkflow(), production });
-    const defaults = workDefaultsSchema.parse({ production });
-    expect(configured.production).toEqual(defaults.production);
     expect(configured.production).not.toHaveProperty('executionMode');
     expect(configured.production).toMatchObject({ agentSkillIds: ['method'], agentMcpServerIds: ['tool'] });
   }

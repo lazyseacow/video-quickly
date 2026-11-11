@@ -4,7 +4,7 @@ import type { AssetRecord, CharacterProfile, MCPServer, ModelProfile, ProjectDoc
 import { test } from './isolated-workspace';
 import { fixture as productionFixture, open as openProduction, pick, rpc } from './native-video-fixture';
 import { productionStep, saveAndStartProduction, saveProduction } from './production-settings';
-import { openProjectFromList } from './workspace-navigation';
+import { openAssetLibrary, openProjectFromList } from './workspace-navigation';
 import { confirmAction } from './confirmation-actions';
 
 async function writeWave(path: string) {
@@ -26,16 +26,17 @@ for (const viewport of [{ width: 1536, height: 960, theme: 'dark' }, { width: 60
   page.on('pageerror', error => errors.push(error.message));
   page.on('request', request => { if (request.url().endsWith('/__desktop_rpc')) { const method = request.postDataJSON()?.method; if (['project.archive', 'model.delete', 'asset.delete', 'character.archive', 'seriesTemplate.archive', 'tool.delete'].includes(method)) writes.push(method); } });
   await page.setViewportSize(viewport); await page.addInitScript(theme => localStorage.setItem('vq-theme', theme), viewport.theme); await page.goto('/');
-  const cases: Array<{ pageName: string; trigger: string; title: string; confirm: string; method: string; subject: string; card: Locator }> = [
+  const cases: Array<{ pageName: string; view?: '媒体' | '角色'; trigger: string; title: string; confirm: string; method: string; subject: string; card: Locator }> = [
     { pageName: '我的项目', trigger: `将“${project.title}”移入回收站`, title: '将项目移入回收站？', confirm: '移入回收站', method: 'project.archive', subject: project.title, card: page.locator('.project-card').filter({ hasText: project.title }) },
     { pageName: '模型连接', trigger: `移除“${model.name}”`, title: '移除模型连接？', confirm: '确认移除', method: 'model.delete', subject: model.name, card: page.locator('.list-card').filter({ hasText: model.name }) },
-    { pageName: '素材库', trigger: `移除素材“${asset.name}”`, title: '移除素材记录？', confirm: '确认移除', method: 'asset.delete', subject: asset.name, card: page.locator('.asset-card').filter({ hasText: asset.name }) },
-    { pageName: '角色参考库', trigger: `归档角色：${character.name}`, title: '归档角色？', confirm: '确认归档', method: 'character.archive', subject: character.name, card: page.locator('.character-card').filter({ hasText: character.name }) },
+    { pageName: '素材库', view: '媒体', trigger: `移除素材“${asset.name}”`, title: '移除素材记录？', confirm: '确认移除', method: 'asset.delete', subject: asset.name, card: page.locator('.asset-card').filter({ hasText: asset.name }) },
+    { pageName: '素材库', view: '角色', trigger: `归档角色：${character.name}`, title: '归档角色？', confirm: '确认归档', method: 'character.archive', subject: character.name, card: page.locator('.character-card').filter({ hasText: character.name }) },
     { pageName: '系列模板', trigger: `归档系列模板：${template.name}`, title: '归档系列模板？', confirm: '确认归档', method: 'seriesTemplate.archive', subject: template.name, card: page.locator('.series-template-card').filter({ hasText: template.name }) },
     { pageName: 'Skill 工作室', trigger: `移除工具连接“${server.name}”`, title: '移除工具连接？', confirm: '确认移除', method: 'tool.delete', subject: server.name, card: page.locator('.tool-connections .list-card').filter({ hasText: server.name }) },
   ];
   for (const item of cases) {
-    await page.getByRole('button', { name: item.pageName, exact: true }).click();
+    if (item.view) await openAssetLibrary(page, item.view);
+    else await page.getByRole('button', { name: item.pageName, exact: true }).click();
     const trigger = page.getByRole('button', { name: item.trigger, exact: true }), dialog = page.getByRole('alertdialog', { name: item.title, exact: true });
     await trigger.click(); await expect(dialog).toBeVisible(); await expect(dialog).toContainText(item.subject);
     await expect(dialog.getByRole('button', { name: '取消', exact: true })).toBeFocused();

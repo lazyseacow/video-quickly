@@ -11,6 +11,7 @@ import {
 } from '@video-quickly/contracts';
 import { audioFileHash } from './audio-preview.js';
 import type { DocumentStore } from './database.js';
+import { projectFilesPurgedKind } from './project-file-cleanup.js';
 
 export interface AssetRecoveryOptions {
   directory: string;
@@ -81,6 +82,8 @@ export function createAssetRecovery(options: AssetRecoveryOptions) {
   }
   function collect(projectId?: string): AssetRecoveryItem[] {
     const result = new Map<string, AssetRecoveryItem>(), current = options.store.list<unknown>('asset');
+    const currentIds = new Set(current.map(value => object(value).id));
+    const purgedProjects = new Set(options.store.database.prepare('SELECT id FROM documents WHERE kind = ?').pluck().all(projectFilesPurgedKind));
     if (projectId && !options.store.database.prepare("SELECT 1 FROM documents WHERE kind = 'project' AND id = ?").get(projectId)) throw new Error('项目不存在，无法检查其素材。');
     const projectReferences = options.store.database.prepare('SELECT project_id, asset_id FROM project_asset_references WHERE (? IS NULL OR project_id = ?)').all(projectId ?? null, projectId ?? null) as { project_id: string; asset_id: string }[];
     const needed = new Set(projectReferences.map(row => row.asset_id));
@@ -90,6 +93,7 @@ export function createAssetRecovery(options: AssetRecoveryOptions) {
     for (const profile of profiles) for (const id of values(object(profile).referenceAssetIds)) if (typeof id === 'string') needed.add(id);
     function add(raw: unknown, source: AssetRecoverySource) {
       const parsed = assetSchema.safeParse(raw), metadata = object(raw), id = typeof metadata.id === 'string' ? metadata.id : `invalid:${source.kind}:${source.id}`;
+      if (parsed.success && purgedProjects.has(parsed.data.projectId) && !currentIds.has(id)) return;
       const value = parsed.success ? expected(parsed.data) : null, key = value ? identity(value) : `invalid:${id}`;
       let item = result.get(key);
       if (!item) { item = { id: itemId(key), assetId: id, name: typeof metadata.name === 'string' ? metadata.name : id, expected: value, sources: [], status: value ? 'pending' : 'invalid_metadata', detail: value ? undefined : '素材记录缺少恢复所需的路径、摘要或版本信息。', candidates: [], additionalCandidates: 0 }; result.set(key, item); }
@@ -157,6 +161,7 @@ export function createAssetRecovery(options: AssetRecoveryOptions) {
   }
   function assertIdentity(item: AssetRecoveryItem, history?: Map<string, Set<string>>) {
     if (!item.expected) throw new Error('素材缺少恢复身份。');
+    if (item.expected.projectId && options.store.get(projectFilesPurgedKind, item.expected.projectId) && !options.store.get('asset', item.expected.id)) throw new Error('该项目的本地素材已彻底删除。');
     for (const source of item.sources) {
       if (source.kind === 'asset') {
         const value = options.store.get<AssetRecord>('asset', source.id);
@@ -357,6 +362,14 @@ export function createAssetRecovery(options: AssetRecoveryOptions) {
   }
   return {
     dispatch,
+    repairing(projectId: string) {
+      return [...active.keys()].some(id => {
+        const record = get(id);
+        if (record.job.phase !== 'repairing' || !record.selection) return false;
+        const selected = new Set((JSON.parse(record.selection) as Array<{ itemId: string }>).map(value => value.itemId));
+        return record.items.some(item => selected.has(item.id) && item.expected?.projectId === projectId);
+      });
+    },
     async waitForIdle() { await ready; while (active.size) await Promise.allSettled([...active.values()].map(value => value.promise)); },
     async close() { closing = true; await ready; for (const job of active.values()) job.controller.abort(new Error('素材恢复已关闭。')); while (active.size) await Promise.allSettled([...active.values()].map(value => value.promise)); },
   };

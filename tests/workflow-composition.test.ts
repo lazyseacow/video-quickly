@@ -1,4 +1,4 @@
-import { mkdtemp, rm, readFile, writeFile } from 'node:fs/promises';
+import { mkdtemp, rm, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { afterEach, expect, it } from 'vitest';
@@ -85,30 +85,29 @@ function animatedBackupShot() {
     { id: 'motion-last', timeUs: 1_700_000, panX: .25, panY: -.12, zoom: 1.6, easing: 'linear' },
   ] } };
 }
-it('backs up fixed composition and complete keyframes in format three independently of the template library', async () => {
+it('exports and executes fixed composition and keyframes independently of the template library', async () => {
   const { value, project, template } = await fixture();
   const configured = projectSchema.parse(await value.dispatch('project.update', { projectId: project.id, revision: project.revision, patch: { shots: [animatedBackupShot()] } }));
   await value.dispatch('workflowTemplate.save', { templateId: template.id, revision: template.revision, name: '后续模板版本', workflow: workflowSchema.parse({ id: 'latest', name: 'latest', version: 1, production: { mode: 'native-video', referenceMode: 'none', soundPrompt: '', subtitleMode: 'off' }, nodes: [node('latest-only')], edges: [] }) });
   const { path } = await value.dispatch('project.backup', { projectId: configured.id }) as { path: string };
   const manifestPath = join(path, 'project.json'), manifest = JSON.parse(await readFile(manifestPath, 'utf8')); expect(manifest.schemaVersion).toBe(4);
-  const isolated = await runtime({ seed: false }); const restored = projectSchema.parse(await isolated.value.dispatch('project.importBackup', { path }));
-  expect(restored.id).not.toBe(configured.id); expect(restored.workflow).toEqual(configured.workflow);
-  expect(restored.shots[0].animation).toEqual(configured.shots[0].animation);
-  expect(projectDetailSchema.parse(await isolated.value.dispatch('project.get', { projectId: restored.id })).project?.shots[0].animation).toEqual(configured.shots[0].animation);
-  const run = await isolated.value.dispatch('run.start', { projectId: restored.id }) as RunRecord; await isolated.value.waitForIdle();
-  const inspection = await isolated.value.dispatch('run.inspect', { runId: run.id }) as RunInspection; expect(inspection.run.status).toBe('succeeded'); expect(inspection.steps.map(step => step.id)).toEqual(['call', 'call/subflow/first', 'call/subflow/last', 'after']);
-  expect(await isolated.value.dispatch('node.result', { runId: run.id, nodeId: 'call' })).toMatchObject({ version: 1, outputs: { brief: configured.brief } });
-  for (const schemaVersion of [1, 2]) { await writeFile(manifestPath, JSON.stringify({ ...manifest, schemaVersion })); await expect(isolated.value.dispatch('project.importBackup', { path })).rejects.toThrow('格式 4'); }
+  const exported = projectSchema.parse(manifest.project);
+  expect(exported.workflow).toEqual(configured.workflow);
+  expect(exported.shots[0].animation).toEqual(configured.shots[0].animation);
+  const run = await value.dispatch('run.start', { projectId: configured.id }) as RunRecord;
+  await value.waitForIdle();
+  const inspection = await value.dispatch('run.inspect', { runId: run.id }) as RunInspection;
+  expect(inspection.run.status).toBe('succeeded');
+  expect(inspection.steps.map(step => step.id)).toEqual(['call', 'call/subflow/first', 'call/subflow/last', 'after']);
+  expect(await value.dispatch('node.result', { runId: run.id, nodeId: 'call' })).toMatchObject({ version: 1, outputs: { brief: configured.brief } });
 });
-it('requires format three for keyframes alone and rejects downgraded manifests without subflows or parallel settings', async () => {
+it('exports keyframes in format 4 for workflows without subflows or parallel settings', async () => {
   const { value } = await runtime({ seed: false }), created = projectSchema.parse(await value.dispatch('project.create', { title: '旧流程的关键帧备份' }));
   const configured = projectSchema.parse(await value.dispatch('project.update', { projectId: created.id, revision: created.revision, patch: { shots: [animatedBackupShot()], workflow: { id: 'legacy', version: 1, name: 'legacy', production: { mode: 'native-video', referenceMode: 'none', soundPrompt: '', subtitleMode: 'off' }, nodes: [node('brief')], edges: [] } } }));
   expect(configured.workflow.subflows).toBeUndefined(); expect(configured.workflow.execution).toBeUndefined(); expect(configured.workflow.nodes.some(node => node.kind === 'subflow' || node.subflow)).toBe(false);
   const { path } = await value.dispatch('project.backup', { projectId: configured.id }) as { path: string }, manifestPath = join(path, 'project.json'), manifest = JSON.parse(await readFile(manifestPath, 'utf8'));
   expect(manifest.schemaVersion).toBe(4);
-  const isolated = await runtime({ seed: false }), restored = projectSchema.parse(await isolated.value.dispatch('project.importBackup', { path }));
-  expect(restored.id).not.toBe(configured.id); expect(restored.shots[0].animation).toEqual(configured.shots[0].animation);
-  for (const schemaVersion of [1, 2]) { await writeFile(manifestPath, JSON.stringify({ ...manifest, schemaVersion })); await expect(isolated.value.dispatch('project.importBackup', { path })).rejects.toThrow('格式 4'); }
+  expect(projectSchema.parse(manifest.project).shots[0].animation).toEqual(configured.shots[0].animation);
 });
 it('stores an application receipt atomically and returns it after lost acknowledgement without overwriting later edits', async () => {
   const { value } = await runtime({ provider: async () => ({ text: '新的系列风格' }) });

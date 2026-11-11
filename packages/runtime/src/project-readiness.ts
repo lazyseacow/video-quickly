@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { stat } from 'node:fs/promises';
-import { creativeReferenceAssetIds, isCreativeReferenceAsset, projectCharacterIds, projectReadinessSchema, usesManualPlanning, usesVideoAudio, type AssetRecord, type CharacterProfile, type ModelProfile, type ProjectDocument, type ReadinessIssue, type RunSelection, type RuntimeSystem, type SkillPackage, type WorkflowNode } from '@video-quickly/contracts';
+import { creativeReferenceAssetIds, isCreativeReferenceAsset, isVideoGenerationNode, projectCharacterIds, projectReadinessSchema, usesManualPlanning, usesVideoAudio, type AssetRecord, type CharacterProfile, type ModelProfile, type ProjectDocument, type ReadinessIssue, type RunSelection, type RuntimeSystem, type SkillPackage, type WorkflowNode } from '@video-quickly/contracts';
 import { fingerprint } from './activities.js';
 import { audioFileHash } from './audio-preview.js';
 import { ExecutionModelError, validateExecutionModel } from './execution-model.js';
@@ -72,10 +72,12 @@ export function createProjectReadiness(options: {
       else requireAsset(assetId, nodes[0]);
     }
     let futureShots = false, futureImages = false, futureVoice = false;
+    const pendingVideoInputs = new Set<string>();
     for (const node of nodes) {
       signal.throwIfAborted();
       const model = node.modelId ? models.get(node.modelId) : undefined;
       const manual = usesManualPlanning(project.workflow, node);
+      if (isVideoGenerationNode(node) && (futureShots || futureImages && project.workflow.production.referenceMode !== 'none')) pendingVideoInputs.add(node.id);
       if (manual) {
         try { manualPlanningOutput(project, node); }
         catch (error) {
@@ -114,7 +116,7 @@ export function createProjectReadiness(options: {
         for (const clip of project.musicClips ?? []) requireAsset(clip.assetId, node);
       }
       if (model && !invalidModels.has(node.id)) {
-        if (node.kind === 'script') futureShots = true;
+        if (node.kind === 'script' && !manual) futureShots = true;
         if (node.kind === 'assets') futureImages = true;
         if (node.config.operation === 'generate-native-video') { futureImages = true; futureVoice = true; }
       }
@@ -134,7 +136,7 @@ export function createProjectReadiness(options: {
         signal.throwIfAborted();
         const model = node.modelId ? models.get(node.modelId) : undefined;
         if (!model || invalidModels.has(node.id) || !['assets', 'animation'].includes(node.kind)) continue;
-        try { await options.preflight({ project, node, assets: saved.assets, model, characters: saved.characters.filter(character => characterIds.has(character.id)), signal, dataDirectory: options.directory, pendingCastFrames: node.config.automaticCasting === true }); }
+        try { await options.preflight({ project, node, assets: saved.assets, model, characters: saved.characters, signal, dataDirectory: options.directory, pendingVideoInput: pendingVideoInputs.has(node.id) }); }
         catch (failure) { signal.throwIfAborted(); add({ severity: 'error', category: 'model', nodeId: node.id, modelId: model.id, message: failure instanceof Error ? failure.message : '媒体输入条件无法通过本地检查。', fix: 'models' }, `preflight:${node.id}`); }
       }
     }

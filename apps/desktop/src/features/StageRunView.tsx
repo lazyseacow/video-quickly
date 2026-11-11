@@ -1,7 +1,7 @@
 import { useEffect, useId, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { ClipboardList, RefreshCw, Settings2 } from 'lucide-react';
-import { isModelGenerationNode, runInspectionSchema, type RunStepSummary, type RunSummary, type WorkflowNode } from '@video-quickly/contracts';
+import { isModelGenerationNode, runInspectionSchema, type RunStepSummary, type WorkflowNode } from '@video-quickly/contracts';
 import { Button, EmptyState, IconButton, Notice } from '../components/Primitives';
 import { useChargeRpc } from '../components/ConfirmationDialog';
 import { useRuntimeRead } from '../lib/use-runtime-read';
@@ -27,7 +27,6 @@ export interface StageRunViewProps {
   onOpenOutput: (selection: StepOutputSelection) => void;
   onConfigure?: (nodeId: string) => void;
   onChanged?: () => void;
-  onRestart?: (run: RunSummary) => void;
   planning?: PlanningControls;
 }
 
@@ -106,13 +105,13 @@ function RecordedStageRun({ runId, stageId, nodeIds, configurableNodeIds = nodeI
   }
 
   return <section className="stage-run-view" aria-label="本次制作">
-    {inspection.error && <Notice kind="error">{inspection.error}<Button aria-label={flat ? '重试读取制作记录' : '重试读取阶段制作'} onClick={inspection.refresh}>重试</Button></Notice>}
+    {inspection.error && <Notice kind="error">{inspection.error}<Button aria-label={flat ? '重试读取本次制作' : '重试读取阶段制作'} onClick={inspection.refresh}>重试</Button></Notice>}
     {error && <Notice kind="error">{error}</Notice>}
     {!data && !inspection.error && <p role="status">正在读取本次制作…</p>}
     {data && <>
       <header className="stage-run-view__summary">
         <div><p className="stage-run-view__completion"><strong>{steps.filter(step => ['succeeded', 'skipped'].includes(step.status)).length}</strong><span>/ {steps.length} 项任务完成</span></p><time dateTime={data.run.createdAt}>{new Date(data.run.createdAt).toLocaleString('zh-CN')}</time></div>
-        <IconButton label={flat ? '刷新制作记录' : '刷新阶段制作'} disabled={inspection.busy || Boolean(pending)} onClick={inspection.refresh}><RefreshCw size={16} className={inspection.busy ? 'spin' : undefined} /></IconButton>
+        <IconButton label={flat ? '刷新本次制作' : '刷新阶段制作'} disabled={inspection.busy || Boolean(pending)} onClick={inspection.refresh}><RefreshCw size={16} className={inspection.busy ? 'spin' : undefined} /></IconButton>
       </header>
       {failed && <Notice kind="error"><div className="stage-run-view__failure"><div><strong>{failed.label}未完成</strong><p>{failed.error || failed.reason}</p>{!nodeIds.some(nodeId => failed.id === nodeId || failed.id.startsWith(`${nodeId}/subflow/`)) && <p>此步骤已移出当前阶段，请从顶部“制作设置”核对当前任务配置。</p>}</div>{failedConfigureId && <Button onClick={() => onConfigure?.(failedConfigureId)}><Settings2 size={16} />修复配置</Button>}</div></Notice>}
       {steps.length > 0 ? <>

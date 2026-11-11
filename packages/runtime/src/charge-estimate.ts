@@ -7,7 +7,6 @@ export interface PlannedCharge {
   kind: ChargeLine['kind'];
   count?: number;
   videoSeconds?: number;
-  referenceViews?: number;
 }
 
 export function plannedNodeCharge(node: WorkflowNode, model: ModelProfile | undefined, project?: ProjectDocument): PlannedCharge {
@@ -18,13 +17,13 @@ export function plannedNodeCharge(node: WorkflowNode, model: ModelProfile | unde
 }
 
 function estimate(work: PlannedCharge): ChargeLine['estimated'] {
-  const { model, count, kind, videoSeconds, referenceViews } = work;
+  const { model, count, kind, videoSeconds } = work;
   const pricing = model?.pricing;
   if (!model || !pricing || count === undefined) return;
   let amount: number | undefined;
   if (kind === 'image' && pricing.perImage !== undefined && ['openai-compatible', 'seedream'].includes(model.provider)) {
     const grouping = model.parameters.sequential_image_generation;
-    if (referenceViews || grouping === undefined || grouping === 'disabled') amount = count * pricing.perImage;
+    if (grouping === undefined || grouping === 'disabled') amount = count * pricing.perImage;
   }
   if (kind === 'video' && pricing.perVideoSecond !== undefined && videoSeconds !== undefined) amount = videoSeconds * pricing.perVideoSecond;
   return amount !== undefined && Number.isFinite(amount) ? { currency: pricing.currency, amount } : undefined;
@@ -34,7 +33,7 @@ export function summarizeCharge(work: PlannedCharge[], batch = false, incomplete
   const rows = new Map<string, ChargeLine>();
   for (const { model, ...quantity } of work) {
     const estimated = estimate({ model, ...quantity });
-    const key = JSON.stringify([model?.id, model?.name, model?.model, quantity.kind, quantity.referenceViews, model?.pricing?.currency]);
+    const key = JSON.stringify([model?.id, model?.name, model?.model, quantity.kind, model?.pricing?.currency]);
     const previous = rows.get(key);
     if (!previous) {
       rows.set(key, { ...quantity, modelName: model?.name, model: model?.model, estimated });

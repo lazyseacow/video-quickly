@@ -1,7 +1,8 @@
 import { openStoryboardProfile, productionStep, saveProduction, saveAndStartProduction } from './production-settings';
 import { confirmAction } from './confirmation-actions';
 import { expect, test } from '@playwright/test';
-import type { ProjectDocument, RunStepPayload, RunSummary } from '@video-quickly/contracts';
+import { writeFile } from 'node:fs/promises';
+import type { AssetRecord, CharacterProfile, ProjectDocument, RunStepPayload, RunSummary } from '@video-quickly/contracts';
 import { rpc, fixture, saved, latest, open, pick } from './native-video-fixture';
 import { openProjectFromList } from './workspace-navigation';
 
@@ -16,6 +17,10 @@ test('prefills AI planning fields, validates drafts and uses the edited values i
     expect(source.requests).toHaveLength(0);
     await pick(dialog, '文本模型', source.models[0]); await pick(dialog, '视频模型', source.video);
     await productionStep(dialog, '创作要求');
+    const originalText = '河风渐起，旅人将信藏进了木盒。';
+    await dialog.getByText('项目原文（可选）', { exact: true }).click();
+    await dialog.getByLabel('项目原文', { exact: true }).fill(originalText);
+    await page.screenshot({ path: info.outputPath('project-original-text.png') });
     await (await openStoryboardProfile(dialog)).getByLabel('视频帧率', { exact: true }).selectOption('60');
     await dialog.getByRole('button', { name: 'AI 填写简报', exact: true }).click();
     await confirmAction(page, '确认填写');
@@ -40,6 +45,8 @@ test('prefills AI planning fields, validates drafts and uses the edited values i
     await scriptButton.click();
     await confirmAction(page, '确认填写');
     await expect(dialog.getByRole('alert')).toContainText('第 1/1 批分镜结果校验失败');
+    expect(JSON.stringify(source.requests[0])).toContain(originalText);
+    for (const request of source.requests.slice(2, 4)) expect(JSON.stringify(request)).toContain(originalText);
     await expect(editor).toHaveCount(0);
     await expect(topic).toHaveValue('人工修改后的主题');
     expect(await saved(request, source.project.id)).toEqual(source.project);
@@ -61,6 +68,7 @@ test('prefills AI planning fields, validates drafts and uses the edited values i
     expect(source.requests.filter(value => JSON.stringify(value).includes('分镜生成阶段：全片大纲。'))).toHaveLength(1);
     expect(JSON.stringify(source.requests[5])).toContain('这是人工修改的分镜旁白。');
     const completed = await saved(request, source.project.id);
+    expect(completed.originalText).toBe(originalText);
     expect(completed.workflow.production.manualPlanningFields).toMatchObject({ brief: { topic: '人工修改后的主题', coreMessage: '人工补充的核心信息' }, style: { artStyle: 'AI 提出的水彩画风', palette: '人工选择的蓝白色' } });
     expect(completed.workflow.production.manualPlanningSteps).toEqual(['brief', 'style', 'script']);
   } finally { await source.close(); }
@@ -72,6 +80,14 @@ test('fills each planning field, adds a storyboard shot and starts with only a v
   try {
     await page.setViewportSize({ width: 1024, height: 768 });
     await page.addInitScript(() => localStorage.setItem('vq-theme', 'light'));
+    const referenceBytes = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScLbtAAAAABJRU5ErkJggg==', 'base64');
+    const references: AssetRecord[] = [];
+    for (const name of ['主参考图.png', '备用参考图.png']) {
+      const path = info.outputPath(name);
+      await writeFile(path, referenceBytes);
+      references.push(await rpc<AssetRecord>(request, 'asset.import', { path, kind: 'image' }));
+    }
+    const character = await rpc<CharacterProfile>(request, 'character.save', { character: { name: `蓝帽旁白者 ${source.project.id.slice(0, 8)}`, description: '蓝色圆帽，银框眼镜', referenceAssetIds: references.map(asset => asset.id) } });
     const project = await rpc<ProjectDocument>(request, 'project.update', { projectId: source.project.id, revision: source.project.revision, patch: {
       creativeContext: { characterIds: [], entities: [{ key: 'sky', kind: 'scene', name: '晴朗天空', description: '晴朗的蓝天' }], continuity: '' },
     } });
@@ -114,6 +130,7 @@ test('fills each planning field, adds a storyboard shot and starts with only a v
     expect((await saved(request, project.id)).shots).toHaveLength(0);
     await duration.fill('1');
     await editor.getByRole('checkbox', { name: /晴朗天空/ }).check();
+    await editor.getByRole('checkbox', { name: character.name, exact: true }).check();
     await editor.locator('.planning-result-editor__body').evaluate(element => { element.scrollTop = 0; });
     await page.screenshot({ path: info.outputPath('manual-storyboard-fields.png') });
     await editor.getByRole('button', { name: '保存到项目', exact: true }).click();
@@ -129,10 +146,23 @@ test('fills each planning field, adds a storyboard shot and starts with only a v
     await pick(dialog, '视频模型', source.video);
     await next.click();
     await expect(dialog.getByLabel('声音要求', { exact: true })).toBeVisible();
-    await saveAndStartProduction(dialog);
+    await saveProduction(dialog);
+    await expect(dialog).toHaveCount(0);
+    await page.getByRole('button', { name: '开始制作', exact: true }).click();
+    const referenceReview = page.getByRole('alertdialog').getByRole('region', { name: '视频参考图', exact: true });
+    await expect(referenceReview).toContainText('我写的天空镜头');
+    await expect(referenceReview).toContainText('主参考图.png');
+    await expect(referenceReview.getByText('备用参考图.png', { exact: true })).toHaveCount(0);
+    await expect(referenceReview.locator('img')).toHaveJSProperty('naturalWidth', 1);
+    await expect(page.getByRole('alertdialog').locator('.dialog__surface')).toHaveCSS('opacity', '1');
+    await page.screenshot({ path: info.outputPath('video-reference-confirmation.png') });
+    await confirmAction(page, '确认开始制作');
     await expect.poll(async () => (await latest(request, project.id))?.status, { timeout: 30_000 }).toBe('succeeded');
     expect(source.requests).toHaveLength(1);
     expect(JSON.stringify(source.requests[0])).toContain('这段旁白由我填写。');
+    expect((source.requests[0].content as Array<{ type: string }>).filter(item => item.type === 'image_url')).toEqual([
+      { type: 'image_url', role: 'first_frame', image_url: { url: `data:image/png;base64,${referenceBytes.toString('base64')}` } },
+    ]);
     const runId = (await latest(request, project.id)).id;
     const brief = await rpc<RunStepPayload>(request, 'run.step.payload', { runId, nodeId: 'brief', kind: 'output' });
     expect(brief).toMatchObject({ value: { text: expect.stringContaining('核心信息\n我写的天空创作简报'), source: 'project' } });

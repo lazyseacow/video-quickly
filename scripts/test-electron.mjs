@@ -42,7 +42,6 @@ let actualElectronVersion;
 let distributionScope = packaged ? 'unverified-package' : 'source-desktop';
 let fixtureFfmpeg = process.env.VIDEO_QUICKLY_FFMPEG ?? 'ffmpeg';
 let credentialModel;
-let workFixture;
 const testSecret = `isolated-electron-fixture-${randomUUID()}`;
 let expectedSecret = testSecret;
 const credentialReferences = new Set();
@@ -120,7 +119,6 @@ async function launch() {
     const project = await verifyGettingStarted();
     await verifyGenericWorkflow(project);
     if (compact) await verifyNativeCompactDialogs({ page, rpc, openProject, fixture, artifacts, ffmpegPath: fixtureFfmpeg, environment: packaged ? environment : process.env, checks });
-    await verifyWorkProduction(project.title);
     await verifyNativeMediaExtensions({ page, rpc, openProject, fixture, artifacts, ffmpegPath: fixtureFfmpeg, environment: packaged ? environment : process.env, checks });
     await verifyNativeTransitions({ page, rpc, openProject, fixture, artifacts, ffmpegPath: fixtureFfmpeg, environment: packaged ? environment : process.env, checks });
     await verifyNativeTransitionLoading({ page, rpc, openProject, fixture, artifacts, ffmpegPath: fixtureFfmpeg, environment: packaged ? environment : process.env, checks });
@@ -234,55 +232,6 @@ async function verifyGenericWorkflow(project) {
   checks.projectSettings = true;
   checks.genericWorkflow = true;
 }
-async function verifyWorkProduction(projectTitle) {
-  await page.getByRole('button', { name: '我的项目', exact: true }).click();
-  await page.getByRole('button', { name: '作品与分集', exact: true }).click();
-  await page.getByRole('button', { name: '新建作品', exact: true }).click();
-  const editor = page.getByRole('dialog', { name: '新建作品', exact: true });
-  await editor.getByRole('textbox', { name: '作品名称', exact: true }).fill('原生分集作品');
-  await editor.getByRole('textbox', { name: '作品默认风格', exact: true }).fill('原生包的作品风格');
-  await editor.getByRole('button', { name: '保存作品', exact: true }).click();
-  await expect(page.getByRole('heading', { name: '原生分集作品', exact: true })).toBeVisible();
-  await page.getByRole('button', { name: '批量新建分集', exact: true }).click();
-  const batch = page.getByRole('dialog', { name: '批量新建分集', exact: true });
-  await batch.getByRole('spinbutton', { name: '创建数量', exact: true }).fill('2');
-  await batch.getByRole('textbox', { name: '第 1 集原始文案', exact: true }).fill('原生包中的第一集文案');
-  await batch.getByRole('button', { name: '创建 2 个分集', exact: true }).click();
-  await expect(page.locator('.episode-row')).toHaveCount(2);
-  const selectAllEpisodes = page.getByRole('checkbox', { name: '全选分集', exact: true });
-  await expect(selectAllEpisodes).toBeChecked();
-  await selectAllEpisodes.uncheck();
-  await expect(page.getByRole('button', { name: '所选分集入队（2）', exact: true })).toHaveCount(0);
-  await selectAllEpisodes.press('Space');
-  await expect(page.getByRole('button', { name: '所选分集入队（2）', exact: true })).toBeEnabled();
-  const works = await rpc('work.list'), work = works.items.find(work => work.title === '原生分集作品'); assert.ok(work);
-  const episodes = (await rpc('workspace.summary')).projects.filter(project => project.episode?.workId === work.id);
-  assert.equal(episodes.length, 2); assert.deepEqual(episodes.map(project => project.episode.number).sort(), [1, 2]);
-  await page.getByRole('button', { name: '所选分集入队（2）', exact: true }).click();
-  await expect(page.locator('.queue-item')).toHaveCount(2);
-  await expect(page.getByRole('button', { name: '生产队列', exact: true })).toBeFocused();
-  await expect(page.getByRole('button', { name: '刷新作品', exact: true })).toHaveCount(0);
-  await expect(page.getByRole('button', { name: '刷新队列', exact: true })).toHaveCount(1);
-  await expect(page.getByRole('button', { name: '开始队列', exact: true })).toBeInViewport({ ratio: 1 });
-  await expect(page.getByRole('button', { name: '暂停后续派发', exact: true })).toHaveCount(0);
-  const queues = await rpc('productionQueue.list', { workId: work.id }), queue = queues.items[0]; assert.equal(queue.status, 'paused');
-  const duplicate = await rpc('productionQueue.enqueue', { workId: work.id, workRevision: work.revision, requestId: randomUUID(), projects: episodes.map(project => ({ projectId: project.id, revision: project.revision })) });
-  assert.equal(duplicate.queue, null); assert.equal(duplicate.reused.length, 2);
-  assert.equal((await rpc('run.list', { projectId: episodes[0].id })).items.length, 0);
-  await page.screenshot({ path: join(artifacts, 'desktop-work-production-queue.png') });
-  await page.getByRole('button', { name: '取消后续排队项', exact: true }).click();
-  await page.getByRole('alertdialog').getByRole('button', { name: '取消后续排队项', exact: true }).click();
-  await expect(page.locator('.queue-item__status')).toHaveText(['已取消', '已取消']);
-  await expect(page.getByRole('button', { name: '取消后续排队项', exact: true })).toHaveCount(0);
-  workFixture = { workId: work.id, queueId: queue.id, projectIds: episodes.map(project => project.id) };
-  checks.workBatchCreation = true; checks.workMembershipProjection = true; checks.queueActiveDeduplication = true; checks.queueControlIsolation = true;
-  checks.workQueueContextualControls = true;
-  checks.workEpisodeBulkSelection = true;
-  await page.getByRole('button', { name: '全部作品', exact: true }).click();
-  await page.getByRole('button', { name: '全部项目', exact: true }).click();
-  await openProject(projectTitle);
-}
-
 async function verifyGettingStarted() {
   const guide = page.getByRole('dialog', { name: '使用指南', exact: true });
   const heading = guide.getByRole('heading');
@@ -844,10 +793,6 @@ try {
   await expect(page.getByLabel('旁白', { exact: true })).toHaveValue('Electron 重启后恢复的未保存草稿');
   await expect(page.getByText('已恢复未保存的本地草稿，含撤销与重做历史。')).toBeVisible();
   checks.restartRecovery = true;
-  assert.equal((await rpc('work.get', { workId: workFixture.workId })).title, '原生分集作品');
-  const persistedQueue = await rpc('productionQueue.get', { queueId: workFixture.queueId });
-  assert.equal(persistedQueue.queue.status, 'canceled'); assert.deepEqual(persistedQueue.items.map(item => item.projectId).sort(), [...workFixture.projectIds].sort());
-  checks.workQueueRestartPersistence = true;
   assert.equal((await rpc('model.test', { modelId: credentialModel.id })).connected, true);
   assert.equal(credentialRequests, 2);
   expectedSecret = `isolated-electron-replacement-${randomUUID()}`;

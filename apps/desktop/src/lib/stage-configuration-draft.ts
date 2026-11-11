@@ -2,7 +2,7 @@ import { z } from 'zod';
 import { productionSettingsSchema, projectSchema, resolveProductionWorkflow, workflowExecutionSchema, workflowNodeSchema, type ProductionSettings, type WorkflowDefinition, type WorkflowNode } from '@video-quickly/contracts';
 import { sameContent } from './project-edits';
 
-const productionProjectSettingsSchema = projectSchema.pick({ brief: true, style: true, profile: true, creativeContext: true });
+const productionProjectSettingsSchema = projectSchema.pick({ brief: true, originalText: true, style: true, profile: true, creativeContext: true });
 export type ProductionProjectSettings = z.infer<typeof productionProjectSettingsSchema>;
 export const stageConfigurationDraftSchema = z.object({
   version: z.literal(1),
@@ -39,7 +39,10 @@ export function updateProductionConfigurationDraft(projectId: string, previous: 
   if (!workflow.production) throw new Error('当前流程不支持统一制作设置。');
   const draft = updateStageConfigurationDraft(projectId, previous, workflow.nodes, nodes);
   const baseline = draft.production?.baseline ?? workflow.production;
-  const projectBaseline = draft.project?.baseline ?? current;
+  const projectBaseline = { ...(draft.project?.baseline ?? current) };
+  if (projectBaseline.originalText === undefined && draft.project?.value.originalText === undefined) {
+    projectBaseline.originalText = current.originalText;
+  }
   const executionBaseline = draft.execution ? draft.execution.baseline : workflow.execution;
   return stageConfigurationDraftSchema.parse({ ...draft,
     production: sameContent(baseline, production) ? undefined : { baseline, value: production },
@@ -52,7 +55,7 @@ export function applyProductionProjectDraft(current: ProductionProjectSettings, 
   if (!draft?.project) return { settings: current, conflicts: [] };
   const { baseline, value } = draft.project;
   const settings = { ...current }, conflicts: string[] = [];
-  for (const field of ['brief', 'style', 'profile', 'creativeContext'] as const) {
+  for (const field of ['brief', 'originalText', 'style', 'profile', 'creativeContext'] as const) {
     if (sameContent(baseline[field], value[field])) continue;
     if (!sameContent(current[field], baseline[field]) && !sameContent(current[field], value[field])) conflicts.push(field);
     else Object.assign(settings, { [field]: value[field] });

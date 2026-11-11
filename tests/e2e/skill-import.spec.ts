@@ -211,7 +211,11 @@ test('expands groups independently and restores their layout when clearing searc
   await search.fill('折叠验收乙');
   await expect(color).toBeVisible();
   await expect(style).toBeVisible();
-  await search.clear();
+  await search.fill('无对应关键词');
+  await expect(page.getByRole('heading', { name: '没有匹配的 Skill', exact: true })).toBeVisible();
+  await page.getByRole('button', { name: '清空搜索', exact: true }).press('Enter');
+  await expect(search).toBeFocused();
+  await expect(search).toHaveValue('');
   await expect(writing).toBeVisible();
   await expect(secondDisclosure).toHaveAttribute('aria-expanded', 'false');
   await expect(color).toBeHidden();

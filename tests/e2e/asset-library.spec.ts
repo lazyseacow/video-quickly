@@ -1,7 +1,8 @@
-import { readFile, writeFile } from 'node:fs/promises';
-import { join } from 'node:path';
+import { readdir, readFile, writeFile } from 'node:fs/promises';
+import { dirname, join } from 'node:path';
 import { expect } from '@playwright/test';
-import type { AssetListItem, AssetRecord, ProjectDocument, RecordPage } from '@video-quickly/contracts';
+import type { AssetListItem, AssetRecord, CharacterProfile, ProjectDocument, RecordPage } from '@video-quickly/contracts';
+import { fixtureCharacterImage } from '../fixtures/character-image';
 import { test } from './isolated-workspace';
 import { rpc } from './native-video-fixture';
 import { setWorkspaceTheme } from './workspace-settings';
@@ -37,7 +38,7 @@ test('previews assets, moves a filtered selection to the recycle bin and restore
   const card = (asset: AssetRecord) => page.locator('.asset-card').filter({ has: heading(asset) });
   await expect(heading(first)).toBeVisible();
   await expect(page.getByRole('button', { name: '恢复缺失素材', exact: true })).toHaveCount(0);
-  await expect(card(first).locator('.asset-actions').getByRole('button')).toHaveCount(2);
+  await expect(card(first).locator('.asset-actions').getByRole('button')).toHaveCount(3);
   await expect(card(first).getByRole('button', { name: '保留此版本', exact: true })).toBeEnabled();
   await expect(card(first).getByRole('button', { name: `移除素材“${first.name}”`, exact: true })).toBeEnabled();
   await expect.poll(() => card(first).locator('img').evaluate((img: HTMLImageElement) => img.naturalWidth)).toBeGreaterThan(0);
@@ -142,6 +143,103 @@ test('previews assets, moves a filtered selection to the recycle bin and restore
   await expect(heading(first)).toBeVisible();
   expect(await rpc(request, 'asset.getMany', { assetIds: [first.id] })).toEqual([first]);
   expect(await readFile(first.path, 'utf8')).toBe(illustration);
+});
+
+test('keeps media and role views in one library and lets two roles reference the same public image', async ({ page, request, isolatedWorkspace }, info) => {
+  const portrait = await fixtureCharacterImage();
+  const path = join(isolatedWorkspace.directory, '青衣旅人参考图.png');
+  const projectPath = join(isolatedWorkspace.directory, '项目专属图.png');
+  const notesPath = join(isolatedWorkspace.directory, '场景说明.txt');
+  await Promise.all([writeFile(path, portrait), writeFile(projectPath, portrait), writeFile(notesPath, '场景说明')]);
+  const shared = await rpc<AssetRecord>(request, 'asset.import', { path });
+  const project = await rpc<ProjectDocument>(request, 'project.create', { title: '素材与角色共用验收' });
+  const projectImage = await rpc<AssetRecord>(request, 'asset.import', { path: projectPath, projectId: project.id });
+  const notes = await rpc<AssetRecord>(request, 'asset.import', { path: notesPath });
+  const archived = await rpc<CharacterProfile>(request, 'character.save', { character: { name: '归档角色验收', description: '', referenceAssetIds: [] } });
+  await rpc(request, 'character.archive', { characterId: archived.id, revision: archived.revision });
+  const beforeFiles = (await readdir(dirname(shared.path))).sort();
+  const beforeImages = await rpc<RecordPage<AssetListItem>>(request, 'asset.list', { kind: 'image' });
+
+  await page.setViewportSize({ width: 1464, height: 895 });
+  await page.goto('/');
+  const library = page.getByRole('button', { name: '素材库', exact: true });
+  await library.click();
+  const views = page.getByRole('tablist', { name: '素材库视图', exact: true });
+  const media = views.getByRole('tab', { name: '媒体', exact: true });
+  const roles = views.getByRole('tab', { name: '角色', exact: true });
+  const mediaPanel = page.getByRole('tabpanel', { name: '媒体', exact: true });
+  const rolePanel = page.getByRole('tabpanel', { name: '角色', exact: true });
+  const card = (asset: AssetRecord) => mediaPanel.locator('.asset-card').filter({ has: page.getByRole('heading', { name: asset.name, exact: true }) });
+  const createFromImage = (asset: AssetRecord) => card(asset).getByRole('button', { name: `用“${asset.name}”新建角色`, exact: true });
+  await expect(media).toHaveAttribute('aria-selected', 'true');
+  await expect(card(projectImage)).toBeVisible();
+  await expect(card(notes)).toBeVisible();
+  await expect(createFromImage(projectImage)).toHaveCount(0);
+  await expect(createFromImage(notes)).toHaveCount(0);
+  await mediaPanel.getByRole('button', { name: '图片', exact: true }).click();
+  await media.press('ArrowRight');
+  await expect(roles).toBeFocused();
+  await expect(roles).toHaveAttribute('aria-selected', 'true');
+  const archivedFilter = rolePanel.getByRole('button', { name: '已归档', exact: true });
+  await archivedFilter.click();
+  await expect(rolePanel.getByRole('heading', { name: archived.name, exact: true })).toBeVisible();
+  await page.getByRole('button', { name: '模型连接', exact: true }).click();
+  await library.click();
+  await expect(roles).toHaveAttribute('aria-selected', 'true');
+  await expect(archivedFilter).toHaveAttribute('aria-pressed', 'true');
+  await roles.press('Home');
+  await expect(media).toBeFocused();
+  await expect(mediaPanel.getByRole('button', { name: '图片', exact: true })).toHaveAttribute('aria-pressed', 'true');
+  await expect(card(notes)).toHaveCount(0);
+  await page.screenshot({ path: info.outputPath('asset-library-media-dark-1464.png') });
+
+  const imports: string[] = [];
+  page.on('request', outgoing => {
+    if (!outgoing.url().endsWith('/__desktop_rpc')) return;
+    const input = outgoing.postDataJSON();
+    if (input.method === 'asset.import') imports.push(input.params.path);
+  });
+  const trigger = createFromImage(shared);
+  const editor = page.getByRole('dialog', { name: '新建角色', exact: true });
+  await trigger.press('Enter');
+  await expect(editor.getByLabel('角色名称', { exact: true })).toBeFocused();
+  await expect(editor.getByRole('checkbox', { name: shared.name })).toBeChecked();
+  await expect(editor.locator('summary').first()).toContainText('已选 1 张');
+  await expect(editor.locator('.dialog__surface')).toHaveCSS('opacity', '1');
+  await page.screenshot({ path: info.outputPath('asset-library-use-image-dark-1464.png') });
+  await page.keyboard.press('Escape');
+  await expect(editor).toHaveCount(0);
+  await expect(trigger).toBeFocused();
+  for (const name of ['青衣旅人', '青衣旅人的替身']) {
+    await trigger.click();
+    await expect(editor.getByRole('checkbox', { name: shared.name })).toBeChecked();
+    await editor.getByLabel('角色名称', { exact: true }).fill(name);
+    await editor.getByRole('button', { name: '保存角色', exact: true }).click();
+    await expect(editor).toHaveCount(0);
+    await expect(media).toHaveAttribute('aria-selected', 'true');
+  }
+  await expect(page.locator('.toast__entry:not(.toast__entry--leaving) .toast__message')).toHaveText('角色已创建');
+  const created = (await rpc<RecordPage<CharacterProfile>>(request, 'character.list')).items;
+  expect(created.map(role => role.name).sort()).toEqual(['青衣旅人', '青衣旅人的替身'].sort());
+  for (const role of created) {
+    expect(role.referenceAssetIds).toEqual([shared.id]);
+    expect(await rpc(request, 'character.references', { characterId: role.id })).toEqual([shared]);
+  }
+  expect(imports).toEqual([]);
+  expect((await rpc<RecordPage<AssetListItem>>(request, 'asset.list', { kind: 'image' })).items.map(asset => asset.id)).toEqual(beforeImages.items.map(asset => asset.id));
+  expect((await readdir(dirname(shared.path))).sort()).toEqual(beforeFiles);
+  await expect(card(shared)).toContainText('使用中');
+  await expect(card(shared).getByRole('button', { name: `移除素材“${shared.name}”`, exact: true })).toBeDisabled();
+
+  await media.press('End');
+  await expect(archivedFilter).toHaveAttribute('aria-pressed', 'true');
+  await rolePanel.getByRole('button', { name: '可用角色', exact: true }).click();
+  for (const role of created) await expect(rolePanel.getByRole('heading', { name: role.name, exact: true })).toBeVisible();
+  await page.setViewportSize({ width: 390, height: 844 });
+  await setWorkspaceTheme(page, 'light');
+  expect(await page.locator('.page-body').evaluate(element => element.scrollWidth - element.clientWidth)).toBeLessThanOrEqual(1);
+  await expect(page.locator('.toast')).toHaveCount(0);
+  await page.screenshot({ path: info.outputPath('asset-library-roles-light-390.png') });
 });
 
 test('selects loaded assets across pages without adding new rows to the selection automatically', async ({ page, request, isolatedWorkspace }) => {

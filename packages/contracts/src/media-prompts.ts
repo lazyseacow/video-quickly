@@ -1,4 +1,4 @@
-import { formatFrameRate, VIDEO_FIT_MODE_LABELS, videoAspectRatioPreset, type CharacterProfile, type JsonValue, type ModelProfile, type ProjectDocument, type Shot, type VideoProfile, type WorkflowNode } from './index.js';
+import { formatFrameRate, VIDEO_FIT_MODE_LABELS, videoAspectRatioPreset, type AssetRecord, type CharacterProfile, type JsonValue, type ModelProfile, type ProjectDocument, type Shot, type VideoProfile, type WorkflowNode } from './index.js';
 import { creativeEntityLabels, creativeReferenceAssetIds, hasCharacterAppearance, shotCreativePrompt } from './creative-context.js';
 import { isVideoGenerationNode } from './production.js';
 import { resolvePromptBindings } from './prompt-bindings.js';
@@ -25,8 +25,9 @@ export function characterReferencePrompt(selected: CharacterProfile[], reference
 function creativeReferencePrompt(project: Pick<ProjectDocument, 'creativeContext'>, shot: Pick<Shot, 'creativeEntityKeys'>, referenceIds: readonly string[]): string {
   const selected = new Set(shot.creativeEntityKeys ?? []);
   const features = { character: '人物身份、发型与辨识特征', scene: '空间布局、建筑与光线', prop: '形状、颜色与材质' } as const;
-  return (project.creativeContext?.entities ?? []).filter(entity => selected.has(entity.key) && entity.referenceAssetIds?.length).map(entity => {
-    const numbers = (entity.referenceAssetIds ?? []).map(id => `图片 ${referenceIds.indexOf(id) + 1}`).join('、');
+  return (project.creativeContext?.entities ?? []).filter(entity => selected.has(entity.key)).flatMap(entity => {
+    const numbers = (entity.referenceAssetIds ?? []).map(id => referenceIds.indexOf(id) + 1).filter(number => number > 0).map(number => `图片 ${number}`).join('、');
+    if (!numbers) return [];
     const casting = entity.kind === 'character' ? '定妆图中的不同视角属于同一人物。按镜头要求描绘实际出镜人数。' : '';
     return `${creativeEntityLabels[entity.kind]}「${entity.name}」参考图：${numbers}。保持参考图中的${features[entity.kind]}，同时遵循文字设定。${casting}`;
   }).join('\n');
@@ -35,6 +36,33 @@ function creativeReferencePrompt(project: Pick<ProjectDocument, 'creativeContext
 export function singleFrameVideoModel(model: ModelProfile | undefined, project: Pick<ProjectDocument, 'workflow'>): boolean {
   return model?.provider === 'openai-compatible' || model?.provider === 'seedance'
     && model.parameters.characterReferenceMode !== 'reference_image' && !project.workflow.production.referenceAudioAssetIds?.length;
+}
+
+export interface VideoReferenceImages {
+  mode: 'text' | 'single' | 'multiple';
+  referenceIds: string[];
+  frame?: AssetRecord;
+}
+
+export function videoReferenceImages(project: ProjectDocument, node: WorkflowNode, model: ModelProfile, shot: Shot, characters: readonly CharacterProfile[], assets: readonly AssetRecord[]): VideoReferenceImages {
+  const groups = [
+    ...(shot.characterIds ?? []).map(id => characters.find(profile => profile.id === id)?.referenceAssetIds ?? []),
+    ...(project.creativeContext?.entities ?? []).filter(entity => shot.creativeEntityKeys?.includes(entity.key)).map(entity => entity.referenceAssetIds ?? []),
+  ].filter(group => group.length > 0);
+  const referenceIds = [...new Set(groups.flat())];
+  const supportsFrame = model.provider === 'openai-compatible' || model.provider === 'seedance';
+  const frameId = supportsFrame && (project.workflow.production.referenceMode !== 'none' || node.config.operation === 'regenerate' && !referenceIds.length) ? shot.assetId : undefined;
+  const frame = frameId ? assets.find(asset => asset.id === frameId && asset.active && asset.kind === 'image' && (!asset.projectId || asset.projectId === project.id)) : undefined;
+  if (frameId && !frame) throw new Error(`镜头「${shot.title}」的参考画面不可用，请恢复或重新选择图片。`);
+  if (singleFrameVideoModel(model, project)) {
+    if (frame) return { mode: 'single', referenceIds: [], frame };
+    if (!groups.length) return { mode: 'text', referenceIds: [] };
+    // A single attachment can cover several bindings if they explicitly share an image.
+    const primary = groups[0].find(id => groups.every(group => group.includes(id)));
+    if (!primary) throw new Error(`镜头「${shot.title}」绑定了多组参考图。当前视频连接每镜头接收一张图，请选用包含所需主体的镜头画面、选择「先生成参考图」或切换到多图参考连接。`);
+    return { mode: 'single', referenceIds: [primary] };
+  }
+  return { mode: referenceIds.length || frame ? 'multiple' : 'text', referenceIds, frame };
 }
 
 export function needsComposedSceneFrame(project: ProjectDocument, shot: Shot, characters: CharacterProfile[] = []): boolean {
@@ -60,7 +88,7 @@ export function characterSceneFirstFrame(project: ProjectDocument, node: Workflo
 }
 
 /** This is also used by offline preview; protocol adapters add no hidden prose. */
-export function buildMediaPrompt(project: ProjectDocument, node: WorkflowNode, shot: Shot, characters: CharacterProfile[] = [], model?: ModelProfile, hasSceneImage = false, upstream: Record<string, JsonValue> = {}, unifiedShotProfile = true): string {
+export function buildMediaPrompt(project: ProjectDocument, node: WorkflowNode, shot: Shot, characters: CharacterProfile[] = [], model?: ModelProfile, hasSceneImage = false, upstream: Record<string, JsonValue> = {}, unifiedShotProfile = true, videoReferences?: VideoReferenceImages): string {
   const selected = (shot.characterIds ?? []).map(id => {
     const profile = characters.find(profile => profile.id === id);
     if (!profile) throw new Error('缺少镜头所选角色的快照。');
@@ -68,14 +96,16 @@ export function buildMediaPrompt(project: ProjectDocument, node: WorkflowNode, s
   });
   const edit = node.config.imageEdit;
   const sourceId = edit && typeof edit === 'object' && !Array.isArray(edit) && typeof edit.sourceAssetId === 'string' ? edit.sourceAssetId : undefined;
-  const sceneFirstFrame = hasSceneImage && characterSceneFirstFrame(project, node, model, shot, characters);
-  const references = sceneFirstFrame ? [] : [...new Set([...(sourceId ? [sourceId] : []), ...selected.flatMap(profile => profile.referenceAssetIds), ...creativeReferenceAssetIds(project, shot)])];
-  const multimodal = Boolean(project.workflow.production?.referenceAudioAssetIds?.length) || references.length > 0 && model?.parameters.characterReferenceMode === 'reference_image';
+  const sceneFirstFrame = videoReferences ? videoReferences.mode === 'single' && Boolean(videoReferences.frame) : hasSceneImage && characterSceneFirstFrame(project, node, model, shot, characters);
+  const references = videoReferences?.referenceIds ?? (sceneFirstFrame ? [] : [...new Set([...(sourceId ? [sourceId] : []), ...selected.flatMap(profile => profile.referenceAssetIds), ...creativeReferenceAssetIds(project, shot)])]);
+  const multimodal = videoReferences ? videoReferences.mode === 'multiple' : Boolean(project.workflow.production?.referenceAudioAssetIds?.length) || references.length > 0 && model?.parameters.characterReferenceMode === 'reference_image';
   const video = isVideoGenerationNode(node);
   const prompt = [sourceId ? '图片 1 为待修改原图，保留未要求修改的部分。' : '', project.style, shot.visualPrompt, shotCreativePrompt(project, shot), resolvePromptBindings(node, project, shot, upstream).prompt, characterReferencePrompt(selected, references), sceneFirstFrame ? '以镜头首帧中的人物形象和构图为准。' : creativeReferencePrompt(project, shot, references), generationFramePrompt(project.profile, video && unifiedShotProfile),
-    ...(video ? [shot.narration.trim() ? `实际台词（只朗读以下正文）：${JSON.stringify(shot.narration)}` : '本镜头不需要人声。',
+    ...(video ? [videoReferences && videoReferences.mode !== 'text' ? '全镜头保持参考人物的身份、五官比例、发型和关键辨识特征。动作与运镜按分镜推进。仅在明确要求时改变服装或造型。' : '',
+      shot.narration.trim() ? `实际台词（只朗读以下正文）：${JSON.stringify(shot.narration)}` : '本镜头不需要人声。',
       `声音要求：${[node.config.soundPrompt, shot.soundPrompt].filter(Boolean).join('\n')}`,
       '画面不生成字幕或文字；台词、人声和环境音直接包含在视频音轨中。'] : []),
   ].filter(Boolean).join('\n');
-  return prompt + (model?.provider === 'seedance' && multimodal && hasSceneImage ? `\n图片 ${references.length + 1} 为当前场景构图参考。` : '');
+  const sceneIndex = videoReferences?.frame ? references.indexOf(videoReferences.frame.id) + 1 : 0;
+  return prompt + (model?.provider === 'seedance' && multimodal && hasSceneImage ? `\n图片 ${sceneIndex || references.length + 1} 为当前场景构图参考。` : '');
 }

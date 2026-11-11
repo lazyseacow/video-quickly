@@ -93,19 +93,17 @@ it('retains existing character bindings through an ordinary script to image pipe
   expect((await runtime.dispatch('project.get', { projectId: project.id }) as { project: ProjectDocument }).project.shots[0].characterIds).toEqual([profiles[0].id]);
 });
 
-it('backs up distinct same-named candidate files and restores character IDs with public reference assets', async () => {
+it('backs up distinct same-named candidate files and public role reference assets', async () => {
   const { runtime, project, profiles, model, directory } = await fixture();
   await generate(runtime, project, model); await generate(runtime, project, model);
   const destination = join(directory, 'backup'); await mkdir(destination);
   await runtime.dispatch('project.backup', { projectId: project.id, destination });
-  const manifest = JSON.parse(await readFile(join(destination, 'project.json'), 'utf8')) as { characters: CharacterProfile[]; assets: AssetRecord[] };
+  const manifest = JSON.parse(await readFile(join(destination, 'project.json'), 'utf8')) as { project: ProjectDocument; characters: CharacterProfile[]; assets: AssetRecord[] };
   expect(manifest.characters).toEqual(profiles); expect(new Set(manifest.assets.map(asset => asset.path)).size).toBe(manifest.assets.length);
-  const restored = projectSchema.parse(await runtime.dispatch('project.importBackup', { path: destination }));
-  expect(restored.shots[0].characterIds?.[0]).not.toBe(profiles[0].id);
-  const profile = characterProfileSchema.parse(await runtime.dispatch('character.get', { characterId: restored.shots[0].characterIds![0] }));
-  expect(profile.description).toBe(profiles[0].description);
-  const references = await runtime.dispatch('character.references', { characterId: profile.id }) as AssetRecord[];
-  expect(references[0].projectId).toBeUndefined(); expect(await readFile(references[0].path)).toEqual(png);
+  expect(manifest.project.shots[0].characterIds?.[0]).toBe(profiles[0].id);
+  const reference = manifest.assets.find(asset => asset.id === profiles[0].referenceAssetIds[0])!;
+  expect(reference.projectId).toBeUndefined();
+  expect(await readFile(join(destination, reference.path))).toEqual(png);
 });
 
 it('rejects unknown character associations in project and single-shot save APIs without changing revision', async () => {

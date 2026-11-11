@@ -6,10 +6,10 @@ export const MAX_CHARACTER_REFERENCE_BYTES = 20 * 1024 * 1024;
 const MAX_CHARACTER_REFERENCE_TOTAL_BYTES = 64 * 1024 * 1024;
 interface CharacterReferenceImage { assetId: string; mimeType: string; dataUrl: string }
 export interface ResolvedCharacterReferences { characters: CharacterProfile[]; prompt: string; images: CharacterReferenceImage[] }
-export interface CharacterReferenceInput { shot: Pick<Shot, 'characterIds' | 'creativeEntityKeys'>; project?: { id?: string; creativeContext?: CreativeContext | null }; characters?: CharacterProfile[]; assets: AssetRecord[]; includeImages?: boolean }
+export interface CharacterReferenceInput { shot: Pick<Shot, 'characterIds' | 'creativeEntityKeys'>; project?: { id?: string; creativeContext?: CreativeContext | null }; characters?: CharacterProfile[]; assets: AssetRecord[]; includeImages?: boolean; referenceIds?: readonly string[] }
 
 /** Resolve only the frozen profiles selected by this shot, before any provider request is made. */
-export async function resolveCharacterReferences({ shot, project, characters = [], assets, includeImages = true }: CharacterReferenceInput): Promise<ResolvedCharacterReferences> {
+export async function resolveCharacterReferences({ shot, project, characters = [], assets, includeImages = true, referenceIds }: CharacterReferenceInput): Promise<ResolvedCharacterReferences> {
   const selectedIds = [...new Set(shot.characterIds ?? [])];
   const profiles = new Map(characters.map(profile => [profile.id, profile]));
   const availableAssets = new Map(assets.map(asset => [asset.id, asset]));
@@ -21,10 +21,10 @@ export async function resolveCharacterReferences({ shot, project, characters = [
     return parsed;
   });
   const libraryIds = new Set(selected.flatMap(profile => profile.referenceAssetIds));
-  const referenceIds = includeImages ? [...new Set([...libraryIds, ...creativeReferenceAssetIds(project ?? {}, shot)])] : [];
+  const imageIds = referenceIds ?? (includeImages ? [...new Set([...libraryIds, ...creativeReferenceAssetIds(project ?? {}, shot)])] : []);
   const references: AssetRecord[] = [];
   let totalBytes = 0;
-  for (const id of referenceIds) {
+  for (const id of imageIds) {
     const asset = availableAssets.get(id);
     if (!isCreativeReferenceAsset(project ?? {}, asset) || libraryIds.has(id) && asset.projectId !== undefined) throw new Error('请使用运行快照中有效的公共图片或当前项目的人物定妆图。');
     const info = await stat(asset.path).catch(() => undefined);
@@ -40,6 +40,6 @@ export async function resolveCharacterReferences({ shot, project, characters = [
     if (bytes.length !== asset.size || createHash('sha256').update(bytes).digest('hex') !== asset.sha256) throw new Error(`参考图「${asset.name}」校验失败，请重新导入。`);
     images.push({ assetId: asset.id, mimeType: asset.mimeType, dataUrl: `data:${asset.mimeType};base64,${bytes.toString('base64')}` });
   }
-  const prompt = characterReferencePrompt(selected, referenceIds);
+  const prompt = characterReferencePrompt(selected, imageIds);
   return { characters: selected, prompt, images };
 }

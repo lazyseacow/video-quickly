@@ -5,27 +5,24 @@ import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { afterEach, expect, it } from 'vitest';
-import { assetSchema, imageGridRectangles, projectSchema, runSchema, shotSchema, type ShotCandidate } from '@video-quickly/contracts';
+import { assetSchema, characterProfileSchema, projectSchema, runSchema, shotSchema, type ShotCandidate } from '@video-quickly/contracts';
 import { createRuntime } from '../packages/runtime/src/index';
-import { DocumentStore, openDatabase } from '../packages/runtime/src/database';
-import { createImageTools } from '../packages/runtime/src/image-tools';
 import { createActivityExecutor, validateMediaActivity } from '../packages/integrations/src';
-import { createEditMask, imageDimensions, validateEditMask } from '../packages/video/src/image-tools';
+import { createEditMask, validateEditMask } from '../packages/video/src/image-tools';
+import { seedLegacyGridAsset } from './fixtures/legacy-grid-asset';
 
 const ffmpeg = process.env.VIDEO_QUICKLY_FFMPEG ?? 'ffmpeg';
 const directories: string[] = [], runtimes: ReturnType<typeof createRuntime>[] = [], servers: Server[] = [];
-const databases: ReturnType<typeof openDatabase>[] = [];
 const sha = (bytes: Buffer) => createHash('sha256').update(bytes).digest('hex');
 function sourceImage(width = 5, height = 3) {
   const rgba = Buffer.alloc(width * height * 4);
   for (let index = 0; index < width * height; index++) { rgba[index * 4] = index * 13; rgba[index * 4 + 1] = index * 7; rgba[index * 4 + 2] = index * 3; rgba[index * 4 + 3] = 255; }
   const png = execFileSync(ffmpeg, ['-v', 'error', '-f', 'rawvideo', '-pixel_format', 'rgba', '-video_size', `${width}x${height}`, '-i', 'pipe:0', '-frames:v', '1', '-f', 'image2pipe', '-c:v', 'png', 'pipe:1'], { input: rgba, windowsHide: true });
-  return { rgba, png, width, height };
+  return { png, width, height };
 }
 function pixels(bytes: Buffer) { return execFileSync(ffmpeg, ['-v', 'error', '-i', 'pipe:0', '-frames:v', '1', '-f', 'rawvideo', '-pix_fmt', 'rgba', 'pipe:1'], { input: bytes, windowsHide: true }); }
 afterEach(async () => {
   await Promise.all(runtimes.splice(0).map(runtime => runtime.close()));
-  for (const database of databases.splice(0)) database.close();
   await Promise.all(servers.splice(0).map(server => { server.closeAllConnections(); return new Promise<void>(resolve => server.close(() => resolve())); }));
   await Promise.all(directories.splice(0).map(path => rm(path, { force: true, recursive: true })));
 });
@@ -36,28 +33,6 @@ async function setup() {
   const asset = assetSchema.parse(await runtime.dispatch('asset.import', { path }));
   return { runtime, directory, source, asset };
 }
-function imageToolsFor(directory: string) {
-  const database = openDatabase(directory);
-  databases.push(database);
-  return createImageTools({ store: new DocumentStore(database), directory, changed: () => undefined });
-}
-it('cuts every source pixel once, preserving integer bounds, provenance and request idempotency', async () => {
-  const { runtime, directory, asset, source } = await setup();
-  const imageTools = imageToolsFor(directory);
-  const input = { assetId: asset.id, rows: 2, columns: 2 };
-  const [first, concurrent] = await Promise.all([imageTools.cutGrid(input), imageTools.cutGrid(input)]);
-  const assets = assetSchema.array().parse(first); expect(concurrent).toEqual(assets); expect(assets).toHaveLength(4);
-  const rectangles = imageGridRectangles(source.width, source.height, 2, 2), reconstructed = Buffer.alloc(source.rgba.length);
-  for (let index = 0; index < assets.length; index++) {
-    const rectangle = rectangles[index], bytes = await readFile(assets[index].path), rgba = pixels(bytes);
-    expect(assets[index].derivation).toMatchObject({ kind: 'grid-crop', sourceAssetId: asset.id, sourceSha256: asset.sha256, rectangle, grid: { index, rows: 2, columns: 2 } });
-    expect(await imageDimensions(bytes)).toEqual({ width: rectangle.width, height: rectangle.height });
-    for (let row = 0; row < rectangle.height; row++) rgba.copy(reconstructed, ((row + rectangle.y) * source.width + rectangle.x) * 4, row * rectangle.width * 4, (row + 1) * rectangle.width * 4);
-  }
-  expect(reconstructed).toEqual(source.rgba); expect(await imageTools.cutGrid(input)).toEqual(assets);
-  await expect(runtime.dispatch('asset.delete', { assetId: asset.id })).rejects.toThrow('正在使用');
-  await writeFile(asset.path, 'corrupted'); await expect(imageTools.cutGrid(input)).rejects.toThrow();
-});
 it('creates a same-size alpha mask and rejects out-of-bounds or opaque masks', async () => {
   const { runtime, asset, source } = await setup(), rectangle = { x: 1, y: 1, width: 3, height: 1 };
   const mask = assetSchema.parse(await runtime.dispatch('image.createMask', { assetId: asset.id, rectangle }));
@@ -68,33 +43,35 @@ it('creates a same-size alpha mask and rejects out-of-bounds or opaque masks', a
   await expect(validateEditMask(source.png, source)).rejects.toThrow('透明');
   await expect(validateEditMask(bytes, { width: 6, height: 3 })).rejects.toThrow('尺寸');
 });
-it('restores only missing grid results after a tile is removed and reuses valid siblings', async () => {
-  const { runtime, directory, asset } = await setup();
-  const imageTools = imageToolsFor(directory);
-  const input = { assetId: asset.id, rows: 2, columns: 2 };
-  const original = await imageTools.cutGrid(input);
-  await runtime.dispatch('asset.delete', { assetId: original[0].id });
-  await rm(original[0].path);
-  const [first, concurrent] = await Promise.all([imageTools.cutGrid(input), imageTools.cutGrid(input)]);
-  const restored = assetSchema.array().parse(first);
+it('reuses a valid mask and restores a missing mask under concurrent requests', async () => {
+  const { runtime, asset } = await setup();
+  const input = { assetId: asset.id, rectangle: { x: 1, y: 1, width: 2, height: 1 } };
+  const original = assetSchema.parse(await runtime.dispatch('image.createMask', input));
+  expect(await runtime.dispatch('image.createMask', input)).toEqual(original);
+  await runtime.dispatch('asset.delete', { assetId: original.id });
+  await rm(original.path);
+  const [first, concurrent] = await Promise.all([runtime.dispatch('image.createMask', input), runtime.dispatch('image.createMask', input)]);
+  const restored = assetSchema.parse(first);
   expect(concurrent).toEqual(restored);
-  expect(restored.slice(1)).toEqual(original.slice(1));
-  expect(restored[0]).toMatchObject({ active: true, sha256: original[0].sha256, derivation: original[0].derivation });
-  expect(sha(await readFile(restored[0].path))).toBe(original[0].sha256);
+  expect(restored).toEqual(original);
+  expect(sha(await readFile(restored.path))).toBe(original.sha256);
+  await writeFile(asset.path, 'corrupted');
+  await expect(runtime.dispatch('image.createMask', input)).rejects.toThrow();
 });
-it('exports and restores grid lineage using format 8 and refuses older-format provenance', async () => {
+it('exports grid lineage and its source image using format 8', async () => {
   const { runtime, asset, directory } = await setup();
-  const [tile] = await imageToolsFor(directory).cutGrid({ assetId: asset.id, rows: 1, columns: 2 });
+  const tile = await seedLegacyGridAsset(directory, asset);
+  const character = characterProfileSchema.parse(await runtime.dispatch('character.save', { character: { name: '已有角色', description: '', referenceAssetIds: [tile.id] } }));
+  expect(await runtime.dispatch('character.references', { characterId: character.id })).toEqual([tile]);
+  await expect(runtime.dispatch('asset.delete', { assetId: asset.id })).rejects.toThrow('正在使用');
   let project = projectSchema.parse(await runtime.dispatch('project.create', { title: '切图备份' }));
   project = projectSchema.parse(await runtime.dispatch('project.update', { projectId: project.id, revision: project.revision, patch: { shots: [shotSchema.parse({ id: 'one', title: '一', visualPrompt: '画面', narration: '', durationUs: 1000000, assetId: tile.id })] } }));
   const destination = join(directory, 'backup'); await runtime.dispatch('project.backup', { projectId: project.id, destination });
   const backup = JSON.parse(await readFile(join(destination, 'project.json'), 'utf8')); expect(backup.schemaVersion).toBe(8); expect(backup.assets).toHaveLength(2);
-  const imported = projectSchema.parse(await runtime.dispatch('project.importBackup', { path: destination }));
-  const assets = assetSchema.array().parse(await runtime.dispatch('asset.getMany', { assetIds: [imported.shots[0].assetId] }));
-  expect(assets[0].derivation?.sourceAssetId).not.toBe(asset.id);
-  expect(await runtime.dispatch('asset.getMany', { assetIds: [assets[0].derivation?.sourceAssetId] })).toHaveLength(1);
-  backup.schemaVersion = 7; await writeFile(join(destination, 'project.json'), JSON.stringify(backup));
-  await expect(runtime.dispatch('project.importBackup', { path: destination })).rejects.toThrow('格式 8');
+  expect(projectSchema.parse(backup.project).shots[0].assetId).toBe(tile.id);
+  const exported = assetSchema.array().parse(backup.assets);
+  expect(exported.find(item => item.id === tile.id)?.derivation?.sourceAssetId).toBe(asset.id);
+  expect(exported.some(item => item.id === asset.id)).toBe(true);
 });
 it('submits source first with its transparent mask, retains a candidate, and never overwrites the current image', async () => {
   const { runtime, source, asset } = await setup();

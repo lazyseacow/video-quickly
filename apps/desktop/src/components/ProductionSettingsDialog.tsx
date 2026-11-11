@@ -1,6 +1,6 @@
 import { lazy, Suspense, useCallback, useEffect, useId, useLayoutEffect, useRef, useState } from 'react';
 import { ChevronLeft, ChevronRight, Ellipsis, WandSparkles } from 'lucide-react';
-import { VIDEO_FIT_MODE_LABELS, applyWorkflowProposal, formatFrameRate, formatPlanningDocument, getMediaAdapters, planningDocumentSchemas, productionEditingSkillIds, productionEditingStep, productionModelSetting, productionPlanningStep, productionPlanningSteps, productionSettingsSchema, resolveProductionWorkflow, supportsAutomaticCasting, supportsProductionAgent, usesManualPlanning, videoAspectRatioPreset, videoProfileSchema, type AssetRecord, type PlanningDocumentKind, type ProductionPlanningStep, type ProductionSettings, type ProjectDocument, type PromptDraft, type RunSummary, type WorkflowDefinition, type WorkflowNode, type WorkflowStage } from '@video-quickly/contracts';
+import { VIDEO_FIT_MODE_LABELS, applyWorkflowProposal, formatFrameRate, formatPlanningDocument, getMediaAdapters, planningDocumentSchemas, productionEditingSkillIds, productionEditingStep, productionModelSetting, productionPlanningStep, productionPlanningSteps, productionSettingsSchema, resolveProductionWorkflow, supportsAutomaticCasting, supportsProductionAgent, usesManualPlanning, videoAspectRatioPreset, videoProfileSchema, type AssetRecord, type PlanningDocumentKind, type ProductionPlanningStep, type ProductionSettings, type PromptDraft, type RunSummary, type WorkflowDefinition, type WorkflowNode, type WorkflowStage } from '@video-quickly/contracts';
 import type { WorkspaceView, StepOutputSelection } from '../lib/types';
 import { planningLabels, storyboardDraftSchema, type PlanningControls } from '../lib/planning-edits';
 import type { ProductionProjectSettings } from '../lib/stage-configuration-draft';
@@ -35,7 +35,7 @@ type ConfigurationStep = typeof steps[number]['id'];
 export interface ProductionConfiguration { nodes: WorkflowNode[]; production: ProductionSettings; project: ProductionProjectSettings; execution: WorkflowDefinition['execution']; }
 
 export default function ProductionSettingsDialog({ project, projectId, projectRevision, workflow, workspace, run, version, usedEntityKeys = [], initialStage = 'planning', initialNodeId, initialTab, flatRecords, recordStages, pendingConfiguration, configurationError, onSave, onDiscardPending, onClose, onOpenOutput, onOpenTool, onSectionChange, onImportReferenceAudio, planning }: {
-  project: Pick<ProjectDocument, 'brief' | 'style' | 'profile' | 'creativeContext'>; workflow: WorkflowDefinition; workspace: WorkspaceView; run?: RunSummary; version: number; usedEntityKeys?: string[];
+  project: ProductionProjectSettings; workflow: WorkflowDefinition; workspace: WorkspaceView; run?: RunSummary; version: number; usedEntityKeys?: string[];
   projectId?: string; projectRevision?: number;
   planning?: PlanningControls;
   initialStage?: string; initialNodeId?: string; initialTab?: 'settings' | 'run'; flatRecords?: boolean; recordStages?: WorkflowStage[]; pendingConfiguration?: boolean; configurationError?: string;
@@ -46,7 +46,7 @@ export default function ProductionSettingsDialog({ project, projectId, projectRe
 }) {
   const chargeRpc = useChargeRpc();
   const [settings, setSettings] = useState(() => productionSettingsSchema.parse(workflow.production));
-  const [fields, setFields] = useState<ProductionProjectSettings>(() => ({ brief: project.brief, style: project.style, profile: project.profile, creativeContext: project.creativeContext }));
+  const [fields, setFields] = useState<ProductionProjectSettings>(() => ({ brief: project.brief, originalText: project.originalText, style: project.style, profile: project.profile, creativeContext: project.creativeContext }));
   const [documents, setDocuments] = useState(() => ({
     brief: initialPlanningDocument('brief', settings.manualPlanningFields?.brief, project.brief, planning?.project.title),
     style: initialPlanningDocument('style', settings.manualPlanningFields?.style, project.style),
@@ -313,13 +313,21 @@ export default function ProductionSettingsDialog({ project, projectId, projectRe
         {pendingConfiguration && <Notice><span>已保存待用配置。</span>{onDiscardPending && <Button static disabled={Boolean(pending)} onClick={() => void discard()}>放弃待用配置</Button>}</Notice>}
         {(configurationError || error) && <Notice kind="error">{configurationError || error}</Notice>}
       </div>}
-      {records ? <div className="production-settings__run">{flat ? <Suspense fallback={<p role="status">正在读取制作记录…</p>}><StageRunView flat planning={planning} runId={run?.id} nodes={resolved.nodes} nodeIds={resolved.nodes.map(node => node.id)} initialNodeId={initialNodeId} version={version} actionsTarget={runActionsTarget} onNotice={showNotice} onOpenOutput={onOpenOutput} configurableNodeIds={[]} /></Suspense> : <SettingsSections label="制作阶段记录" layout="tabs" value={runStage} onValueChange={setRunStage} sections={stages.map(item => ({ id: item.id, label: item.label, content: item.id === selectedStage?.id ? <Suspense fallback={<p role="status">正在读取制作记录…</p>}><StageRunView planning={planning} runId={run?.id} stageId={item.id} nodeIds={item.nodeIds} initialNodeId={initialNodeId} version={version} actionsTarget={runActionsTarget} onNotice={showNotice} onOpenOutput={onOpenOutput} configurableNodeIds={[]} /></Suspense> : null }))} />}</div> : <form ref={form} noValidate className="production-settings__form" onSubmit={event => { event.preventDefault(); if (step === 'review') void submit(); else next(); }}>
+      {records ? <div className="production-settings__run">{flat ? <Suspense fallback={<p role="status">正在读取本次制作…</p>}><StageRunView flat planning={planning} runId={run?.id} nodes={resolved.nodes} nodeIds={resolved.nodes.map(node => node.id)} initialNodeId={initialNodeId} version={version} actionsTarget={runActionsTarget} onNotice={showNotice} onOpenOutput={onOpenOutput} configurableNodeIds={[]} /></Suspense> : <SettingsSections label="制作阶段记录" layout="tabs" value={runStage} onValueChange={setRunStage} sections={stages.map(item => ({ id: item.id, label: item.label, content: item.id === selectedStage?.id ? <Suspense fallback={<p role="status">正在读取本次制作…</p>}><StageRunView planning={planning} runId={run?.id} stageId={item.id} nodeIds={item.nodeIds} initialNodeId={initialNodeId} version={version} actionsTarget={runActionsTarget} onNotice={showNotice} onOpenOutput={onOpenOutput} configurableNodeIds={[]} /></Suspense> : null }))} />}</div> : <form ref={form} noValidate className="production-settings__form" onSubmit={event => { event.preventDefault(); if (step === 'review') void submit(); else next(); }}>
         <fieldset disabled={Boolean(pending)} className="production-settings__fieldset"><div ref={content} className="dialog__scroll production-settings__content">
           <section className="form-stack" data-production-step="planning" hidden={step !== 'planning'} aria-label="创作要求配置" tabIndex={-1}>
             <details className="form-disclosure production-settings__storyboard">
               <summary><span>分镜全局参数</span><small>{width} × {height} · {formatFrameRate(frameRate)} fps</small></summary>
               <div className="form-disclosure__body" role="group" aria-label="分镜全局参数">
                 <VideoSettings mode="generation" profile={fields.profile} onChange={profile => setFields(current => ({ ...current, profile }))} />
+              </div>
+            </details>
+            <details className="form-disclosure">
+              <summary><span>项目原文（可选）</span></summary>
+              <div className="form-disclosure__body">
+                <Field label="项目原文" hint="粘贴小说或剧本正文，供 AI 简报和分镜使用。">
+                  <textarea rows={5} maxLength={30000} value={fields.originalText ?? ''} onChange={event => setFields(current => ({ ...current, originalText: event.target.value }))} />
+                </Field>
               </div>
             </details>
             {planningSteps.length > 0 && <div role="group" aria-label="策划内容来源" className="production-settings__models production-settings__planning-sources">
@@ -379,7 +387,7 @@ export default function ProductionSettingsDialog({ project, projectId, projectRe
             </div>
             {!textField.required && hasEditingStep && <p className="production-settings__agent-help">文本模型可选，供剪辑 Agent 使用。</p>}
             <div className="production-settings__models">
-              <Field label="参考素材"><Select value={settings.referenceMode} onChange={event => updateSettings({ referenceMode: event.target.value as ProductionSettings['referenceMode'] })}><option value="none">直接文生视频</option><option value="existing">使用已有参考图</option><option value="generate">先生成参考图</option></Select></Field>
+              <Field label="参考素材" hint="直接生成时沿用镜头绑定的角色参考图。使用已有参考图时，采用镜头中选定的画面。"><Select value={settings.referenceMode} onChange={event => updateSettings({ referenceMode: event.target.value as ProductionSettings['referenceMode'] })}><option value="none">直接生成视频</option><option value="existing">使用已有参考图</option><option value="generate">先生成参考图</option></Select></Field>
               {showImageModel && modelField(imageField)}
             </div>
             {automaticCasting && <p className="field__hint">反复出镜的人物缺少参考图时，使用图片模型自动定妆。留空时使用唯一可用的图片模型。</p>}
@@ -400,6 +408,7 @@ export default function ProductionSettingsDialog({ project, projectId, projectRe
                 <div><dt>分镜全局参数</dt><dd>{aspectRatio && `${aspectRatio} · `}{width} × {height} · {formatFrameRate(frameRate)} fps</dd></div>
                 <div><dt>素材适配</dt><dd>{VIDEO_FIT_MODE_LABELS[fitMode]}</dd></div>
                 <div><dt>{manualSteps.includes('brief') ? '创意简报' : '创作要求'}</dt><dd>{(manualSteps.includes('brief') ? formatPlanningDocument('brief', documents.brief) : fields.brief.trim()) || '尚未填写'}</dd></div>
+                {Boolean(fields.originalText?.trim()) && <div><dt>项目原文</dt><dd>{fields.originalText?.length} 字符</dd></div>}
                 <div><dt>视觉风格</dt><dd>{(manualSteps.includes('style') ? formatPlanningDocument('style', documents.style) : fields.style.trim()) || '沿用默认风格'}</dd></div>
                 {manualSteps.length > 0 && <div><dt>手动策划内容</dt><dd>{manualSteps.map(kind => planningLabels[kind]).join('、')}</dd></div>}
                 <div><dt>项目角色池</dt><dd>{fields.creativeContext?.characterIds.length ? `已选择 ${fields.creativeContext.characterIds.length} 个角色` : '未选择'}</dd></div>
@@ -410,7 +419,7 @@ export default function ProductionSettingsDialog({ project, projectId, projectRe
                 </div>}
               </dl>
             </section>
-            <section><header><h3>模型与素材</h3><Button static variant="ghost" aria-label="修改模型与素材" onClick={() => selectStep('materials', true)}>修改</Button></header><dl><div><dt>文本模型</dt><dd>{modelName(settings.textModelId)}</dd></div><div><dt>视频模型</dt><dd>{modelName(settings.videoModelId)}</dd></div><div><dt>参考素材</dt><dd>{{ none: '直接文生视频', existing: '使用已有参考图', generate: '先生成参考图' }[settings.referenceMode]}</dd></div>{showImageModel && <div><dt>图片模型</dt><dd>{settings.imageModelId || imageField.required ? modelName(settings.imageModelId) : '按需自动选择'}</dd></div>}<div><dt>参考音频</dt><dd>{settings.referenceAudioAssetIds?.length ? `已选择 ${settings.referenceAudioAssetIds.length} 段` : '未添加'}</dd></div><div><dt>镜头同时处理数</dt><dd>{execution?.maxConcurrentShots ?? 1}</dd></div><div><dt>模型并发上限</dt><dd>{Object.entries(execution?.modelLimits ?? {}).map(([modelId, limit]) => `${modelName(modelId)}：${limit}`).join('；') || '跟随镜头并发'}</dd></div></dl></section>
+            <section><header><h3>模型与素材</h3><Button static variant="ghost" aria-label="修改模型与素材" onClick={() => selectStep('materials', true)}>修改</Button></header><dl><div><dt>文本模型</dt><dd>{modelName(settings.textModelId)}</dd></div><div><dt>视频模型</dt><dd>{modelName(settings.videoModelId)}</dd></div><div><dt>参考素材</dt><dd>{{ none: '直接生成视频', existing: '使用已有参考图', generate: '先生成参考图' }[settings.referenceMode]}</dd></div>{showImageModel && <div><dt>图片模型</dt><dd>{settings.imageModelId || imageField.required ? modelName(settings.imageModelId) : '按需自动选择'}</dd></div>}<div><dt>参考音频</dt><dd>{settings.referenceAudioAssetIds?.length ? `已选择 ${settings.referenceAudioAssetIds.length} 段` : '未添加'}</dd></div><div><dt>镜头同时处理数</dt><dd>{execution?.maxConcurrentShots ?? 1}</dd></div><div><dt>模型并发上限</dt><dd>{Object.entries(execution?.modelLimits ?? {}).map(([modelId, limit]) => `${modelName(modelId)}：${limit}`).join('；') || '跟随镜头并发'}</dd></div></dl></section>
             <section>
               <header><h3>声音与成片</h3><Button static variant="ghost" aria-label="修改声音与成片" onClick={() => selectStep('delivery', true)}>修改</Button></header>
               <dl>

@@ -97,15 +97,12 @@ it('recovers a committed trial after a process interruption without another mode
   expect(runSchema.parse(await recovered.dispatch('run.get', { runId: record.id })).status).toBe('succeeded'); expect(source.prompts).toHaveLength(1);
   expect(await recovered.dispatch('promptSession.get', { id: saved.id })).toEqual(saved);
 });
-it('retains prompt bindings in a version 6 project backup and refuses misleading old formats', async () => {
+it('exports prompt bindings in a version-6 project backup', async () => {
   const source = await fixture();
   const project = projectSchema.parse(await source.runtime.dispatch('project.update', { projectId: source.project.id, revision: source.project.revision, patch: { workflow: { ...source.project.workflow, nodes: source.project.workflow.nodes.map(node => node.id === source.draft.node.id ? source.draft.node : node) } } }));
   const backup = await source.runtime.dispatch('project.backup', { projectId: project.id }) as { path: string };
   const manifest = JSON.parse(await readFile(join(backup.path, 'project.json'), 'utf8')); expect(manifest.schemaVersion).toBe(6);
-  const imported = projectSchema.parse(await source.runtime.dispatch('project.importBackup', { path: backup.path }));
-  expect(imported.workflow.nodes.find(node => node.kind === 'brief')?.promptBindings).toEqual(source.draft.node.promptBindings);
-  await writeFile(join(backup.path, 'project.json'), JSON.stringify({ ...manifest, schemaVersion: 5 }));
-  await expect(source.runtime.dispatch('project.importBackup', { path: backup.path })).rejects.toThrow('格式 6');
+  expect(projectSchema.parse(manifest.project).workflow.nodes.find(node => node.kind === 'brief')?.promptBindings).toEqual(source.draft.node.promptBindings);
 });
 
 it('freezes the selected model and Skill version and prevents applying a trial over a newer project', async () => {

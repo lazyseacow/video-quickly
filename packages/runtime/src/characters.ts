@@ -1,11 +1,10 @@
 import { randomUUID } from 'node:crypto';
 import type Database from 'better-sqlite3';
 import { z } from 'zod';
-import { assetSchema, characterProfileSchema, creativeReferenceAssetIds, isCreativeReferenceAsset, pageInputSchema, projectCharacterIds, type AssetRecord, type CharacterProfile, type CreativeContext, type RecordPage, type Shot } from '@video-quickly/contracts';
+import { characterProfileSchema, creativeReferenceAssetIds, isCreativeReferenceAsset, pageInputSchema, projectCharacterIds, type AssetRecord, type CharacterProfile, type CreativeContext, type RecordPage, type Shot } from '@video-quickly/contracts';
 import { DocumentStore } from './database.js';
 
 export interface CharacterBundle { characters: CharacterProfile[]; assets: AssetRecord[] }
-export interface ImportedCharacters { characters: CharacterProfile[]; idMap: Map<string, string> }
 export interface CharacterLibraryOptions { database: Database.Database; store: DocumentStore; onChanged: () => void }
 
 const editableCharacter = characterProfileSchema.pick({ name: true, description: true, referenceAssetIds: true });
@@ -20,7 +19,7 @@ function publicReference(asset: AssetRecord | undefined, label = '角色'): Asse
 const retainedReferenceIds = [
   "SELECT reference.value AS asset_id FROM documents profile, json_each(profile.body, '$.referenceAssetIds') reference WHERE profile.kind = 'character'",
   "SELECT reference.value AS asset_id FROM documents snapshot, json_each(snapshot.body, '$.characters') profile, json_each(profile.value, '$.referenceAssetIds') reference WHERE snapshot.kind IN ('run-snapshot','export-batch-snapshot')",
-  ...[['project', '$.creativeContext.entities'], ['story-work', '$.defaults.creativeContext.entities'], ['run-snapshot', '$.project.creativeContext.entities'], ['run-snapshot', '$.trial.inputProject.creativeContext.entities'], ['run-snapshot', '$.sourceGeneration.inputProject.creativeContext.entities'], ['node-project', '$.creativeContext.entities'], ['export-batch-snapshot', '$.project.creativeContext.entities']].map(([kind, path]) => `SELECT reference.value AS asset_id FROM documents profile, json_each(profile.body, '${path}') entity, json_each(entity.value, '$.referenceAssetIds') reference WHERE profile.kind = '${kind}'`),
+  ...[['project', '$.creativeContext.entities'], ['run-snapshot', '$.project.creativeContext.entities'], ['run-snapshot', '$.trial.inputProject.creativeContext.entities'], ['run-snapshot', '$.sourceGeneration.inputProject.creativeContext.entities'], ['node-project', '$.creativeContext.entities'], ['export-batch-snapshot', '$.project.creativeContext.entities']].map(([kind, path]) => `SELECT reference.value AS asset_id FROM documents profile, json_each(profile.body, '${path}') entity, json_each(entity.value, '$.referenceAssetIds') reference WHERE profile.kind = '${kind}'`),
 ].join(' UNION ALL ');
 
 export function createCharacterLibrary({ database, store, onChanged }: CharacterLibraryOptions) {
@@ -36,7 +35,7 @@ export function createCharacterLibrary({ database, store, onChanged }: Character
     if (revision !== profile.revision) throw new Error('角色已在其他视图修改，请刷新后重新保存。');
   }
   function isReferenced(id: string): boolean {
-    return Boolean(database.prepare("SELECT 1 FROM documents project WHERE project.kind = 'project' AND (EXISTS (SELECT 1 FROM json_each(project.body, '$.creativeContext.characterIds') WHERE value = ?) OR EXISTS (SELECT 1 FROM json_each(project.body, '$.shots') shot, json_each(shot.value, '$.characterIds') character WHERE character.value = ?)) UNION ALL SELECT 1 FROM documents work, json_each(work.body, '$.defaults.creativeContext.characterIds') role WHERE work.kind = 'story-work' AND role.value = ? LIMIT 1").get(id, id, id));
+    return Boolean(database.prepare("SELECT 1 FROM documents project WHERE project.kind = 'project' AND (EXISTS (SELECT 1 FROM json_each(project.body, '$.creativeContext.characterIds') WHERE value = ?) OR EXISTS (SELECT 1 FROM json_each(project.body, '$.shots') shot, json_each(shot.value, '$.characterIds') character WHERE character.value = ?)) LIMIT 1").get(id, id));
   }
   function assetInUse(id: string): boolean {
     // Archived settings and frozen generation inputs remain restorable.
@@ -63,24 +62,6 @@ export function createCharacterLibrary({ database, store, onChanged }: Character
       assets.set(asset.id, asset);
     }
     return { characters, assets: [...assets.values()] };
-  }
-  function prepareImport(bundle: CharacterBundle, assetIdMap: ReadonlyMap<string, string>): ImportedCharacters {
-    const input = z.object({ characters: z.array(characterProfileSchema), assets: z.array(assetSchema) }).parse(bundle);
-    const sourceAssets = new Map(input.assets.map(asset => [asset.id, asset]));
-    const idMap = new Map<string, string>();
-    const timestamp = new Date().toISOString();
-    const characters = input.characters.map(profile => {
-      if (idMap.has(profile.id)) throw new Error('备份包含重复的角色编号。');
-      const id = randomUUID(); idMap.set(profile.id, id);
-      const referenceAssetIds = profile.referenceAssetIds.map(assetId => {
-        publicReference(sourceAssets.get(assetId));
-        const mapped = assetIdMap.get(assetId);
-        if (!mapped) throw new Error('角色备份缺少参考图，请重新备份完整项目。');
-        return mapped;
-      });
-      return characterProfileSchema.parse({ ...profile, id, referenceAssetIds, revision: 1, createdAt: timestamp, updatedAt: timestamp });
-    });
-    return { characters, idMap };
   }
   function dispatch(method: string, rawParams: unknown = {}): CharacterProfile | RecordPage<CharacterProfile> | AssetRecord[] {
     switch (method) {
@@ -120,5 +101,5 @@ export function createCharacterLibrary({ database, store, onChanged }: Character
       default: throw new Error(`未知角色方法：${method}`);
     }
   }
-  return { dispatch, assetInUse, assetsInUse, profilesFor, prepareImport };
+  return { dispatch, assetInUse, assetsInUse, profilesFor };
 }

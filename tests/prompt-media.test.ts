@@ -40,13 +40,15 @@ async function fixture(kind: 'image' | 'video') {
   const character = characterProfileSchema.parse(await runtime.dispatch('character.save', { character: { name: '小青', description: '蓝外衣、黑短发', referenceAssetIds: [reference.id] } }));
   const model = modelSchema.parse(await runtime.dispatch('model.save', { model: { name: '媒体实验', provider: kind === 'image' ? 'openai-compatible' : 'seedance', baseUrl, connectionType: kind, capabilities: [kind], model: kind === 'image' ? 'fixture-image' : 'seedance-2-0-fixture', parameters: kind === 'video' ? { characterReferenceMode: 'reference_image' } : {} } }));
   const created = projectSchema.parse(await runtime.dispatch('project.create', { title: '媒体提示词实验', profile: { width: 160, height: 90, frameRate: { numerator: 30, denominator: 1 } } }));
-  const scene = assetSchema.parse(await runtime.dispatch('asset.import', { projectId: created.id, path, kind: 'image' }));
+  const sceneBytes = Buffer.concat([png, Buffer.from('scene')]), scenePath = join(directory, 'scene.png');
+  await writeFile(scenePath, sceneBytes);
+  const scene = assetSchema.parse(await runtime.dispatch('asset.import', { projectId: created.id, path: scenePath, kind: 'image' }));
   const shot = shotSchema.parse({ id: 'first', title: '第一镜', narration: '找到盒子了。', visualPrompt: '小青在花园找到木盒', durationUs: 1000000, assetId: scene.id, characterIds: [character.id] });
   const other = shotSchema.parse({ ...shot, id: 'other', title: '其他镜头', characterIds: [] });
   const project = projectSchema.parse(await runtime.dispatch('project.update', { projectId: created.id, revision: created.revision, patch: { shots: [shot, other], workflow: { ...created.workflow, production: { ...created.workflow.production, referenceMode: 'existing' } } } }));
   const node = project.workflow.nodes.find(node => kind === 'image' ? node.kind === 'assets' : node.id === 'video')!;
   const draft: PromptDraft = { projectId: project.id, projectRevision: project.revision, node: { ...node, modelId: model.id, prompt: '画面节奏：{{voice}}', promptBindings: { voice: { shotPath: ['narration'] } } }, shotId: shot.id };
-  return { runtime, directory, requests, draft, project, reference, model, scene };
+  return { runtime, directory, requests, draft, project, reference, model, scene, sceneBytes };
 }
 for (const kind of ['image', 'video'] as const) it(`previews the exact ${kind} request, generates one candidate and keeps production untouched`, async () => {
   const source = await fixture(kind);
@@ -58,7 +60,11 @@ for (const kind of ['image', 'video'] as const) it(`previews the exact ${kind} r
   expect(source.requests).toHaveLength(1);
   if (kind === 'image') expect(source.requests[0].body.prompt).toBe(preview.prompt);
   else {
-    expect(source.requests[0].body.content).toEqual(expect.arrayContaining([expect.objectContaining({ type: 'text', text: preview.prompt })]));
+    expect(preview.references.map(reference => reference.id)).toEqual([source.reference.id, source.scene.id]);
+    expect(source.requests[0].body.content).toEqual([
+      { type: 'text', text: preview.prompt },
+      ...[png, source.sceneBytes].map(bytes => ({ type: 'image_url', role: 'reference_image', image_url: { url: `data:image/png;base64,${bytes.toString('base64')}` } })),
+    ]);
     expect(preview.prompt).toContain('图片 2 为当前场景构图参考。');
   }
   expect((await source.runtime.dispatch('project.get', { projectId: source.project.id }) as { project: unknown }).project).toEqual(source.project);

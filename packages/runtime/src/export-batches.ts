@@ -210,6 +210,7 @@ export function createExportBatchManager(options: ExportBatchOptions) {
         const job = active.get(batch.id);
         if (job && !job.controller.signal.aborted) return get(batch.id);
         if (job) { await job.promise; batch = get(batch.id); }
+        options.currentRevision(batch.projectId);
         if (closed || blocked(batch.projectId, batch.id) || options.projectBusy(batch.projectId, batch.id)) throw new Error('该项目已有其他运行，请完成或取消后继续批量导出。');
         const resumed = save({ ...batch, status: 'queued', error: undefined, targets: batch.targets.map(target => target.status === 'succeeded' ? target : { ...target, status: 'queued', error: undefined, progress: 0 }) });
         schedule(batch.id); return resumed;

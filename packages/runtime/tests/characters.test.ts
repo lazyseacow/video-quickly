@@ -89,15 +89,4 @@ describe('shared character library', () => {
     expect((library.dispatch('character.archive', { characterId: selected.id, revision: selected.revision }) as CharacterProfile).archived).toBe(true);
   });
 
-  it('prepares a portable character backup with fresh identities without writing partial imports', async () => {
-    const { library, save, image, store } = await fixture();
-    const profile = save('原始角色');
-    const bundle = { characters: [profile], assets: [image] };
-    const prepared = library.prepareImport(bundle, new Map([[image.id, 'restored-public-image']]));
-    expect(prepared.characters[0]).toMatchObject({ name: profile.name, description: profile.description, referenceAssetIds: ['restored-public-image'], revision: 1 });
-    expect(prepared.idMap.get(profile.id)).toBe(prepared.characters[0].id); expect(prepared.characters[0].id).not.toBe(profile.id);
-    expect(store.get('character', prepared.characters[0].id)).toBeUndefined();
-    expect(bundle.characters[0]).toEqual(profile);
-    expect(() => library.prepareImport(bundle, new Map())).toThrow('缺少参考图');
-  });
 });

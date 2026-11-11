@@ -73,21 +73,49 @@ describe('on-demand workspace reads', () => {
     } finally { database.close(); }
   }, 90_000);
 
-  it('keeps active tasks and retained run outputs when deleting from history', async () => {
+  it('reads earlier hidden runs directly while respecting their listing preference', async () => {
     const { runtime, project, directory } = await fixture(10, { assets: 1, runs: 3, eventsPerRun: 1 });
     const database = openDatabase(directory), store = new DocumentStore(database);
     const removed = `${project.id}-run-2`, active = `${project.id}-run-1`;
     try {
       const run = store.get<RunRecord>('run', active)!;
       store.put('run', active, { ...run, status: 'waiting_external' });
-      await expect(runtime.dispatch('run.delete', { runId: active })).rejects.toThrow('请先停止制作');
-      await expect(runtime.dispatch('run.delete', { runId: removed })).resolves.toEqual({ deleted: true });
-      await expect(runtime.dispatch('run.delete', { runId: removed })).resolves.toEqual({ deleted: true });
-      const history = recordPageSchema(runSummarySchema).parse(await runtime.dispatch('run.list', { projectId: project.id, limit: 1 }));
-      expect(history.items.map(item => item.id)).toEqual([active]);
-      expect(history.nextCursor).not.toBeNull();
+      store.put('run-history-deletion', removed, { deletedAt: new Date().toISOString() });
+      const page = recordPageSchema(runSummarySchema).parse(await runtime.dispatch('run.list', { projectId: project.id, limit: 1 }));
+      expect(page.items.map(item => item.id)).toEqual([active]);
+      expect(page.nextCursor).not.toBeNull();
       expect(await runtime.dispatch('run.get', { runId: removed })).toMatchObject({ id: removed, completedNodeIds: ['brief'] });
     } finally { database.close(); }
+  });
+
+  it('deletes only archived projects atomically while keeping their media and historical runs available', async () => {
+    const { runtime, project, directory } = await fixture(1, { assets: 1, runs: 1, eventsPerRun: 1 });
+    const assetId = `${project.id}-asset-0`, runId = `${project.id}-run-0`;
+    const live = projectSchema.parse(await runtime.dispatch('project.create', { title: '未归档项目' }));
+    await runtime.dispatch('project.update', { projectId: project.id, revision: project.revision, patch: { shots: [{ ...project.shots[0], assetId }] } });
+    await runtime.dispatch('project.archive', { projectId: project.id });
+    const assetPage = async () => recordPageSchema(assetListItemSchema).parse(await runtime.dispatch('asset.list', {}));
+    expect((await assetPage()).items).toMatchObject([{ id: assetId, inUse: true }]);
+
+    await expect(runtime.dispatch('project.deleteMany', { projectIds: [project.id, live.id] })).rejects.toThrow('只能彻底删除回收站中的项目');
+    await expect(runtime.dispatch('project.deleteMany', { projectIds: [project.id, 'missing-project'] })).rejects.toThrow('项目不存在');
+    const database = openDatabase(directory), store = new DocumentStore(database);
+    try {
+      const history = store.get<RunRecord>('run', runId)!;
+      store.put('run', runId, { ...history, status: 'waiting_external' });
+      await expect(runtime.dispatch('project.deleteMany', { projectIds: [project.id] })).rejects.toThrow('有未结束的任务');
+      expect(await runtime.dispatch('project.get', { projectId: project.id })).toMatchObject({ project: { archived: true } });
+      store.put('run', runId, { ...history, status: 'failed' });
+    } finally { database.close(); }
+
+    expect(await runtime.dispatch('project.deleteMany', { projectIds: [project.id, project.id] })).toEqual({ deleted: 1 });
+    await expect(runtime.dispatch('project.get', { projectId: project.id })).rejects.toThrow('项目不存在');
+    await expect(runtime.dispatch('project.restore', { projectId: project.id })).rejects.toThrow('项目不存在');
+    expect(workspaceSummarySchema.parse(await runtime.dispatch('workspace.summary', {})).projects.map(value => value.id)).toEqual([live.id]);
+    expect((await assetPage()).items).toMatchObject([{ id: assetId, inUse: false }]);
+    expect(await runtime.dispatch('run.get', { runId })).toMatchObject({ id: runId, status: 'failed' });
+    expect(await runtime.dispatch('run.inspect', { runId })).toMatchObject({ recovery: { resume: false, cancel: false, reason: '项目已彻底删除。' } });
+    await expect(runtime.dispatch('run.resume', { runId })).rejects.toThrow('项目不存在');
   });
 
   it.each(['failed', 'needs_attention'] as const)('follows a resumed older %s run through automatic execution, then returns to the newest completed run', async failureStatus => {

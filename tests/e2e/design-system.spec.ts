@@ -109,7 +109,8 @@ for (const width of [1536, 600]) for (const theme of ['light', 'dark']) {
     await page.addInitScript(value => localStorage.setItem('vq-theme', value), theme);
     await openApp(page);
     await page.screenshot({ path: info.outputPath(`unified-workspace-${theme}-${width}.png`) });
-    for (const name of ['我的项目', '素材库', '角色参考库', '系列模板', '模型连接', 'Skill 工作室', 'Token 消耗', '制作记录']) {
+    await expect(page.getByRole('button', { name: '制作记录', exact: true })).toHaveCount(0);
+    for (const name of ['我的项目', '素材库', '系列模板', '模型连接', 'Skill 工作室', 'Token 消耗']) {
       if (name === 'Token 消耗') await openCosts(page); else await page.getByRole('button', { name, exact: true }).click();
       await expect(page.getByRole('heading', { level: 1, name, exact: true })).toBeVisible();
       expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), name).toBe(true);
@@ -157,16 +158,12 @@ test('previews imported images automatically and keeps navigation typography sta
   await setWorkspaceTheme(page, 'dark');
   expect(await typography()).toEqual(unselected);
   await expect(image).toBeVisible();
+  const calls: string[] = [];
+  page.on('request', request => { if (request.url().endsWith('/__desktop_rpc')) calls.push(request.postDataJSON().method); });
   await openCosts(page);
   await expect(page.locator('.cost-totals')).toBeVisible();
   await expect(page.locator('.cost-metric > p')).toHaveCount(0);
-  const calls: string[] = [];
-  page.on('request', request => { if (request.url().endsWith('/__desktop_rpc')) calls.push(request.postDataJSON().method); });
-  await page.getByRole('button', { name: '制作记录', exact: true }).click();
-  await expect(page.getByRole('heading', { name: '制作记录', exact: true })).toBeVisible();
-  await expect(page.locator('.run-card').first().or(page.getByText('还没有制作记录', { exact: true }))).toBeVisible();
-  await expect(page.locator('.run-card details')).toHaveCount(0);
-  expect(calls).toContain('run.list');
+  expect(calls).not.toContain('run.list');
   expect(calls).not.toContain('run.events');
   expect(calls).not.toContain('run.activities');
 });

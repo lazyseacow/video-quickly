@@ -5,8 +5,7 @@ import { tmpdir } from 'node:os';
 import { afterEach, expect, it } from 'vitest';
 import { assetSchema, imageDerivationSchema, projectSchema, shotSchema } from '@video-quickly/contracts';
 import { createRuntime } from '../packages/runtime/src/index';
-import { DocumentStore, openDatabase } from '../packages/runtime/src/database';
-import { createImageTools } from '../packages/runtime/src/image-tools';
+import { seedLegacyGridAsset } from './fixtures/legacy-grid-asset';
 
 const directories: string[] = [], runtimes: ReturnType<typeof createRuntime>[] = [];
 const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScLbtAAAAABJRU5ErkJggg==', 'base64');
@@ -27,21 +26,17 @@ it('validates crop bounds, integer grid identity and mask provenance as one cons
   expect(imageDerivationSchema.safeParse({ ...derivation, kind: 'edit-mask', grid: undefined }).success).toBe(true);
 });
 
-it('rejects an external format-8 backup whose crop source hash contradicts its source record', async () => {
+it('preserves the source hash for a legacy grid crop in a format-8 export', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'vq-image-derivation-')); directories.push(directory);
   const runtime = createRuntime({ dataDirectory: directory, seed: false }); runtimes.push(runtime);
   const path = join(directory, 'source.png'); await writeFile(path, png);
   const source = assetSchema.parse(await runtime.dispatch('asset.import', { path, kind: 'image' }));
-  const database = openDatabase(directory);
-  const [tile] = await createImageTools({ store: new DocumentStore(database), directory, changed: () => undefined })
-    .cutGrid({ assetId: source.id, rows: 1, columns: 1 }).finally(() => database.close());
+  const tile = await seedLegacyGridAsset(directory, source, 1);
   const created = projectSchema.parse(await runtime.dispatch('project.create', { title: '来源完整性' }));
   const project = projectSchema.parse(await runtime.dispatch('project.update', { projectId: created.id, revision: created.revision, patch: { shots: [shotSchema.parse({ id: 'one', title: '一', visualPrompt: '', narration: '', durationUs: 1_000_000, assetId: tile.id })] } }));
   const backup = await runtime.dispatch('project.backup', { projectId: project.id }) as { path: string };
   const manifestPath = join(backup.path, 'project.json'), manifest = JSON.parse(await readFile(manifestPath, 'utf8'));
   const cropped = manifest.assets.find((asset: { id: string }) => asset.id === tile.id);
   expect(cropped.derivation.sourceSha256).toBe(createHash('sha256').update(png).digest('hex'));
-  cropped.derivation.sourceSha256 = '0'.repeat(64);
-  await writeFile(manifestPath, JSON.stringify(manifest));
-  await expect(runtime.dispatch('project.importBackup', { path: backup.path })).rejects.toThrow(/来源|源图|摘要|哈希|SHA/);
+  expect(manifest.assets.find((asset: { id: string }) => asset.id === source.id).sha256).toBe(cropped.derivation.sourceSha256);
 });

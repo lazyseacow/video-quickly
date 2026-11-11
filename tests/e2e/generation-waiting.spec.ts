@@ -33,7 +33,7 @@ for (const kind of ['image', 'video'] as const) for (const viewport of [{ width:
       await expect(heading).toHaveCount(kind === 'video' ? 0 : 1);
       await expect(dialog.getByRole('region', { name: '步骤进度', exact: true })).toHaveCount(1);
       await expect(dialog.getByText('制作中', { exact: true })).toHaveCount(0);
-      await expect(dialog.getByRole('button', { name: '刷新制作记录', exact: true })).toBeVisible();
+      await expect(dialog.getByRole('button', { name: '刷新本次制作', exact: true })).toBeVisible();
       await expect(progress.getByRole('progressbar')).toHaveAttribute('aria-valuenow', '33');
       await expect(progress).toContainText('已等待'); await expect(dialog).not.toContainText('这个步骤尚未保存产物');
       await expect(dialog.getByRole('navigation', { name: '本次制作步骤' })).not.toContainText('1/3');

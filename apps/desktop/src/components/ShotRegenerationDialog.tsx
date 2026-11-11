@@ -109,7 +109,7 @@ export default function ShotRegenerationDialog({ project, shot, models, assets, 
           load(0, completed.id),
           readCandidateAssets(project.id).then(values => { if (alive.current && !controller.signal.aborted) setExtraAssets(values); }),
         ]);
-      } else if (completed.status !== 'canceled') setError(completed.error ?? '生成需要核对，请在制作记录中查看任务。');
+      } else if (completed.status !== 'canceled') setError(completed.error ?? '生成需要核对，请检查当前任务。');
     }).catch(error => { if (alive.current && !controller.signal.aborted) setProgressError(error instanceof Error ? error.message : String(error)); });
     return () => controller.abort();
   }, [runId, project.id, load, progressRefresh]);
@@ -165,7 +165,7 @@ export default function ShotRegenerationDialog({ project, shot, models, assets, 
       {!source && !availableModels.length && <p className="tiny-meta">请先在模型连接中添加具备{candidateKindLabels[kind]}能力的模型。</p>}
       {shot.locked && <Notice>请先解锁当前镜头，再生成或应用候选。</Notice>}
       <div className="shot-regeneration__generate"><Button variant="primary" busy={generating} disabled={applying || running || unfinishedSource || !selectedModelId && !source || shot.locked} onClick={() => void generate()}><Sparkles size={14} />生成候选</Button><span className="tiny-meta">生成结果会先保留为候选，应用前不会替换当前镜头。</span></div>
-      {runId && <div className="shot-regeneration__run" role="status"><Status value={run?.status ?? 'queued'} /><span>{resumable ? run?.error : running ? '生成在后台继续；关闭后可重新打开或查看制作记录。' : run?.status === 'succeeded' ? '候选已保存，可比较后选择应用。' : run?.status === 'canceled' ? '已请求停止，已提交的远端任务请在制作记录中核对。' : run?.error}</span>{resumable && <Button aria-label="继续生成" busy={resuming} disabled={canceling} onClick={() => void resume()}>继续</Button>}{(running || unfinishedSource) && <Button aria-label="停止生成" busy={canceling} disabled={resuming} onClick={() => void cancel()}><Square size={13} />停止</Button>}</div>}
+      {runId && <div className="shot-regeneration__run" role="status"><Status value={run?.status ?? 'queued'} /><span>{resumable ? run?.error : running ? '生成在后台继续，可重新打开镜头候选查看。' : run?.status === 'succeeded' ? '候选已保存，可比较后选择应用。' : run?.status === 'canceled' ? '已请求停止。请在模型服务中核对已提交的任务。' : run?.error}</span>{resumable && <Button aria-label="继续生成" busy={resuming} disabled={canceling} onClick={() => void resume()}>继续</Button>}{(running || unfinishedSource) && <Button aria-label="停止生成" busy={canceling} disabled={resuming} onClick={() => void cancel()}><Square size={13} />停止</Button>}</div>}
       {progressError && <Notice kind="error">{progressError}<Button aria-label="重试生成进度" onClick={() => setProgressRefresh(value => value + 1)}>重试</Button></Notice>}
       <div className="shot-regeneration__workspace">
         <aside className="shot-regeneration__history" aria-label="候选历史"><div className="shot-regeneration__history-heading"><h3>候选历史 <span>{total}</span></h3><Button aria-label="刷新候选" variant="ghost" disabled={loading || applying} onClick={() => void load()}><RefreshCw size={13} />刷新</Button></div>

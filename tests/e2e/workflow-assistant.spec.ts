@@ -172,13 +172,9 @@ test('restores a saved suggestion after reopening and rejects applying it after 
     await expect(dialog.getByRole('button', { name: '应用到任务草稿', exact: true })).toBeEnabled(); expect(source.prompts).toHaveLength(2);
     await dialog.getByRole('button', { name: '关闭', exact: true }).click(); await expect(dialog).toHaveCount(0);
     await settings.getByRole('button', { name: '关闭对话框', exact: true }).click(); await expect(settings).toHaveCount(0);
-    await page.getByRole('button', { name: '制作记录', exact: true }).click();
-    await page.getByRole('combobox', { name: '记录来源', exact: true }).selectOption('workflow-assistant');
-    await page.locator('.run-card').filter({ hasText: changed.title }).first().getByRole('button', { name: '查看步骤', exact: true }).click();
-    const history = page.getByRole('dialog', { name: '制作步骤详情', exact: true });
-    await expect(history.getByRole('region', { name: '任务修改建议', exact: true })).toContainText('缓慢推近木盒');
-    await expect(history.getByRole('button', { name: '在项目中查看与应用', exact: true })).toHaveCount(0);
-    await history.getByText('原始模型结果', { exact: true }).click();
-    await expect(history.locator('.step-result__document pre')).toContainText('缓慢推近木盒'); expect(source.prompts).toHaveLength(2);
+    const { items } = await rpc<{ items: Array<{ id: string; status: string; projectRevision: number }> }>(request, 'run.list', { projectId: changed.id, purpose: 'workflow-assistant' });
+    expect(items).toHaveLength(2);
+    expect(items[0]).toMatchObject({ status: 'succeeded', projectRevision: changed.revision });
+    expect(JSON.stringify(await rpc(request, 'node.result', { runId: items[0].id, nodeId: 'workflow-assistant' }))).toContain('缓慢推近木盒');
   } finally { await source.close(); }
 });

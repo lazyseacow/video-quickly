@@ -1,7 +1,7 @@
 import { supportsProductionAgent, validateModelConnection, validateModelParameters, type ModelCapability, type ModelProfile, type WorkflowNode } from './index.js';
 
 export interface ModelFailureContext {
-  error?: string; unknownSubmission?: boolean; runStatus?: string; queueOwned?: boolean; trial?: boolean;
+  error?: string; unknownSubmission?: boolean; runStatus?: string; trial?: boolean;
 }
 export type ModelFailureKind = 'unknown-submission' | 'credentials' | 'rate-limit' | 'service' | 'configuration' | 'other';
 export function classifyModelFailure(failure: ModelFailureContext): ModelFailureKind {
@@ -29,9 +29,8 @@ export function modelAlternatives(node: WorkflowNode, models: readonly ModelProf
   const capability: ModelCapability | undefined = node.config.operation === 'prepare-edit' || node.config.operation === 'prepare-references' && node.config.referenceMode !== 'generate'
     ? undefined : ['brief', 'research', 'style', 'script', 'agent'].includes(node.kind) ? 'text' : node.kind === 'assets' ? 'image' : node.kind === 'animation' ? 'video' : undefined;
   const kind = classifyModelFailure(failure);
-  const blocked = failure.unknownSubmission || failure.queueOwned || failure.trial || ['queued', 'running', 'waiting_review', 'waiting_external', 'retry_scheduled'].includes(failure.runStatus ?? '');
+  const blocked = failure.unknownSubmission || failure.trial || ['queued', 'running', 'waiting_review', 'waiting_external', 'retry_scheduled'].includes(failure.runStatus ?? '');
   const guidance = failure.unknownSubmission ? '原任务提交结果尚未确认，请先核对服务端任务；切换配置不会恢复或取消原任务。'
-    : failure.queueOwned ? '该任务属于生产队列，请先在队列中处理当前项，再保存模型配置并重新建项。'
     : failure.trial ? '请在提示词实验中更换模型、重新预览并显式试运行。'
     : blocked ? '请先完成或停止当前任务，再按新配置创建运行。'
     : kind === 'credentials' ? '先检查访问权限与凭据；同一服务地址的其他模型可能受相同权限限制。'

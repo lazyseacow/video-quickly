@@ -126,30 +126,21 @@ describe('native LangGraph persistence and project behavior', () => {
     expect(bytes.includes('test-only-value')).toBe(false);
   });
 
-  it('restores a portable backup with new identities and rejects corruption or traversal', async () => {
+  it('exports a complete portable backup and retires project import', async () => {
     const instance = await runtime();
     const before = await instance.dispatch('workspace.snapshot') as WorkspaceSnapshot;
     const original = before.projects[0];
     const backup = await instance.dispatch('project.backup', { projectId: original.id }) as { path: string };
-    const restored = await instance.dispatch('project.importBackup', { path: backup.path }) as ProjectDocument;
-    expect(restored.id).not.toBe(original.id);
-    expect(restored.shots[0].assetId).not.toBe(original.shots[0].assetId);
-    const after = await instance.dispatch('workspace.snapshot') as WorkspaceSnapshot;
-    expect(after.projects).toHaveLength(2);
-    const copied = after.assets.find(asset => asset.id === restored.shots[0].assetId)!;
+    const manifest = JSON.parse(await readFile(join(backup.path, 'project.json'), 'utf8')) as { project: ProjectDocument; assets: WorkspaceSnapshot['assets'] };
+    expect(manifest.project).toEqual(original);
     const source = before.assets.find(asset => asset.id === original.shots[0].assetId)!;
-    expect(await readFile(copied.path)).toEqual(await readFile(source.path));
-    const manifestPath = join(backup.path, 'project.json');
-    const manifest = JSON.parse(await readFile(manifestPath, 'utf8')) as { assets: Array<{ path: string; sha256: string }> };
-    const first = manifest.assets[0];
-    const originalPath = first.path;
-    first.path = '../outside.svg';
-    await writeFile(manifestPath, JSON.stringify(manifest));
-    await expect(instance.dispatch('project.importBackup', { path: backup.path })).rejects.toThrow('越界');
-    first.path = originalPath; first.sha256 = '0'.repeat(64);
-    await writeFile(manifestPath, JSON.stringify(manifest));
-    await expect(instance.dispatch('project.importBackup', { path: backup.path })).rejects.toThrow('校验失败');
-    expect((await instance.dispatch('workspace.snapshot') as WorkspaceSnapshot).projects).toHaveLength(2);
+    const copied = manifest.assets.find(asset => asset.id === source.id)!;
+    expect(copied.path).toMatch(/^assets\//);
+    expect(await readFile(join(backup.path, copied.path))).toEqual(await readFile(source.path));
+    for (const method of ['project.importBackup', 'work.list', 'productionQueue.list']) {
+      await expect(instance.dispatch(method, { path: backup.path })).rejects.toThrow('未知操作');
+    }
+    expect((await instance.dispatch('workspace.snapshot') as WorkspaceSnapshot).projects).toEqual(before.projects);
   });
 
   it('never persists raw credentials from an external provider error', async () => {

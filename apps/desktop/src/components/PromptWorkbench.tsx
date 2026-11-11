@@ -171,7 +171,7 @@ export default function PromptWorkbench({ projectId, projectRevision, node: init
       </fieldset>
     </div>
     <div className="dialog__footer"><Button onClick={onClose}>关闭</Button><Button disabled={busy} onClick={() => void perform(() => onApplyPrompt(currentNode()))}>应用提示词到设置</Button><Button disabled={!session || !preview} onClick={() => setTab('trial')}>查看试运行</Button></div>
-    {inspected && <Suspense fallback={null}><RunInspector runId={inspected} version={version} onClose={() => setInspected(undefined)} onChanged={() => setRefresh(value => value + 1)} onRestart={() => { setInspected(undefined); setTab('trial'); request.current = undefined; setRun(undefined); }} onOpenOutput={selection => { onClose(); onOpenOutput(selection); }} /></Suspense>}
+    {inspected && <Suspense fallback={null}><RunInspector runId={inspected} version={version} onClose={() => setInspected(undefined)} onChanged={() => setRefresh(value => value + 1)} onOpenOutput={selection => { onClose(); onOpenOutput(selection); }} /></Suspense>}
     {usageRun && <Dialog title="实验费用" className="dialog--wide" onClose={() => setUsageRun(undefined)}><div className="dialog__body"><Suspense fallback={<p role="status">正在读取费用…</p>}><TaskUsage runId={usageRun} version={version} onBack={() => setUsageRun(undefined)} backLabel="返回提示词实验" onTaskUpdated={receiveCost} /></Suspense></div></Dialog>}
   </Dialog>;
 }

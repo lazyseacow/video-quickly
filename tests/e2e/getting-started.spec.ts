@@ -436,7 +436,8 @@ isolatedTest('guides an empty workspace through the normal project list and pres
   await expect(empty).toBeVisible();
   await expect(main.getByLabel('搜索项目', { exact: true })).toBeVisible();
   await expect(main.getByRole('button', { name: '全部项目', exact: true })).toHaveText('全部 0');
-  for (const name of ['作品与分集', '导入项目', '新建项目']) await expect(main.getByRole('button', { name, exact: true })).toBeEnabled();
+  await expect(main.getByRole('button', { name: '新建项目', exact: true })).toBeEnabled();
+  await expect(main.getByRole('button', { name: /作品与分集|导入项目/ })).toHaveCount(0);
   expect((await rpc<{ projects: ProjectDocument[] }>(request, 'workspace.snapshot')).projects.every(project => project.archived)).toBe(true);
   expect(isolatedWorkspace.origin).toBe(new URL(page.url()).origin); expect(observed.writes).toEqual([]); expect(observed.errors).toEqual([]);
 

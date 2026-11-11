@@ -11,8 +11,7 @@ import { createRuntime, SimulatedProcessExit, type RuntimeOptions } from '../pac
 import { createActivityExecutor, validateMediaActivity } from '../packages/integrations/src';
 import { probeMedia } from '../packages/video/src/node';
 import { fixtureNativeVideo } from './fixtures/native-video';
-import { fixtureCharacterViews } from './fixtures/character-views';
-import { cropToolImage } from '../packages/video/src/image-tools';
+import { fixtureCharacterImage } from './fixtures/character-image';
 
 const directories: string[] = [], servers: Server[] = [], releases: Array<() => void> = [];
 const runtimes = new Set<ReturnType<typeof createRuntime>>();
@@ -110,7 +109,7 @@ async function fixture(extra: { full?: boolean; scriptOutput?: string; failpoint
     creativeContext: creativeContextSchema.parse({ characterIds: extra.automaticCasting ? [] : profiles.map(profile => profile.id), continuity: '同一个傍晚，衣服保持不变', entities: [
       { key: 'garden', kind: 'scene', name: '花园', description: '左侧木门，右侧石喷泉' }, { key: 'kitchen', kind: 'scene', name: '厨房', description: '白色瓷砖与银色水槽' },
     ] }),
-    workflow: { ...workflow, nodes, edges: workflow.edges.filter(edge => ids.has(edge.source) && ids.has(edge.target)), stages: workflow.stages?.flatMap(stage => { const nodeIds = stage.nodeIds.filter(id => ids.has(id)); return nodeIds.length ? [{ ...stage, nodeIds }] : []; }), production: { ...workflow.production, textModelId: text.id, imageModelId: extra.relay || extra.automaticCasting === 'first-frame' ? undefined : image.id, videoModelId: videoModel.id, referenceMode: extra.relay || extra.automaticCasting === 'first-frame' ? 'none' : 'generate' } },
+    workflow: { ...workflow, nodes, edges: workflow.edges.filter(edge => ids.has(edge.source) && ids.has(edge.target)), stages: workflow.stages?.flatMap(stage => { const nodeIds = stage.nodeIds.filter(id => ids.has(id)); return nodeIds.length ? [{ ...stage, nodeIds }] : []; }), production: { ...workflow.production, textModelId: text.id, imageModelId: extra.relay ? undefined : image.id, videoModelId: videoModel.id, referenceMode: extra.relay ? 'none' : 'generate' } },
   } }));
   const current = async (target = runtime): Promise<ProjectDocument> => (await target.dispatch('project.get', { projectId: project.id }) as { project: ProjectDocument }).project;
   return { runtime, project, directory, profiles, references, referenceBytes, requests, options, current, enteredScript, release, image, text };
@@ -134,10 +133,10 @@ it('starts from no shots, binds frozen roles and sends each real reference only 
   expect(imageCalls[0].body.prompt).toEqual(expect.stringContaining('磨损红漆')); expect(imageCalls[1].body.prompt).toEqual(expect.stringContaining('银色短发'));
   const count = source.requests.length; await source.runtime.dispatch('run.replay', { runId: started.id }); expect(source.requests).toHaveLength(count);
   const backup = await source.runtime.dispatch('project.backup', { projectId: project.id }) as { path: string };
-  const restored = projectSchema.parse(await source.runtime.dispatch('project.importBackup', { path: backup.path }));
-  expect(restored.shots.map(shot => shot.characterIds)).toEqual(restored.creativeContext?.characterIds.map(id => [id]));
-  expect(restored.shots.map(shot => shot.creativeEntityKeys)).toEqual(project.shots.map(shot => shot.creativeEntityKeys));
-  expect(restored.creativeContext?.entities).toEqual(project.creativeContext?.entities);
+  const exported = projectSchema.parse(JSON.parse(await readFile(join(backup.path, 'project.json'), 'utf8')).project);
+  expect(exported.shots.map(shot => shot.characterIds)).toEqual(exported.creativeContext?.characterIds.map(id => [id]));
+  expect(exported.shots.map(shot => shot.creativeEntityKeys)).toEqual(project.shots.map(shot => shot.creativeEntityKeys));
+  expect(exported.creativeContext?.entities).toEqual(project.creativeContext?.entities);
 });
 
 it.each(['character', 'entity'] as const)('stops an unknown %s key before any media submission', async kind => {
@@ -176,21 +175,18 @@ it('cancels a running text generation without changing its project or submitting
   expect(await source.current()).toEqual(source.project); expect(source.requests).toHaveLength(1);
 });
 
-it('backs up and remaps the pool even before shots exist, rejecting incomplete and incorrectly versioned backups', async () => {
+it('backs up the role pool and reference files before shots exist', async () => {
   const source = await fixture();
   const backup = await source.runtime.dispatch('project.backup', { projectId: source.project.id }) as { path: string };
-  const path = join(backup.path, 'project.json'), manifest = JSON.parse(await readFile(path, 'utf8')) as { schemaVersion: number; project: ProjectDocument; characters: CharacterProfile[] };
+  const path = join(backup.path, 'project.json'), manifest = JSON.parse(await readFile(path, 'utf8')) as { schemaVersion: number; project: ProjectDocument; characters: CharacterProfile[]; assets: AssetRecord[] };
   expect(manifest.schemaVersion).toBe(5); expect(manifest.characters).toEqual(source.profiles);
-  const restored = projectSchema.parse(await source.runtime.dispatch('project.importBackup', { path: backup.path }));
-  expect(restored.shots).toEqual([]); expect(restored.creativeContext?.entities).toEqual(source.project.creativeContext?.entities);
-  for (const [index, id] of restored.creativeContext!.characterIds.entries()) {
-    expect(id).not.toBe(source.profiles[index].id);
-    const profile = characterProfileSchema.parse(await source.runtime.dispatch('character.get', { characterId: id }));
-    const [asset] = await source.runtime.dispatch('character.references', { characterId: profile.id }) as AssetRecord[];
-    expect(asset.projectId).toBeUndefined(); expect(await readFile(asset.path)).toEqual(source.referenceBytes[index]);
+  expect(manifest.project.shots).toEqual([]);
+  expect(manifest.project.creativeContext).toEqual(source.project.creativeContext);
+  for (const [index, profile] of manifest.characters.entries()) {
+    const reference = manifest.assets.find(asset => asset.id === profile.referenceAssetIds[0])!;
+    expect(reference.projectId).toBeUndefined();
+    expect(await readFile(join(backup.path, reference.path))).toEqual(source.referenceBytes[index]);
   }
-  await writeFile(path, JSON.stringify({ ...manifest, schemaVersion: 4 })); await expect(source.runtime.dispatch('project.importBackup', { path: backup.path })).rejects.toThrow('格式 5');
-  await writeFile(path, JSON.stringify({ ...manifest, characters: manifest.characters.slice(1) })); await expect(source.runtime.dispatch('project.importBackup', { path: backup.path })).rejects.toThrow('备份缺少');
 });
 
 it.each([false, true])('resumes committed script output with frozen context across reopening; edited library = %s', async edited => {
@@ -237,7 +233,7 @@ it.skipIf(!mediaAvailable)('carries roles and textual continuity through real vi
   expect(media.width).toBe(160); expect(media.height).toBe(90); expect(media.audio).toBe(true); expect(media.duration).toBeGreaterThan(0);
 });
 
-it.skipIf(!mediaAvailable)('composes the existing role references before sending a single image to an OpenAI-compatible Seedance relay', async () => {
+it.skipIf(!mediaAvailable)('uses both roles when the project explicitly asks to generate a scene image for a single-image connection', async () => {
   const shots = [
     { id: 'meeting', title: '双人见面', narration: '', visualPrompt: '小青与小红在门口见面', durationUs: 4_000_000, characterKeys: ['role-1', 'role-2'] },
     { id: 'talking', title: '双人交谈', narration: '', visualPrompt: '小青与小红在喷泉边交谈', durationUs: 4_000_000, characterKeys: ['role-1', 'role-2'] },
@@ -246,6 +242,7 @@ it.skipIf(!mediaAvailable)('composes the existing role references before sending
   const source = await fixture({ full: true, relay: true, scriptOutput: JSON.stringify({ shots }) });
   const project = projectSchema.parse(await source.runtime.dispatch('project.update', { projectId: source.project.id, revision: source.project.revision, patch: {
     shots: shots.map(({ characterKeys, ...shot }) => ({ ...shot, characterIds: characterKeys.map(key => source.profiles[key === 'role-1' ? 0 : 1].id) })),
+    workflow: { ...source.project.workflow, production: { ...source.project.workflow.production, referenceMode: 'generate', imageModelId: source.image.id } },
   } }));
   const readiness = await source.runtime.dispatch('project.readiness', { projectId: project.id });
   expect(readiness).toMatchObject({ ready: true });
@@ -256,8 +253,8 @@ it.skipIf(!mediaAvailable)('composes the existing role references before sending
   const finished = runSchema.parse(await source.runtime.dispatch('run.get', { runId: started.id }));
   expect(finished.status, finished.error).toBe('succeeded');
   const pictureCalls = source.requests.filter(request => request.path.endsWith('/images/edits'));
-  expect(pictureCalls).toHaveLength(2);
-  for (const picture of pictureCalls) {
+  expect(pictureCalls).toHaveLength(3);
+  for (const picture of pictureCalls.slice(0, 2)) {
     expect(picture.body.images).toEqual(source.referenceBytes.map(bytes => ({ image_url: `data:image/png;base64,${bytes.toString('base64')}` })));
   }
   const videoCalls = source.requests.filter(request => request.path === '/v1/videos');
@@ -265,48 +262,55 @@ it.skipIf(!mediaAvailable)('composes the existing role references before sending
   for (const request of videoCalls.slice(0, 2)) {
     expect(request.body).toMatchObject({ model: 'seedance-2-0-fixture', images: [png.toString('base64')], prompt: expect.stringContaining('以镜头首帧中的人物形象和构图为准') });
   }
-  expect(videoCalls[2].body.images).toEqual([source.referenceBytes[0].toString('base64')]);
+  expect(pictureCalls[2].body.images).toEqual([{ image_url: `data:image/png;base64,${source.referenceBytes[0].toString('base64')}` }]);
+  expect(videoCalls[2].body.images).toEqual([png.toString('base64')]);
 });
 
-it('sends one fixed-size full-color character board request through a Seedream relay', async () => {
-  const board = await fixtureCharacterViews();
-  const source = await fixture({ imageResponse: () => board, acceptImageRequest: (path, body) =>
-    path === '/v1/images/generations' && body.size === '2048x2048' && !('n' in body) && !('stream' in body) && !('sequential_image_generation' in body) && !('images' in body) });
+it('passes the requested composition to a Seedream relay and saves one original image per request', async () => {
+  const [png, jpeg, webp] = await Promise.all([fixtureCharacterImage(), fixtureCharacterImage(true, 'jpeg'), fixtureCharacterImage(false, 'webp')]);
+  const portraitPrompt = '蓝外衣、黑色短发，竹林晨雾中的肩部特写。';
+  const customPrompt = '在一张画布上绘制正面、侧面、背面和四分之三侧面的四视角。';
+  const imagesByPrompt = new Map([[portraitPrompt, png], [customPrompt, jpeg]]);
+  const source = await fixture({ imageResponse: prompt => imagesByPrompt.get(prompt) ?? webp, acceptImageRequest: (path, body) =>
+    path === '/v1/images/generations' && body.size === '2560x1440' && !('n' in body) && !('stream' in body) && !('sequential_image_generation' in body) && !('images' in body) });
   const model = modelSchema.parse(await source.runtime.dispatch('model.save', { model: {
     name: 'Seedream 兼容中转', provider: 'openai-compatible', baseUrl: source.image.baseUrl, model: 'doubao-seedream-5-0-lite-260128',
     connectionType: 'image', capabilities: ['image'], parameters: { size: '2560x1440', n: 4, stream: true, sequential_image_generation: 'auto', sequential_image_generation_options: { max_images: 4 } },
   } }));
-  const specifiedDesign = '蓝外衣、黑色短发，背景为竹林晨雾。';
-  const inferredDesign = '性格沉静的古风剑客。';
-  for (const design of [{ description: specifiedDesign }, { description: inferredDesign, referenceAssetId: source.references[0].id }]) {
-    const views = assetSchema.array().parse(await source.runtime.dispatch('character.generateViews', {
-      requestId: randomUUID(), modelId: model.id, name: '小青', ...design,
-    }));
-    expect(views).toHaveLength(4);
+  const generate = async (prompt: string, referenceAssetId?: string) => assetSchema.parse(await source.runtime.dispatch('character.generateImage', {
+    requestId: randomUUID(), modelId: model.id, name: '小青', prompt, referenceAssetId,
+  }));
+  const generatedPortrait = await generate(portraitPrompt);
+  const generatedCustom = await generate(customPrompt, source.references[0].id);
+  const generatedFromReference = await generate('', generatedCustom.id);
+  for (const [image, extension, mimeType, bytes] of [
+    [generatedPortrait, 'png', 'image/png', png], [generatedCustom, 'jpg', 'image/jpeg', jpeg],
+    [generatedFromReference, 'webp', 'image/webp', webp],
+  ] as const) {
+    expect(image).toMatchObject({ name: `小青 · 参考图.${extension}`, width: 320, height: 360, mimeType });
+    expect(image.path.endsWith(`.${extension}`)).toBe(true);
+    expect(image.projectId).toBeUndefined();
+    expect(image.shotId).toBeUndefined();
+    expect(image.derivation).toBeUndefined();
+    expect(await readFile(image.path)).toEqual(bytes);
   }
 
-  expect(source.requests).toHaveLength(2);
-  const [textOnly, withReference] = source.requests.map(request => request.body);
+  expect(source.requests).toHaveLength(3);
+  const [textOnly, withReference, referenceOnly] = source.requests.map(request => request.body);
   expect(textOnly).not.toHaveProperty('image');
-  expect(textOnly.prompt).toContain(specifiedDesign);
-  expect(textOnly.prompt).toContain('未指定的颜色根据角色设定补齐');
+  expect(textOnly.prompt).toBe(portraitPrompt);
   expect(withReference.image).toEqual([`data:image/png;base64,${source.referenceBytes[0].toString('base64')}`]);
-  expect(withReference.prompt).toContain(inferredDesign);
-  expect(withReference.prompt).toContain('未指定的颜色根据角色设定和参考图补齐');
-  for (const body of [textOnly, withReference]) {
+  expect(withReference.prompt).toBe(customPrompt);
+  expect(referenceOnly.prompt).toBe('根据参考图生成「小青」的角色参考图。');
+  expect(referenceOnly.image).toEqual([`data:image/jpeg;base64,${jpeg.toString('base64')}`]);
+  for (const body of [textOnly, withReference, referenceOnly]) {
     expect(body.model).toBe(model.model);
-    expect(body.prompt).toContain('1:1 正方形画布');
-    expect(body.prompt).toContain('全彩四视角角色设定图');
-    expect(body.prompt).toContain('以角色设定中指定的配色和背景为准');
-    expect(body.prompt).toContain('背景未指定时，选择与人物有明暗或色相对比的素色底');
-    expect(body.prompt).toContain('四个视角保持配色、背景和光照一致');
     expect(body).not.toHaveProperty('sequential_image_generation_options');
   }
 });
 
-it.skipIf(!mediaAvailable)('shares one cast across six shots and uses the confirmed sixth frame in an ordinary video redo', async () => {
-  const board = await fixtureCharacterViews();
-  const [frontFrame, sideFrame] = await cropToolImage(board, [{ x: 0, y: 0, width: 320, height: 320 }, { x: 0, y: 320, width: 320, height: 320 }]);
+it.skipIf(!mediaAvailable)('sends the same chosen role image across six shots and ordinary video redo without creating a new frame', async () => {
+  const [frontFrame, sideFrame] = await Promise.all([fixtureCharacterImage(), fixtureCharacterImage(true)]);
   const clipsByFrame = new Map([frontFrame, sideFrame].map(frame => [frame.toString('base64'), fixtureNativeVideo(frame)]));
   const shots = Array.from({ length: 6 }, (_, index) => ({
     title: `分片 ${index + 1}`, narration: '', durationUs: 4_000_000,
@@ -314,22 +318,20 @@ it.skipIf(!mediaAvailable)('shares one cast across six shots and uses the confir
     characterKeys: index === 0 || index === 5 ? ['role-1'] : [],
   }));
   const source = await fixture({ full: true, relay: true, clipsByFrame, scriptOutput: JSON.stringify({ shots }), imageResponse: prompt =>
-    prompt.includes('四视角角色设定图') ? board : prompt.includes('侧身握住') ? sideFrame : frontFrame });
+    prompt.includes('侧身握住') ? sideFrame : frontFrame });
   const { runtime } = source;
-  const viewInput = { requestId: randomUUID(), modelId: source.image.id, name: source.profiles[0].name, description: source.profiles[0].description, referenceAssetId: source.references[0].id };
-  const [first, duplicate] = await Promise.all([runtime.dispatch('character.generateViews', viewInput), runtime.dispatch('character.generateViews', viewInput)]);
-  const views = assetSchema.array().length(4).parse(first);
-  expect(duplicate).toEqual(views);
-  expect(await runtime.dispatch('character.generateViews', viewInput)).toEqual(views);
-  expect(views.map(view => view.name)).toEqual(['小青 · 正面.png', '小青 · 四分之三侧面.png', '小青 · 侧面.png', '小青 · 背面.png']);
-  expect(views.every(view => view.projectId === undefined && view.shotId === undefined && view.width === 320 && view.height === 320)).toBe(true);
-  expect(new Set(views.map(view => view.sha256)).size).toBe(4);
-  const viewCalls = source.requests.filter(request => request.path.endsWith('/images/edits'));
-  expect(viewCalls).toHaveLength(1);
-  expect(viewCalls[0].body).toMatchObject({ size: '1024x1024', n: 1 });
-  expect(viewCalls[0].body.images).toEqual([{ image_url: `data:image/png;base64,${source.referenceBytes[0].toString('base64')}` }]);
-  expect(viewCalls[0].body.prompt).toContain('同一个角色');
-  const role = characterProfileSchema.parse(await runtime.dispatch('character.save', { character: { ...source.profiles[0], referenceAssetIds: views.map(view => view.id) } }));
+  const imageInput = { requestId: randomUUID(), modelId: source.image.id, name: source.profiles[0].name, prompt: source.profiles[0].description, referenceAssetId: source.references[0].id };
+  const [first, duplicate] = await Promise.all([runtime.dispatch('character.generateImage', imageInput), runtime.dispatch('character.generateImage', imageInput)]);
+  const image = assetSchema.parse(first);
+  expect(duplicate).toEqual(image);
+  expect(await runtime.dispatch('character.generateImage', imageInput)).toEqual(image);
+  const imageCalls = source.requests.filter(request => request.path.endsWith('/images/edits'));
+  expect(imageCalls).toHaveLength(1);
+  expect(imageCalls[0].body).toMatchObject({ n: 1, prompt: imageInput.prompt,
+    images: [{ image_url: `data:image/png;base64,${source.referenceBytes[0].toString('base64')}` }],
+  });
+  const references = [image, source.references[0]];
+  const role = characterProfileSchema.parse(await runtime.dispatch('character.save', { character: { ...source.profiles[0], referenceAssetIds: references.map(asset => asset.id) } }));
 
   const started = runSchema.parse(await runtime.dispatch('run.start', { projectId: source.project.id }));
   await runtime.waitForIdle();
@@ -338,18 +340,23 @@ it.skipIf(!mediaAvailable)('shares one cast across six shots and uses the confir
   expect(source.requests.filter(request => request.path.endsWith('/chat/completions') && JSON.stringify(request.body).includes('分镜生成阶段：第'))).toHaveLength(2);
   const project = await source.current();
   expect(project.shots.map(shot => shot.characterIds)).toEqual([[role.id], [], [], [], [], [role.id]]);
-  const frameRequests = source.requests.filter(request => request.path.endsWith('/images/edits')).slice(1);
-  const referenceInputs = await Promise.all(views.map(async asset => ({ image_url: `data:image/png;base64,${(await readFile(asset.path)).toString('base64')}` })));
-  expect(frameRequests.map(request => request.body.images)).toEqual([referenceInputs, referenceInputs]);
+  expect(source.requests.filter(request => request.path.includes('/images/'))).toHaveLength(1);
+  const primaryBytes = (await readFile(image.path)).toString('base64');
   const videos = () => source.requests.filter(request => request.path === '/v1/videos');
   const sixVideos = videos();
   expect(sixVideos).toHaveLength(6);
-  expect(sixVideos.find(request => String(request.body.prompt).includes('正脸站在'))?.body.images).toEqual([frontFrame.toString('base64')]);
+  expect(sixVideos.find(request => String(request.body.prompt).includes('正脸站在'))?.body.images).toEqual([primaryBytes]);
   const sixthRequest = sixVideos.find(request => String(request.body.prompt).includes('侧身握住'));
-  expect(sixthRequest?.body.images).toEqual([sideFrame.toString('base64')]);
+  expect(sixthRequest?.body.images).toEqual([primaryBytes]);
+  expect(sixthRequest?.body.prompt).toContain('参考图：图片 1。');
+  expect(sixthRequest?.body.prompt).not.toContain('图片 2');
+  expect(sixthRequest?.body.prompt).toContain('全镜头保持参考人物的身份');
 
   const sixth = project.shots[5];
   const regenerate = { projectId: project.id, revision: project.revision, shotId: sixth.id, kind: 'video', instruction: '延长回头动作' };
+  expect(await runtime.dispatch('billing.prepare', { method: 'shot.regenerate', params: regenerate })).toMatchObject({ videoReferences: {
+    status: 'ready', shots: [{ title: sixth.title, mode: 'single', images: [{ id: image.id, sha256: image.sha256 }] }],
+  } });
   const redo = runSchema.parse(await runtime.dispatch('shot.regenerate', regenerate));
   await runtime.waitForIdle();
   const redone = runSchema.parse(await runtime.dispatch('run.get', { runId: redo.id }));
@@ -357,13 +364,14 @@ it.skipIf(!mediaAvailable)('shares one cast across six shots and uses the confir
   expect(videos()).toHaveLength(7);
   expect(videos()[6].body.images).toEqual(sixthRequest?.body.images);
   expect(videos()[6].body.prompt).toContain('延长回头动作');
-  expect(source.requests.filter(request => request.path.endsWith('/images/edits'))).toHaveLength(3);
+  expect(source.requests.filter(request => request.path.includes('/images/'))).toHaveLength(1);
   expect(await source.current()).toEqual(project);
   const candidates = await runtime.dispatch('shot.candidates', { projectId: project.id, shotId: sixth.id }) as { items: ShotCandidate[] };
   const candidate = candidates.items.find(item => item.runId === redo.id)!;
   const applied = projectSchema.parse(await runtime.dispatch('shot.candidate.apply', { projectId: project.id, revision: project.revision, candidateId: candidate.id }));
   expect(applied.shots.slice(0, 5)).toEqual(project.shots.slice(0, 5));
-  expect(applied.shots[5]).toMatchObject({ assetId: sixth.assetId, characterIds: [role.id], videoAssetId: candidate.shot.videoAssetId });
+  expect(applied.shots[5]).toMatchObject({ characterIds: [role.id], videoAssetId: candidate.shot.videoAssetId });
+  expect(applied.shots[5].assetId).toBe(sixth.assetId);
   expect(applied.shots[5].videoAssetId).not.toBe(sixth.videoAssetId);
   const evidence = process.env.VIDEO_QUICKLY_ACCEPTANCE_ARTIFACTS;
   if (evidence) {
@@ -374,12 +382,42 @@ it.skipIf(!mediaAvailable)('shares one cast across six shots and uses the confir
     await copyFile(redoneClip.path, join(evidence, 'shot-06-redo-fixture.mp4'));
   }
 
-  const [frame] = assetSchema.array().parse(await runtime.dispatch('asset.getMany', { assetIds: [sixth.assetId] }));
-  await unlink(frame.path);
+  await unlink(image.path);
   const missing = runSchema.parse(await runtime.dispatch('shot.regenerate', { ...regenerate, revision: applied.revision }));
   await runtime.waitForIdle();
-  expect(await runtime.dispatch('run.get', { runId: missing.id })).toMatchObject({ status: 'needs_attention', error: expect.stringContaining('镜头首帧缺失或损坏') });
+  expect(await runtime.dispatch('run.get', { runId: missing.id })).toMatchObject({ status: 'needs_attention', error: expect.stringContaining('缺失、为空或已更改') });
   expect(videos()).toHaveLength(7);
+});
+
+it.skipIf(!mediaAvailable)('rejects several independent references for a single-image connection and sends a user-selected scene as the sole attachment', async () => {
+  const source = await fixture({ full: true, relay: true });
+  const { runtime } = source;
+  const shot = { id: 'two-roles', title: '两人见面', narration: '', visualPrompt: '两位角色对话', durationUs: 1_000_000, characterIds: source.profiles.map(profile => profile.id) };
+  const bound = projectSchema.parse(await runtime.dispatch('project.update', { projectId: source.project.id, revision: source.project.revision, patch: { shots: [shot] } }));
+  const params = { projectId: bound.id, revision: bound.revision, nodeId: 'video' };
+  await expect(runtime.dispatch('billing.prepare', { method: 'run.start', params })).rejects.toThrow('绑定了多组参考图');
+  const run = runSchema.parse(await runtime.dispatch('run.start', params));
+  await runtime.waitForIdle();
+  expect(await runtime.dispatch('run.get', { runId: run.id })).toMatchObject({ status: 'needs_attention', error: expect.stringContaining('绑定了多组参考图') });
+  expect(source.requests).toHaveLength(0);
+
+  const path = join(source.directory, 'approved-scene.png');
+  await writeFile(path, png);
+  const frame = assetSchema.parse(await runtime.dispatch('asset.import', { projectId: bound.id, path, kind: 'image' }));
+  const selected = projectSchema.parse(await runtime.dispatch('project.update', { projectId: bound.id, revision: bound.revision, patch: {
+    shots: [{ ...shot, assetId: frame.id }], workflow: { ...bound.workflow, production: { ...bound.workflow.production, referenceMode: 'existing' } },
+  } }));
+  const nextParams = { ...params, revision: selected.revision };
+  expect(await runtime.dispatch('billing.prepare', { method: 'run.start', params: nextParams })).toMatchObject({ videoReferences: {
+    status: 'ready', shots: [{ mode: 'single', images: [{ id: frame.id, name: frame.name }] }],
+  } });
+  const next = runSchema.parse(await runtime.dispatch('run.start', nextParams));
+  await runtime.waitForIdle();
+  const finished = runSchema.parse(await runtime.dispatch('run.get', { runId: next.id }));
+  expect(finished.status, finished.error).toBe('succeeded');
+  expect(source.requests).toHaveLength(1);
+  expect(source.requests[0]).toMatchObject({ path: '/v1/videos', body: { images: [png.toString('base64')] } });
+  expect(source.requests[0].body.prompt).toContain('以镜头首帧中的人物形象和构图为准');
 });
 
 it.skipIf(!mediaAvailable).each(['first-frame', 'multi-reference'] as const)('reuses one library reference and one generated look across shots with %s video', async automaticCasting => {
@@ -439,12 +477,12 @@ it.skipIf(!mediaAvailable).each(['first-frame', 'multi-reference'] as const)('re
   expect(videoCalls).toHaveLength(3);
   for (const [index, request] of videoCalls.entries()) {
     const inputs = (request.body.content as Array<{ type: string }>).filter(item => item.type === 'image_url');
-    if (index === 2) {
-      expect(inputs).toHaveLength(automaticCasting === 'first-frame' ? 0 : 1);
-    } else if (automaticCasting === 'first-frame') {
+    if (automaticCasting === 'first-frame') {
       const frame = assets.find(asset => asset.id === result.shots[index].assetId)!;
       expect(inputs).toEqual([{ type: 'image_url', image_url: { url: await imageUrl(frame) }, role: 'first_frame' }]);
       expect(frame.sha256).not.toEqual(look.sha256);
+    } else if (index === 2) {
+      expect(inputs).toHaveLength(1);
     } else {
       expect(inputs).toContainEqual({ type: 'image_url', image_url: { url: appearance }, role: 'reference_image' });
     }
@@ -459,9 +497,7 @@ it.skipIf(!mediaAvailable).each(['first-frame', 'multi-reference'] as const)('re
     expect(source.requests.at(-1)?.body.images).toEqual(images[0].body.images);
   }
   const backup = await runtime.dispatch('project.backup', { projectId: result.id }) as { path: string };
-  const restored = projectSchema.parse(await runtime.dispatch('project.importBackup', { path: backup.path }));
-  const restoredLookId = restored.creativeContext!.entities.find(entity => entity.key === 'chen')!.referenceAssetIds![0];
-  const { assets: workspaceAssets } = await runtime.dispatch('workspace.snapshot') as { assets: AssetRecord[] };
-  expect(workspaceAssets.find(asset => asset.id === restoredLookId)).toMatchObject({ projectId: restored.id, sha256: look.sha256 });
-  expect(restoredLookId).not.toBe(lookId);
+  const manifest = JSON.parse(await readFile(join(backup.path, 'project.json'), 'utf8')) as { project: ProjectDocument; assets: AssetRecord[] };
+  expect(manifest.project.creativeContext?.entities.find(entity => entity.key === 'chen')?.referenceAssetIds).toEqual([lookId]);
+  expect(manifest.assets.find(asset => asset.id === lookId)).toMatchObject({ projectId: result.id, sha256: look.sha256 });
 });

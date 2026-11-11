@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, expect, it } from 'vitest';
@@ -64,10 +64,9 @@ it('uses one native workflow for the example and both project categories with su
   }
 });
 
-it('writes format 4 and rejects every earlier backup format', async () => {
+it('writes a format-4 project backup with its native production settings', async () => {
   const runtime = await fixture(), project = projectSchema.parse(await runtime.dispatch('project.create', { title: '备份契约' }));
   const backup = await runtime.dispatch('project.backup', { projectId: project.id }) as { path: string }, path = join(backup.path, 'project.json');
   const manifest = JSON.parse(await readFile(path, 'utf8')); expect(manifest.schemaVersion).toBe(4);
-  expect(projectSchema.parse(await runtime.dispatch('project.importBackup', { path: backup.path })).workflow.production).toEqual(project.workflow.production);
-  for (const schemaVersion of [1, 2, 3]) { await writeFile(path, JSON.stringify({ ...manifest, schemaVersion })); await expect(runtime.dispatch('project.importBackup', { path: backup.path })).rejects.toThrow('格式 4'); }
+  expect(projectSchema.parse(manifest.project).workflow.production).toEqual(project.workflow.production);
 });

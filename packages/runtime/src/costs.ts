@@ -242,7 +242,7 @@ export function createCostLedger(options: { database: Database.Database; store: 
       WHERE u.kind = 'usage-record' AND ${usageRunId} = page.run_id ${projectFilter}
       GROUP BY page.cursor, page.run_id
     ) SELECT g.*, coalesce(json_extract(s.body, '$.project.title'), json_extract(p.body, '$.title'), '项目制作') AS projectTitle,
-      CASE WHEN json_extract(r.body, '$.purpose') = 'prompt-trial' THEN CASE WHEN json_type(r.body, '$.promptSessionId') IS NULL THEN 'AI 填写 · ' ELSE '提示词实验 · ' END WHEN json_extract(r.body, '$.purpose') = 'workflow-assistant' THEN '任务修改建议 · ' WHEN json_type(r.body, '$.productionQueueId') = 'text' THEN '分集队列 · ' ELSE '' END || coalesce(CASE WHEN json_array_length(s.body, '$.nodes') = 1 THEN json_extract(s.body, '$.nodes[0].label') ELSE json_extract(s.body, '$.project.workflow.name') END, '制作任务') AS title,
+      CASE WHEN json_extract(r.body, '$.purpose') = 'prompt-trial' THEN CASE WHEN json_type(r.body, '$.promptSessionId') IS NULL THEN 'AI 填写 · ' ELSE '提示词实验 · ' END WHEN json_extract(r.body, '$.purpose') = 'workflow-assistant' THEN '任务修改建议 · ' ELSE '' END || coalesce(CASE WHEN json_array_length(s.body, '$.nodes') = 1 THEN json_extract(s.body, '$.nodes[0].label') ELSE json_extract(s.body, '$.project.workflow.name') END, '制作任务') AS title,
       coalesce(json_extract(r.body, '$.createdAt'), g.createdAt) AS taskCreatedAt,
       json_extract(r.body, '$.status') AS status, json_extract(r.body, '$.projectRevision') AS projectRevision,
       json_extract(r.body, '$.workflowVersion') AS workflowVersion, r.id IS NOT NULL AS runAvailable

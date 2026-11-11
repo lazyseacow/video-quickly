@@ -1,5 +1,5 @@
 import { lazy, Suspense, useEffect, useId, useRef, useState } from 'react';
-import { BookOpen, Check, ChevronRight, Pencil, Plus, ToggleLeft, ToggleRight, Trash2 } from 'lucide-react';
+import { BookOpen, Check, ChevronRight, Files, FlaskConical, Pencil, Plus, Search, ToggleLeft, ToggleRight, Trash2, Wrench } from 'lucide-react';
 import { z } from 'zod';
 import { supportsSkillScript, type SkillGroup, type SkillPackage } from '@video-quickly/contracts';
 import type { Action, StepOutputSelection, WorkspaceView } from '../lib/types';
@@ -21,6 +21,7 @@ export default function SkillStudio({ workspace, action, onOpenOutput }: { works
   const [collapsedMatches, setCollapsedMatches] = useState<string[]>([]);
   const [busy, setBusy] = useState<string[]>([]), [operationError, setOperationError] = useState('');
   const panelPrefix = useId();
+  const searchInput = useRef<HTMLInputElement>(null);
   const pending = useRef(new Set<string>());
   const confirm = useConfirmation();
   const groups = workspace.skillGroups ?? [], grouped = new Set(groups.flatMap(group => group.skillIds));
@@ -59,9 +60,18 @@ export default function SkillStudio({ workspace, action, onOpenOutput }: { works
     if (!await confirm({ title: `卸载分组“${group.name}”？`, description: `移除该分组及其独有的 ${group.skillIds.length - shared} 个 Skill。${shared ? `仍属于其他分组的 ${shared} 个 Skill 会保留。` : ''}引用已卸载 Skill 的任务需重新选择，运行中的任务和历史快照会保留。`, confirmLabel: '卸载分组' })) return;
     await perform(group.id, 'skill.group.uninstall', { id: group.id }, 'Skill 分组已卸载');
   }
-  return <div className="content-page">
-    <div className="page-heading"><div><h1>Skill 工作室</h1></div><Button variant="primary" onClick={() => setImporting(true)}><Plus size={16} />导入 Skill</Button></div>
-    <div className="page-toolbar"><input type="search" aria-label="搜索 Skill 或分组" placeholder="搜索 Skill 或分组" value={search} onChange={event => changeSearch(event.target.value)} /><Button onClick={() => setPromptStudio(true)}>提示词实验与模板</Button></div>
+  return <div className="content-page skill-studio">
+    <div className="page-heading skill-studio__heading">
+      <h1>Skill 工作室</h1>
+      <Button variant="primary" onClick={() => setImporting(true)}><Plus size={16} aria-hidden="true" />导入 Skill</Button>
+    </div>
+    <div className="page-toolbar skill-studio__toolbar">
+      <div className="search-field skill-studio__search">
+        <Search size={16} strokeWidth={1.5} aria-hidden="true" />
+        <input ref={searchInput} type="search" aria-label="搜索 Skill 或分组" placeholder="搜索 Skill 或分组" value={search} onChange={event => changeSearch(event.target.value)} />
+      </div>
+      <Button onClick={() => setPromptStudio(true)}><FlaskConical size={16} aria-hidden="true" />提示词实验与模板</Button>
+    </div>
     {operationError && <Notice kind="error">{operationError}</Notice>}
     <div className="skill-studio-groups">
       {workspace.skills.length ? matches.map(collection => {
@@ -73,42 +83,52 @@ export default function SkillStudio({ workspace, action, onOpenOutput }: { works
         const groupBusy = busy.includes(id), hasBusySkill = skills.some(skill => busy.includes(skill.id));
         return <section className="skill-studio-group" key={id} aria-label={`Skill 分组“${name}”`}>
           <div className="skill-studio-group__heading">
-            <div className="skill-studio-group__identity">
-              <h2><Button variant="ghost" static className="skill-studio-group__toggle" aria-expanded={expanded} aria-controls={panelId} onClick={() => toggleGroup(id)}>
+            <h2 className="skill-studio-group__identity">
+              <Button variant="ghost" static className="skill-studio-group__toggle" aria-expanded={expanded} aria-controls={panelId}
+                aria-labelledby={`${panelId}-label`} aria-describedby={source ? `${panelId}-source` : undefined} onClick={() => toggleGroup(id)}>
                 <ChevronRight size={16} aria-hidden="true" />
-                <span className="skill-studio-group__label"><span>{name}</span><span className="tiny-meta">{skills.length} 个 Skill · 已启用 {enabledCount} 个</span></span>
-              </Button></h2>
-              {source && <p className="tiny-meta">{source}</p>}
-            </div>
-            {group && <div className="skill-studio-group__actions">
+                <span className="skill-studio-group__copy">
+                  <span id={`${panelId}-label`} className="skill-studio-group__label">
+                    <span>{name}</span>
+                    <span className="skill-studio-group__count">{skills.length} 个 Skill · 已启用 {enabledCount} 个</span>
+                  </span>
+                  {source && <span id={`${panelId}-source`} className="skill-studio-group__source">{source}</span>}
+                </span>
+              </Button>
+            </h2>
+            {group && <div className="skill-studio__actions">
               <IconButton label={`编辑分组“${name}”`} disabled={groupBusy} onClick={() => setEditingGroup(group)}><Pencil size={16} aria-hidden="true" /></IconButton>
               <IconButton label={`${allEnabled ? '停用' : '启用'}分组“${name}”`} busy={groupBusy} disabled={hasBusySkill} onClick={() => void perform(id, 'skill.group.toggle', { id, enabled: !allEnabled }, '分组启用状态已更新')}>
-                {allEnabled ? <ToggleRight size={16} aria-hidden="true" /> : <ToggleLeft size={16} aria-hidden="true" />}
+                {allEnabled ? <ToggleRight className="skill-studio-group__status-icon" size={20} aria-hidden="true" /> : <ToggleLeft className="skill-studio-group__status-icon" size={20} aria-hidden="true" />}
               </IconButton>
-              <IconButton label={`卸载分组“${name}”`} disabled={groupBusy || hasBusySkill} onClick={() => void uninstallGroup(group)}><Trash2 size={16} aria-hidden="true" /></IconButton>
+              <IconButton className="skill-studio__uninstall" label={`卸载分组“${name}”`} disabled={groupBusy || hasBusySkill} onClick={() => void uninstallGroup(group)}><Trash2 size={16} aria-hidden="true" /></IconButton>
             </div>}
           </div>
           <div className="skill-studio-group__cards" id={panelId} hidden={!expanded}>
             {expanded && matchingSkills.map(skill => <article className={'list-card skill-card' + (skill.enabled ? '' : ' skill-card--disabled')} key={skill.id}>
-              <div className="list-card__icon"><BookOpen size={20} /></div>
-              <div className="list-card__body"><h3>{skill.name}</h3><p>{skill.description}</p>
-                {(skill.resources.length > 0 || skill.tools.length > 0) && <div className="pill-row">
-                  {skill.resources.length > 0 && <span className="pill">{skill.resources.length} 个资源</span>}
-                  {skill.tools.length > 0 && <span className="pill">{skill.tools.length} 个工具</span>}
+              <div className="list-card__icon" aria-hidden="true"><BookOpen size={16} strokeWidth={1.5} /></div>
+              <div className="list-card__body">
+                <h3>{skill.name}</h3>
+                {skill.description && <p>{skill.description}</p>}
+                {(skill.resources.length > 0 || skill.tools.length > 0) && <div className="skill-card__meta">
+                  {skill.resources.length > 0 && <span><Files size={14} strokeWidth={1.5} aria-hidden="true" />{skill.resources.length} 个资源</span>}
+                  {skill.tools.length > 0 && <span><Wrench size={14} strokeWidth={1.5} aria-hidden="true" />{skill.tools.length} 个工具</span>}
                 </div>}
               </div>
-              <div className="list-card__actions">
-                <IconButton label={`查看“${skill.name}”`} onClick={() => setSelected(skill)}><Pencil size={16} /></IconButton>
-                <IconButton role="switch" label={`“${skill.name}”启用状态`} aria-checked={skill.enabled} title={skill.enabled ? '停用 Skill' : '启用 Skill'} busy={skillBusy(skill.id)} onClick={() => void perform(skill.id, 'skill.toggle', { skillId: skill.id, enabled: !skill.enabled }, skill.enabled ? 'Skill 已停用' : 'Skill 已启用')}>
-                  {skill.enabled ? <ToggleRight size={16} aria-hidden="true" /> : <ToggleLeft size={16} aria-hidden="true" />}
+              <div className="list-card__actions skill-studio__actions">
+                <IconButton label={`查看“${skill.name}”`} onClick={() => setSelected(skill)}><Pencil size={16} aria-hidden="true" /></IconButton>
+                <IconButton className="skill-card__switch" role="switch" label={`“${skill.name}”启用状态`} aria-checked={skill.enabled} title={skill.enabled ? '停用 Skill' : '启用 Skill'} busy={skillBusy(skill.id)} onClick={() => void perform(skill.id, 'skill.toggle', { skillId: skill.id, enabled: !skill.enabled }, skill.enabled ? 'Skill 已停用' : 'Skill 已启用')}>
+                  <span className="skill-card__switch-track" aria-hidden="true" />
                 </IconButton>
-                <IconButton label={`卸载“${skill.name}”`} disabled={skillBusy(skill.id)} onClick={() => void uninstallSkill(skill)}><Trash2 size={16} aria-hidden="true" /></IconButton>
+                <IconButton className="skill-studio__uninstall" label={`卸载“${skill.name}”`} disabled={skillBusy(skill.id)} onClick={() => void uninstallSkill(skill)}><Trash2 size={16} aria-hidden="true" /></IconButton>
               </div>
             </article>)}
           </div>
         </section>;
       }) : <EmptyState icon={<BookOpen size={25} />} title="还没有 Skill" description="导入后可在新建项目和制作设置中选用。" />}
-      {workspace.skills.length > 0 && query && matches.length === 0 && <p className="muted">没有匹配的 Skill。</p>}
+      {workspace.skills.length > 0 && query && matches.length === 0 && <EmptyState icon={<Search size={24} />} title="没有匹配的 Skill" description="试试其他关键词。">
+        <Button onClick={() => { changeSearch(''); searchInput.current?.focus(); }}>清空搜索</Button>
+      </EmptyState>}
     </div>
     <ToolConnections action={action} version={workspace.version} />
     {importing && <SkillImportDialog onClose={() => setImporting(false)} />}

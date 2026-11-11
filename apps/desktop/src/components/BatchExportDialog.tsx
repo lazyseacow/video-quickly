@@ -23,14 +23,14 @@ function initialTargets(profile: VideoProfile): DraftTarget[] {
 }
 const batchKey = (projectId: string) => `vq-export-batch:${projectId}`;
 
-export default function BatchExportDialog({ project, onClose, notify }: {
-  project: ProjectDocument; action: Action; onClose: () => void; notify?: (message: string, error?: boolean) => void;
+export default function BatchExportDialog({ project, initialSection, onClose, notify }: {
+  project: ProjectDocument; action: Action; initialSection?: 'history'; onClose: () => void; notify?: (message: string, error?: boolean) => void;
 }) {
   // An open configuration always refers to this saved revision. External edits must conflict.
   const [baseline] = useState(() => ({ id: project.id, title: project.title, revision: project.revision, shotCount: project.shots.length }));
   const [targets, setTargets] = useState(() => initialTargets(project.profile));
   const [destination, setDestination] = useState('');
-  const [section, setSection] = useState(() => localStorage.getItem(batchKey(project.id)) ? 'history' : 'targets');
+  const [section, setSection] = useState(() => initialSection ?? (localStorage.getItem(batchKey(project.id)) ? 'history' : 'targets'));
   const [history, setHistory] = useState<ExportBatch[]>([]);
   const [nextCursor, setNextCursor] = useState<number | null>(null);
   const [selectedId, setSelectedId] = useState<string>();
@@ -49,10 +49,13 @@ export default function BatchExportDialog({ project, onClose, notify }: {
       const page = batchesSchema.parse(await rpc('render.batch.list', { projectId: baseline.id, limit: 20, ...(before ? { before } : {}) }));
       if (!alive.current || request !== listRequest.current) return;
       setHistory(current => before ? [...current, ...page.items.filter(item => !current.some(existing => existing.id === item.id))] : page.items); setNextCursor(page.nextCursor);
-      setSelectedId(current => current ?? localStorage.getItem(batchKey(baseline.id)) ?? page.items[0]?.id);
+      const preferred = initialSection === 'history'
+        ? page.items.find(item => ['queued', 'running', 'interrupted'].includes(item.status))?.id
+        : localStorage.getItem(batchKey(baseline.id));
+      setSelectedId(current => current ?? preferred ?? page.items[0]?.id);
     } catch (reason) { if (alive.current && request === listRequest.current) setListError(reason instanceof Error ? reason.message : String(reason)); }
     finally { if (alive.current && request === listRequest.current) setListBusy(false); }
-  }, [baseline.id]);
+  }, [baseline.id, initialSection]);
   useEffect(() => { void loadHistory(); }, [loadHistory]);
   useEffect(() => {
     if (!selectedId) return;

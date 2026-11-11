@@ -13,6 +13,9 @@ export interface AudioMixCallbacks {
   levels(options: { mix: PreparedAudioMix; startUs: number; durationUs: number }): Promise<AudioLevelWindow>;
   silence(options: { asset: AssetRecord; thresholdDb: number; minimumDurationUs: number; paddingUs: number; signal: AbortSignal }): Promise<SilenceDetection>;
 }
+const storedAudioMixJobSchema = audioMixJobSchema.extend({ projectId: z.string().optional() });
+type StoredAudioMixJob = z.infer<typeof storedAudioMixJobSchema>;
+function publicJob({ projectId: _projectId, ...job }: StoredAudioMixJob): AudioMixJob { return structuredClone(job); }
 export async function audioFileHash(path: string, signal?: AbortSignal): Promise<string> {
   const hash = createHash('sha256');
   for await (const chunk of createReadStream(path, { signal })) hash.update(chunk);
@@ -37,7 +40,7 @@ export function createAudioPreview(options: {
   validate(project: ProjectDocument): void;
 }) {
   const { store } = options, directory = resolve(options.directory, 'derived', 'audio-mixes');
-  const jobs = new Map<string, AudioMixJob>(), byKey = new Map<string, string>();
+  const jobs = new Map<string, StoredAudioMixJob>(), byKey = new Map<string, string>();
   const queued: Array<{ id: string; project: ProjectDocument; assets: AssetRecord[] }> = [];
   const controllers = new Set<AbortController>();
   const pending = new Set<Promise<unknown>>();
@@ -50,12 +53,20 @@ export function createAudioPreview(options: {
   }
   let running: Promise<void> | undefined, closing = false;
   for (const saved of store.list<AudioMixJob>('audio-mix-job')) {
-    const job = audioMixJobSchema.parse(saved);
+    const job = storedAudioMixJobSchema.parse(saved);
     const restored = ['queued', 'running'].includes(job.status) ? { ...job, status: 'failed' as const, error: '上次试听准备已中断，请重新准备。' } : job;
     jobs.set(job.id, restored); byKey.set(job.key, job.id);
     if (restored !== job) store.put('audio-mix-job', job.id, restored);
   }
-  function save(job: AudioMixJob) { jobs.set(job.id, job); store.put('audio-mix-job', job.id, job); return structuredClone(job); }
+  function save(job: StoredAudioMixJob) { jobs.set(job.id, job); store.put('audio-mix-job', job.id, job); return publicJob(job); }
+  function projectJobs(projects: readonly ProjectDocument[], assets: readonly AssetRecord[]) {
+    const ids = new Set(projects.map(project => project.id)), legacyKeys = new Set<string>();
+    if (options.callbacks && [...jobs.values()].some(job => !job.projectId)) for (const project of projects) {
+      try { legacyKeys.add(options.callbacks.projectionKey(project, assets)); }
+      catch { /* A legacy mix with missing source records has no verifiable project identity. */ }
+    }
+    return [...jobs.values()].filter(job => job.projectId ? ids.has(job.projectId) : legacyKeys.has(job.key));
+  }
   function callbacks() { if (!options.callbacks) throw new Error('音频处理器尚未连接。'); return options.callbacks; }
   function revisionChanged(project: ProjectDocument): Extract<AudioMixPrepareResult, { status: 'revision_changed' }> | undefined {
     const current = options.project(project.id);
@@ -132,7 +143,7 @@ export function createAudioPreview(options: {
       if (readChange) return readChange;
       const key = preparedAudioMixSchema.shape.key.parse(callbacks().projectionKey(project, assets));
       const existing = byKey.get(key), previous = existing ? jobs.get(existing) : undefined;
-      if (previous && ['queued', 'running'].includes(previous.status)) return structuredClone(previous);
+      if (previous && ['queued', 'running'].includes(previous.status)) return publicJob(previous);
       if (previous?.status === 'succeeded' && previous.result) {
         let valid = false;
         try { verifyMapping(previous.result, project, key); await verifyResult(previous.result); valid = true; }
@@ -140,22 +151,22 @@ export function createAudioPreview(options: {
         recheck(assets);
         const cacheChange = revisionChanged(project);
         if (cacheChange) return cacheChange;
-        if (valid) return structuredClone(previous);
+        if (valid) return previous.projectId ? publicJob(previous) : save({ ...previous, projectId: project.id });
       }
       const latest = jobs.get(byKey.get(key) ?? '');
-      if (latest && ['queued', 'running'].includes(latest.status)) return structuredClone(latest);
+      if (latest && ['queued', 'running'].includes(latest.status)) return publicJob(latest);
       if (closing) throw new Error('音频处理器已关闭。');
       recheck(assets);
       const queueChange = revisionChanged(project);
       if (queueChange) return queueChange;
       const snapshot = compactAudioProject(project);
       if (callbacks().projectionKey(snapshot, assets) !== key) throw new Error('音频处理器使用了无法安全冻结的非音频项目字段。');
-      const job = save({ id: previous?.id ?? randomUUID(), key, status: 'queued', progress: 0 });
+      const job = save({ id: previous?.id ?? randomUUID(), key, projectId: project.id, status: 'queued', progress: 0 });
       byKey.set(key, job.id); queued.push({ id: job.id, project: snapshot, assets: structuredClone(assets) }); start(); return job;
     }
     if (method === 'audio.mix.get') {
       const { jobId } = z.object({ jobId: z.string().min(1) }).parse(raw), job = jobs.get(jobId);
-      if (!job) throw new Error('试听任务不存在，请重新准备。'); return structuredClone(job);
+      if (!job) throw new Error('试听任务不存在，请重新准备。'); return publicJob(job);
     }
     if (method === 'audio.mix.levels') {
       const input = z.object({ key: preparedAudioMixSchema.shape.key, startUs: z.number().int().nonnegative(), durationUs: z.number().int().positive().max(60_000_000) }).strict().parse(raw);
@@ -183,6 +194,10 @@ export function createAudioPreview(options: {
     throw new Error('未知音频操作。');
   }
   return { ready(project: ProjectDocument, assets: readonly AssetRecord[]) { const key = options.callbacks?.projectionKey(project, assets), job = key ? jobs.get(byKey.get(key) ?? '') : undefined; if (!key || job?.status !== 'succeeded' || !job.result) return undefined; try { verifyMapping(job.result, project, key); return structuredClone(job.result); } catch { return undefined; } },
+    projectJobs,
+    forget(mixes: readonly AudioMixJob[]) {
+      for (const mix of mixes) { jobs.delete(mix.id); if (byKey.get(mix.key) === mix.id) byKey.delete(mix.key); }
+    },
     dispatch(method: string, raw: unknown) { const promise = perform(method, raw); pending.add(promise); void promise.then(() => pending.delete(promise), () => pending.delete(promise)); return promise; },
     async waitForIdle() { while (running) await running; },
     async close() { closing = true; queued.length = 0; for (const controller of controllers) controller.abort(); await Promise.allSettled([...pending, ...(running ? [running] : [])]); } };

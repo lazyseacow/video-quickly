@@ -37,6 +37,21 @@ export async function saveDraft(key: string, state: SavedEdits) {
   });
 }
 
+export async function deleteProjectDrafts(directory: string, projectIds: readonly string[]) {
+  const db = await database();
+  return new Promise<void>((resolve, reject) => {
+    const transaction = db.transaction('projects', 'readwrite'), projects = transaction.objectStore('projects');
+    for (const projectId of projectIds) {
+      const key = `${directory}:${projectId}`;
+      projects.delete(key);
+      projects.delete(`${key}:stage-configuration`);
+    }
+    transaction.oncomplete = () => resolve();
+    transaction.onabort = () => reject(transaction.error ?? new Error('本机项目草稿未能清理。'));
+    transaction.onerror = () => reject(transaction.error ?? new Error('本机项目草稿未能清理。'));
+  });
+}
+
 export async function loadStageConfigurationDraft(key: string): Promise<StageConfigurationDraft | undefined> {
   const db = await database();
   return new Promise((resolve, reject) => {

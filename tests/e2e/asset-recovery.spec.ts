@@ -253,9 +253,9 @@ test('automatically recovers selected result media while preserving frozen run r
       finally { database.close(); }
     }
     const baseline = frozen(), asset = assets[1]; await rm(asset.path); missingAssets.add(asset.path);
-    await open(page, project); await page.getByRole('button', { name: '制作记录', exact: true }).click();
-    await page.locator(`.run-card[data-run-id="${runs[1].id}"]`).getByRole('button', { name: '查看步骤', exact: true }).click();
-    const detail = page.getByRole('dialog', { name: '制作步骤详情', exact: true }), current = detail.getByRole('region', { name: '本次产物', exact: true });
+    await open(page, project);
+    await page.getByRole('button', { name: '打开阶段：素材与配音', exact: true }).click();
+    const detail = page.getByRole('dialog', { name: '本次制作', exact: true }), current = detail.getByRole('region', { name: '本次产物', exact: true });
     await current.locator(`button[data-asset-id="${asset.id}"]`).click(); await expect(current.getByRole('alert')).toContainText('媒体暂时无法预览');
     const job = await rpc<{ id: string }>(request, 'asset.recovery.start', { projectId: project.id });
     await expect.poll(async () => (await rpc<{ job: { phase: string } }>(request, 'asset.recovery.get', { jobId: job.id })).job.phase).toBe('awaiting_directory');

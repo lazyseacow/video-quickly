@@ -123,28 +123,12 @@ for (const surface of [{ width: 1536, height: 960, theme: 'dark' }, { width: 600
     expect(await detail.evaluate(element => element.scrollWidth <= element.clientWidth)).toBe(true);
     await page.screenshot({ path: info.outputPath(`agent-edit-workflow-${surface.width}.png`) });
 
+    await expect(steps.locator('.run-inspector__index')).toHaveText(['01', '02', '03', '04', '05', '06', '07', '08']);
+    for (const [index, label] of ['简报生成', '风格与角色生成', '分镜生成'].entries()) {
+      await expect(steps.getByRole('button').nth(index).locator('strong')).toHaveText(label);
+    }
     await page.keyboard.press('Escape'); await expect(detail).toHaveCount(0);
     await progress.scrollIntoViewIfNeeded(); await page.screenshot({ path: info.outputPath(`agent-progress-${surface.width}.png`) });
-
-    await page.getByRole('button', { name: '制作记录', exact: true }).click();
-    await page.locator(`.run-card[data-run-id="${run.id}"]`).getByRole('button', { name: '查看步骤', exact: true }).click();
-    const history = page.getByRole('dialog', { name: '制作步骤详情', exact: true });
-    const historySteps = history.getByRole('navigation', { name: '冻结流程步骤', exact: true });
-    await expect(historySteps.getByRole('img', { name: '已保存产物', exact: true })).toHaveCount(8);
-    await expect(historySteps.locator('.run-inspector__index')).toHaveText(['01', '02', '03', '04', '05', '06', '07', '08']);
-    for (const [index, label] of ['简报生成', '风格与角色生成', '分镜生成'].entries()) {
-      const step = historySteps.getByRole('button').nth(index);
-      await expect(step.locator('strong')).toHaveText(label);
-      await step.click();
-      await expect(history.getByRole('heading', { name: label, exact: true })).toBeVisible();
-    }
-    await history.getByRole('tab', { name: '制作信息', exact: true }).click();
-    await expect(history.locator('.run-inspector__facts dd').filter({ hasText: /^风格与角色生成$/ })).toBeVisible();
-    await expect(historySteps.getByRole('button', { name: /剪辑与运镜准备/ })).toHaveCount(1);
-    await historySteps.getByRole('button', { name: /应用剪辑调整/ }).click();
-    await expect(history.getByRole('heading', { name: '应用剪辑调整', exact: true })).toBeVisible();
-    await expect(history.getByRole('region', { name: '本次产物', exact: true })).toContainText(project.title);
-    await page.screenshot({ path: info.outputPath(`agent-edit-history-${surface.width}.png`) });
 
     await expect(page).toHaveTitle('Video Quickly · 视频创作工作台'); await expect(page.locator('vite-error-overlay')).toHaveCount(0);
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true); expect(errors).toEqual([]);

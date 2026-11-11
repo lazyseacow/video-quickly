@@ -167,11 +167,13 @@ it('follows fixed subflow dependencies rather than their stored node order witho
   expect(f.store.get<ProjectDocument>('project', f.project.id)?.workflow.subflows?.[0].nodes.map(node => node.id)).toEqual(['export', 'image']);
 });
 
-it('locates a busy project in its run history rather than generic project settings', async () => {
+it('directs users to the workbench or batch export for unfinished tasks', async () => {
   const f = await fixture([{ id: 'script', kind: 'script' }]);
   f.store.put('run', 'unfinished', { id: 'unfinished', projectId: f.project.id, projectRevision: f.project.revision, workflowVersion: 1, status: 'waiting_review', snapshotDigest: 'fixture', createdAt: '', updatedAt: '', events: [], activities: [] });
   const result = await f.check();
-  expect(result.issues).toEqual(expect.arrayContaining([expect.objectContaining({ category: 'project', severity: 'error', fix: 'runs' })]));
+  expect(result.issues).toEqual(expect.arrayContaining([expect.objectContaining({ category: 'project', severity: 'error', fix: 'production' })]));
+  f.store.put('export-batch', 'unfinished-batch', { id: 'unfinished-batch', projectId: f.project.id, status: 'interrupted' });
+  expect((await f.check()).issues).toEqual(expect.arrayContaining([expect.objectContaining({ category: 'project', severity: 'error', fix: 'batch-export' })]));
 });
 
 it('locates an out-of-scope subflow binding at its owning step', async () => {

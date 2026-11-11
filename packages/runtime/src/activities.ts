@@ -37,10 +37,10 @@ class ActivityInputChangedError extends Error {
 
 export class SimulatedProcessExit extends Error {}
 
-export const AGENT_CONTINUATION_EXHAUSTED = '视频 Agent 已连续三次结束回复，但尚未完成与当前项目一致的成片导出。请查看制作记录中的工具结果后重试。';
+export const AGENT_CONTINUATION_EXHAUSTED = '视频 Agent 已连续三次结束回复，但尚未完成与当前项目一致的成片导出。请在「本次制作」中核对步骤产物后重试。';
 
 export class AgentCompletionError extends Error {
-  constructor(message = '视频 Agent 尚未完成与当前项目一致的有效成片导出，请查看制作记录中的工具结果后重试。') {
+  constructor(message = '视频 Agent 尚未完成与当前项目一致的有效成片导出，请在「本次制作」中核对步骤产物后重试。') {
     super(message);
     this.name = 'AgentCompletionError';
   }

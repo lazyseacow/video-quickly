@@ -390,12 +390,12 @@ test('persists automatic completion and supports read-only replay', async ({ pag
   const started = await request.post('/__desktop_rpc', { data: { method: 'run.start', params: { projectId: project.id, nodeId: 'script' } } });
   const { result: run } = await started.json();
   await openApp(page);
-  await page.getByRole('button', { name: '制作记录', exact: true }).click();
-  const card = page.locator(`.run-card[data-run-id="${run.id}"]`);
-  await expect(card.getByText('已完成', { exact: true })).toBeVisible();
+  await openProjectFromList(page, project.title);
+  const progress = page.getByRole('region', { name: '当前制作', exact: true });
+  await expect(progress.getByText('已完成', { exact: true })).toBeVisible();
   await page.reload();
-  await page.getByRole('button', { name: '制作记录', exact: true }).click();
-  await expect(card.getByText('已完成', { exact: true })).toBeVisible();
+  await openProjectFromList(page, project.title);
+  await expect(progress.getByText('已完成', { exact: true })).toBeVisible();
   await expect.poll(async () => {
     const response = await request.post('/__desktop_rpc', { data: { method: 'workspace.snapshot' } });
     return (await response.json()).result.runs.find((value: { id: string }) => value.id === run.id).status;

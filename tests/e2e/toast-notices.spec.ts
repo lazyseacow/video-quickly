@@ -106,8 +106,8 @@ for (const reducedMotion of ['no-preference', 'reduce'] as const) {
       await page.clock.runFor(1);
       if (reducedMotion === 'no-preference') await expect(page.locator('.toast')).toHaveAttribute('inert', '');
       await page.clock.runFor(200); await expect(page.locator('.toast-anchor')).toHaveCount(0);
-      await page.getByRole('button', { name: '制作记录', exact: true }).click();
-      await expect(page.getByRole('button', { name: '刷新制作记录', exact: true }).locator('svg')).toHaveCount(1);
+      await page.getByRole('button', { name: '素材库', exact: true }).click();
+      await expect(page.getByRole('button', { name: '回收站', exact: true }).locator('svg')).toHaveCount(1);
       await page.setViewportSize({ width: 390, height: 844 });
       await expect(page.getByRole('button', { name: '新建项目', exact: true }).locator('svg')).toHaveCount(1);
       expect(errors).toEqual([]);

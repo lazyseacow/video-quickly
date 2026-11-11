@@ -1,10 +1,9 @@
 import { confirmAction } from './confirmation-actions';
-import { openProjectFromList } from './workspace-navigation';
+import { openAssetLibrary, openProjectFromList } from './workspace-navigation';
 import { openCosts, setWorkspaceTheme } from './workspace-settings';
-import { settingField } from './settings';
-import { fixtureCharacterViews } from '../fixtures/character-views';
+import { fixtureCharacterImage } from '../fixtures/character-image';
 import { createServer } from 'node:http';
-import { writeFile } from 'node:fs/promises';
+import { readFile, writeFile } from 'node:fs/promises';
 import { expect, test, type APIRequestContext, type Page } from '@playwright/test';
 import type { AssetRecord, CharacterProfile, ModelProfile, ProjectDocument, RunSummary, UsageRecord } from '@video-quickly/contracts';
 
@@ -32,8 +31,9 @@ function observeErrors(page: Page) {
 const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+a5mQAAAAASUVORK5CYII=', 'base64');
 
 for (const viewport of [{ width: 1536, height: 960, theme: 'dark', useReference: true, rejectFirst: true }, { width: 390, height: 844, theme: 'light', useReference: false, rejectFirst: false }]) {
-  test(`generates, previews and saves four views in one form at ${viewport.width}px`, async ({ page, request }, info) => {
-    const board = await fixtureCharacterViews();
+  test(`generates, previews and selects one reference image at ${viewport.width}px`, async ({ page, request }, info) => {
+    const format = viewport.useReference ? 'jpeg' : 'webp';
+    const portrait = await fixtureCharacterImage(false, format);
     const calls: { path?: string; body: Record<string, unknown> }[] = [];
     let release!: () => void;
     const gate = new Promise<void>(resolve => { release = resolve; });
@@ -49,7 +49,7 @@ for (const viewport of [{ width: 1536, height: 960, theme: 'dark', useReference:
         response.end(JSON.stringify({ error: { message: 'status_code=400, The request failed because the output image may contain sensitive information. Request id: fixture-private-detail' } }));
         return;
       }
-      response.end(JSON.stringify({ data: [{ b64_json: board.toString('base64') }] }));
+      response.end(JSON.stringify({ data: [{ b64_json: portrait.toString('base64') }] }));
     })().catch(error => response.destroy(error)); });
     await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
     try {
@@ -61,13 +61,15 @@ for (const viewport of [{ width: 1536, height: 960, theme: 'dark', useReference:
       await page.setViewportSize(viewport);
       await page.addInitScript(theme => localStorage.setItem('vq-theme', theme), viewport.theme);
       await page.goto('/');
-      await page.getByRole('button', { name: '角色参考库', exact: true }).click();
+      await openAssetLibrary(page, '角色');
       await page.getByRole('button', { name: '新建角色', exact: true }).click();
       const dialog = page.getByRole('dialog', { name: '新建角色', exact: true });
       const nameField = dialog.getByLabel('角色名称', { exact: true });
       const descriptionField = dialog.getByLabel('角色设定', { exact: true });
+      const promptField = dialog.getByLabel('生成提示词', { exact: true });
       const modelField = dialog.getByLabel('图片模型', { exact: true });
       const description = '蓝绿色长外套、橙色围巾、黑色短发。';
+      const prompt = viewport.useReference ? '半身侧脸特写，窗边自然光。' : '把同一角色的正面、侧面、背面和四分之三侧面排在一张图中。';
       await nameField.fill(name);
       await descriptionField.fill(description);
       await page.mouse.click(2, 2);
@@ -78,14 +80,19 @@ for (const viewport of [{ width: 1536, height: 960, theme: 'dark', useReference:
       if (viewport.useReference) {
         const path = info.outputPath('role-anchor.png');
         await writeFile(path, png);
-        await (await settingField(dialog, '角色参考图路径')).fill(path);
-        await dialog.getByRole('button', { name: '导入参考图片', exact: true }).click();
+        await dialog.getByLabel('角色参考图路径', { exact: true }).fill(path);
+        await dialog.getByRole('button', { name: '上传参考图', exact: true }).click();
         await expect(summary).toContainText('已选 1 张');
+        await expect(dialog.getByRole('checkbox', { name: 'role-anchor.png' })).toBeChecked();
         await summary.click();
       }
+      await expect(modelField).toBeHidden();
+      await dialog.getByText('AI 生成参考图（可选）', { exact: true }).click();
+      await expect(promptField).toHaveValue(description);
+      await promptField.fill(prompt);
       await modelField.selectOption(model.id);
-      const generate = dialog.getByRole('button', { name: '生成四视角', exact: true });
-      const billing = page.getByRole('alertdialog', { name: '生成角色四视角？', exact: true });
+      const generate = dialog.getByRole('button', { name: '生成参考图', exact: true });
+      const billing = page.getByRole('alertdialog', { name: '生成角色参考图？', exact: true });
       const estimate = billing.getByRole('region', { name: '生成与费用预估' });
       if (viewport.rejectFirst) {
         await generate.click();
@@ -100,18 +107,19 @@ for (const viewport of [{ width: 1536, height: 960, theme: 'dark', useReference:
         await expect(billing).toHaveCount(0);
         await expect(generate).toBeEnabled();
         await expect(nameField).toHaveValue(name);
+        await expect(promptField).toHaveValue(prompt);
         await expect(modelField).toHaveValue(model.id);
         expect(calls).toHaveLength(0);
       }
       await generate.click();
       await expect(estimate).toContainText(model.name);
       await expect(estimate).toContainText(model.model);
-      await expect(estimate).toContainText('1 张四宫格原图，裁出 4 张参考图');
+      await expect(estimate).toContainText('1 张图片');
       await expect(estimate).toContainText(viewport.useReference ? '¥0.25' : '暂无法估算');
       await expect(estimate).toContainText('以服务商实际计费为准');
       await confirmAction(page, '确认生成');
       await expect(generate).toBeDisabled();
-      await expect(dialog.getByText('正在为同一个角色绘制四个视角。')).toBeVisible();
+      await expect(generate).toHaveText('正在生成…');
       await expect(dialog.getByRole('button', { name: '关闭对话框', exact: true })).toBeDisabled();
       await expect(dialog.getByRole('button', { name: '取消', exact: true })).toBeDisabled();
       await page.mouse.click(2, 2);
@@ -123,40 +131,50 @@ for (const viewport of [{ width: 1536, height: 960, theme: 'dark', useReference:
         await page.mouse.click(2, 2);
         await expect(nameField).toHaveValue(name);
         await expect(descriptionField).toHaveValue(description);
+        await expect(promptField).toHaveValue(prompt);
         await expect(modelField).toHaveValue(model.id);
         await expect(summary).toContainText('已选 1 张');
         expect(calls).toHaveLength(1);
-        await page.screenshot({ path: info.outputPath('character-views-review-rejection.png') });
-        await descriptionField.fill(`${description}风格为手绘动画。`);
+        await page.screenshot({ path: info.outputPath('character-image-review-rejection.png') });
+        await promptField.fill(`${prompt}风格为手绘动画。`);
         await generate.click();
         await confirmAction(page, '确认生成');
         await expect(dialog.getByRole('alert')).toHaveCount(0);
       }
-      const views = dialog.getByRole('group', { name: '生成的四视角参考图' });
-      await expect(views.locator('img')).toHaveCount(4);
+      const result = dialog.getByRole('group', { name: '生成的参考图' });
+      const preview = result.getByRole('img');
+      await expect(preview).toHaveCount(1);
       await page.mouse.click(2, 2);
-      await expect.poll(() => views.locator('img').evaluateAll(images => images.every(image => (image as HTMLImageElement).naturalWidth > 0))).toBe(true);
-      await views.scrollIntoViewIfNeeded();
+      await preview.scrollIntoViewIfNeeded();
+      await expect(preview).toHaveJSProperty('naturalWidth', 320);
+      await expect(preview).toHaveJSProperty('naturalHeight', 360);
       await expect.poll(() => dialog.evaluate(element => element.scrollWidth <= element.clientWidth + 2)).toBe(true);
-      const evidence = info.outputPath(`character-views-${viewport.width}.png`);
+      const evidence = info.outputPath(`character-image-${viewport.width}.png`);
       await page.screenshot({ path: evidence });
-      await info.attach('character-views', { path: evidence, contentType: 'image/png' });
+      await info.attach('character-image', { path: evidence, contentType: 'image/png' });
 
-      await dialog.getByRole('button', { name: '选用这组参考图', exact: true }).click();
-      await expect(summary).toContainText('已选 4 张');
-      await expect(views.locator('img')).toHaveCount(4);
+      const count = viewport.useReference ? 2 : 1;
+      await expect(summary).toContainText(viewport.useReference ? '已选 1 张' : '从素材库选择');
+      await result.getByRole('button', { name: '选用这张图', exact: true }).click();
+      await expect(summary).toContainText(`已选 ${count} 张`);
+      await expect(result.getByRole('status')).toHaveText('已选用这张参考图');
       await summary.click();
       const references = dialog.getByRole('group', { name: '参考图片（最多 4 张）' });
-      await expect(references.locator('input:checked')).toHaveCount(4);
+      await expect(references.locator('input:checked')).toHaveCount(count);
       await dialog.getByRole('button', { name: '保存角色', exact: true }).click();
       await expect(dialog).toHaveCount(0);
       const library = await rpc<{ items: CharacterProfile[] }>(request, 'character.list');
       const character = library.items.find(item => item.name === name)!;
-      expect(character.referenceAssetIds).toHaveLength(4);
-      expect((await rpc<AssetRecord[]>(request, 'character.references', { characterId: character.id })).every(asset => asset.projectId === undefined)).toBe(true);
+      expect(character.referenceAssetIds).toHaveLength(count);
+      expect(character.description).toBe(description);
+      const savedReferences = await rpc<AssetRecord[]>(request, 'character.references', { characterId: character.id });
+      expect(savedReferences.at(-1)?.name).toBe(`${name} · 参考图.${format === 'jpeg' ? 'jpg' : format}`);
+      expect(savedReferences.at(-1)?.mimeType).toBe(`image/${format}`);
+      expect(savedReferences.at(-1)?.projectId).toBeUndefined();
+      if (viewport.useReference) expect(savedReferences[0].name).toBe('role-anchor.png');
       expect(calls).toHaveLength(viewport.rejectFirst ? 2 : 1);
-      expect(calls[0].body.prompt).toContain('蓝绿色长外套、橙色围巾、黑色短发');
-      if (viewport.rejectFirst) expect(calls[1].body.prompt).toContain('风格为手绘动画');
+      expect(calls[0].body).toMatchObject({ n: 1, prompt });
+      if (viewport.rejectFirst) expect(calls[1].body.prompt).toBe(`${prompt}风格为手绘动画。`);
       expect(calls[0].path).toBe(viewport.useReference ? '/v1/images/edits' : '/v1/images/generations');
       if (viewport.useReference) expect(calls[0].body.images).toEqual([{ image_url: `data:image/png;base64,${png.toString('base64')}` }]);
     } finally {
@@ -182,26 +200,43 @@ test('can remove an archived character from an unsaved draft without losing othe
   expect((await savedProject(request, project.id)).shots[0].characterIds ?? []).toEqual([]);
 });
 
-test('creates a visual character library, binds a shot with durable undo, and protects references through backup', async ({ page, request }, info) => {
+test('uploads a role reference without AI, binds a shot with durable undo, and protects references through backup', async ({ page, request }, info) => {
   const errors = observeErrors(page);
-  const project = await createProject(request, '角色参考库与编辑恢复验收');
+  const generationCalls: string[] = [];
+  page.on('request', outgoing => {
+    if (!outgoing.url().endsWith('/__desktop_rpc') || outgoing.method() !== 'POST') return;
+    const payload = outgoing.postDataJSON();
+    if (payload?.method === 'character.generateImage' || payload?.params?.method === 'character.generateImage') generationCalls.push(payload.method);
+  });
+  const project = await createProject(request, '角色引用与编辑恢复验收');
   const fileName = 'public-character.png';
   const path = info.outputPath(fileName); await writeFile(path, png);
   await openProject(page, project.title);
-  await page.getByRole('button', { name: '角色参考库', exact: true }).click();
+  await openAssetLibrary(page, '角色');
   await page.getByRole('button', { name: '新建角色', exact: true }).click();
   const dialog = page.getByRole('dialog', { name: '新建角色', exact: true });
-  await (await settingField(dialog, '角色名称')).fill('稳定角色小青');
-  await (await settingField(dialog, '角色设定')).fill('青色长衫，圆眼镜，保持人物服饰与面部特征。');
-  await (await settingField(dialog, '角色参考图路径')).fill(path);
-  await dialog.getByRole('button', { name: '导入参考图片', exact: true }).click();
+  await dialog.getByLabel('角色名称', { exact: true }).fill('稳定角色小青');
+  await dialog.getByLabel('角色设定', { exact: true }).fill('青色长衫，圆眼镜，保持人物服饰与面部特征。');
+  await expect(dialog.getByLabel('图片模型', { exact: true })).toBeHidden();
+  await dialog.getByLabel('角色参考图路径', { exact: true }).fill(path);
+  await dialog.getByRole('button', { name: '上传参考图', exact: true }).click();
   await expect(dialog.getByRole('checkbox', { name: fileName })).toBeChecked();
+  const primaryName = 'public-character-primary.png', primaryPath = info.outputPath(primaryName);
+  await writeFile(primaryPath, png);
+  await dialog.getByLabel('角色参考图路径', { exact: true }).fill(primaryPath);
+  await dialog.getByRole('button', { name: '上传参考图', exact: true }).click();
+  await expect(dialog.getByRole('checkbox', { name: primaryName })).toBeChecked();
+  await dialog.getByLabel('主参考图', { exact: true }).selectOption({ label: primaryName });
   await dialog.getByRole('button', { name: '保存角色', exact: true }).click(); await expect(dialog).toHaveCount(0);
   const library = await rpc<{ items: CharacterProfile[] }>(request, 'character.list', { archived: false });
   const character = library.items.find(value => value.name === '稳定角色小青'); expect(character).toBeTruthy();
+  expect(character?.referenceAssetIds).toHaveLength(2);
+  const referenceOrder = await rpc<AssetRecord[]>(request, 'character.references', { characterId: character!.id });
+  expect(referenceOrder.map(asset => asset.name)).toEqual([primaryName, fileName]);
+  expect(generationCalls).toEqual([]);
   await expect(page.getByAltText('稳定角色小青参考图')).toBeVisible();
   await page.screenshot({ path: info.outputPath('character-library-dark.png') });
-  await page.getByRole('button', { name: '素材库', exact: true }).click();
+  await openAssetLibrary(page, '媒体');
   const referencedImage = page.locator('.asset-card').filter({ hasText: fileName });
   await expect(referencedImage).toContainText('使用中');
   await expect(referencedImage.getByRole('button', { name: `移除素材“${fileName}”`, exact: true })).toBeDisabled();
@@ -215,7 +250,7 @@ test('creates a visual character library, binds a shot with durable undo, and pr
   await expect.poll(async () => (await savedProject(request, project.id)).shots[0].characterIds).toEqual([character!.id]);
   await page.reload(); await openProjectFromList(page, project.title);
   await expect(page.getByRole('checkbox', { name: '稳定角色小青', exact: true })).toBeChecked();
-  await page.getByRole('button', { name: '角色参考库', exact: true }).click();
+  await openAssetLibrary(page, '角色');
   const blockedArchive = page.waitForResponse(response => response.url().endsWith('/__desktop_rpc') && response.request().postDataJSON()?.method === 'character.archive');
   await page.getByRole('button', { name: '归档角色：稳定角色小青', exact: true }).click(); await confirmAction(page, '确认归档');
   await expect(page.getByRole('alert')).toContainText('仍有项目镜头使用此角色');
@@ -223,12 +258,11 @@ test('creates a visual character library, binds a shot with durable undo, and pr
   const deletion = await request.post('/__desktop_rpc', { data: { method: 'asset.delete', params: { assetId: character!.referenceAssetIds[0] } } });
   expect((await deletion.json()).error).toBeTruthy();
   const backup = await rpc<{ path: string }>(request, 'project.backup', { projectId: project.id, destination: info.outputPath('character-backup') });
-  const imported = await rpc<ProjectDocument>(request, 'project.importBackup', { path: backup.path });
-  expect(imported.shots[0].characterIds).toHaveLength(1); expect(imported.shots[0].characterIds![0]).not.toBe(character!.id);
-  const restored = await rpc<CharacterProfile>(request, 'character.get', { characterId: imported.shots[0].characterIds![0] });
-  expect(restored.name).toBe(character!.name); expect(restored.referenceAssetIds[0]).not.toBe(character!.referenceAssetIds[0]);
-  const images = await rpc<AssetRecord[]>(request, 'character.references', { characterId: restored.id });
-  expect(images).toHaveLength(1); expect(images[0].sha256).toBe((await rpc<AssetRecord[]>(request, 'character.references', { characterId: character!.id }))[0].sha256);
+  const manifest = JSON.parse(await readFile(backup.path + '/project.json', 'utf8')) as { project: ProjectDocument; characters: CharacterProfile[]; assets: AssetRecord[] };
+  expect(manifest.project.shots[0].characterIds).toEqual([character!.id]);
+  expect(manifest.characters).toContainEqual(character);
+  const [image] = await rpc<AssetRecord[]>(request, 'character.references', { characterId: character!.id });
+  expect(manifest.assets.find(asset => asset.id === image.id)?.sha256).toBe(image.sha256);
   expect(errors).toEqual(['Failed to load resource: the server responded with a status of 400 (Bad Request)']); await expect(page.locator('vite-error-overlay')).toHaveCount(0);
 });
 

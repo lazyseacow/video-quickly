@@ -5,10 +5,10 @@ import { dirname, extname, join, resolve } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { z } from 'zod';
 import { prepareGeneratedVideo, renderProject } from '@video-quickly/video/node';
-import { buildMediaPrompt, characterSceneFirstFrame, needsComposedSceneFrame, MediaRequestRejectedError, isVideoGenerationNode, retryAfterMilliseconds, singleFrameVideoModel, usesVideoSceneImage, validateCreativeReferences, videoAspectRatioPreset } from '@video-quickly/contracts';
+import { buildMediaPrompt, characterSceneFirstFrame, MediaRequestRejectedError, isVideoGenerationNode, retryAfterMilliseconds, singleFrameVideoModel, usesVideoSceneImage, validateCreativeReferences, videoAspectRatioPreset, videoReferenceImages, type VideoReferenceImages } from '@video-quickly/contracts';
 import { defaultVideoRequestSeconds, providerReportedUsage, sumProviderUsage, requestModelParameters, validateModelParameters, type ProviderUsage, type AssetRecord, type CharacterProfile, type JsonValue, type ModelProfile, type PreparedAudioMix, type ProjectDocument, type Shot, type WorkflowNode } from '@video-quickly/contracts';
 import { MediaRequestQueue, mapMediaShots } from './media-concurrency.js';
-import { resolveCharacterReferences, type ResolvedCharacterReferences } from './character-references.js';
+import { MAX_CHARACTER_REFERENCE_BYTES, resolveCharacterReferences, type ResolvedCharacterReferences } from './character-references.js';
 import { resolveReferenceAudio } from './audio-references.js';
 import { resolveImageEdit } from './image-edit.js';
 import { appendSkillContext, type SkillPackage } from '@video-quickly/contracts';
@@ -48,6 +48,7 @@ export interface MediaActivityContext {
   dataDirectory: string;
   assets: AssetRecord[];
   characters?: CharacterProfile[];
+  promptOverride?: string;
   promptUpstream?: Record<string, JsonValue>;
   onProgress?: (value: number) => void;
   onAsset?: (asset: AssetRecord) => void;
@@ -56,6 +57,7 @@ export interface MediaActivityContext {
   model?: ModelProfile;
   apiKey?: string;
   unifiedShotProfile?: boolean;
+  legacyVideoReferences?: boolean;
   ffmpegPath?: string;
   ffprobePath?: string;
   remoteTaskId?: string;
@@ -121,16 +123,18 @@ function fillTemplate(value: JsonValue, values: Record<string, JsonValue>): Json
   return value;
 }
 
-function visualPrompt(context: MediaActivityContext, shot: Shot, references: ResolvedCharacterReferences): string {
-  return appendSkillContext(buildMediaPrompt(context.project, context.node, shot, references.characters, context.model, Boolean(currentVideoImage(context, shot)), context.promptUpstream, Boolean(context.unifiedShotProfile)), context.node, context.skills ?? []);
+function visualPrompt(context: MediaActivityContext, shot: Shot, references: ResolvedCharacterReferences, videoReferences?: VideoReferenceImages): string {
+  if (context.promptOverride !== undefined) return context.promptOverride;
+  const hasFrame = Boolean(videoReferences ? videoReferences.frame : currentVideoImage(context, shot));
+  return appendSkillContext(buildMediaPrompt(context.project, context.node, shot, references.characters, context.model, hasFrame, context.promptUpstream, Boolean(context.unifiedShotProfile), videoReferences), context.node, context.skills ?? []);
 }
 
-function comfyPrompt(context: MediaActivityContext, shot: Shot, references: ResolvedCharacterReferences): Record<string, unknown> {
+function comfyPrompt(context: MediaActivityContext, shot: Shot, references: ResolvedCharacterReferences, videoReferences?: VideoReferenceImages): Record<string, unknown> {
   const model = context.model!;
   const workflow = structuredClone(objectSchema.parse(model.parameters.workflow));
   const { width, height, frameRate } = context.project.profile;
   const values: Record<string, JsonValue> = {
-    prompt: visualPrompt(context, shot, references), narration: shot.narration,
+    prompt: visualPrompt(context, shot, references, videoReferences), narration: shot.narration,
     character_images: references.images.map(image => image.dataUrl),
     width, height,
     ...(context.unifiedShotProfile && isVideoGenerationNode(context.node) ? { fps: frameRate.numerator / frameRate.denominator } : {}),
@@ -151,7 +155,7 @@ function comfyPrompt(context: MediaActivityContext, shot: Shot, references: Reso
   return workflow;
 }
 
-type MediaPreflightContext = Pick<MediaActivityContext, 'project' | 'node' | 'assets' | 'model' | 'characters'> & Partial<Pick<MediaActivityContext, 'operationId' | 'dataDirectory' | 'signal'>> & { pendingCastFrames?: boolean };
+type MediaPreflightContext = Pick<MediaActivityContext, 'project' | 'node' | 'assets' | 'model' | 'characters' | 'legacyVideoReferences'> & Partial<Pick<MediaActivityContext, 'operationId' | 'dataDirectory' | 'signal'>> & { pendingVideoInput?: boolean };
 const mediaActivityDirectory = (dataDirectory: string, projectId: string, operationId: string) => resolve(dataDirectory, 'projects', projectId, 'activities', createHash('sha256').update(operationId).digest('hex').slice(0, 24));
 const mediaShotFileId = (shotId: string) => createHash('sha256').update(shotId).digest('hex').slice(0, 24);
 const imageMimeTypes = ['image/png', 'image/jpeg', 'image/webp'];
@@ -161,11 +165,15 @@ function currentVideoImage(context: MediaPreflightContext, shot: Shot): AssetRec
     ?? (context.node.config.operation === 'regenerate' ? undefined : context.assets.find(asset => asset.projectId === context.project.id && asset.shotId === shot.id && asset.kind === 'image' && asset.active));
 }
 
-function mediaReferences(context: MediaPreflightContext, shot: Shot) {
+function planVideoReferences(context: MediaPreflightContext, shot: Shot) {
+  if (context.legacyVideoReferences || !context.model || !isVideoGenerationNode(context.node)) return undefined;
+  return videoReferenceImages(context.project, context.node, context.model, shot, context.characters ?? [], context.assets);
+}
+
+function mediaReferences(context: MediaPreflightContext, shot: Shot, plan?: VideoReferenceImages) {
+  if (plan) return resolveCharacterReferences({ project: context.project, shot, characters: context.characters, assets: context.assets, referenceIds: plan.referenceIds });
   const sceneFrame = characterSceneFirstFrame(context.project, context.node, context.model, shot, context.characters);
-  const pendingFrame = context.pendingCastFrames && !shot.locked
-    && (context.project.workflow.production.referenceMode === 'generate' || needsComposedSceneFrame(context.project, shot, context.characters));
-  const includeImages = !sceneFrame || !(pendingFrame || currentVideoImage(context, shot));
+  const includeImages = !sceneFrame || !currentVideoImage(context, shot);
   return resolveCharacterReferences({ project: context.project, shot, characters: context.characters, assets: context.assets, includeImages });
 }
 function hasExactTemplateValue(value: JsonValue | undefined, placeholder: string): boolean {
@@ -173,9 +181,9 @@ function hasExactTemplateValue(value: JsonValue | undefined, placeholder: string
   if (Array.isArray(value)) return value.some(item => hasExactTemplateValue(item, placeholder));
   return Boolean(value && typeof value === 'object' && Object.values(value).some(item => hasExactTemplateValue(item, placeholder)));
 }
-function validateReferenceProtocol(context: MediaPreflightContext, shot: Shot, references: ResolvedCharacterReferences): void {
+function validateReferenceProtocol(context: MediaPreflightContext, shot: Shot, references: ResolvedCharacterReferences, plan?: VideoReferenceImages): void {
   const model = context.model;
-  if (!model || !references.images.length && !context.node.config.imageEdit) return;
+  if (!model || !references.images.length && !plan?.frame && !context.node.config.imageEdit) return;
   const editSourceId = context.node.config.imageEdit && typeof context.node.config.imageEdit === 'object' && !Array.isArray(context.node.config.imageEdit) ? context.node.config.imageEdit.sourceAssetId : undefined;
   const count = references.images.length + (typeof editSourceId === 'string' && !references.images.some(image => image.assetId === editSourceId) ? 1 : 0);
   if (model.provider === 'custom-http') {
@@ -202,8 +210,8 @@ function validateReferenceProtocol(context: MediaPreflightContext, shot: Shot, r
     } else throw new Error('所选图片协议尚未支持角色参考图。');
     return;
   }
-  const image = currentVideoImage(context, shot);
-  const total = count + (image ? 1 : 0);
+  const image = plan ? plan.frame : currentVideoImage(context, shot);
+  const total = count + (image && !plan?.referenceIds.includes(image.id) ? 1 : 0);
   if (model.provider === 'openai-compatible' && total !== 1) throw new Error('当前连接使用 OpenAI 兼容视频接口，每个镜头仅支持一张输入图。请配置图片模型并重新开始制作，以生成包含出镜角色的镜头首帧。');
   if (model.provider === 'seedance') {
     const referenceImages = model.parameters.characterReferenceMode === 'reference_image';
@@ -266,18 +274,23 @@ export async function validateMediaActivity(context: MediaPreflightContext): Pro
   if (!['assets', 'animation'].includes(context.node.kind)) return;
   await resolveImageEdit(context);
   if (model.provider === 'seedance' && isVideoGenerationNode(context.node)) await resolveReferenceAudio({ assetIds: context.project.workflow.production.referenceAudioAssetIds ?? [], assets: context.assets, projectId: context.project.id, signal: context.signal });
+  if (isVideoGenerationNode(context.node) && context.pendingVideoInput) return;
   for (const shot of context.project.shots) {
     context.signal?.throwIfAborted();
     const kind = context.node.kind === 'assets' ? 'image' : 'video';
     const existing = context.assets.find(asset => asset.projectId === context.project.id && asset.shotId === shot.id && asset.kind === kind && asset.active);
     if (context.node.config.operation !== 'regenerate' && shot.locked && existing && await validAsset(existing)) continue;
-    if (kind === 'video' && context.node.config.operation === 'regenerate' && shot.assetId && singleFrameVideoModel(model, context.project)) {
+    const plan = planVideoReferences(context, shot);
+    if (plan?.frame) {
+      if (!imageMimeTypes.includes(plan.frame.mimeType) || plan.frame.size > MAX_CHARACTER_REFERENCE_BYTES) throw new Error(`镜头「${shot.title}」的参考画面须为 20 MiB 以内的 PNG、JPEG 或 WebP。`);
+      if (!await validAsset(plan.frame)) throw new Error(`镜头「${shot.title}」的参考画面缺失或损坏，请恢复素材或重新选择图片。`);
+    } else if (context.legacyVideoReferences && kind === 'video' && context.node.config.operation === 'regenerate' && shot.assetId && singleFrameVideoModel(model, context.project)) {
       const frame = currentVideoImage(context, shot);
       if (!frame || !await validAsset(frame)) throw new Error('已确认的镜头首帧缺失或损坏，请恢复素材或重新选择首帧。');
     }
-    const references = await mediaReferences(context, shot);
+    const references = await mediaReferences(context, shot, plan);
     context.signal?.throwIfAborted();
-    validateReferenceProtocol(context, shot, references);
+    validateReferenceProtocol(context, shot, references, plan);
   }
 }
 
@@ -315,6 +328,15 @@ async function readReceipt(path: string): Promise<Receipt | undefined> {
   return JSON.parse(await readFile(path, 'utf8')) as Receipt;
 }
 
+const imageOutputTypes: Record<string, string> = { '.png': 'image/png', '.jpg': 'image/jpeg', '.webp': 'image/webp' };
+
+function generatedImagePath(path: string, bytes: Uint8Array): string {
+  const header = Buffer.from(bytes.subarray(0, 12));
+  if (header[0] === 0xff && header[1] === 0xd8 && header[2] === 0xff) return path.replace(/\.png$/, '.jpg');
+  if (header.toString('ascii', 0, 4) === 'RIFF' && header.toString('ascii', 8, 12) === 'WEBP') return path.replace(/\.png$/, '.webp');
+  return path;
+}
+
 async function assetFor(path: string, context: MediaActivityContext, kind: AssetRecord['kind'], shot?: Shot, video?: Pick<AssetRecord, 'width' | 'height' | 'durationUs'>): Promise<AssetRecord> {
   const hash = createHash('sha256');
   let size = 0;
@@ -322,7 +344,7 @@ async function assetFor(path: string, context: MediaActivityContext, kind: Asset
   return {
     id: `asset-${createHash('sha256').update(context.operationId + (shot?.id ?? '') + path).digest('hex').slice(0, 24)}`,
     projectId: context.project.id, shotId: shot?.id, name: path.split(/[\\/]/).at(-1) ?? '媒体', kind, path,
-    mimeType: kind === 'image' ? 'image/png' : kind === 'video' ? 'video/mp4' : kind === 'subtitle' ? 'application/x-subrip' : 'application/json',
+    mimeType: kind === 'image' ? imageOutputTypes[extname(path)] ?? 'image/png' : kind === 'video' ? 'video/mp4' : kind === 'subtitle' ? 'application/x-subrip' : 'application/json',
     size, sha256: hash.digest('hex'), version: 1,
     ...video,
     createdAt: new Date().toISOString(), provenance: context.model ? `${context.model.provider}/${context.model.model}` : '本地渲染', retained: false, active: true,
@@ -408,16 +430,17 @@ async function downloadReceipt(path: string, receiptPath: string, receipt: Recei
     bytes = await boundedResponseBytes(response);
   }
   if (bytes.byteLength === 0 || bytes.byteLength > MAX_MEDIA_BYTES) throw new Error('素材结果为空或超出单文件限制');
-  const temporary = `${path}.tmp`;
+  const destination = kind === 'image' ? generatedImagePath(path, bytes) : path;
+  const temporary = `${destination}.tmp`;
   await writeFile(temporary, bytes);
-  await rename(temporary, path);
+  await rename(temporary, destination);
   context.onDiagnostic?.({ event: 'media.download_completed', level: 'info', phase: 'download', byteSize: bytes.byteLength, durationMs: performance.now() - started });
   const validationStarted = performance.now();
   context.onDiagnostic?.({ event: 'media.validation_started', level: 'info', phase: 'validate' });
   const video = kind === 'video' && isVideoGenerationNode(context.node) ? await prepareGeneratedVideo(path, context.project.profile, {
     conform: context.unifiedShotProfile, ffmpegPath: context.ffmpegPath, ffprobePath: context.ffprobePath, signal: context.signal,
   }) : undefined;
-  const asset = await assetFor(path, context, kind, shot, video);
+  const asset = await assetFor(destination, context, kind, shot, video);
   await atomicJson(receiptPath, { state: 'completed', attempt: receipt.attempt, taskId: receipt.taskId, asset, providerUsage: receipt.providerUsage });
   context.onDiagnostic?.({ event: 'media.validation_completed', level: 'info', phase: 'validate', assetId: asset.id, byteSize: asset.size, durationMs: performance.now() - validationStarted });
   return asset;
@@ -435,13 +458,19 @@ function seedanceProjectResolution(modelId: string, shortSide: number): string |
   return undefined;
 }
 
-async function seedanceVideoBody(context: MediaActivityContext & { model: ModelProfile }, shot: Shot, references: ResolvedCharacterReferences, parameters: Record<string, JsonValue>): Promise<string> {
+async function videoFrameBytes(frame: AssetRecord, verify: boolean) {
+  const bytes = await readFile(frame.path);
+  if (verify && (bytes.length !== frame.size || createHash('sha256').update(bytes).digest('hex') !== frame.sha256)) throw new Error('镜头参考画面内容已变化，请恢复素材后重新生成。');
+  return bytes;
+}
+
+async function seedanceVideoBody(context: MediaActivityContext & { model: ModelProfile }, shot: Shot, references: ResolvedCharacterReferences, parameters: Record<string, JsonValue>, plan?: VideoReferenceImages): Promise<string> {
   const audio = await resolveReferenceAudio({ assetIds: context.project.workflow.production.referenceAudioAssetIds ?? [], assets: context.assets, projectId: context.project.id, signal: context.signal });
-  const image = currentVideoImage(context, shot);
-  const imageUrl = image ? `data:${image.mimeType};base64,${(await readFile(image.path)).toString('base64')}` : undefined;
-  const multimodal = audio.length > 0 || references.images.length > 0 && context.model.parameters.characterReferenceMode === 'reference_image';
+  const image = plan ? plan.frame : currentVideoImage(context, shot);
+  const imageUrl = image && !plan?.referenceIds.includes(image.id) ? `data:${image.mimeType};base64,${(await videoFrameBytes(image, Boolean(plan))).toString('base64')}` : undefined;
+  const multimodal = audio.length > 0 || (plan ? plan.mode === 'multiple' : references.images.length > 0 && context.model.parameters.characterReferenceMode === 'reference_image');
   const images = [...references.images.map(reference => reference.dataUrl), ...(imageUrl ? [imageUrl] : [])];
-  const prompt = visualPrompt(context, shot, references);
+  const prompt = visualPrompt(context, shot, references, plan);
   const { width, height } = context.project.profile;
   const targetRatio = videoAspectRatioPreset(width, height)?.label;
   const adaptiveFirstFrame = images.length > 0 && !multimodal && /seedance[-_.]?2[._-]?5/i.test(context.model.model);
@@ -461,10 +490,11 @@ async function generateMedia(context: MediaActivityContext, directory: string, s
   if (!model) throw new Error('请为此步骤选择相应的生成模型，或先导入素材');
   const parameters = requestModelParameters(model, kind);
   if (kind === 'video') parameters.generate_audio = true;
-  const references = await mediaReferences(context, shot);
+  const plan = planVideoReferences(context, shot);
+  const references = await mediaReferences(context, shot, plan);
   const imageEdit = await resolveImageEdit(context);
-  validateReferenceProtocol(context, shot, references);
-  const prompt = visualPrompt(context, shot, references);
+  validateReferenceProtocol(context, shot, references, plan);
+  const prompt = visualPrompt(context, shot, references, plan);
   const adjustment = context.node.config.operation === 'regenerate' && typeof context.node.config.instruction === 'string' ? context.node.config.instruction : '';
   const instruction = context.node.prompt.trim().endsWith(adjustment.trim()) ? context.node.prompt : [context.node.prompt, adjustment].filter(Boolean).join('\n');
   const extension = kind === 'image' ? '.png' : '.mp4';
@@ -484,7 +514,9 @@ async function generateMedia(context: MediaActivityContext, directory: string, s
   const requestId = `${context.operationId}:${shot.id}${attempt > 1 ? `:attempt:${attempt}` : ''}`;
 
   // Local file and request-size failures remain retryable before recording a submission.
-  const seedanceBody = !receipt && kind === 'video' && model.provider === 'seedance' ? await seedanceVideoBody({ ...context, model }, shot, references, parameters) : '';
+  const seedanceBody = !receipt && kind === 'video' && model.provider === 'seedance' ? await seedanceVideoBody({ ...context, model }, shot, references, parameters, plan) : '';
+  const openAiFrame = !receipt && kind === 'video' && model.provider === 'openai-compatible' ? (plan ? plan.frame : currentVideoImage(context, shot)) : undefined;
+  const openAiFrameBytes = openAiFrame ? await videoFrameBytes(openAiFrame, Boolean(plan)) : undefined;
   if (!receipt) {
     receipt = { state: 'prepared', attempt };
     await atomicJson(receiptPath, receipt);
@@ -524,7 +556,7 @@ async function generateMedia(context: MediaActivityContext, directory: string, s
         const first = Array.isArray(result.data) ? objectSchema.parse(result.data[0]) : undefined;
         receipt = { state: 'download', downloadUrl: stringOrUndefined(first?.url), base64: stringOrUndefined(first?.b64_json), providerUsage: providerReportedUsage(result) };
       } else if (model.provider === 'comfyui') {
-        const workflow = comfyPrompt(context, shot, references);
+        const workflow = comfyPrompt(context, shot, references, plan);
         const result = await requestJson(endpoint(model.baseUrl, 'prompt'), context, { method: 'POST', body: JSON.stringify({ prompt: workflow, client_id: requestId }) });
         const taskId = z.string().parse(result.prompt_id);
         receipt = { state: 'submitted', taskId, providerUsage: providerReportedUsage(result) };
@@ -536,12 +568,11 @@ async function generateMedia(context: MediaActivityContext, directory: string, s
           body = seedanceBody;
         }
         else {
-          const image = currentVideoImage(context, shot);
           const form = formParameters(parameters);
           form.set('model', model.model); form.set('prompt', prompt);
           form.set('seconds', String(parameters.seconds ?? defaultVideoRequestSeconds(model.model, shot.durationUs)));
           form.set('size', String(parameters.size ?? `${context.project.profile.width}x${context.project.profile.height}`));
-          if (image) form.set('input_reference', new Blob([await readFile(image.path)], { type: image.mimeType }), `reference${extname(image.path)}`);
+          if (openAiFrame && openAiFrameBytes) form.set('input_reference', new Blob([openAiFrameBytes], { type: openAiFrame.mimeType }), `reference${extname(openAiFrame.path)}`);
           else if (references.images[0]) form.set('input_reference', referenceBlob(references.images[0].dataUrl, references.images[0].mimeType), 'character-reference.png');
           body = form;
         }

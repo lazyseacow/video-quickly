@@ -22,6 +22,10 @@ export interface PrepareAudioMixOptions {
 
 export function audioMixProjectionKey(project: ProjectDocument, assets: readonly AssetRecord[]): string { return digest(audioMixProjection(project, assets)); }
 
+export function audioStemCacheKey(asset: Pick<AssetRecord, 'sha256' | 'kind'>, denoise: boolean, reduction: number): string {
+  return digest(JSON.stringify([asset.sha256, asset.kind, denoise, denoise ? reduction : 0, ALGORITHM]));
+}
+
 async function fileHash(path: string, signal?: AbortSignal): Promise<string> {
   const hash = createHash('sha256');
   for await (const chunk of createReadStream(path, { signal })) hash.update(chunk);
@@ -157,7 +161,7 @@ async function prepare(options: PrepareAudioMixOptions, key: string): Promise<Pr
   const warnings: NonNullable<PreparedAudioMix['warningDetails']> = [];
   const stems = new Map<string, { path: string; samples: number }>();
   async function stem(asset: AssetRecord, denoise: boolean, reduction: number) {
-    const stemKey = digest(JSON.stringify([asset.sha256, asset.kind, denoise, denoise ? reduction : 0, ALGORITHM]));
+    const stemKey = audioStemCacheKey(asset, denoise, reduction);
     const found = stems.get(stemKey); if (found) return found;
     const output = join(options.outputDirectory, `source-${stemKey}.wav`), metadataPath = `${output}.json`;
     try {
@@ -172,7 +176,7 @@ async function prepare(options: PrepareAudioMixOptions, key: string): Promise<Pr
     const filters = [asset.kind === 'video' ? 'aresample=48000:async=1:first_pts=0' : 'aresample=48000', 'aformat=sample_fmts=fltp:channel_layouts=stereo', ...(denoise ? [`afftdn=nr=${reduction}:nf=-50`] : [])];
     await runMedia(ffmpeg, ['-nostdin', '-v', 'error', '-y', '-i', asset.path, '-map', '0:a:0', '-vn', '-af', filters.join(','), '-c:a', 'pcm_f32le', pending], { signal });
     const metadata = await probeMedia(pending, ffprobe, signal), result = { path: output, samples: Math.round((metadata.audioDuration ?? metadata.duration) * SAMPLE_RATE) };
-    const pendingMetadata = join(temporary, `source-${stemKey}.json`); await writeFile(pendingMetadata, JSON.stringify({ samples: result.samples, sha256: await fileHash(pending, signal) }));
+    const pendingMetadata = join(temporary, `source-${stemKey}.json`); await writeFile(pendingMetadata, JSON.stringify({ samples: result.samples, sha256: await fileHash(pending, signal), sourceSha256: asset.sha256, sourceKind: asset.kind }));
     await rename(pending, output); await rename(pendingMetadata, metadataPath);
     stems.set(stemKey, result); return result;
   }

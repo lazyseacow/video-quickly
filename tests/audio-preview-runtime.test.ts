@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, expect, it } from 'vitest';
@@ -41,6 +41,17 @@ async function fixture(extra: Partial<RuntimeOptions> = {}) {
   const prepare = (projectOverride = project) => runtime.dispatch('audio.mix.prepare', { project: projectOverride }) as Promise<AudioMixJob>;
   return { runtime, directory, project, asset, calls, options, open, prepare };
 }
+
+it('removes an archived project’s completed mix and its local cache from the regular delete path', async () => {
+  const { runtime, project, prepare } = await fixture(), job = await prepare();
+  await runtime.waitForIdle();
+  const completed = await runtime.dispatch('audio.mix.get', { jobId: job.id }) as AudioMixJob;
+  expect(completed.status).toBe('succeeded');
+  await runtime.dispatch('project.archive', { projectId: project.id });
+  await runtime.dispatch('project.deleteMany', { projectIds: [project.id] });
+  await expect(stat(completed.result!.path)).rejects.toMatchObject({ code: 'ENOENT' });
+  await expect(runtime.dispatch('audio.mix.get', { jobId: job.id })).rejects.toThrow('试听任务不存在');
+});
 
 it('deduplicates equal frozen drafts and serializes distinct snapshots without writing projects, runs or costs', async () => {
   const { runtime, project, calls, prepare } = await fixture(); calls.hold = gate(); calls.entered = gate();

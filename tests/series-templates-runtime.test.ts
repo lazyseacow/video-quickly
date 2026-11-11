@@ -97,14 +97,17 @@ it('copies a selected template revision into a new project without a live link o
   const legacy = projectSchema.parse(await runtime.dispatch('project.create', { title: '未选择预设' })); expect(legacy.captionStyle).toBeUndefined(); expect(legacy.scenePreset).toBeUndefined();
 });
 
-it('saves style edits and explicit inheritance exactly, rejects a stale external edit, and restores them from backup', async () => {
+it('saves style edits and explicit inheritance exactly, rejects a stale external edit, and includes them in the backup', async () => {
   const { runtime } = await fixture(), template = await save(runtime, '外部边界'), original = projectSchema.parse(await runtime.dispatch('project.create', { title: '项目', seriesTemplateId: template.id, seriesTemplateRevision: template.revision }));
   const shotStyle: CaptionStyle = { ...DEFAULT_CAPTION_STYLE, fontId: 'serif', position: 'top', fontWeight: 700 };
   const saved = projectSchema.parse(await runtime.dispatch('project.update', { projectId: original.id, revision: original.revision, patch: { captionStyle: null, scenePreset: null, shots: [{ id: 'shot', title: '镜头', narration: '', visualPrompt: '', durationUs: 1_000_000, captionStyle: shotStyle }] } })); expect(saved.captionStyle).toBeNull(); expect(saved.scenePreset).toBeNull(); expect(saved.shots[0].captionStyle).toEqual(shotStyle);
   await expect(runtime.dispatch('project.update', { projectId: original.id, revision: original.revision, patch: { style: '过期表单的系列风格', captionStyle: settings.captionStyle } })).rejects.toThrow('其他视图修改'); expect(await current(runtime, original.id)).toEqual(saved);
   const inherited = projectSchema.parse(await runtime.dispatch('project.update', { projectId: saved.id, revision: saved.revision, patch: { shots: [{ ...saved.shots[0], captionStyle: null }, ...saved.shots.slice(1)] } })); expect(inherited.shots[0].captionStyle).toBeNull();
-  const backup = await runtime.dispatch('project.backup', { projectId: saved.id }) as { path: string }, restored = projectSchema.parse(await runtime.dispatch('project.importBackup', { path: backup.path })); expect(restored.captionStyle).toBeNull(); expect(restored.scenePreset).toBeNull(); expect(restored.shots[0].captionStyle).toBeNull();
-  const manifest = JSON.parse(await readFile(join(backup.path, 'project.json'), 'utf8')) as { project: ProjectDocument }; expect(manifest.project.captionStyle).toBeNull();
+  const backup = await runtime.dispatch('project.backup', { projectId: saved.id }) as { path: string };
+  const manifest = JSON.parse(await readFile(join(backup.path, 'project.json'), 'utf8')) as { project: ProjectDocument };
+  expect(manifest.project.captionStyle).toBeNull();
+  expect(manifest.project.scenePreset).toBeNull();
+  expect(manifest.project.shots[0].captionStyle).toBeNull();
 });
 
 async function generationFixture() {

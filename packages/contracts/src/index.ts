@@ -170,8 +170,6 @@ export const audioWaveformSchema = z.object({
 }).refine(value => value.peaks.length === Math.ceil(value.durationUs / 10_000), { message: '波形峰值数量须与音频时长一致', path: ['peaks'] });
 export type AudioWaveform = z.infer<typeof audioWaveformSchema>;
 
-export const CHARACTER_REFERENCE_VIEW_LABELS = ['正面', '四分之三侧面', '侧面', '背面'] as const;
-
 export const characterProfileSchema = z.object({
   id: z.string().min(1), name: z.string().trim().min(1).max(120), description: z.string().max(10000),
   referenceAssetIds: z.array(z.string().min(1)).max(4).refine(value => new Set(value).size === value.length, '角色参考图不能重复'),
@@ -295,12 +293,13 @@ export const workflowTemplateSchema = z.object({
 export type WorkflowTemplate = z.infer<typeof workflowTemplateSchema>;
 export { validateWorkflowComposition, workflowNodesWithSubflows, workflowEdgesWithSubflows, resolveSubflowInputs, substituteSubflowInputs, subflowNodeId, subflowThreadId, subflowValueAt } from './workflow-composition.js';
 export { resolveWorkflowStages, type ResolvedWorkflowStage } from './workflow-stages.js';
-export const episodeSchema = z.object({ workId: z.string().min(1), number: z.number().int().min(1).max(100000), originalText: z.string().max(30000), defaultsRevision: z.number().int().positive().optional() });
-export const episodeSourceSchema = episodeSchema.extend({ workTitle: z.string().max(160) });
+const episodeSchema = z.object({ workId: z.string().min(1), number: z.number().int().min(1).max(100000), originalText: z.string().max(30000), defaultsRevision: z.number().int().positive().optional() });
+const episodeSourceSchema = episodeSchema.extend({ workTitle: z.string().max(160) });
 export const projectSchema = z.object({
   id: z.string(), title: z.string().min(1).max(160), brief: z.string().max(30000), templateId: z.string().default('history-handdrawn'),
   revision: z.number().int().positive(), profile: videoProfileSchema, shots: z.array(shotSchema), workflow: workflowSchema,
   creativeContext: creativeContextSchema.nullable().optional(),
+  originalText: z.string().max(30000).optional(),
   episode: episodeSchema.optional(), episodeSource: episodeSourceSchema.optional(),
   musicClips: z.array(musicClipSchema).optional(),
   researchSources: z.array(researchSourceSchema).max(20).optional(), referenceDisplay: z.enum(['hidden', 'numbers']).optional(),
@@ -310,31 +309,9 @@ export const projectSchema = z.object({
   createdAt: z.string(), updatedAt: z.string(), archived: z.boolean().default(false),
 });
 export type ProjectDocument = z.infer<typeof projectSchema>;
-export const workDefaultsSchema = z.object({
-  style: z.string().max(30000).default(''), creativeContext: creativeContextSchema.nullable().optional(),
-  profile: videoProfileSchema.default(() => structuredClone(DEFAULT_VIDEO_PROFILE)),
-  production: productionSettingsSchema.omit({ referenceAudioAssetIds: true, manualPlanningFields: true }).extend({ executionMode: z.enum(['workflow', 'agent']).optional() }).strict()
-    .transform(({ executionMode: _legacy, ...settings }) => settings).default(() => productionSettingsSchema.parse({ mode: 'native-video' })),
-});
-export const workSchema = z.object({
-  id: z.string(), revision: z.number().int().positive(), title: z.string().trim().min(1).max(160), description: z.string().max(10000).default(''),
-  defaults: workDefaultsSchema, archived: z.boolean().default(false), createdAt: z.string(), updatedAt: z.string(),
-});
-export type StoryWork = z.infer<typeof workSchema>;
-export const productionQueueSchema = z.object({
-  id: z.string(), workId: z.string(), revision: z.number().int().positive(), status: z.enum(['paused', 'running', 'needs_attention', 'succeeded', 'canceled']),
-  createdAt: z.string(), updatedAt: z.string(), error: z.string().optional(),
-});
-export type ProductionQueue = z.infer<typeof productionQueueSchema>;
-export const productionQueueItemSchema = z.object({
-  id: z.string(), queueId: z.string(), projectId: z.string(), projectRevision: z.number().int().positive(), revision: z.number().int().positive(),
-  position: z.number().int().nonnegative(), episodeNumber: z.number().int().positive(), title: z.string(),
-  status: z.enum(['queued', 'running', 'succeeded', 'needs_attention', 'failed', 'canceled', 'skipped']),
-  runId: z.string().optional(), error: z.string().optional(), createdAt: z.string(), updatedAt: z.string(),
-});
-export type ProductionQueueItem = z.infer<typeof productionQueueItemSchema>;
-export const productionQueueDetailSchema = z.object({ queue: productionQueueSchema, items: z.array(productionQueueItemSchema) });
-export const productionQueueEnqueueResultSchema = z.object({ queue: productionQueueSchema.nullable(), items: z.array(productionQueueItemSchema), reused: z.array(productionQueueItemSchema) });
+export function projectOriginalText(project: Pick<ProjectDocument, 'originalText' | 'episode' | 'episodeSource'>): string | undefined {
+  return project.originalText ?? (project.episode ?? project.episodeSource)?.originalText;
+}
 
 export const modelCapabilitySchema = z.enum(['text', 'image', 'video', 'vision', 'tools', 'structured-output']);
 export type ModelCapability = z.infer<typeof modelCapabilitySchema>;
@@ -346,14 +323,23 @@ export const chargeEstimateSchema = z.object({
     modelName: z.string().optional(), model: z.string().optional(),
     kind: z.enum(['text', 'image', 'video']),
     count: z.number().int().nonnegative().optional(), videoSeconds: z.number().nonnegative().optional(),
-    referenceViews: z.number().int().positive().optional(), estimated: chargeAmountSchema.optional(),
+    estimated: chargeAmountSchema.optional(),
   })),
   totals: z.array(chargeAmountSchema).optional(),
 });
 export type ChargeEstimate = z.infer<typeof chargeEstimateSchema>;
+const videoReferenceReviewSchema = z.discriminatedUnion('status', [
+  z.object({ status: z.literal('pending'), until: z.enum(['storyboard', 'references']) }),
+  z.object({ status: z.literal('ready'), shots: z.array(z.object({
+    id: z.string(), title: z.string(), mode: z.enum(['single', 'multiple']),
+    images: z.array(z.object({ id: z.string(), name: z.string(), path: z.string(), sha256: z.string() })),
+  })), textShots: z.number().int().nonnegative() }),
+]);
+export type VideoReferenceReview = z.infer<typeof videoReferenceReviewSchema>;
 export const chargeConfirmationSchema = z.object({
   confirmationId: z.string().uuid(), title: z.string(), description: z.string(), confirmLabel: z.string(),
   estimate: chargeEstimateSchema.optional(),
+  videoReferences: videoReferenceReviewSchema.optional(),
 });
 export const modelPricingSchema = z.object({
   currency: currencySchema,
@@ -500,7 +486,7 @@ export type RunPlan = z.infer<typeof runPlanSchema>;
 export const readinessIssueSchema = z.object({
   id: z.string(), severity: z.enum(['error', 'warning']), category: z.enum(['project', 'workflow', 'model', 'media', 'environment', 'skill']),
   message: z.string(), hint: z.string().optional(), nodeId: z.string().optional(), nodeLabel: z.string().optional(), modelId: z.string().optional(), modelName: z.string().optional(), assetId: z.string().optional(),
-  fix: z.enum(['project', 'step', 'models', 'characters', 'assets', 'runtime', 'runs']),
+  fix: z.enum(['project', 'step', 'models', 'characters', 'assets', 'runtime', 'production', 'batch-export']),
 });
 export type ReadinessIssue = z.infer<typeof readinessIssueSchema>;
 export const projectReadinessSchema = z.object({
@@ -518,7 +504,6 @@ export const runSchema = z.object({
   regenerationSource: z.object({ runId: z.string().min(1), nodeId: z.string().min(1), shotId: z.string().min(1), requestId: z.string().uuid() }).optional(),
   events: z.array(runEventSchema).default([]), activities: z.array(activitySchema).default([]),
   purpose: z.enum(['production', 'prompt-trial', 'workflow-assistant']).optional(), promptSessionId: z.string().optional(), promptSessionRevision: z.number().int().positive().optional(),
-  productionQueueId: z.string().optional(), productionQueueItemId: z.string().optional(),
 });
 export type StepRun = z.infer<typeof runSchema>;
 export type RunRecord = StepRun;
@@ -555,7 +540,7 @@ export const workspaceSnapshotSchema = z.object({
 });
 export type WorkspaceSnapshot = z.infer<typeof workspaceSnapshotSchema>;
 // Summaries deliberately exclude shot collections, activity results and event history.
-export const projectSummarySchema = projectSchema.pick({ id: true, title: true, brief: true, templateId: true, revision: true, profile: true, captionStyle: true, episode: true, episodeSource: true, createdAt: true, updatedAt: true, archived: true }).extend({
+export const projectSummarySchema = projectSchema.pick({ id: true, title: true, brief: true, templateId: true, revision: true, profile: true, captionStyle: true, createdAt: true, updatedAt: true, archived: true }).extend({
   shotCount: z.number().int().nonnegative(), durationUs: z.number().nonnegative(), workflowNodeCount: z.number().int().nonnegative(),
   thumbnailShot: shotSchema.nullable(), thumbnailAsset: assetSchema.optional(),
 });
@@ -564,7 +549,7 @@ export const runSummarySchema = runSchema.omit({ events: true, activities: true 
 export type RunSummary = z.infer<typeof runSummarySchema>;
 export const promptDraftSchema = z.object({
   projectId: z.string().min(1), projectRevision: z.number().int().positive(), node: workflowNodeSchema,
-  context: projectSchema.pick({ brief: true, style: true, creativeContext: true, profile: true }).partial().extend({ production: productionSettingsSchema.optional() }).optional(),
+  context: projectSchema.pick({ brief: true, originalText: true, style: true, creativeContext: true, profile: true }).partial().extend({ production: productionSettingsSchema.optional() }).optional(),
   shotId: z.string().min(1).optional(), upstreamRunId: z.string().min(1).optional(),
 });
 export type PromptDraft = z.infer<typeof promptDraftSchema>;
@@ -581,7 +566,7 @@ export const promptSessionSchema = z.object({
 });
 export type PromptSession = z.infer<typeof promptSessionSchema>;
 export { resolvePromptBindings, applyPromptLibraryItem, supportsPromptExperiment } from './prompt-bindings.js';
-export { buildMediaPrompt, characterReferencePrompt, generationFramePrompt, singleFrameVideoModel, needsComposedSceneFrame, usesVideoSceneImage, characterSceneFirstFrame } from './media-prompts.js';
+export { buildMediaPrompt, characterReferencePrompt, generationFramePrompt, singleFrameVideoModel, needsComposedSceneFrame, usesVideoSceneImage, characterSceneFirstFrame, videoReferenceImages, type VideoReferenceImages } from './media-prompts.js';
 export const runStepStatusSchema = z.enum(['pending', 'running', 'waiting_review', 'waiting_external', 'retry_scheduled', 'needs_attention', 'succeeded', 'failed', 'canceled', 'skipped', 'not_recorded']);
 export const modelResponseIssueSchema = z.object({ path: z.string(), message: z.string() });
 export type ModelResponseIssue = z.infer<typeof modelResponseIssueSchema>;
@@ -619,7 +604,7 @@ export const runStepSummarySchema = z.object({
   startedAt: z.string().optional(), completedAt: z.string().optional(), error: z.string().optional(),
 });
 export type RunStepSummary = z.infer<typeof runStepSummarySchema>;
-export const runRecoverySchema = z.object({ review: z.boolean(), resume: z.boolean(), cancel: z.boolean(), restart: z.boolean(), reason: z.string() });
+export const runRecoverySchema = z.object({ review: z.boolean(), resume: z.boolean(), cancel: z.boolean(), reason: z.string() });
 export const runInspectionSchema = z.object({
   stages: z.array(workflowStageSchema).optional(),
   workflowId: z.string().optional(),

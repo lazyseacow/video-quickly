@@ -24,7 +24,7 @@ const enumFields: Record<string, ReadonlySet<string>> = {
   phase: new Set(['queue', 'generate', 'submit', 'poll', 'download', 'validate', 'render']),
   requestPhase: new Set(['prepare', 'send', 'headers', 'read', 'parse', 'validate']),
 };
-const methodWords = new Set(('workspace snapshot summary project create get update archive restore backup importBackup saveShot shot candidate apply candidates regenerate ' +
+const methodWords = new Set(('workspace snapshot summary project create get update archive restore backup saveShot shot candidate apply candidates regenerate ' +
   'run list start cancel resume review replay plan events activities diagnostics inspect step payload versions node result model save delete test discover ' +
   'skill import group resource toggle tool register cost billing task tasks character references workflow workflowTemplate seriesTemplate render batch export research search analyze source read ' +
   'asset select retain waveform caption system status runtime reconnect host secret set audio preview levels silence mix prepare edit history undo redo readiness recovery scan confirm').split(' '));

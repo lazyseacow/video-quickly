@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
-import { stat } from 'node:fs/promises';
+import { mkdir, readFile, stat, writeFile } from 'node:fs/promises';
 import { expect, test, type APIRequestContext } from '@playwright/test';
-import type { ProjectDocument, RecordPage, RunSummary } from '@video-quickly/contracts';
+import type { AssetRecord, ProjectDocument, RecordPage, RunSummary } from '@video-quickly/contracts';
 import { probeMedia } from '../../packages/video/src/media-process';
 import { openProjectFromList } from './workspace-navigation';
 
@@ -78,7 +78,7 @@ for (const viewport of [{ width: 1536, height: 960, theme: 'dark' }, { width: 39
   expect(writes).toEqual([]); expect(errors).toEqual([]); await expect(page.locator('vite-error-overlay')).toHaveCount(0);
 });
 
-test('downloads the whole saved project from its card and retains the MP4 after deleting its record', async ({ page, request }, info) => {
+test('downloads the whole saved project from its card and retains the exported MP4 after permanent deletion', async ({ page, request }, info) => {
   const created = await rpc<ProjectDocument>(request, 'project.create', { title: '完整视频 ' + randomUUID().slice(0, 8), profile: { width: 320, height: 180, frameRate: { numerator: 30, denominator: 1 }, previewScale: 1 } });
   const project = await rpc<ProjectDocument>(request, 'project.update', { projectId: created.id, revision: created.revision, patch: {
     workflow: { ...created.workflow, id: 'custom-download-test', stages: undefined, nodes: created.workflow.nodes.filter(node => node.kind === 'script'), edges: [] },
@@ -115,28 +115,20 @@ test('downloads the whole saved project from its card and retains the MP4 after 
     await page.screenshot({ path: info.outputPath('project-card-download.png') });
     expect((await rpc<{ project: ProjectDocument }>(request, 'project.get', { projectId: project.id })).project).toEqual(project);
     const { videoPath } = await rpc<{ videoPath: string }>(request, 'node.result', { runId, nodeId: 'export' });
-    await page.getByRole('button', { name: '制作记录', exact: true }).click();
-    const row = page.locator(`[data-run-id="${runId}"]`);
-    const remove = row.getByRole('button', { name: '删除制作记录', exact: true });
-    await remove.click();
-    const confirmation = page.getByRole('alertdialog', { name: '删除制作记录？' });
-    await confirmation.getByRole('button', { name: '取消', exact: true }).click();
-    await expect(remove).toBeFocused();
-    await remove.click(); await confirmation.getByRole('button', { name: '删除记录', exact: true }).click();
-    await expect(row).toHaveCount(0);
-    expect((await rpc<RecordPage<RunSummary>>(request, 'run.list', { projectId: project.id })).items).toEqual([]);
     expect((await stat(videoPath)).size).toBe((await stat(await file.path())).size);
-    await page.reload(); await page.getByRole('button', { name: '制作记录', exact: true }).click();
-    await page.getByLabel('制作项目', { exact: true }).selectOption(project.id);
-    await expect(page.getByRole('heading', { name: '这个项目还没有制作记录' })).toBeVisible();
+    await rpc(request, 'project.archive', { projectId: project.id });
+    await rpc(request, 'project.deleteMany', { projectIds: [project.id] });
+    expect(await readFile(videoPath)).toEqual(await readFile(await file.path()));
+    expect((await rpc<RecordPage<RunSummary>>(request, 'run.list', { projectId: project.id })).items).toMatchObject([{ id: runId, status: 'succeeded' }]);
   } finally { release(); }
 });
 
-test('starts on the project list and batch deletes only checked projects into the recycle bin', async ({ page, request }, info) => {
+test('starts on the project list and moves only checked projects into and out of the recycle bin', async ({ page, request }, info) => {
   const group = `批量项目 ${randomUUID().slice(0, 8)}`;
   const projects = [];
-  for (const suffix of ['甲', '乙', '丙']) projects.push(await rpc<ProjectDocument>(request, 'project.create', { title: `${group} ${suffix}` }));
-  const [first, second, third] = projects;
+  for (const suffix of ['甲', '乙', '丙', '丁']) projects.push(await rpc<ProjectDocument>(request, 'project.create', { title: `${group} ${suffix}` }));
+  const [first, second, third, fourth] = projects;
+  await rpc(request, 'project.archive', { projectId: fourth.id });
   const card = (project: ProjectDocument) => page.locator('.project-card').filter({ has: page.getByRole('heading', { name: project.title, exact: true }) });
   const calls: string[] = [];
   page.on('request', request => { if (request.url().endsWith('/__desktop_rpc')) calls.push(request.postDataJSON().method); });
@@ -154,13 +146,13 @@ test('starts on the project list and batch deletes only checked projects into th
 
   await page.getByLabel('搜索项目', { exact: true }).fill(group);
   await page.getByRole('button', { name: '多选', exact: true }).click();
-  const selectAll = page.getByRole('checkbox', { name: '全选当前结果', exact: true });
+  const selectAll = page.getByRole('checkbox', { name: '全选', exact: true });
   await selectAll.check();
   await card(third).getByRole('checkbox').uncheck();
   await expect(selectAll).toHaveJSProperty('indeterminate', true);
   await expect(page.getByText('已选 2 项', { exact: true })).toBeVisible();
   await page.screenshot({ path: info.outputPath('project-card-selection.png') });
-  const remove = page.getByRole('button', { name: '批量删除', exact: true });
+  const remove = page.getByRole('button', { name: '删除', exact: true });
   const confirmation = page.getByRole('alertdialog', { name: '批量删除项目？' });
   await remove.click(); await expect(confirmation).toContainText('将 2 个项目移入回收站');
   await confirmation.getByRole('button', { name: '取消', exact: true }).click();
@@ -171,7 +163,115 @@ test('starts on the project list and batch deletes only checked projects into th
   expect(calls.filter(method => method === 'project.archiveMany')).toHaveLength(1);
   await page.getByRole('button', { name: '回收站', exact: true }).click();
   await expect(card(first)).toBeVisible(); await expect(card(second)).toBeVisible(); await expect(card(third)).toHaveCount(0);
-  await card(first).getByRole('button', { name: '恢复项目', exact: true }).click();
-  await page.getByRole('button', { name: '全部项目', exact: true }).click();
-  await expect(card(first)).toBeVisible(); await expect(card(third)).toBeVisible(); await expect(card(second)).toHaveCount(0);
+
+  const invalidRestore = await request.post('/__desktop_rpc', { data: { method: 'project.restoreMany', params: { projectIds: [first.id, 'missing-project'] } } });
+  expect((await invalidRestore.json()).error).toContain('项目不存在');
+  expect((await rpc<{ project: ProjectDocument }>(request, 'project.get', { projectId: first.id })).project.archived).toBe(true);
+
+  const multiSelect = page.getByRole('button', { name: '多选', exact: true });
+  await multiSelect.click();
+  const restore = page.getByRole('button', { name: '批量恢复', exact: true });
+  await expect(restore).toBeDisabled();
+  await expect(card(fourth).getByRole('button', { name: '恢复项目', exact: true })).toHaveCount(0);
+  await selectAll.check();
+  await card(fourth).getByRole('checkbox').uncheck();
+  await expect(selectAll).toHaveJSProperty('indeterminate', true);
+  await expect(page.getByText('已选 2 项', { exact: true })).toBeVisible();
+  await page.screenshot({ path: info.outputPath('project-trash-selection.png') });
+  await restore.click();
+  await expect(card(first)).toHaveCount(0); await expect(card(second)).toHaveCount(0); await expect(card(fourth)).toBeVisible();
+  await expect(restore).toBeDisabled();
+  expect(calls.filter(method => method === 'project.restoreMany')).toHaveLength(1);
+  expect(await rpc(request, 'project.restoreMany', { projectIds: [first.id, first.id] })).toEqual({ restored: 0 });
+
+  const allProjects = page.getByRole('button', { name: '全部项目', exact: true });
+  const recycleBin = page.getByRole('button', { name: '回收站', exact: true });
+  await selectAll.check();
+  await allProjects.click();
+  await expect(multiSelect).toBeVisible();
+  await expect(card(first)).toBeVisible(); await expect(card(second)).toBeVisible(); await expect(card(third)).toBeVisible();
+  await expect(card(fourth)).toHaveCount(0);
+  await recycleBin.click();
+  await card(fourth).getByRole('button', { name: '恢复项目', exact: true }).click();
+  await expect(card(fourth)).toHaveCount(0);
+  await allProjects.click();
+  await expect(card(fourth)).toBeVisible();
 });
+
+for (const { width, height, theme } of [{ width: 1024, height: 720, theme: 'dark' }, { width: 390, height: 844, theme: 'light' }]) {
+  test(`requires confirmation to permanently delete only checked recycle-bin projects at ${width}px`, async ({ page, request }, info) => {
+    const group = `彻底删除 ${randomUUID().slice(0, 8)}`;
+    const projects = [];
+    for (const suffix of ['甲', '乙', '丙', '丁']) projects.push(await rpc<ProjectDocument>(request, 'project.create', { title: `${group} ${suffix}` }));
+    const [first, second, keep, live] = projects;
+    await mkdir(info.outputDir, { recursive: true });
+    const source = info.outputPath('project-owned.txt');
+    await writeFile(source, '项目素材夹具');
+    const asset = await rpc<AssetRecord>(request, 'asset.import', { projectId: first.id, path: source });
+    await rpc(request, 'project.archiveMany', { projectIds: [first.id, second.id, keep.id] });
+    const calls: string[][] = [];
+    page.on('request', request => {
+      if (!request.url().endsWith('/__desktop_rpc')) return;
+      const { method, params } = request.postDataJSON();
+      if (method === 'project.deleteMany') calls.push(params.projectIds);
+    });
+    await page.setViewportSize({ width, height });
+    await page.addInitScript(theme => localStorage.setItem('vq-theme', theme), theme);
+    await page.goto('/');
+
+    const search = page.getByLabel('搜索项目', { exact: true });
+    const recycleBin = page.getByRole('button', { name: '回收站', exact: true });
+    const multiSelect = page.getByRole('button', { name: '多选', exact: true });
+    const purge = page.getByRole('button', { name: '批量彻底删除', exact: true });
+    const card = (project: ProjectDocument) => page.locator('.project-card').filter({ has: page.getByRole('heading', { name: project.title, exact: true }) });
+    await search.fill(group);
+    await multiSelect.click();
+    await expect(purge).toHaveCount(0);
+    await recycleBin.click();
+    await multiSelect.click();
+    await expect(purge).toBeDisabled();
+    await page.getByRole('checkbox', { name: '全选', exact: true }).check();
+    await card(keep).getByRole('checkbox').uncheck();
+    await expect(page.getByText('已选 2 项', { exact: true })).toBeVisible();
+    expect(await page.locator('.page-body').evaluate(element => element.scrollWidth - element.clientWidth)).toBeLessThanOrEqual(1);
+
+    const dialog = page.getByRole('alertdialog', { name: '批量彻底删除项目？', exact: true });
+    const cancel = dialog.getByRole('button', { name: '取消', exact: true });
+    await purge.click();
+    await expect(dialog).toHaveAccessibleDescription('将彻底删除 2 个项目，并清理项目独占的本地素材和缓存。此操作无法撤销。');
+    await expect(cancel).toBeFocused();
+    await expect(dialog.locator('.dialog__surface')).toHaveCSS('opacity', '1');
+    await page.screenshot({ path: info.outputPath(`project-trash-delete-confirm-${width}.png`) });
+    await cancel.click();
+    await expect(dialog).toHaveCount(0);
+    await expect(purge).toBeFocused();
+    await expect(card(first).getByRole('checkbox')).toBeChecked();
+    expect(calls).toEqual([]);
+    expect(await readFile(asset.path, 'utf8')).toBe('项目素材夹具');
+
+    await purge.click();
+    await dialog.getByRole('button', { name: '彻底删除', exact: true }).click();
+    await expect(card(first)).toHaveCount(0);
+    await expect(card(second)).toHaveCount(0);
+    await expect(card(keep)).toBeVisible();
+    await expect(purge).toBeDisabled();
+    expect(calls).toEqual([[first.id, second.id]]);
+    await expect(stat(asset.path)).rejects.toMatchObject({ code: 'ENOENT' });
+    expect(await readFile(source, 'utf8')).toBe('项目素材夹具');
+    await page.reload();
+    await search.fill(group);
+    await expect(card(live)).toBeVisible();
+    await recycleBin.click();
+    await expect(card(keep)).toBeVisible();
+    await expect(page.locator('.project-card')).toHaveCount(1);
+    await expect(card(keep).getByRole('button')).toHaveCount(2);
+    await expect(card(keep).getByRole('button', { name: '恢复项目', exact: true })).toBeVisible();
+    const deleteProject = card(keep).getByRole('button', { name: `彻底删除“${keep.title}”`, exact: true });
+    await deleteProject.click();
+    const singleDialog = page.getByRole('alertdialog', { name: '彻底删除项目？', exact: true });
+    await expect(singleDialog).toHaveAccessibleDescription(`将彻底删除“${keep.title}”，并清理项目独占的本地素材和缓存。此操作无法撤销。`);
+    await singleDialog.getByRole('button', { name: '彻底删除', exact: true }).click();
+    await expect(card(keep)).toHaveCount(0);
+    expect(calls).toEqual([[first.id, second.id], [keep.id]]);
+  });
+}

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { createNativeVideoWorkflow, DEFAULT_VIDEO_PROFILE, projectSchema, type WorkflowNode } from '@video-quickly/contracts';
-import { applyStageConfigurationDraft, stageConfigurationDraftSchema, updateProductionConfigurationDraft, updateStageConfigurationDraft } from '../apps/desktop/src/lib/stage-configuration-draft';
+import { applyProductionProjectDraft, applyStageConfigurationDraft, stageConfigurationDraftSchema, updateProductionConfigurationDraft, updateStageConfigurationDraft } from '../apps/desktop/src/lib/stage-configuration-draft';
 
 const projectId = 'stage-configuration-project';
 function task(id: string, changes: Partial<WorkflowNode> = {}) {
@@ -10,6 +10,17 @@ function task(id: string, changes: Partial<WorkflowNode> = {}) {
 }
 
 describe('pending stage configuration', () => {
+  it('can edit original text alongside a recovered pending configuration and detect a concurrent text edit', () => {
+    const workflow = createNativeVideoWorkflow();
+    const settings = { brief: '简报', style: '', profile: DEFAULT_VIDEO_PROFILE };
+    const oldDraft = updateProductionConfigurationDraft(projectId, undefined, workflow, workflow.nodes, workflow.production, settings, { ...settings, brief: '待用简报' });
+    const current = { ...settings, originalText: '旧分集原文' };
+    const recovered = applyProductionProjectDraft(current, oldDraft).settings;
+    const next = updateProductionConfigurationDraft(projectId, oldDraft, workflow, workflow.nodes, workflow.production, recovered, { ...recovered, originalText: '' });
+    expect(applyProductionProjectDraft(current, next)).toEqual({ settings: { ...current, brief: '待用简报', originalText: '' }, conflicts: [] });
+    expect(applyProductionProjectDraft({ ...current, originalText: '其他窗口的原文' }, next).conflicts).toEqual(['originalText']);
+  });
+
   it('round trips pending concurrency without changing the live workflow and detects a competing concurrency edit', () => {
     const workflow = createNativeVideoWorkflow(), before = structuredClone(workflow);
     const project = projectSchema.parse({ id: projectId, title: '生成并发', brief: '', profile: DEFAULT_VIDEO_PROFILE, shots: [], revision: 1, createdAt: '', updatedAt: '', workflow });

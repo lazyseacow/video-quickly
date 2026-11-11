@@ -192,11 +192,16 @@ test('preserves the project when a trial is canceled and exposes experiment hist
     await dialog.getByRole('button', { name: '试运行（产生用量）', exact: true }).click(); await confirmAction(page, '确认试运行'); await expect.poll(() => source.prompts.length).toBe(1);
     await dialog.getByRole('button', { name: '停止试运行', exact: true }).click(); await expect(dialog.getByText('已停止', { exact: true })).toBeVisible();
     expect(await source.current()).toEqual(source.project); source.release();
-    await page.goto('/'); await page.getByRole('button', { name: '制作记录', exact: true }).click();
-    await page.getByRole('combobox', { name: '记录来源', exact: true }).selectOption('prompt-trial');
-    await expect(page.locator('.run-card').filter({ hasText: source.project.title })).toContainText('提示词实验');
-    await page.getByRole('combobox', { name: '记录来源', exact: true }).selectOption('production');
-    await expect(page.locator('.run-card').filter({ hasText: source.project.title })).toHaveCount(0);
+    const { items } = await rpc<{ items: RunSummary[] }>(request, 'run.list', { projectId: source.project.id, purpose: 'prompt-trial' });
+    expect(items).toHaveLength(1);
+    const trial = items[0];
+    expect(trial.promptSessionId).toBeTruthy();
+    const reopened = await openExperiment(await openLauncher(page, source.project));
+    await reopened.getByRole('combobox', { name: '继续实验', exact: true }).selectOption(trial.promptSessionId!);
+    await reopened.getByRole('button', { name: '查看试运行', exact: true }).click();
+    await expect(reopened.getByRole('combobox', { name: '实验记录', exact: true })).toHaveValue(trial.id);
+    await expect(reopened.getByText('已停止', { exact: true })).toBeVisible();
+    expect((await rpc<{ items: RunSummary[] }>(request, 'run.list', { projectId: source.project.id, purpose: 'production' })).items).toEqual([]);
   } finally { await source.close(); }
 });
 

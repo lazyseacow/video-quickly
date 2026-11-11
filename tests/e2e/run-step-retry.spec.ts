@@ -46,14 +46,14 @@ async function fixture(request: APIRequestContext, flat = false, failure: 'downl
       },
     } });
     const run = await rpc<RunSummary>(request, 'run.start', { projectId: project.id });
-    await expect.poll(async () => (await rpc<RunSummary>(request, 'run.get', { runId: run.id })).status).toMatch(/^(failed|needs_attention)$/);
     const inspect = () => rpc<RunInspection>(request, 'run.inspect', { runId: run.id });
+    await expect.poll(async () => (await inspect()).run.status).toMatch(/^(failed|needs_attention)$/);
     expect((await inspect()).steps.find(step => step.id === 'images')?.retry?.allowed).toBe(true);
     return { project, run, inspect, ready: () => { ready = true; }, counts: () => ({ textCalls, submissions: [...submissions], downloads: [...downloads] }), close };
   } catch (error) { await close(); throw error; }
 }
 
-for (const failure of ['download', 'rejection'] as const) for (const surface of ['history', 'stage', 'flat'] as const) for (const viewport of [{ width: 1536, height: 960, theme: 'dark' }, { width: 390, height: 844, theme: 'light' }]) {
+for (const failure of ['download', 'rejection'] as const) for (const surface of ['stage', 'flat'] as const) for (const viewport of [{ width: 1536, height: 960, theme: 'dark' }, { width: 390, height: 844, theme: 'light' }]) {
   test(`retries the selected ${failure} step from ${surface} at ${viewport.width}px without starting downstream`, async ({ page, request }, info) => {
     await page.setViewportSize(viewport); await page.emulateMedia({ reducedMotion: 'reduce' });
     await page.addInitScript(theme => localStorage.setItem('vq-theme', theme), viewport.theme);
@@ -64,14 +64,9 @@ for (const failure of ['download', 'rejection'] as const) for (const surface of 
     page.on('request', outgoing => { if (outgoing.url().endsWith('/__desktop_rpc')) { const input = outgoing.postDataJSON(); if (['run.start', 'run.resume', 'run.cancel', 'run.step.retry'].includes(input.method)) writes.push(input.method); } });
     try {
       await page.goto('/'); await expect(page).toHaveTitle(/Video Quickly/); await expect(page.getByRole('navigation', { name: '主导航', exact: true })).toBeVisible();
-      if (surface === 'history') {
-        await page.getByRole('button', { name: '制作记录', exact: true }).click();
-        await page.locator(`.run-card[data-run-id="${source.run.id}"]`).getByRole('button', { name: '查看步骤', exact: true }).click();
-      } else {
-        await openProjectFromList(page, source.project.title);
-        await page.getByRole('button', { name: '打开阶段：素材与配音', exact: true }).click();
-      }
-      const dialog = page.getByRole('dialog', { name: surface === 'history' ? '制作步骤详情' : '本次制作', exact: true });
+      await openProjectFromList(page, source.project.title);
+      await page.getByRole('button', { name: '打开阶段：素材与配音', exact: true }).click();
+      const dialog = page.getByRole('dialog', { name: '本次制作', exact: true });
       const retry = dialog.getByRole('button', { name: '重试此步骤', exact: true });
       if (surface === 'flat') await expect(dialog.getByRole('tablist', { name: '制作阶段记录', exact: true })).toHaveCount(0);
       await expect(retry).toBeVisible(); await expect(retry).toBeEnabled();
@@ -84,7 +79,6 @@ for (const failure of ['download', 'rejection'] as const) for (const surface of 
       await expect.poll(async () => (await source.inspect()).steps.find(step => step.id === 'images')?.status).toBe('succeeded');
       await expect(dialog).toContainText('后续步骤尚未执行'); await expect(retry).toHaveCount(0);
       await expect(dialog.getByRole('region', { name: '步骤详情：镜头图片生成', exact: true })).toBeVisible();
-      if (surface === 'history') await dialog.getByRole('tab', { name: '步骤产物', exact: true }).click();
       const inspection = await source.inspect();
       expect(inspection.run.id).toBe(source.run.id); expect(inspection.run.status).toBe('needs_attention');
       expect(inspection.steps.map(step => [step.id, step.status])).toEqual([['style', 'succeeded'], ['images', 'succeeded'], ['finish', 'pending']]);
@@ -96,24 +90,22 @@ for (const failure of ['download', 'rejection'] as const) for (const surface of 
       expect((await rpc<{ project: ProjectDocument }>(request, 'project.get', { projectId: source.project.id })).project).toEqual(source.project);
       expect(new URL(page.url()).origin).toBe(info.project.use.baseURL);
       await expect(dialog.locator('.dialog__footer')).toBeInViewport({ ratio: 1 });
-      if (surface !== 'history') {
-        const footer = dialog.locator('.dialog__footer');
-        await expect(footer.getByRole('button')).toHaveText(['停止', '继续原制作']);
-        await expect(dialog.getByRole('button', { name: '关闭对话框', exact: true })).toBeVisible();
-        await expect(dialog.locator('.dialog__body').getByRole('button', { name: '继续原制作', exact: true })).toHaveCount(0);
-        const positions = await footer.getByRole('button').evaluateAll(buttons => buttons.map(button => ({ x: button.getBoundingClientRect().x, y: button.getBoundingClientRect().y })));
-        expect(positions[0].y).toBeCloseTo(positions[1].y);
-        expect(positions[0].x).toBeLessThan(positions[1].x);
-        await footer.getByRole('button', { name: '停止', exact: true }).focus(); await page.keyboard.press('Tab');
-        await expect(footer.getByRole('button', { name: '继续原制作', exact: true })).toBeFocused();
-      }
+      const footer = dialog.locator('.dialog__footer');
+      await expect(footer.getByRole('button')).toHaveText(['停止', '继续原制作']);
+      await expect(dialog.getByRole('button', { name: '关闭对话框', exact: true })).toBeVisible();
+      await expect(dialog.locator('.dialog__body').getByRole('button', { name: '继续原制作', exact: true })).toHaveCount(0);
+      const positions = await footer.getByRole('button').evaluateAll(buttons => buttons.map(button => ({ x: button.getBoundingClientRect().x, y: button.getBoundingClientRect().y })));
+      expect(positions[0].y).toBeCloseTo(positions[1].y);
+      expect(positions[0].x).toBeLessThan(positions[1].x);
+      await footer.getByRole('button', { name: '停止', exact: true }).focus(); await page.keyboard.press('Tab');
+      await expect(footer.getByRole('button', { name: '继续原制作', exact: true })).toBeFocused();
       if (surface === 'flat') {
         const notice = dialog.locator('.toast'), layout = dialog.locator('.run-inspector__layout');
         await expect(notice).toContainText('后续步骤尚未执行'); await expect(notice).toBeInViewport({ ratio: 1 });
         const bounds = await layout.boundingBox();
         await page.screenshot({ path: info.outputPath('retry-notice.png') });
         await expect(notice).not.toBeVisible({ timeout: 4000 }); expect(await layout.boundingBox()).toEqual(bounds);
-        const refresh = dialog.getByRole('button', { name: '刷新制作记录', exact: true }); await refresh.click(); await expect(refresh).toBeEnabled();
+        const refresh = dialog.getByRole('button', { name: '刷新本次制作', exact: true }); await refresh.click(); await expect(refresh).toBeEnabled();
         await expect(notice).not.toBeVisible(); expect(await layout.boundingBox()).toEqual(bounds);
       }
       expect(await dialog.evaluate(element => element.scrollWidth <= element.clientWidth)).toBe(true);

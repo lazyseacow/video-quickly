@@ -1,0 +1,13 @@
+.asset-library .asset-library__heading {
+  flex-wrap: wrap;
+  gap: var(--space-3) var(--space-4);
+  margin-block-end: var(--space-5);
+}
+.asset-library__recycle-heading {
+  margin-block-end: var(--space-3);
+  font-size: var(--text-size-title);
+  font-weight: var(--font-weight-emphasis);
+}
+@media (pointer: coarse) {
+  .asset-library__heading .tabs > button { min-height: var(--control-height); }
+}

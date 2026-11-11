@@ -246,17 +246,17 @@ for (const width of [1536, 390]) {
   });
 }
 
-for (const protocol of ['chat-completions', 'responses'] as const) for (const surface of ['flat', 'history'] as const) for (const viewport of [{ width: 1536, height: 960, theme: 'dark' }, { width: 390, height: 844, theme: 'light' }]) {
-  test(`shows field errors and raw response, then retries only script via ${protocol} in ${surface} at ${viewport.width}px`, async ({ page, request }, info) => {
+for (const protocol of ['chat-completions', 'responses'] as const) for (const viewport of [{ width: 1536, height: 960, theme: 'dark' }, { width: 390, height: 844, theme: 'light' }]) {
+  test(`shows field errors and raw response, then retries only script via ${protocol} at ${viewport.width}px`, async ({ page, request }, info) => {
     await page.setViewportSize(viewport); await page.emulateMedia({ reducedMotion: 'reduce' });
     await page.addInitScript(theme => localStorage.setItem('vq-theme', theme), viewport.theme);
     const errors: string[] = []; page.on('pageerror', error => errors.push(error.message)); page.on('console', message => { if (message.type() === 'error') errors.push(message.text()); });
     const source = await fixture(request, protocol), field = protocol === 'responses' ? 'shots' : 'shots[0].narration';
     try {
       await page.goto('/'); await expect(page).toHaveTitle(/Video Quickly/); await expect(page.getByRole('navigation', { name: '主导航', exact: true })).toBeVisible();
-      if (surface === 'flat') { await openProjectFromList(page, source.project.title); await page.getByRole('button', { name: '打开阶段：策划与分镜', exact: true }).click(); }
-      else { await page.getByRole('button', { name: '制作记录', exact: true }).click(); await page.locator(`.run-card[data-run-id="${source.run.id}"]`).getByRole('button', { name: '查看步骤', exact: true }).click(); }
-      const dialog = page.getByRole('dialog', { name: surface === 'flat' ? '本次制作' : '制作步骤详情', exact: true });
+      await openProjectFromList(page, source.project.title);
+      await page.getByRole('button', { name: '打开阶段：策划与分镜', exact: true }).click();
+      const dialog = page.getByRole('dialog', { name: '本次制作', exact: true });
       const record = dialog.getByRole('region', { name: '模型返回记录', exact: true });
       await expect(record).toContainText('模型已返回，分镜校验未通过'); await expect(record).toContainText(field); await expect(record).toContainText(protocol === 'responses' ? '应为数组' : '应为字符串');
       await expect(dialog.getByRole('button', { name: '重试此批', exact: true })).toBeEnabled(); await expect(dialog).not.toContainText('存在结果未确认的外部提交');

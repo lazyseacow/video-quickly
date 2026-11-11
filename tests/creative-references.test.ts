@@ -4,7 +4,7 @@ import { mkdtemp, readFile, rm, unlink, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { afterEach, expect, it } from 'vitest';
-import { assetRecoveryJobSchema, assetRecoveryPageSchema, assetSchema, buildMediaPrompt, characterProfileSchema, creativeContextSchema, creativeReferenceAssetIds, createNativeVideoWorkflow, DEFAULT_VIDEO_PROFILE, modelSchema, projectReadinessSchema, projectSchema, promptPreviewSchema, promptSessionSchema, runSchema, shotSchema, workDefaultsSchema, workSchema, workflowNodeSchema, type AssetRecord, type JsonValue, type ShotCandidate } from '@video-quickly/contracts';
+import { assetRecoveryJobSchema, assetRecoveryPageSchema, assetSchema, buildMediaPrompt, characterProfileSchema, creativeContextSchema, creativeReferenceAssetIds, createNativeVideoWorkflow, DEFAULT_VIDEO_PROFILE, modelSchema, projectReadinessSchema, projectSchema, promptPreviewSchema, promptSessionSchema, runSchema, shotSchema, workflowNodeSchema, type AssetRecord, type JsonValue, type ShotCandidate } from '@video-quickly/contracts';
 import { resolveCharacterReferences } from '../packages/integrations/src/character-references';
 import { createActivityExecutor, validateMediaActivity } from '../packages/integrations/src';
 import { createRuntime, type RuntimeOptions } from '../packages/runtime/src/index';
@@ -89,37 +89,34 @@ it('keeps reference identities out of text prompts and rejects model-authored im
   expect(() => parseWorkflowScript(JSON.stringify({ ...output, entities: [{ ...output.entities[0], referenceAssetIds: ['fabricated'] }] }), project)).toThrow('不能设置参考图');
 });
 
-it('validates project and work references and retains archived work defaults', async () => {
+it('validates project reference scope and protects archived project references', async () => {
   const source = await fixture(), [scene, prop] = source.assets;
   const privateImage = assetSchema.parse(await source.runtime.dispatch('asset.import', { path: source.path, kind: 'image', projectId: source.created.id }));
   await expect(source.runtime.dispatch('project.update', { projectId: source.created.id, revision: source.created.revision, patch: { creativeContext: context(privateImage.id, prop.id) } })).rejects.toThrow('公共素材库');
   const appearance = creativeContextSchema.parse({ entities: [{ key: 'lead', kind: 'character', name: '小青', description: '', referenceAssetIds: [privateImage.id] }] });
-  await expect(source.runtime.dispatch('work.save', { title: '跨项目引用', defaults: { ...workDefaultsSchema.parse({}), creativeContext: appearance } })).rejects.toThrow('公共素材库');
   const other = projectSchema.parse(await source.runtime.dispatch('project.create', { title: '其他项目' }));
   await expect(source.runtime.dispatch('project.update', { projectId: other.id, revision: other.revision, patch: { creativeContext: appearance } })).rejects.toThrow('当前项目');
   const valid = creativeContextSchema.parse({ entities: context(scene.id, prop.id).entities.slice(0, 2) });
-  const work = workSchema.parse(await source.runtime.dispatch('work.save', { title: '参考作品', defaults: { ...workDefaultsSchema.parse({}), creativeContext: valid } }));
+  const project = projectSchema.parse(await source.runtime.dispatch('project.update', { projectId: source.created.id, revision: source.created.revision, patch: { creativeContext: valid } }));
   await expect(source.runtime.dispatch('asset.delete', { assetId: scene.id })).rejects.toThrow('正在使用');
-  await source.runtime.dispatch('work.archive', { workId: work.id, revision: work.revision });
+  await source.runtime.dispatch('project.archive', { projectId: project.id });
   await expect(source.runtime.dispatch('asset.delete', { assetId: prop.id })).rejects.toThrow('正在使用');
-  const result = await source.runtime.dispatch('work.episodes.create', { workId: work.id, revision: work.revision, requestId: randomUUID(), episodes: [{ number: 1, title: '一', originalText: '' }] }).catch(error => error);
-  expect(result).toBeInstanceOf(Error);
 });
 
-it('backs up public scene and prop references and remaps restored identities', async () => {
+it('backs up public scene and prop references with their files', async () => {
   const source = await fixture(), [scene, prop] = source.assets;
   const creativeContext = creativeContextSchema.parse({ entities: context(scene.id, prop.id).entities.slice(0, 2) });
   const project = projectSchema.parse(await source.runtime.dispatch('project.update', { projectId: source.created.id, revision: source.created.revision, patch: { creativeContext, shots: [shot()] } }));
   const backup = await source.runtime.dispatch('project.backup', { projectId: project.id }) as { path: string };
-  const manifest = JSON.parse(await readFile(join(backup.path, 'project.json'), 'utf8')) as { schemaVersion: number; assets: AssetRecord[] };
+  const manifest = JSON.parse(await readFile(join(backup.path, 'project.json'), 'utf8')) as { schemaVersion: number; project: ProjectDocument; assets: AssetRecord[] };
   expect(manifest.schemaVersion).toBeGreaterThanOrEqual(8);
   expect(manifest.assets.map(asset => asset.id)).toEqual(expect.arrayContaining([scene.id, prop.id]));
-  const restored = projectSchema.parse(await source.runtime.dispatch('project.importBackup', { path: backup.path }));
-  const ids = creativeReferenceAssetIds(restored);
-  expect(ids).toHaveLength(2); expect(ids).not.toContain(scene.id); expect(ids).not.toContain(prop.id);
-  const restoredAssets = assetSchema.array().parse(await source.runtime.dispatch('asset.getMany', { assetIds: ids }));
-  expect(restoredAssets.every(asset => asset.projectId === undefined && asset.sha256 === createHash('sha256').update(png).digest('hex'))).toBe(true);
-  await expect(source.runtime.dispatch('asset.delete', { assetId: ids[0] })).rejects.toThrow('正在使用');
+  expect(creativeReferenceAssetIds(manifest.project)).toEqual([scene.id, prop.id]);
+  for (const id of [scene.id, prop.id]) {
+    const asset = manifest.assets.find(item => item.id === id)!;
+    expect(asset.projectId).toBeUndefined();
+    expect(await readFile(join(backup.path, asset.path))).toEqual(png);
+  }
 });
 
 it('sends selected scene and prop images through the actual adapter and rejects stale candidate references', async () => {

@@ -115,12 +115,14 @@ describe('workspace database upgrades', () => {
     expect((await readdir(join(path, 'database-backups'))).some(name => name.startsWith(`workspace-v15-to-v${currentVersion}-`))).toBe(true);
   });
 
-  it('upgrades a v13 workspace, retains old snapshots and projects, and projects unique episode memberships', async () => {
+  it('upgrades a v13 workspace, retains old snapshots and project source text', async () => {
     const path = await directory(), legacy = new Database(join(path, 'workspace.sqlite'));
     legacy.function('vq_thumbnail', { deterministic: true }, (body: unknown) => JSON.stringify(thumbnailShot(JSON.parse(String(body)))));
     const previousMigrations = WORKSPACE_MIGRATIONS.filter(migration => migration.version <= 13);
     migrateDatabase(legacy, path, previousMigrations);
-    const project = projectSchema.parse({ id: 'pre-work-project', revision: 1, title: '已有独立项目', brief: '', profile: DEFAULT_VIDEO_PROFILE, workflow: createNativeVideoWorkflow(), shots: [], createdAt: '', updatedAt: '' });
+    const project = projectSchema.parse({ id: 'pre-work-project', revision: 1, title: '已有项目', brief: '', profile: DEFAULT_VIDEO_PROFILE, workflow: createNativeVideoWorkflow(), shots: [], createdAt: '', updatedAt: '',
+      episode: { workId: 'work-fixture', number: 1, originalText: '原始文案' },
+    });
     new DocumentStore(legacy).put('project', project.id, project);
     new DocumentStore(legacy).put('run-snapshot', 'preserved-prompt-trial', { project, trial: { preview: { prompt: '固定的旧提示词' } } }); legacy.close();
     const upgraded = openDatabase(path), store = new DocumentStore(upgraded);
@@ -128,10 +130,8 @@ describe('workspace database upgrades', () => {
       expect(upgraded.prepare("SELECT value FROM runtime_metadata WHERE key = 'work-production'").get()).toEqual({ value: '1' });
       expect(store.get('project', project.id)).toEqual(project);
       expect(store.get('run-snapshot', 'preserved-prompt-trial')).toMatchObject({ trial: { preview: { prompt: '固定的旧提示词' } } });
-      const member = { ...project, episode: { workId: 'work-fixture', number: 1, originalText: '原始文案' } };
-      store.put('project', project.id, member);
-      expect(projectSummarySchema.parse(store.get('project-summary', project.id)).episode).toEqual(member.episode);
-      expect(() => store.put('project', 'duplicate-episode', { ...member, id: 'duplicate-episode' })).toThrow('UNIQUE');
+      expect(store.get('project-summary', project.id)).not.toHaveProperty('episode');
+      expect(upgraded.prepare("SELECT value FROM runtime_metadata WHERE key = 'project-original-text'").get()).toEqual({ value: '1' });
       expect(() => migrateDatabase(upgraded, path, previousMigrations)).toThrow(DatabaseMigrationError);
     } finally { upgraded.close(); }
   });
@@ -295,7 +295,7 @@ describe('workspace database upgrades', () => {
   it('creates a versioned database and does not back up on every reopen', async () => {
     const path = await directory(); const db = openDatabase(path);
     expect(db.pragma('user_version', { simple: true })).toBe(currentVersion);
-    expect(db.prepare('SELECT name FROM schema_migrations ORDER BY version').all()).toEqual([{ name: 'workspace-baseline' }, { name: 'execution-event-index' }, { name: 'workspace-read-models' }, { name: 'audio-asset-references' }, { name: 'project-summary-caption-style' }, { name: 'clip-edit-references-and-first-frame' }, { name: 'workflow-composition-and-keyframe-capabilities' }, { name: 'active-project-runs-index' }, { name: 'workflow-layout' }, { name: 'native-video-production' }, { name: 'production-reference-audio' }, { name: 'project-creative-context' }, { name: 'prompt-workbench' }, { name: 'work-episodes-production-queue' }, { name: 'creative-reference-images-and-media-derivations' }, { name: 'single-step-retry-checkpoints' }, { name: 'script-response-receipts' }, { name: 'text-request-rejection-receipts' }, { name: 'media-request-rejection-receipts' }, { name: 'legacy-project-production-workflows' }, { name: 'asset-read-indexes' }, { name: 'manual-planning-inputs' }, { name: 'structured-planning-prefill' }, { name: 'cost-and-run-read-indexes' }, { name: 'incremental-cost-overview' }, { name: 'exact-cost-overview-deltas' }]);
+    expect(db.prepare('SELECT name FROM schema_migrations ORDER BY version').all()).toEqual([{ name: 'workspace-baseline' }, { name: 'execution-event-index' }, { name: 'workspace-read-models' }, { name: 'audio-asset-references' }, { name: 'project-summary-caption-style' }, { name: 'clip-edit-references-and-first-frame' }, { name: 'workflow-composition-and-keyframe-capabilities' }, { name: 'active-project-runs-index' }, { name: 'workflow-layout' }, { name: 'native-video-production' }, { name: 'production-reference-audio' }, { name: 'project-creative-context' }, { name: 'prompt-workbench' }, { name: 'work-episodes-production-queue' }, { name: 'creative-reference-images-and-media-derivations' }, { name: 'single-step-retry-checkpoints' }, { name: 'script-response-receipts' }, { name: 'text-request-rejection-receipts' }, { name: 'media-request-rejection-receipts' }, { name: 'legacy-project-production-workflows' }, { name: 'asset-read-indexes' }, { name: 'manual-planning-inputs' }, { name: 'structured-planning-prefill' }, { name: 'cost-and-run-read-indexes' }, { name: 'incremental-cost-overview' }, { name: 'exact-cost-overview-deltas' }, { name: 'project-original-text' }]);
     db.close(); openDatabase(path).close();
     expect(await readdir(path)).not.toContain('database-backups');
   });

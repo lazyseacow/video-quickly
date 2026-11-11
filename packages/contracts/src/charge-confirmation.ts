@@ -2,8 +2,8 @@ import { z } from 'zod';
 
 export const chargeActionSchema = z.enum([
   'run.start', 'run.resume', 'run.step.retry', 'shot.regenerate',
-  'character.generateViews', 'planning.prefill.start', 'promptTrial.start', 'workflowAssistant.start',
-  'productionQueue.start', 'productionQueue.resumeItem', 'cost.update',
+  'character.generateImage', 'planning.prefill.start', 'promptTrial.start', 'workflowAssistant.start',
+  'cost.update',
 ]);
 export type ChargeAction = z.infer<typeof chargeActionSchema>;
 

@@ -1,6 +1,7 @@
 import { expect, test, type Locator } from '@playwright/test';
 import type { ProjectDocument } from '@video-quickly/contracts';
 import { openCosts } from './workspace-settings';
+import { openAssetLibrary } from './workspace-navigation';
 
 for (const { width, theme } of [
   { width: 1536, theme: 'dark' }, { width: 1536, theme: 'light' },
@@ -34,20 +35,34 @@ for (const { width, theme } of [
     expect.soft(await page.locator('.page-body').evaluate(element => element.scrollWidth - element.clientWidth), `${name}: page overflow`).toBeLessThanOrEqual(1);
     await page.screenshot({ path: info.outputPath(`${name}-${theme}-${width}.png`) });
   }
-  const toolbar = () => page.locator('.content-page:visible .page-toolbar');
+  const toolbar = () => page.locator('.content-page:visible .page-toolbar:visible');
   await page.getByRole('button', { name: '我的项目', exact: true }).click();
   const search = page.getByLabel('搜索项目', { exact: true });
   await search.fill(project.title); await expect(page.locator('.project-card')).toHaveCount(1);
   await expect(page.locator('.project-card')).toContainText(project.title);
-  await inspect('projects', toolbar()); await search.fill('');
-  await page.getByRole('button', { name: '作品与分集', exact: true }).click();
-  const archived = page.getByRole('group', { name: '作品筛选', exact: true }).getByRole('button', { name: '已归档', exact: true });
-  await archived.click(); await expect(archived).toHaveAttribute('aria-pressed', 'true'); await inspect('works', toolbar());
-  for (const [pageName, buttonName, artifact] of [
-    ['模型连接', '视频模型', 'models'], ['素材库', '音频', 'assets'],
-    ['角色参考库', '已归档', 'characters'], ['系列模板', '已归档模板', 'templates'],
-  ]) {
-    await page.getByRole('button', { name: pageName, exact: true }).click();
+  const projectToolbar = toolbar();
+  const projectFilters = projectToolbar.getByRole('group', { name: '项目筛选', exact: true });
+  const projectTrash = projectFilters.getByRole('button', { name: '回收站', exact: true });
+  const projectMultiSelect = projectToolbar.getByRole('button', { name: '多选', exact: true });
+  await expect(projectMultiSelect).toBeEnabled();
+  const filterBounds = await projectFilters.boundingBox();
+  const multiSelectBounds = await projectMultiSelect.boundingBox();
+  await inspect('projects', projectToolbar);
+  await projectTrash.click();
+  await expect(projectTrash).toHaveAttribute('aria-pressed', 'true');
+  await expect(projectMultiSelect).toBeDisabled();
+  await expect(search).toHaveValue(project.title);
+  expect(await projectFilters.boundingBox()).toEqual(filterBounds);
+  expect(await projectMultiSelect.boundingBox()).toEqual(multiSelectBounds);
+  await inspect('projects-trash', projectToolbar);
+  await projectFilters.getByRole('button', { name: '全部项目', exact: true }).click();
+  await search.fill('');
+  for (const [pageName, buttonName, artifact, view] of [
+    ['模型连接', '视频模型', 'models'], ['素材库', '音频', 'assets', '媒体'],
+    ['素材库', '已归档', 'characters', '角色'], ['系列模板', '已归档模板', 'templates'],
+  ] as const) {
+    if (view) await openAssetLibrary(page, view);
+    else await page.getByRole('button', { name: pageName, exact: true }).click();
     await expect(page.getByRole('heading', { name: pageName, exact: true })).toBeVisible();
     const button = toolbar().getByRole('button', { name: buttonName, exact: true });
     await button.click(); await expect(button).toHaveClass(/active/); await inspect(artifact, toolbar());

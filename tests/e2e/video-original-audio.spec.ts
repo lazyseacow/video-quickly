@@ -197,7 +197,7 @@ test('mixes original sound under a diagram and bounds bulk trims by its real vid
   await healthy(page, errors);
 });
 
-test('keeps original sound and its waveform source windows through a real split, EDL cut and full backup restore', async ({ page, request }, info) => {
+test('keeps original sound and its waveform source windows through a real split, EDL cut, backup and reload', async ({ page, request }, info) => {
   test.setTimeout(60_000);
   const errors = observe(page), { project, asset } = await fixture(request, info); await open(page, project); await setOriginal(page, true);
   const ruler = page.getByRole('slider', { name: '预览播放位置', exact: true }); await ruler.press('Home'); await ruler.press('Shift+ArrowRight');
@@ -216,11 +216,11 @@ test('keeps original sound and its waveform source windows through a real split,
   await expect(waves.nth(1)).toHaveAttribute('data-span-count', '2'); await mixReady(page.locator('.preview-panel'));
   expect(await amplitudeOfPlayedMix(page.locator('.preview-panel'), request, info, 'edl-last', 1320, .85)).toBeGreaterThan(.17);
   const backup = await rpc<{ path: string }>(request, 'project.backup', { projectId: project.id });
-  const restored = await rpc<ProjectDocument>(request, 'project.importBackup', { path: backup.path });
-  expect(restored.shots.map(shot => shot.audioProcessing)).toEqual(split.shots.map(shot => shot.audioProcessing));
-  expect(restored.shots[0].videoAssetId).not.toBe(split.shots[0].videoAssetId);
-  expect(restored.clipEditPlans).toHaveLength(1);
-  await open(page, restored); await mixReady(page.locator('.preview-panel'));
-  expect(await amplitudeOfPlayedMix(page.locator('.preview-panel'), request, info, 'restored-last', 1320, .85)).toBeGreaterThan(.17);
+  const exported = (JSON.parse(await readFile(backup.path + '/project.json', 'utf8')) as { project: ProjectDocument }).project;
+  expect(exported.shots.map(shot => shot.audioProcessing)).toEqual(split.shots.map(shot => shot.audioProcessing));
+  expect(exported.shots[0].videoAssetId).toBe(split.shots[0].videoAssetId);
+  expect(exported.clipEditPlans).toHaveLength(1);
+  await open(page, project); await mixReady(page.locator('.preview-panel'));
+  expect(await amplitudeOfPlayedMix(page.locator('.preview-panel'), request, info, 'reloaded-last', 1320, .85)).toBeGreaterThan(.17);
   await healthy(page, errors);
 });

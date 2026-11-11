@@ -15,10 +15,10 @@ async function fixture(request: APIRequestContext) {
       { id: 'second', kind: 'brief', label: '第二步生成', requiresReview: true },
     ], edges: [{ id: 'next', source: 'first', target: 'second' }] },
   } });
-  const run = await rpc<RunSummary>(request, 'run.start', { projectId: project.id });
-  const current = () => rpc<RunSummary>(request, 'run.get', { runId: run.id });
+  const runId = (await rpc<RunSummary>(request, 'run.start', { projectId: project.id })).id;
+  const current = () => rpc<RunSummary>(request, 'run.get', { runId });
   await expect.poll(async () => (await current()).status).toBe('succeeded');
-  return { project, current, run: await current() };
+  return { project, current };
 }
 async function open(page: Page, project: ProjectDocument) {
   await page.emulateMedia({ reducedMotion: 'reduce' }); await page.goto('/');
@@ -28,26 +28,19 @@ async function open(page: Page, project: ProjectDocument) {
   await expect(page.getByLabel('项目名称', { exact: true })).toHaveValue(project.title);
 }
 
-for (const surface of ['workbench', 'history'] as const) {
-  test(`shows automatic completion for legacy review flags in ${surface}`, async ({ page, request }) => {
-    const source = await fixture(request), reviews: unknown[] = [];
-    page.on('request', request => { if (request.url().endsWith('/__desktop_rpc') && request.postDataJSON()?.method === 'run.review') reviews.push(request.postDataJSON().params); });
-    await open(page, source.project);
-    if (surface === 'history') {
-      await page.getByRole('button', { name: '制作记录', exact: true }).click();
-      await page.getByLabel('制作项目', { exact: true }).selectOption(source.project.id);
-    }
-    const panel = surface === 'workbench' ? page.getByRole('region', { name: '当前制作', exact: true }) : page.locator(`.run-card[data-run-id="${source.run.id}"]`);
-    await expect(panel).toContainText('已完成'); await expect(panel.getByRole('button', { name: /通过审阅|停止并修改/ })).toHaveCount(0);
-    await expect(panel).not.toContainText('等待审阅'); await expect(panel).not.toContainText('人工审阅');
-    await panel.getByRole('button', { name: surface === 'workbench' ? '打开步骤：第二步生成' : '查看步骤', exact: true }).click();
-    const detail = page.getByRole('dialog', { name: surface === 'workbench' ? '本次制作' : '制作步骤详情', exact: true });
-    await expect(detail.getByRole('navigation', { name: surface === 'workbench' ? '本阶段制作步骤' : '冻结流程步骤', exact: true })).toContainText('第二步生成');
-    if (surface === 'history') await detail.getByRole('tab', { name: '制作信息', exact: true }).click();
-    else await expect(detail.getByRole('tab', { name: '制作信息', exact: true })).toHaveCount(0);
-    await expect(detail).not.toContainText('人工审阅'); await expect(detail.getByRole('button', { name: /通过审阅|停止并修改/ })).toHaveCount(0);
-    await detail.getByRole('button', { name: '关闭对话框', exact: true }).click();
-    expect(reviews).toEqual([]); expect((await source.current()).completedNodeIds).toEqual(['first', 'second']);
-    expect((await rpc<{ project: ProjectDocument }>(request, 'project.get', { projectId: source.project.id })).project).toEqual(source.project);
-  });
-}
+test('shows automatic completion for legacy review flags in the workbench', async ({ page, request }) => {
+  const source = await fixture(request), reviews: unknown[] = [];
+  page.on('request', request => { if (request.url().endsWith('/__desktop_rpc') && request.postDataJSON()?.method === 'run.review') reviews.push(request.postDataJSON().params); });
+  await open(page, source.project);
+  const panel = page.getByRole('region', { name: '当前制作', exact: true });
+  await expect(panel).toContainText('已完成');
+  await expect(panel).not.toContainText('等待审阅');
+  await panel.getByRole('button', { name: '打开步骤：第二步生成', exact: true }).click();
+  const detail = page.getByRole('dialog', { name: '本次制作', exact: true });
+  await expect(detail.getByRole('navigation', { name: '本阶段制作步骤', exact: true })).toContainText('第二步生成');
+  await expect(detail.getByRole('tab', { name: '制作信息', exact: true })).toHaveCount(0);
+  await expect(detail).not.toContainText('人工审阅'); await expect(detail.getByRole('button', { name: /通过审阅|停止并修改/ })).toHaveCount(0);
+  await detail.getByRole('button', { name: '关闭对话框', exact: true }).click();
+  expect(reviews).toEqual([]); expect((await source.current()).completedNodeIds).toEqual(['first', 'second']);
+  expect((await rpc<{ project: ProjectDocument }>(request, 'project.get', { projectId: source.project.id })).project).toEqual(source.project);
+});

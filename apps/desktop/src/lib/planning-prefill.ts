@@ -23,7 +23,7 @@ export async function readPlanningPrefill(draft: PromptDraft, requestId: string,
   if (run.status !== 'succeeded') {
     const inspection = runInspectionSchema.parse(await rpc('run.inspect', { runId: run.id }));
     if (!inspection.steps.some(step => step.unknownSubmission || step.progress?.storyboard && step.retry?.allowed) && !active.has(run.status)) settled();
-    throw new Error(run.error ?? 'AI 填写未完成，请查看制作记录。');
+    throw new Error(run.error ?? 'AI 填写未完成，请检查模型配置后重试。');
   }
   const output = jsonValueSchema.parse(await rpc('node.result', { runId: run.id, nodeId: draft.node.id }));
   settled();

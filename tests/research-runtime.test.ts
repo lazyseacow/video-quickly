@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { createServer, type Server } from 'node:http';
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, expect, it } from 'vitest';
@@ -81,14 +81,17 @@ it('preserves research scope on an explicit canceled-task remake instead of runn
   const result = researchResultSchema.parse(await runtime.dispatch('node.result', { runId: restarted.id, nodeId: 'research' })); expect(result.claims).toHaveLength(1); expect(await current(runtime, project.id)).toEqual(project);
 });
 
-it('round-trips captured sources and references in backups, rejecting corrupted hashes and immutable source replacement', async () => {
+it('exports captured sources and claims while protecting source integrity in the project', async () => {
   const { runtime, project, source, model } = await fixture();
   const run = await analyze(runtime, project, model); await runtime.waitForIdle(); const result = researchResultSchema.parse(await runtime.dispatch('node.result', { runId: run.id, nodeId: 'research' }));
   const draft = applyResearchClaims(project, result, result.claims, result.shotSuggestions), saved = projectSchema.parse(await runtime.dispatch('project.update', { projectId: project.id, revision: project.revision, patch: { claims: draft.claims, shots: draft.shots } }));
   await expect(runtime.dispatch('project.update', { projectId: project.id, revision: saved.revision, patch: { researchSources: [{ ...source, sha256: '0'.repeat(64) }] } })).rejects.toThrow('校验失败');
   const alternate = source.content + '替换正文'; await expect(runtime.dispatch('project.update', { projectId: project.id, revision: saved.revision, patch: { researchSources: [{ ...source, content: alternate, sha256: createHash('sha256').update(alternate).digest('hex') }], claims: [] , shots: saved.shots.map(shot => ({ ...shot, claimIds: [] })) } })).rejects.toThrow('不可直接替换');
-  const backup = await runtime.dispatch('project.backup', { projectId: project.id }) as { path: string }, restored = projectSchema.parse(await runtime.dispatch('project.importBackup', { path: backup.path })); expect(restored.researchSources).toEqual(saved.researchSources); expect(restored.claims).toEqual(saved.claims); expect(restored.shots[0].claimIds).toEqual(saved.shots[0].claimIds); expect(restored.id).not.toBe(project.id);
-  const path = join(backup.path, 'project.json'), manifest = JSON.parse(await readFile(path, 'utf8')) as { project: ProjectDocument }; manifest.project.researchSources![0].content += '破坏正文'; await writeFile(path, JSON.stringify(manifest)); await expect(runtime.dispatch('project.importBackup', { path: backup.path })).rejects.toThrow('校验失败');
+  const backup = await runtime.dispatch('project.backup', { projectId: project.id }) as { path: string };
+  const exported = projectSchema.parse(JSON.parse(await readFile(join(backup.path, 'project.json'), 'utf8')).project);
+  expect(exported.researchSources).toEqual(saved.researchSources);
+  expect(exported.claims).toEqual(saved.claims);
+  expect(exported.shots[0].claimIds).toEqual(saved.shots[0].claimIds);
 });
 
 

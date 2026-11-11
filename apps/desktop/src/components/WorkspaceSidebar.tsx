@@ -4,7 +4,7 @@ import { Button } from './Primitives';
 import BrandMark from './BrandMark';
 import SidebarNavigationButton from './SidebarNavigationButton';
 
-export type Page = 'workbench' | 'projects' | 'assets' | 'characters' | 'templates' | 'models' | 'skills' | 'runs' | 'costs';
+export type Page = 'workbench' | 'projects' | 'assets' | 'templates' | 'models' | 'skills' | 'costs';
 export interface SidebarNavigationItem { id: Page; label: string; icon: LucideIcon; group: 'main' | 'resources' | 'tools'; }
 interface Props {
   page: Page;

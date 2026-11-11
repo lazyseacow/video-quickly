@@ -188,6 +188,8 @@ const WORK_PRODUCTION_SCHEMA = PRODUCTION_AUDIO_REFERENCE_SCHEMA.replaceAll(clip
   CREATE UNIQUE INDEX queue_item_run ON documents(json_extract(body, '$.productionQueueItemId')) WHERE kind = 'run' AND json_type(body, '$.productionQueueItemId') = 'text';
   INSERT INTO runtime_metadata(key, value) VALUES ('work-production', '1');
 `;
+const CREATIVE_REFERENCE_PROJECTION = PRODUCTION_AUDIO_REFERENCE_SCHEMA
+  .replaceAll("UNION SELECT value FROM json_each(new.body, '$.workflow.production.referenceAudioAssetIds') WHERE type = 'text'", "UNION SELECT value FROM json_each(new.body, '$.workflow.production.referenceAudioAssetIds') WHERE type = 'text' UNION SELECT image.value FROM json_each(new.body, '$.creativeContext.entities') entity JOIN json_each(entity.value, '$.referenceAssetIds') image WHERE image.type = 'text'");
 
 const legacyProjectSchema = z.looseObject({
   revision: projectSchema.shape.revision,
@@ -342,9 +344,8 @@ export const WORKSPACE_MIGRATIONS: readonly DatabaseMigration[] = [
   { version: 12, name: 'project-creative-context', sql: "INSERT INTO runtime_metadata(key, value) VALUES ('creative-context', '1') ON CONFLICT(key) DO UPDATE SET value = excluded.value;" },
   { version: 13, name: 'prompt-workbench', sql: "INSERT INTO runtime_metadata(key, value) VALUES ('prompt-workbench', '1') ON CONFLICT(key) DO UPDATE SET value = excluded.value;" },
   { version: 14, name: 'work-episodes-production-queue', sql: WORK_PRODUCTION_SCHEMA },
-  { version: 15, name: 'creative-reference-images-and-media-derivations', sql: PRODUCTION_AUDIO_REFERENCE_SCHEMA
+  { version: 15, name: 'creative-reference-images-and-media-derivations', sql: CREATIVE_REFERENCE_PROJECTION
     .replaceAll(clipSummaryBody('new.body'), episodeSummaryBody('new.body'))
-    .replaceAll("UNION SELECT value FROM json_each(new.body, '$.workflow.production.referenceAudioAssetIds') WHERE type = 'text'", "UNION SELECT value FROM json_each(new.body, '$.workflow.production.referenceAudioAssetIds') WHERE type = 'text' UNION SELECT image.value FROM json_each(new.body, '$.creativeContext.entities') entity JOIN json_each(entity.value, '$.referenceAssetIds') image WHERE image.type = 'text'")
     + "INSERT INTO runtime_metadata(key, value) VALUES ('media-extensions', '1');" },
   // Older schedulers treat a completed single-node graph as a completed run.
   { version: 16, name: 'single-step-retry-checkpoints', sql: "INSERT INTO runtime_metadata(key, value) VALUES ('single-step-retry', '1');" },
@@ -373,6 +374,14 @@ export const WORKSPACE_MIGRATIONS: readonly DatabaseMigration[] = [
   { version: 24, name: 'cost-and-run-read-indexes', sql: COST_AND_RUN_READ_SCHEMA },
   { version: 25, name: 'incremental-cost-overview', sql: COST_OVERVIEW_SCHEMA },
   { version: 26, name: 'exact-cost-overview-deltas', sql: COST_OVERVIEW_DELTAS_SCHEMA },
+  { version: 27, name: 'project-original-text', sql: CREATIVE_REFERENCE_PROJECTION + `
+    DROP INDEX projects_work_episode;
+    DROP INDEX queue_active_project;
+    DROP INDEX queue_running_item;
+    DROP INDEX queue_order;
+    DROP INDEX queue_item_run;
+    INSERT INTO runtime_metadata(key, value) VALUES ('project-original-text', '1');
+  ` },
 ];
 
 export function openDatabase(directory: string) {

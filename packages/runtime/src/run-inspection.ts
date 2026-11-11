@@ -96,7 +96,8 @@ export function createRunInspector(options: {
     const has = (kind: string, id: string) => documents.some(row => row.kind === kind && row.id === `${runId}:${id}`);
     const directActivities = new Map((database.prepare('SELECT activity_id, status FROM activities WHERE run_id = ? AND activity_id IN (SELECT value FROM json_each(?))').all(runId, JSON.stringify(ids)) as { activity_id: string; status: string }[]).map(row => [row.activity_id, row.status]));
     const unknown = run.status !== 'running' && rows.some(row => row.unknown_count > 0);
-    const resume = ['failed', 'needs_attention', 'waiting_external', 'retry_scheduled', 'queued', 'waiting_review'].includes(run.status) && !unknown;
+    const projectAvailable = Boolean(store.get('project-summary', run.projectId));
+    const resume = projectAvailable && ['failed', 'needs_attention', 'waiting_external', 'retry_scheduled', 'queued', 'waiting_review'].includes(run.status) && !unknown;
     const steps: RunStepSummary[] = nodes.map(node => {
       const receipt = byNode.get(node.id), current = run.currentNodeId === node.id;
       const nodeThread = saved?.inspectionThreads[node.id] ?? runId;
@@ -141,8 +142,9 @@ export function createRunInspector(options: {
         : status === 'running' ? '正在执行这个步骤。'
         : has('node-result', node.id) ? '产物已保存，编排检查点尚未推进；继续执行时会先校验已有结果。'
         : '尚未执行；等待调度或上游步骤完成。';
-      const retryReason = unknown ? '存在结果未确认的外部提交，请先核对原任务。'
-        : !nodeState.available || nodeState.values.currentNodeId !== node.id ? '没有可恢复到此步骤的检查点，请核对制作记录。'
+      const retryReason = !projectAvailable ? '项目已彻底删除。'
+        : unknown ? '存在结果未确认的外部提交，请先核对原任务。'
+        : !nodeState.available || nodeState.values.currentNodeId !== node.id ? '此步骤缺少可用的恢复检查点。'
         : saved?.exportBatch ? '批量导出请从导出记录继续原任务。'
         : !saved || ![1, 2, 3, 4].includes(saved.handlerVersion) ? '运行版本不兼容，请创建新的运行。'
         : '';
@@ -167,7 +169,7 @@ export function createRunInspector(options: {
     const retryStep = steps.some(step => step.retry?.allowed && step.error && (step.progress?.storyboard || step.responseAvailable && step.error.includes('HTTP 429')));
     const selectedNode = nodeId ? store.get<WorkflowNode>('node-definition', `${runId}:${nodeId}`) ?? saved?.nodes.find(node => node.id === nodeId) : undefined, model = selectedNode?.modelId ? saved?.models.find(value => value.id === selectedNode.modelId) : undefined;
     return runInspectionSchema.parse({ run: reads.runSummary(run), projectTitle: saved?.title ?? '历史制作', workflowId: saved?.workflowId ?? undefined, autonomousVideo: saved?.autonomousVideo, snapshotAvailable: !!saved, checkpointAvailable: state.available, steps, stages: saved?.stages,
-      recovery: { review: false, resume: resume && !retryStep, cancel: ['running', 'queued', 'waiting_review', 'waiting_external', 'retry_scheduled', 'needs_attention'].includes(run.status), restart: run.status === 'canceled' && run.purpose !== 'prompt-trial' && !run.productionQueueItemId, reason: unknown ? '存在结果未确认的外部提交，请先核对原任务。' : run.status === 'needs_attention' && run.stepRetry?.status === 'completed' ? '此步骤已完成重试，后续步骤尚未执行。可点击“继续”恢复剩余制作。' : '' },
+      recovery: { review: false, resume: resume && !retryStep, cancel: projectAvailable && ['running', 'queued', 'waiting_review', 'waiting_external', 'retry_scheduled', 'needs_attention'].includes(run.status), reason: !projectAvailable ? '项目已彻底删除。' : unknown ? '存在结果未确认的外部提交，请先核对原任务。' : run.status === 'needs_attention' && run.stepRetry?.status === 'completed' ? '此步骤已完成重试，后续步骤尚未执行。可点击“继续”恢复剩余制作。' : '' },
       selected: selectedNode && saved ? { node: redact(json(selectedNode)), dependencies: saved.edges.filter(edge => edge.target === nodeId).map(edge => edge.source),
         model: model ? { id: model.id, name: model.name, provider: model.provider, model: model.model } : undefined,
         skills: saved.skills.filter(skill => selectedNode.skillIds.includes(skill.id)).map(skill => ({ id: skill.id, name: skill.name, version: skill.version, enabled: skill.enabled })), handlerVersion: saved.handlerVersion } : undefined,

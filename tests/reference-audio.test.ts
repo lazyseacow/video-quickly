@@ -51,7 +51,7 @@ it('validates reference imports before copying while keeping ordinary audio impo
   await expect(runtime.dispatch('asset.import', { projectId: project.id, path: other, kind: 'audio', purpose: 'reference-audio' })).rejects.toThrow('WAV 或 MP3');
 });
 
-it('protects selected audio and remaps its identity when a project backup is restored', async () => {
+it('protects selected audio and includes its file and binding in the project backup', async () => {
   const path = await directory(), runtime = createRuntime({ dataDirectory: path, seed: false }); runtimes.push(runtime);
   let project = projectSchema.parse(await runtime.dispatch('project.create', { title: '参考音频备份' }));
   const file = join(path, '声音参考.wav'); await writeFile(file, 'frozen reference audio');
@@ -59,14 +59,11 @@ it('protects selected audio and remaps its identity when a project backup is res
   project = projectSchema.parse(await runtime.dispatch('project.update', { projectId: project.id, revision: project.revision, patch: { workflow: { ...project.workflow, production: { ...project.workflow.production, referenceAudioAssetIds: [asset.id] } } } }));
   await expect(runtime.dispatch('asset.delete', { assetId: asset.id })).rejects.toThrow('正在使用');
   const backup = await runtime.dispatch('project.backup', { projectId: project.id }) as { path: string };
-  const restored = projectSchema.parse(await runtime.dispatch('project.importBackup', { path: backup.path }));
-  const [restoredId] = restored.workflow.production.referenceAudioAssetIds ?? [];
-  expect(restoredId).toBeTruthy(); expect(restoredId).not.toBe(asset.id);
-  const detail = await runtime.dispatch('project.get', { projectId: restored.id }) as { assets: unknown[] };
-  const imported = detail.assets.map(value => assetSchema.parse(value)).find(asset => asset.id === restoredId);
-  expect(imported?.projectId).toBe(restored.id);
-  expect(await readFile(imported!.path, 'utf8')).toBe('frozen reference audio');
-  await expect(runtime.dispatch('asset.delete', { assetId: restoredId })).rejects.toThrow('正在使用');
+  const manifest = JSON.parse(await readFile(join(backup.path, 'project.json'), 'utf8'));
+  expect(projectSchema.parse(manifest.project).workflow.production.referenceAudioAssetIds).toEqual([asset.id]);
+  const reference = assetSchema.array().parse(manifest.assets).find(item => item.id === asset.id)!;
+  expect(reference.projectId).toBe(project.id);
+  expect(await readFile(join(backup.path, reference.path), 'utf8')).toBe('frozen reference audio');
   project = projectSchema.parse(await runtime.dispatch('project.update', { projectId: project.id, revision: project.revision, patch: { workflow: { ...project.workflow, production: { ...project.workflow.production, referenceAudioAssetIds: [] } } } }));
   await expect(runtime.dispatch('asset.delete', { assetId: asset.id })).resolves.toEqual({ deleted: true });
 });

@@ -6,6 +6,27 @@ import { deleteShotRanges } from '../packages/video/src/clip-edits';
 const project = () => projectSchema.parse({ id: 'p', title: '项目', brief: '', revision: 1, profile: DEFAULT_VIDEO_PROFILE, workflow: createNativeVideoWorkflow(), createdAt: '2026-10-29', updatedAt: '2026-10-29', shots: [1, 2].map(id => ({ id: `shot-${id}`, title: `镜头 ${id}`, narration: '', visualPrompt: '', durationUs: 1_000_000 })) });
 
 describe('unified project edit commands', () => {
+  it.each([undefined, '旧分集原文'])('round trips original text changes with a recovered draft from before source editing (%s)', legacySource => {
+    const original = project();
+    const initial = new ProjectEditSession(original);
+    initial.edit({ ...initial.state.present, title: '待保存的标题' }, '标题');
+    const oldDraft = savedEditsSchema.parse(JSON.parse(JSON.stringify({
+      ...initial.state,
+      base: { ...initial.state.base, originalText: undefined },
+      present: { ...initial.state.present, originalText: undefined },
+    })));
+    if (legacySource) original.episode = { workId: 'legacy-work', number: 1, originalText: legacySource };
+    const session = new ProjectEditSession(original, oldDraft);
+    const nextSource = legacySource ? '' : '新项目原文';
+    expect(session.state.present).toMatchObject({ originalText: legacySource ?? '', title: '待保存的标题' });
+    session.edit({ ...session.state.present, originalText: nextSource }, '项目原文');
+    const restored = new ProjectEditSession(original, savedEditsSchema.parse(JSON.parse(JSON.stringify(session.state))));
+    restored.undo();
+    expect(restored.state.present).toMatchObject({ originalText: legacySource ?? '', title: '待保存的标题' });
+    restored.redo();
+    expect(restored.state.present.originalText).toBe(nextSource);
+  });
+
   it('restores optional workflow stages and their removal through persisted deltas without losing other draft edits', () => {
     const original = project(); delete original.workflow.stages; const session = new ProjectEditSession(original);
     const stages = [{ id: 'planning', label: '策划', description: '制作前准备', nodeIds: ['brief', 'style', 'script'] }];

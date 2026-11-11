@@ -3,7 +3,7 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { afterEach, expect, it } from 'vitest';
-import { costSummarySchema, modelSchema, productionQueueEnqueueResultSchema, projectSchema, runInspectionSchema, runSummarySchema, workflowProposalSchema, workSchema, type ProjectDocument } from '@video-quickly/contracts';
+import { costSummarySchema, modelSchema, projectSchema, runInspectionSchema, runSummarySchema, workflowProposalSchema, type ProjectDocument } from '@video-quickly/contracts';
 import { createRuntime, SimulatedProcessExit, type RuntimeOptions } from '../packages/runtime/src/index';
 import { DocumentStore, openDatabase } from '../packages/runtime/src/database';
 
@@ -82,15 +82,13 @@ it('keeps an ambiguous submission blocked after restart and cancellation explici
   expect(runSummarySchema.parse(await runtime.dispatch('run.get', { runId: first.run.id })).status).toBe('canceled');
   await expect(runtime.dispatch('run.start', { projectId: source.project.id, parentRunId: first.run.id })).rejects.toThrow();
 });
-it('stops an in-flight suggestion and protects revisions and production-queue reservations', async () => {
+it('stops an in-flight suggestion and protects concurrent runs and project revisions', async () => {
   let submitted = false;
   const source = await fixture({ provider: async request => { submitted = true; await new Promise<void>((resolve, reject) => { releases.push(resolve); request.signal?.addEventListener('abort', () => reject(new Error('停止')), { once: true }); }); return '未使用'; } });
   const first = started(await source.runtime.dispatch('workflowAssistant.start', source.input)); await expect.poll(() => submitted).toBe(true);
+  await expect(source.runtime.dispatch('workflowAssistant.start', { ...source.input, requestId: randomUUID() })).rejects.toThrow('未完成');
   await source.runtime.dispatch('run.cancel', { runId: first.run.id }); await source.runtime.waitForIdle();
   expect(runSummarySchema.parse(await source.runtime.dispatch('run.get', { runId: first.run.id })).status).toBe('canceled'); expect(await source.current()).toEqual(source.project);
-  const work = workSchema.parse(await source.runtime.dispatch('work.save', { title: '队列占用作品', defaults: {} }));
-  const attached = projectSchema.parse(await source.runtime.dispatch('work.episode.attach', { workId: work.id, workRevision: work.revision, projectId: source.project.id, revision: source.project.revision, number: 1 }));
+  await source.runtime.dispatch('project.update', { projectId: source.project.id, revision: source.project.revision, patch: { title: '另一处修改' } });
   await expect(source.runtime.dispatch('workflowAssistant.start', { ...source.input, requestId: randomUUID() })).rejects.toThrow('其他视图修改');
-  const queue = productionQueueEnqueueResultSchema.parse(await source.runtime.dispatch('productionQueue.enqueue', { workId: work.id, workRevision: work.revision, requestId: randomUUID(), projects: [{ projectId: attached.id, revision: attached.revision }] })); expect(queue.items).toHaveLength(1);
-  await expect(source.runtime.dispatch('workflowAssistant.start', { ...source.input, revision: attached.revision, requestId: randomUUID() })).rejects.toThrow('未完成');
 });

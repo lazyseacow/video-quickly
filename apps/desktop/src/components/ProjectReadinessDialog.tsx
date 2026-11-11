@@ -6,7 +6,7 @@ import { beginGuideAction } from '../lib/guide-actions';
 import { Button, Dialog, Notice } from './Primitives';
 import './project-readiness.css';
 
-const fixLabels: Record<ReadinessIssue['fix'], string> = { project: '查看项目', step: '调整步骤', models: '配置模型', characters: '查看角色', assets: '修复素材', runtime: '查看修复建议', runs: '查看未完成制作' };
+const fixLabels: Record<ReadinessIssue['fix'], string> = { project: '查看项目', step: '调整步骤', models: '配置模型', characters: '查看角色', assets: '修复素材', runtime: '查看修复建议', production: '返回工作台', 'batch-export': '查看批量导出' };
 const categories: Record<ReadinessIssue['category'], string> = { project: '项目', workflow: '流程', model: '模型', media: '素材', environment: '运行环境', skill: 'Skill' };
 type Request = { id: string; pending: boolean; cancelSent: boolean };
 

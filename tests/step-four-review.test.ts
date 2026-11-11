@@ -58,7 +58,6 @@ it('backs up multiple generated candidates whose source directories contain the 
   }
   expect(generated).toBe(2);
   const backup = await runtime.dispatch('project.backup', { projectId: project.id, destination: join(directory, 'backup') }) as { path: string };
-  await expect(runtime.dispatch('project.importBackup', { path: backup.path })).resolves.toMatchObject({ title: '候选备份审查（恢复）' });
   const manifest = JSON.parse(await readFile(join(backup.path, 'project.json'), 'utf8')) as { assets: AssetRecord[] };
   expect(new Set(manifest.assets.map(asset => asset.path)).size).toBe(2);
 });

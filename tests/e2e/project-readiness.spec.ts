@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import { expect, type APIRequestContext, type Page } from '@playwright/test';
 import { test } from './isolated-workspace';
 import { modelCatalog } from './model-catalog';
-import { modelSchema, workflowNodeSchema, type ProjectDocument, type WorkflowNode } from '@video-quickly/contracts';
+import { exportBatchSchema, modelSchema, workflowNodeSchema, type CharacterProfile, type ProjectDocument, type WorkflowNode } from '@video-quickly/contracts';
 import { DocumentStore, openDatabase } from '../../packages/runtime/src/database';
 import { importSkillFixture } from '../fixtures/import-skill';
 
@@ -83,6 +83,53 @@ test('checks saved content without submitting or saving a dirty draft, preservin
   await page.keyboard.press('Escape'); await expect(dialog).toHaveCount(0); await expect(more).toBeFocused();
   expect((await current(request, project.id)).revision).toBe(afterHistory.revision);
   expect(methods.filter(method => ['run.start', 'project.update', 'shot.regenerate'].includes(method))).toEqual([]);
+});
+
+test('opens the interrupted export batch directly from production checks', async ({ page, request, isolatedWorkspace }) => {
+  const project = await fixture(request);
+  const timestamp = new Date().toISOString();
+  const batch = exportBatchSchema.parse({
+    id: 'interrupted-batch', projectId: project.id, projectRevision: project.revision, revision: 1, status: 'interrupted',
+    targets: [{ id: 'wide', label: '横屏', profile: project.profile, status: 'interrupted' }],
+    createdAt: timestamp, updatedAt: timestamp,
+  });
+  const database = openDatabase(isolatedWorkspace.directory);
+  try {
+    const store = new DocumentStore(database);
+    store.put('export-batch', batch.id, batch);
+    store.put('export-batch', 'previous-batch', { ...batch, id: 'previous-batch', status: 'canceled' });
+  } finally { database.close(); }
+  await page.addInitScript(id => localStorage.setItem(`vq-export-batch:${id}`, 'previous-batch'), project.id);
+  await open(page, project);
+  const check = await openCheck(page);
+  await check.getByRole('button', { name: '查看批量导出', exact: true }).click();
+  await expect(check).toHaveCount(0);
+  const exports = page.getByRole('dialog', { name: '多比例批量导出', exact: true });
+  await expect(exports.getByRole('tab', { name: '导出记录', exact: true })).toHaveAttribute('aria-selected', 'true');
+  await expect(exports.getByRole('combobox', { name: '批量导出记录', exact: true })).toHaveValue(batch.id);
+  await expect(exports.getByRole('button', { name: '继续未完成导出', exact: true })).toBeEnabled();
+});
+
+test('opens the role view of the asset library from a character readiness issue', async ({ page, request, isolatedWorkspace }) => {
+  const initial = await fixture(request);
+  const role = await rpc<CharacterProfile>(request, 'character.save', { character: { name: '旧项目归档角色', description: '', referenceAssetIds: [] } });
+  const project = await rpc<ProjectDocument>(request, 'project.update', { projectId: initial.id, revision: initial.revision,
+    patch: { shots: [{ ...initial.shots[0], characterIds: [role.id] }] },
+  });
+  const database = openDatabase(isolatedWorkspace.directory);
+  try { new DocumentStore(database).put('character', role.id, { ...role, archived: true }); }
+  finally { database.close(); }
+
+  await open(page, project);
+  const check = await openCheck(page);
+  await expect(check.getByText('角色「旧项目归档角色」已归档。', { exact: true })).toBeVisible();
+  await check.getByRole('button', { name: '查看角色', exact: true }).click();
+  await expect(check).toHaveCount(0);
+  await expect(page.getByRole('heading', { name: '素材库', exact: true })).toBeVisible();
+  await expect(page.getByRole('tab', { name: '角色', exact: true })).toHaveAttribute('aria-selected', 'true');
+  const roleView = page.getByRole('tabpanel', { name: '角色', exact: true });
+  await roleView.getByRole('button', { name: '已归档', exact: true }).click();
+  await expect(roleView.getByRole('heading', { name: role.name, exact: true })).toBeVisible();
 });
 
 test('blocks production and opens the exact step, model and media repairs', async ({ page, request }, info) => {

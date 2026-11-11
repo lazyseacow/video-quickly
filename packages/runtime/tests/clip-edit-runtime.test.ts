@@ -39,26 +39,25 @@ it('rejects dangling or mutable edit records and protects every original media f
   const restored = restoreShotRanges(replaced, 'shot'); expect(restored.shots[0]).toMatchObject({ audioAssetId: assets[0].id, videoAssetId: assets[1].id, durationUs: 8_000_000 });
 });
 
-it('backs up format 4 with original source hashes and remaps complete source identities on import', async () => {
+it('backs up format 4 with the original clip ranges and source hashes', async () => {
   const { runtime, project, assets } = await fixture();
   const backup = await runtime.dispatch('project.backup', { projectId: project.id }) as { path: string };
   const manifest = JSON.parse(await readFile(join(backup.path, 'project.json'), 'utf8')) as { schemaVersion: number; project: ProjectDocument; assets: AssetRecord[] };
   expect(manifest.schemaVersion).toBe(4); expect(manifest.assets.map(asset => asset.id)).toEqual(expect.arrayContaining([assets[0].id, assets[1].id]));
-  const restored = projectSchema.parse(await runtime.dispatch('project.importBackup', { path: backup.path }));
-  expect(restored.id).not.toBe(project.id); expect(resolveShotSpans(restored.shots[0], restored).map(span => span.videoInUs)).toEqual([2_000_000, 5_000_000]);
-  const source = restored.clipEditSources![0]; expect(source.original.audioAssetId).not.toBe(assets[0].id); expect(source.original.captionTrack?.sourceAssetId).toBe(source.original.audioAssetId);
-  expect(source.assetHashes.find(value => value.assetId === source.original.audioAssetId)?.sha256).toBe(assets[0].sha256);
-  manifest.schemaVersion = 1; await writeFile(join(backup.path, 'project.json'), JSON.stringify(manifest));
-  await expect(runtime.dispatch('project.importBackup', { path: backup.path })).rejects.toThrow('格式 4');
-  manifest.schemaVersion = 4; manifest.project.clipEditSources![0].assetHashes[0].sha256 = 'f'.repeat(64); await writeFile(join(backup.path, 'project.json'), JSON.stringify(manifest));
-  await expect(runtime.dispatch('project.importBackup', { path: backup.path })).rejects.toThrow('校验值');
+  const exported = projectSchema.parse(manifest.project);
+  expect(resolveShotSpans(exported.shots[0], exported).map(span => span.videoInUs)).toEqual([2_000_000, 5_000_000]);
+  const source = exported.clipEditSources![0];
+  expect(source.original.audioAssetId).toBe(assets[0].id);
+  expect(source.original.captionTrack?.sourceAssetId).toBe(assets[0].id);
+  expect(source.assetHashes.find(value => value.assetId === assets[0].id)?.sha256).toBe(assets[0].sha256);
 });
 
 it('uses format 4 for empty projects and explicit DSP', async () => {
   const { runtime } = await fixture(); let project = projectSchema.parse(await runtime.dispatch('project.create', { templateId: 'history-handdrawn', title: '纯旧格式' }));
   const original = await runtime.dispatch('project.backup', { projectId: project.id }) as { path: string };
-  expect(JSON.parse(await readFile(join(original.path, 'project.json'), 'utf8')).schemaVersion).toBe(4);
-  expect(projectSchema.parse(await runtime.dispatch('project.importBackup', { path: original.path })).shots).toEqual([]);
+  const manifest = JSON.parse(await readFile(join(original.path, 'project.json'), 'utf8'));
+  expect(manifest.schemaVersion).toBe(4);
+  expect(projectSchema.parse(manifest.project).shots).toEqual([]);
   project = projectSchema.parse(await runtime.dispatch('project.update', { projectId: project.id, revision: project.revision, patch: { shots: [{ id: 'dsp', title: '只调声音', narration: '', visualPrompt: '', durationUs: 1_000_000, audioProcessing: DEFAULT_AUDIO_PROCESSING }] } }));
   const dsp = await runtime.dispatch('project.backup', { projectId: project.id }) as { path: string }; expect(JSON.parse(await readFile(join(dsp.path, 'project.json'), 'utf8')).schemaVersion).toBe(4);
 });

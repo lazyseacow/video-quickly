@@ -1,4 +1,4 @@
-import { openProjectFromList } from './workspace-navigation';
+import { openAssetLibrary, openProjectFromList } from './workspace-navigation';
 import { expect, test, type APIRequestContext } from '@playwright/test';
 import type { CharacterProfile, ProjectDocument, RunRecord, SeriesTemplate } from '@video-quickly/contracts';
 
@@ -12,7 +12,7 @@ test('keeps paginated cards and scroll visible during background validation and 
   const prefix = '页面缓存角色';
   const characters: CharacterProfile[] = [];
   for (let index = 0; index < 25; index++) characters.push(await rpc<CharacterProfile>(request, 'character.save', { character: { name: `${prefix} ${index + 1}`, description: '用于页面切换和分页缓存验收', referenceAssetIds: [] } }));
-  await page.goto('/'); await page.getByRole('button', { name: '角色参考库', exact: true }).click();
+  await page.goto('/'); await openAssetLibrary(page, '角色');
   const cards = page.locator('.character-card').filter({ hasText: prefix });
   await expect(cards).toHaveCount(20);
   await page.getByRole('button', { name: '加载更多角色', exact: true }).click(); await expect(cards).toHaveCount(25);
@@ -28,7 +28,8 @@ test('keeps paginated cards and scroll visible during background validation and 
   const pending = new Promise<void>(resolve => { release = resolve; }); let intercepted = 0;
   await page.route('**/__desktop_rpc', async route => { if (route.request().postDataJSON().method === 'character.list') { intercepted++; await pending; } await route.continue(); });
   try {
-    await page.getByRole('button', { name: '角色参考库', exact: true }).click();
+    await page.getByRole('button', { name: '素材库', exact: true }).click();
+    await expect(page.getByRole('tab', { name: '角色', exact: true })).toHaveAttribute('aria-selected', 'true');
     await expect.poll(() => intercepted).toBeGreaterThan(0);
     await expect(cards).toHaveCount(25);
     expect(await page.locator('.page-body').evaluate(element => element.scrollTop)).toBeCloseTo(before, 0);
