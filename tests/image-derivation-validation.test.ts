@@ -5,6 +5,8 @@ import { tmpdir } from 'node:os';
 import { afterEach, expect, it } from 'vitest';
 import { assetSchema, imageDerivationSchema, projectSchema, shotSchema } from '@video-quickly/contracts';
 import { createRuntime } from '../packages/runtime/src/index';
+import { DocumentStore, openDatabase } from '../packages/runtime/src/database';
+import { createImageTools } from '../packages/runtime/src/image-tools';
 
 const directories: string[] = [], runtimes: ReturnType<typeof createRuntime>[] = [];
 const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScLbtAAAAABJRU5ErkJggg==', 'base64');
@@ -30,7 +32,9 @@ it('rejects an external format-8 backup whose crop source hash contradicts its s
   const runtime = createRuntime({ dataDirectory: directory, seed: false }); runtimes.push(runtime);
   const path = join(directory, 'source.png'); await writeFile(path, png);
   const source = assetSchema.parse(await runtime.dispatch('asset.import', { path, kind: 'image' }));
-  const [tile] = assetSchema.array().parse(await runtime.dispatch('image.cutGrid', { assetId: source.id, rows: 1, columns: 1 }));
+  const database = openDatabase(directory);
+  const [tile] = await createImageTools({ store: new DocumentStore(database), directory, changed: () => undefined })
+    .cutGrid({ assetId: source.id, rows: 1, columns: 1 }).finally(() => database.close());
   const created = projectSchema.parse(await runtime.dispatch('project.create', { title: '来源完整性' }));
   const project = projectSchema.parse(await runtime.dispatch('project.update', { projectId: created.id, revision: created.revision, patch: { shots: [shotSchema.parse({ id: 'one', title: '一', visualPrompt: '', narration: '', durationUs: 1_000_000, assetId: tile.id })] } }));
   const backup = await runtime.dispatch('project.backup', { projectId: project.id }) as { path: string };

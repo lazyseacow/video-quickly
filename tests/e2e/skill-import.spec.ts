@@ -232,9 +232,9 @@ test('shows persisted switch states, prevents repeated toggles and confirms indi
   await disclosure.click();
   const card = group.locator('.skill-card').filter({ has: page.getByRole('heading', { name: 'ui-switch-write', exact: true }) });
   const toggle = card.getByRole('switch', { name: '“ui-switch-write”启用状态', exact: true });
-  await expect(toggle).toHaveAttribute('aria-checked', 'true'); await expect(toggle).toHaveText('已启用');
+  await expect(toggle).toHaveAttribute('aria-checked', 'true'); await expect(toggle).toHaveAttribute('title', '停用 Skill'); await expect(toggle).toHaveText('');
   await toggle.click();
-  await expect(toggle).toHaveAttribute('aria-checked', 'false'); await expect(toggle).toHaveText('已停用');
+  await expect(toggle).toHaveAttribute('aria-checked', 'false'); await expect(toggle).toHaveAttribute('title', '启用 Skill'); await expect(toggle).toHaveText('');
   expect((await snapshot()).skills.find(skill => skill.name === 'ui-switch-write')?.enabled).toBe(false);
   await page.reload(); await page.getByRole('button', { name: 'Skill 工作室', exact: true }).click();
   await disclosure.click();

@@ -81,7 +81,6 @@
 .skill-card .list-card__body h3 { overflow-wrap: anywhere; }
 .skill-card .list-card__actions { grid-column: 2; justify-content: flex-end; flex-wrap: wrap; }
 .skill-card--disabled .list-card__body h3 { color: var(--text-secondary); }
-.skill-card .skill-toggle { min-inline-size: calc(var(--space-6) * 4); }
 @container skill-studio (min-width: 720px) {
   .list-card.skill-card { grid-template-columns: auto minmax(0, 1fr) auto; }
   .skill-card .list-card__actions { grid-column: 3; min-height: var(--control-hit-size); }

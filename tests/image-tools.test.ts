@@ -7,11 +7,14 @@ import { tmpdir } from 'node:os';
 import { afterEach, expect, it } from 'vitest';
 import { assetSchema, imageGridRectangles, projectSchema, runSchema, shotSchema, type ShotCandidate } from '@video-quickly/contracts';
 import { createRuntime } from '../packages/runtime/src/index';
+import { DocumentStore, openDatabase } from '../packages/runtime/src/database';
+import { createImageTools } from '../packages/runtime/src/image-tools';
 import { createActivityExecutor, validateMediaActivity } from '../packages/integrations/src';
 import { createEditMask, imageDimensions, validateEditMask } from '../packages/video/src/image-tools';
 
 const ffmpeg = process.env.VIDEO_QUICKLY_FFMPEG ?? 'ffmpeg';
 const directories: string[] = [], runtimes: ReturnType<typeof createRuntime>[] = [], servers: Server[] = [];
+const databases: ReturnType<typeof openDatabase>[] = [];
 const sha = (bytes: Buffer) => createHash('sha256').update(bytes).digest('hex');
 function sourceImage(width = 5, height = 3) {
   const rgba = Buffer.alloc(width * height * 4);
@@ -22,6 +25,7 @@ function sourceImage(width = 5, height = 3) {
 function pixels(bytes: Buffer) { return execFileSync(ffmpeg, ['-v', 'error', '-i', 'pipe:0', '-frames:v', '1', '-f', 'rawvideo', '-pix_fmt', 'rgba', 'pipe:1'], { input: bytes, windowsHide: true }); }
 afterEach(async () => {
   await Promise.all(runtimes.splice(0).map(runtime => runtime.close()));
+  for (const database of databases.splice(0)) database.close();
   await Promise.all(servers.splice(0).map(server => { server.closeAllConnections(); return new Promise<void>(resolve => server.close(() => resolve())); }));
   await Promise.all(directories.splice(0).map(path => rm(path, { force: true, recursive: true })));
 });
@@ -32,10 +36,16 @@ async function setup() {
   const asset = assetSchema.parse(await runtime.dispatch('asset.import', { path }));
   return { runtime, directory, source, asset };
 }
+function imageToolsFor(directory: string) {
+  const database = openDatabase(directory);
+  databases.push(database);
+  return createImageTools({ store: new DocumentStore(database), directory, changed: () => undefined });
+}
 it('cuts every source pixel once, preserving integer bounds, provenance and request idempotency', async () => {
-  const { runtime, asset, source } = await setup();
+  const { runtime, directory, asset, source } = await setup();
+  const imageTools = imageToolsFor(directory);
   const input = { assetId: asset.id, rows: 2, columns: 2 };
-  const [first, concurrent] = await Promise.all([runtime.dispatch('image.cutGrid', input), runtime.dispatch('image.cutGrid', input)]);
+  const [first, concurrent] = await Promise.all([imageTools.cutGrid(input), imageTools.cutGrid(input)]);
   const assets = assetSchema.array().parse(first); expect(concurrent).toEqual(assets); expect(assets).toHaveLength(4);
   const rectangles = imageGridRectangles(source.width, source.height, 2, 2), reconstructed = Buffer.alloc(source.rgba.length);
   for (let index = 0; index < assets.length; index++) {
@@ -44,9 +54,9 @@ it('cuts every source pixel once, preserving integer bounds, provenance and requ
     expect(await imageDimensions(bytes)).toEqual({ width: rectangle.width, height: rectangle.height });
     for (let row = 0; row < rectangle.height; row++) rgba.copy(reconstructed, ((row + rectangle.y) * source.width + rectangle.x) * 4, row * rectangle.width * 4, (row + 1) * rectangle.width * 4);
   }
-  expect(reconstructed).toEqual(source.rgba); expect(await runtime.dispatch('image.cutGrid', input)).toEqual(assets);
+  expect(reconstructed).toEqual(source.rgba); expect(await imageTools.cutGrid(input)).toEqual(assets);
   await expect(runtime.dispatch('asset.delete', { assetId: asset.id })).rejects.toThrow('正在使用');
-  await writeFile(asset.path, 'corrupted'); await expect(runtime.dispatch('image.cutGrid', input)).rejects.toThrow();
+  await writeFile(asset.path, 'corrupted'); await expect(imageTools.cutGrid(input)).rejects.toThrow();
 });
 it('creates a same-size alpha mask and rejects out-of-bounds or opaque masks', async () => {
   const { runtime, asset, source } = await setup(), rectangle = { x: 1, y: 1, width: 3, height: 1 };
@@ -59,12 +69,13 @@ it('creates a same-size alpha mask and rejects out-of-bounds or opaque masks', a
   await expect(validateEditMask(bytes, { width: 6, height: 3 })).rejects.toThrow('尺寸');
 });
 it('restores only missing grid results after a tile is removed and reuses valid siblings', async () => {
-  const { runtime, asset } = await setup();
+  const { runtime, directory, asset } = await setup();
+  const imageTools = imageToolsFor(directory);
   const input = { assetId: asset.id, rows: 2, columns: 2 };
-  const original = assetSchema.array().parse(await runtime.dispatch('image.cutGrid', input));
+  const original = await imageTools.cutGrid(input);
   await runtime.dispatch('asset.delete', { assetId: original[0].id });
   await rm(original[0].path);
-  const [first, concurrent] = await Promise.all([runtime.dispatch('image.cutGrid', input), runtime.dispatch('image.cutGrid', input)]);
+  const [first, concurrent] = await Promise.all([imageTools.cutGrid(input), imageTools.cutGrid(input)]);
   const restored = assetSchema.array().parse(first);
   expect(concurrent).toEqual(restored);
   expect(restored.slice(1)).toEqual(original.slice(1));
@@ -73,7 +84,7 @@ it('restores only missing grid results after a tile is removed and reuses valid 
 });
 it('exports and restores grid lineage using format 8 and refuses older-format provenance', async () => {
   const { runtime, asset, directory } = await setup();
-  const [tile] = assetSchema.array().parse(await runtime.dispatch('image.cutGrid', { assetId: asset.id, rows: 1, columns: 2 }));
+  const [tile] = await imageToolsFor(directory).cutGrid({ assetId: asset.id, rows: 1, columns: 2 });
   let project = projectSchema.parse(await runtime.dispatch('project.create', { title: '切图备份' }));
   project = projectSchema.parse(await runtime.dispatch('project.update', { projectId: project.id, revision: project.revision, patch: { shots: [shotSchema.parse({ id: 'one', title: '一', visualPrompt: '画面', narration: '', durationUs: 1000000, assetId: tile.id })] } }));
   const destination = join(directory, 'backup'); await runtime.dispatch('project.backup', { projectId: project.id, destination });

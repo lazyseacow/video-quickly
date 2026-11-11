@@ -6,7 +6,7 @@
 .character-card__body { padding: var(--space-4); }
 .character-card__body h3 { font-size: var(--text-size-body); font-weight: var(--font-weight-emphasis); margin-bottom: var(--space-2); }
 .character-card__body > p { color: var(--text-secondary); line-height: var(--line-height-prose); font-size: var(--text-size-caption); margin-bottom: var(--space-3); white-space: pre-wrap; overflow-wrap: anywhere; max-height: 82px; overflow: auto; }
-.character-card__actions { display: flex; justify-content: space-between; align-items: center; gap: var(--space-2); margin-top: var(--space-4); }
+.character-card__actions { display: flex; justify-content: flex-end; align-items: center; gap: var(--space-2); margin-top: var(--space-4); }
 .dialog.character-editor { width: min(640px, calc(100vw - var(--space-8))); }
 .character-reference-disclosure { border-block: 1px solid var(--border); }
 .character-reference-disclosure > summary { display: flex; align-items: center; gap: var(--space-2); list-style: none; font-size: var(--text-size-label); }

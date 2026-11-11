@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { mkdir, readFile } from 'node:fs/promises';
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:http';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
@@ -11,7 +11,7 @@ const execute = promisify(execFile);
 
 /** Exercise the installed app's bridge and sidecar, using only its acceptance workspace and loopback suppliers. */
 export async function verifyNativeMediaExtensions({ page, rpc, openProject, fixture, artifacts, ffmpegPath, environment, checks }) {
-  const directory = join(fixture, 'p4-media'), imagePath = join(directory, 'native-grid.png');
+  const directory = join(fixture, 'p4-media'), imagePath = join(directory, 'native-source.png');
   await mkdir(directory, { recursive: true });
   const originalTitle = await page.getByRole('textbox', { name: '项目名称', exact: true }).inputValue();
   await execute(ffmpegPath, ['-v', 'error', '-f', 'lavfi', '-i', 'color=c=red:s=162x92,format=rgba,crop=161:91', '-frames:v', '1', imagePath], { windowsHide: true, env: environment });
@@ -40,18 +40,24 @@ export async function verifyNativeMediaExtensions({ page, rpc, openProject, fixt
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
   const address = server.address(); assert.ok(address && typeof address !== 'string');
   try {
+    const trashPath = join(directory, 'native-asset-recycle.png');
+    await writeFile(trashPath, sourceBytes);
+    const asset = await rpc('asset.import', { path: trashPath });
     await page.getByRole('button', { name: '素材库', exact: true }).click();
-    await page.getByRole('button', { name: `网格切图“${source.name}”`, exact: true }).click();
-    const grid = page.getByRole('dialog', { name: '网格切图', exact: true });
-    await expect(grid.getByRole('combobox', { name: '网格列数', exact: true })).toBeEnabled();
-    await grid.getByRole('combobox', { name: '网格列数', exact: true }).selectOption('3'); await grid.getByRole('button', { name: '保存 6 张切图', exact: true }).click();
-    await expect(grid.getByAltText(/^切图 \d+$/)).toHaveCount(6);
-    const crops = await rpc('image.cutGrid', { assetId: source.id, rows: 2, columns: 3 });
-    assert.deepEqual(crops.map(asset => [asset.width, asset.height]), [[53, 45], [54, 45], [54, 45], [53, 46], [54, 46], [54, 46]]);
-    assert.ok(crops.every(asset => asset.derivation.sourceSha256 === source.sha256));
-    assert.deepEqual((await rpc('image.cutGrid', { assetId: source.id, rows: 2, columns: 3 })).map(asset => asset.id), crops.map(asset => asset.id));
-    await page.screenshot({ path: join(artifacts, 'desktop-image-grid.png') }); await grid.getByRole('button', { name: '关闭', exact: true }).click();
-    checks.nativeImageGrid = true;
+    const assetHeading = page.getByRole('heading', { name: asset.name, exact: true });
+    await page.getByRole('button', { name: `移除素材“${asset.name}”`, exact: true }).click();
+    await page.getByRole('alertdialog', { name: '移除素材记录？', exact: true }).getByRole('button', { name: '确认移除', exact: true }).click();
+    await expect(assetHeading).toHaveCount(0);
+    await page.getByRole('button', { name: '回收站', exact: true }).click();
+    await expect(assetHeading).toBeVisible();
+    await page.screenshot({ path: join(artifacts, 'desktop-asset-recycle-bin.png') });
+    await page.getByRole('button', { name: `恢复素材“${asset.name}”`, exact: true }).click();
+    await expect(assetHeading).toHaveCount(0);
+    await page.getByRole('button', { name: '返回素材库', exact: true }).click();
+    await expect(assetHeading).toBeVisible();
+    assert.deepEqual(await rpc('asset.getMany', { assetIds: [asset.id] }), [asset]);
+    assert.deepEqual(await readFile(asset.path), sourceBytes);
+    checks.nativeAssetRecycleBin = true;
     const mask = await rpc('image.createMask', { assetId: source.id, rectangle: { x: 10, y: 12, width: 40, height: 30 } });
     const decoded = await execute(ffmpegPath, ['-v', 'error', '-i', mask.path, '-f', 'rawvideo', '-pix_fmt', 'rgba', 'pipe:1'], { windowsHide: true, env: environment, encoding: 'buffer', maxBuffer: 2_000_000 });
     assert.equal(decoded.stdout[(12 * 161 + 10) * 4 + 3], 0); assert.equal(decoded.stdout[(11 * 161 + 10) * 4 + 3], 255);

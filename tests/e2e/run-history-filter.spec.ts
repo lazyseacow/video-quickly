@@ -104,7 +104,10 @@ test('owns queued paging and late refreshes by project and refreshes the loaded 
 });
 
 test('keeps history filters aligned and keyboard accessible in dark desktop and light narrow layouts', async ({ page, request }, info) => {
-  const data = await fixture(request, 1), filter = await open(page);
+  const data = await fixture(request, 1);
+  const [resumableId] = seedRuns(data.directory, data.first, 1, 'resumable', { status: 'needs_attention' });
+  const expectedIds = [resumableId, ...data.firstIds];
+  const filter = await open(page);
   async function expectAlignedFilters() {
     const bounds = await page.locator('.run-history-filters').locator('select, input').evaluateAll(controls => controls.map(control => {
       const { y, height } = control.getBoundingClientRect(); return { y, height };
@@ -113,16 +116,23 @@ test('keeps history filters aligned and keyboard accessible in dark desktop and 
   }
   await expectAlignedFilters();
   await page.screenshot({ path: info.outputPath('run-filters-dark-default-1536.png') });
-  await filter.selectOption(data.first.id); await expect.poll(() => visibleIds(page)).toEqual(data.firstIds);
+  await filter.selectOption(data.first.id); await expect.poll(() => visibleIds(page)).toEqual(expectedIds);
   await expectAlignedFilters();
-  await expect(page.locator('.run-card__actions').getByRole('button')).toHaveText(['查看步骤', '打开项目', '删除']);
+  const resumableActions = page.locator(`[data-run-id="${resumableId}"] .run-card__actions`);
+  const completedActions = page.locator(`[data-run-id="${data.firstIds[0]}"] .run-card__actions`);
+  await expect(resumableActions.getByRole('button')).toHaveText(['', '', '', '']);
+  await expect(completedActions.getByRole('button')).toHaveText(['', '', '']);
+  for (const name of ['查看步骤', '打开项目', '继续执行', '删除制作记录']) {
+    await expect(resumableActions.getByRole('button', { name, exact: true })).toHaveAttribute('title', name);
+  }
   await filter.focus(); await expect(filter).toBeFocused();
   const clear = page.getByRole('button', { name: '清除制作记录筛选', exact: true }); await clear.focus(); await clear.press('Enter'); await expect(filter).toHaveValue('');
   await expectAlignedFilters();
-  await filter.selectOption(data.first.id); await expect.poll(() => visibleIds(page)).toEqual(data.firstIds);
+  await filter.selectOption(data.first.id); await expect.poll(() => visibleIds(page)).toEqual(expectedIds);
   await page.screenshot({ path: info.outputPath('run-project-filter-dark-1536.png') });
   await setWorkspaceTheme(page, 'light'); await page.setViewportSize({ width: 600, height: 900 });
   await expect(filter).toBeVisible(); await filter.focus(); await expect(filter).toBeFocused();
+  await page.screenshot({ path: info.outputPath('run-card-actions-light-600.png') });
   await filter.selectOption(data.empty.id); await expect(page.getByText('这个项目还没有制作记录', { exact: true })).toBeVisible();
   await expect(page.getByRole('button', { name: '清除制作记录筛选', exact: true })).toBeVisible();
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1)).toBe(true);

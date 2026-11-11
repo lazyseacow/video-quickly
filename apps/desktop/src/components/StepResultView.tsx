@@ -174,7 +174,13 @@ function MediaGallery({ assets, shots, exported, nodeKind, progress, step, media
               {entry.durationUs ? ` · ${(entry.durationUs / 1_000_000).toFixed(1)} 秒` : ''}
             </span>
           </button>
-          {!exported && onRegenerate && entry.asset && entry.shotId && ['image', 'video'].includes(entry.asset.kind) && <Button static className="step-result__regenerate" variant="ghost" aria-label={`重新生成镜头 ${entry.index}：${entry.title}`} disabled={!mediaGeneration || mediaGeneration.kind !== entry.asset.kind} title={!mediaGeneration ? '本次制作未保存对应的生成模型' : undefined} onClick={() => { if (entry.shotId && entry.asset) onRegenerate(entry.shotId, entry.asset.kind === 'video' ? 'video' : 'image'); }}><RefreshCw size={12} />重新生成</Button>}
+          {!exported && onRegenerate && entry.asset && entry.shotId && ['image', 'video'].includes(entry.asset.kind) && <IconButton
+            className="step-result__regenerate"
+            label={`重新生成镜头 ${entry.index}：${entry.title}`}
+            disabled={!mediaGeneration || mediaGeneration.kind !== entry.asset.kind}
+            title={!mediaGeneration ? '本次制作未保存对应的生成模型' : undefined}
+            onClick={() => { if (entry.shotId && entry.asset) onRegenerate(entry.shotId, entry.asset.kind === 'video' ? 'video' : 'image'); }}
+          ><RefreshCw size={16} aria-hidden="true" /></IconButton>}
         </div>;
       })}</div>
     </>}
@@ -251,7 +257,10 @@ function ResultMedia({ assetId, path, kind, name, exported = false }: { assetId?
   if (!source.url) return <p role="status">正在读取媒体…</p>;
   const failed = () => setSource({ error: '媒体暂时无法预览，请检查文件后重试。' });
   return <>{kind === 'image' ? <img key={retry} src={source.url} alt={name} loading="lazy" onError={failed} /> : kind === 'video' ? <video ref={element => { media.current = element; }} key={retry} src={source.url} controls playsInline preload="metadata" aria-label={name} onError={failed} /> : <audio ref={element => { media.current = element; }} key={retry} src={source.url} controls preload="metadata" aria-label={name} onError={failed} />}
-    {exported && <div className="step-result__file-action">{nativeDesktop ? <Button static onClick={() => void revealFile(path).catch(error => setSource({ error: String(error) }))}><FolderOpen size={16} />打开文件夹</Button> : <a className="button" href={source.url} download={name}><Download size={16} />下载成片</a>}</div>}
+    {exported && <div className="step-result__file-action">
+      {nativeDesktop ? <IconButton label="打开文件夹" onClick={() => void revealFile(path).catch(error => setSource({ error: String(error) }))}><FolderOpen size={16} aria-hidden="true" /></IconButton>
+        : <a className="icon-button" aria-label="下载成片" title="下载成片" href={source.url} download={name}><Download size={16} strokeWidth={1.75} aria-hidden="true" /></a>}
+    </div>}
   </>;
 }
 

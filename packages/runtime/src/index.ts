@@ -152,7 +152,7 @@ export interface RunSnapshot {
 
 const entityId = z.object({ projectId: z.string().min(1) });
 const videoExportInput = entityId.extend({ profile: videoProfileSchema.optional(), destination: z.string().optional(), revision: z.number().int().optional() });
-const assetListInput = pageInputSchema.extend({ kind: assetSchema.shape.kind.optional() });
+const assetListInput = pageInputSchema.extend({ kind: assetSchema.shape.kind.optional(), trashed: z.boolean().optional() });
 const projectUpdateInput = entityId.extend({
   revision: z.number().int().optional(),
   patch: z.object({
@@ -1882,7 +1882,7 @@ export function createRuntime(options: RuntimeOptions) {
       case 'run.diagnostics': return runInspector.dispatch(method, rawParams);
       case 'asset.list': {
         const input = assetListInput.parse(rawParams);
-        const result = reads.assets(input.before, input.limit, input.kind);
+        const result = reads.assets(input.before, input.limit, input.kind, input.trashed);
         const uncheckedIds = result.items.filter(asset => !asset.inUse).map(asset => asset.id);
         if (uncheckedIds.length === 0) return result;
         const characterReferences = characters.assetsInUse(uncheckedIds);
@@ -2440,7 +2440,6 @@ export function createRuntime(options: RuntimeOptions) {
         return importAsset(input);
       }
       case 'image.dimensions': return imageTools.dimensions(rawParams);
-      case 'image.cutGrid': return trackWork(() => imageTools.cutGrid(rawParams));
       case 'image.createMask': return trackWork(() => imageTools.mask(rawParams));
       case 'asset.getMany': {
         const { assetIds } = z.object({ assetIds: z.array(z.string().min(1)).max(100) }).parse(rawParams);
@@ -2467,15 +2466,6 @@ export function createRuntime(options: RuntimeOptions) {
         const asset = store.get<AssetRecord>('asset', assetId); if (!asset) throw new Error('素材不存在。');
         const value = { ...asset, retained }; store.put('asset', assetId, value); changed(); return value;
       }
-      case 'asset.select': {
-        const { assetId, projectId, shotId, revision } = z.object({ assetId: z.string(), projectId: z.string(), shotId: z.string(), revision: z.number().int().optional() }).parse(rawParams);
-        const asset = store.get<AssetRecord>('asset', assetId); if (!asset?.active) throw new Error('素材不存在或已移除。');
-        const value = project(projectId); requireRevision(value, revision);
-        if (asset.projectId && asset.projectId !== projectId) throw new Error('请先将其他项目的素材导入当前项目。');
-        if (!value.shots.some(shot => shot.id === shotId)) throw new Error('镜头不存在。');
-        if (!['image', 'audio', 'video'].includes(asset.kind)) throw new Error('该素材不能绑定到镜头。');
-        return saveProject(bindMedia(value, shotId, asset));
-      }
       case 'asset.delete':
       case 'asset.deleteMany': {
         const assetIds = method === 'asset.delete'
@@ -2498,6 +2488,18 @@ export function createRuntime(options: RuntimeOptions) {
         }).immediate();
         if (removed) changed();
         return { deleted: true };
+      }
+      case 'asset.restore': {
+        const { assetId } = z.object({ assetId: z.string().min(1) }).parse(rawParams);
+        const restored = database.transaction(() => {
+          const asset = store.get<AssetRecord>('asset', assetId);
+          if (!asset) throw new Error('素材不存在。');
+          if (asset.active !== false) return false;
+          store.put('asset', assetId, { ...asset, active: true });
+          return true;
+        }).immediate();
+        if (restored) changed();
+        return { restored: true };
       }
       case 'project.backup': {
         const { projectId, destination } = entityId.extend({ destination: z.string().optional() }).parse(rawParams);

@@ -7,9 +7,9 @@ import { productionStep, saveAndStartProduction, saveProduction } from './produc
 import { openProjectFromList } from './workspace-navigation';
 import { confirmAction } from './confirmation-actions';
 
-async function writeWave(path: string, sample = 0) {
+async function writeWave(path: string) {
   const wave = Buffer.alloc(44 + 3200);
-  wave.write('RIFF'); wave.writeUInt32LE(wave.length - 8, 4); wave.write('WAVEfmt ', 8); wave.writeUInt32LE(16, 16); wave.writeUInt16LE(1, 20); wave.writeUInt16LE(1, 22); wave.writeUInt32LE(16000, 24); wave.writeUInt32LE(32000, 28); wave.writeUInt16LE(2, 32); wave.writeUInt16LE(16, 34); wave.write('data', 36); wave.writeUInt32LE(3200, 40); wave.writeInt16LE(sample, 44);
+  wave.write('RIFF'); wave.writeUInt32LE(wave.length - 8, 4); wave.write('WAVEfmt ', 8); wave.writeUInt32LE(16, 16); wave.writeUInt16LE(1, 20); wave.writeUInt16LE(1, 22); wave.writeUInt32LE(16000, 24); wave.writeUInt32LE(32000, 28); wave.writeUInt16LE(2, 32); wave.writeUInt16LE(16, 34); wave.write('data', 36); wave.writeUInt32LE(3200, 40);
   await writeFile(path, wave);
 }
 
@@ -89,27 +89,6 @@ test('keeps pending production settings on cancel and discards them only after c
     await expect(settings.getByLabel('视觉风格', { exact: true })).toHaveValue(original); await expect(settings.getByRole('button', { name: '放弃待用配置', exact: true })).toHaveCount(0);
     await settings.getByRole('button', { name: '关闭对话框', exact: true }).click();
   } finally { await source.close(); }
-});
-
-test('preserves existing shot media when a replacement is canceled', async ({ page, request }, info) => {
-  const originalPath = info.outputPath('original-voice.wav'), replacementPath = info.outputPath('replacement-voice.wav');
-  await writeWave(originalPath); await writeWave(replacementPath, 1);
-  const original = await rpc<AssetRecord>(request, 'asset.import', { path: originalPath, kind: 'audio' });
-  const replacement = await rpc<AssetRecord>(request, 'asset.import', { path: replacementPath, kind: 'audio' });
-  const created = await rpc<ProjectDocument>(request, 'project.create', { title: '替换镜头素材确认' });
-  const project = await rpc<ProjectDocument>(request, 'project.update', { projectId: created.id, revision: created.revision, patch: { shots: [{ id: 'replace-voice', title: '已有配音的镜头', narration: '', visualPrompt: '', durationUs: 1_000_000, audioAssetId: original.id }] } });
-  const writes: string[] = []; page.on('request', request => { if (request.url().endsWith('/__desktop_rpc') && request.postDataJSON()?.method === 'asset.select') writes.push(request.postData()!); });
-  await page.goto('/'); await openProjectFromList(page, project.title); await page.getByRole('button', { name: '素材库', exact: true }).click();
-  await page.getByRole('button', { name: `将“${replacement.name}”用于镜头`, exact: true }).click();
-  const parent = page.getByRole('dialog', { name: '应用素材到镜头', exact: true });
-  await expect(parent.getByLabel('目标镜头', { exact: true })).toHaveValue('replace-voice');
-  await parent.getByRole('button', { name: '应用此版本', exact: true }).click();
-  const dialog = page.getByRole('alertdialog', { name: '替换镜头素材？', exact: true }); await expect(dialog).toContainText(replacement.name);
-  await dialog.getByRole('button', { name: '取消', exact: true }).click(); await expect(parent).toBeVisible();
-  expect(writes).toHaveLength(0); expect((await rpc<{ project: ProjectDocument }>(request, 'project.get', { projectId: project.id })).project).toEqual(project);
-  await parent.getByRole('button', { name: '应用此版本', exact: true }).click(); await confirmAction(page, '确认替换'); await expect(parent).toHaveCount(0);
-  const updated = (await rpc<{ project: ProjectDocument }>(request, 'project.get', { projectId: project.id })).project;
-  expect(updated.shots[0].audioAssetId).toBe(replacement.id); expect(writes).toHaveLength(1);
 });
 
 test('keeps the conflicting draft and parent dialog until discard is confirmed', async ({ page, request }) => {

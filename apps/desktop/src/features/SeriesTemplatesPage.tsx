@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { Captions, FileText, Image, Pencil, RotateCcw, Trash2, Plus, ChevronDown } from 'lucide-react';
+import { Captions, FilePlus, FileText, Image, Pencil, RotateCcw, Trash2, Plus, ChevronDown } from 'lucide-react';
 import { recordPageSchema, seriesSettingsSchema, seriesTemplateSchema, type SeriesSettings, type SeriesTemplate } from '@video-quickly/contracts';
 import { Button, Dialog, EmptyState, Field, IconButton, Notice } from '../components/Primitives';
 import SeriesSettingsEditor, { scenePresetLabels, SeriesSettingsPreview } from '../components/SeriesSettingsEditor';
@@ -43,8 +43,10 @@ export default function SeriesTemplatesPage({ workspace, action, onCreate }: { w
       <span className="tiny-meta">{template.creationDefaults ? '系统内置' : new Date(template.updatedAt).toLocaleDateString('zh-CN')}</span>
       <div className="pill-row"><span className="pill">{template.settings.captionStyle ? '自定义字幕' : '默认字幕'}</span><span className="pill">{template.settings.scenePreset ? scenePresetLabels[template.settings.scenePreset.kind] : '无画面预设'}</span></div>
       <div className="series-template-card__actions">
-        {!archived && <Button className="series-template-card__create" disabled={Boolean(readingId)} onClick={() => onCreate(template)}>用此模板新建</Button>}
-        <Button variant="ghost" aria-label="编辑系列模板" busy={readingId === template.id} disabled={Boolean(readingId && readingId !== template.id)} onClick={() => void edit(template.id)}>编辑</Button>
+        {!archived && <IconButton label="用此模板新建" disabled={Boolean(readingId)} onClick={() => onCreate(template)}><FilePlus size={16} aria-hidden="true" /></IconButton>}
+        <IconButton label="编辑系列模板" busy={readingId === template.id} disabled={Boolean(readingId)} onClick={() => void edit(template.id)}>
+          <Pencil size={16} aria-hidden="true" />
+        </IconButton>
         <IconButton label={`${archived ? '恢复' : '归档'}系列模板：${template.name}`} disabled={Boolean(readingId)} onClick={() => void archive(template)}>{archived ? <RotateCcw size={15} /> : <Trash2 size={15} />}</IconButton>
       </div>
     </article>)}</div>

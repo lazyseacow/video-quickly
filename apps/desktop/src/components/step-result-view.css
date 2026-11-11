@@ -27,7 +27,7 @@
 .step-result__media-card:hover { background: var(--surface-raised); }
 .step-result__media-card[data-selected='true'] { color: var(--text); border-color: var(--text); background: var(--surface-selected); }
 .step-result__media-select { display: grid; gap: var(--space-1); min-width: 0; padding: 0; border: 0; border-radius: var(--radius-compact); background: transparent; color: inherit; text-align: left; cursor: pointer; }
-.step-result__media-card .step-result__regenerate { width: 100%; min-height: var(--control-hit-size); padding-inline: var(--space-2); font-size: var(--text-size-caption); }
+.step-result__regenerate { justify-self: end; }
 .step-result__thumbnail { position: relative; display: flex; align-items: center; justify-content: center; overflow: hidden; aspect-ratio: 16 / 9; width: 100%; background: var(--media-placeholder); border-radius: calc(var(--radius-small) - var(--space-2)); color: var(--text-secondary); }
 .step-result__thumbnail canvas, .step-result__thumbnail img { display: block; width: 100%; height: 100%; object-fit: cover; outline: 1px solid var(--image-outline); outline-offset: -1px; border-radius: inherit; }
 .step-result__thumbnail[data-state='loading'] canvas, .step-result__thumbnail[data-state='error'] canvas, .step-result__thumbnail[data-state='error'] img { visibility: hidden; }
@@ -100,7 +100,7 @@
   .step-result__gallery[data-multiple] .step-result__preview { grid-area: preview; position: sticky; top: 0; }
   .step-result__gallery[data-multiple][data-regeneration] { grid-template-columns: minmax(0, 1fr) 320px; }
   .step-result__gallery[data-regeneration] .step-result__media-grid { grid-template-columns: minmax(0, 1fr); }
-  .step-result__gallery[data-regeneration] .step-result__media-card { grid-template-columns: minmax(0, 1fr) 88px; align-items: center; gap: var(--space-3); }
+  .step-result__gallery[data-regeneration] .step-result__media-card { grid-template-columns: minmax(0, 1fr) var(--control-hit-size); align-items: center; gap: var(--space-3); }
   .step-result__gallery[data-regeneration] .step-result__media-select { grid-template-columns: 64px minmax(0, 1fr); column-gap: var(--space-3); align-items: center; }
   .step-result__gallery[data-regeneration] .step-result__thumbnail { grid-row: 1 / span 2; }
   .step-result__gallery[data-regeneration] .step-result__media-card-copy, .step-result__gallery[data-regeneration] .step-result__media-card-meta { grid-column: 2; }

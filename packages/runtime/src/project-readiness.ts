@@ -47,7 +47,7 @@ export function createProjectReadiness(options: {
       inspected.add(id);
       const asset = assets.get(id);
       if (!asset?.active || asset.projectId && asset.projectId !== project.id) {
-        add({ severity, category: 'media', assetId: id, nodeId: node.id, message: '步骤引用的素材已移除或不属于当前项目。', hint: '请在素材库恢复文件或重新关联有效素材。', fix: 'assets' }, `missing:${id}`); return;
+        add({ severity, category: 'media', assetId: id, nodeId: node.id, message: '步骤引用的素材已移除或不属于当前项目。', hint: '请在素材回收站恢复已移除的记录，或重新关联有效素材。', fix: 'assets' }, `missing:${id}`); return;
       }
       const previous = required.get(id);
       if (!previous || previous.severity === 'warning' && severity === 'error') required.set(id, { asset, node, severity });

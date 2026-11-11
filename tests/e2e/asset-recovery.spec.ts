@@ -22,8 +22,16 @@ async function open(page: Page, project: ProjectDocument) {
   await page.emulateMedia({ reducedMotion: 'reduce' }); await page.goto('/'); await expect(page).toHaveTitle(/Video Quickly/);
   await openProjectFromList(page, project.title);
 }
+function attachMissingImage(request: APIRequestContext, project: ProjectDocument, assetId: string) {
+  return rpc<ProjectDocument>(request, 'project.update', { projectId: project.id, revision: project.revision, patch: {
+    shots: [{ id: 'recovery-visual', title: '待恢复画面', narration: '', visualPrompt: '', durationUs: 1_000_000, assetId }],
+  } });
+}
 async function recovery(page: Page) {
-  await page.getByRole('button', { name: '素材库', exact: true }).click(); await page.getByRole('button', { name: '恢复缺失素材', exact: true }).click();
+  await page.getByRole('button', { name: '更多', exact: true }).click();
+  await page.getByRole('button', { name: '制作前检查', exact: true }).click();
+  const check = page.getByRole('dialog', { name: '制作前检查', exact: true });
+  await check.getByRole('button', { name: '修复素材', exact: true }).first().click();
   const dialog = page.getByRole('dialog', { name: '恢复缺失素材', exact: true }); await expect(dialog).toBeVisible();
   await expect(dialog.getByText('检查完成', { exact: true })).toBeVisible(); return dialog;
 }
@@ -77,8 +85,11 @@ test('restores a renamed real image through the complete dialog and automaticall
     const baseline = await saved(request, created.id), project = await rpc<ProjectDocument>(request, 'project.update', { projectId: created.id, revision: baseline.revision, patch: { shots: [{ id: 'picture', title: '待恢复画面', narration: '', visualPrompt: '', durationUs: 2_000_000, assetId: asset.id }] } });
     await rm(asset.path); missingAssets.add(asset.path); await rename(path, join(source, '改名后的画面.svg')); await writeFile(join(source, '第二个匹配.svg'), bytes); await writeFile(path, bytes.replace('#379269', '#111111'));
     await open(page, project); await expect(page.locator('.preview-panel .scene-preview__state')).toContainText('无法');
-    const dialog = await recovery(page), card = page.locator('.asset-card').filter({ has: page.getByRole('heading', { name: asset.name, exact: true }) });
+    await page.getByRole('button', { name: '素材库', exact: true }).click();
+    const card = page.locator('.asset-card').filter({ has: page.getByRole('heading', { name: asset.name, exact: true }) });
     await expect(card.getByRole('img', { name: `无法预览“${asset.name}”`, exact: true })).toBeAttached();
+    await openProjectFromList(page, project.title);
+    const dialog = await recovery(page);
     await dialog.getByLabel('查找目录', { exact: true }).fill(source); await dialog.getByRole('button', { name: '扫描目录', exact: true }).click();
     await expect(dialog.getByText('扫描完成，请确认匹配项', { exact: true })).toBeVisible();
     const item = dialog.locator(`[data-asset-id="${asset.id}"]`), candidate = item.getByLabel(`匹配文件：${asset.name}`, { exact: true });
@@ -90,9 +101,11 @@ test('restores a renamed real image through the complete dialog and automaticall
     await dialog.getByRole('button', { name: '确认恢复所选素材', exact: true }).click();
     await expect(dialog.getByText('所选素材已恢复', { exact: true })).toBeVisible(); await page.screenshot({ path: info.outputPath('image-recovery-confirmed-dark.png') });
     await expect(dialog.locator('.asset-recovery__footer')).toContainText('0 个待恢复');
-    await dialog.getByRole('button', { name: '关闭', exact: true }).click(); await expect(card.locator('img')).toBeVisible();
+    await dialog.getByRole('button', { name: '关闭', exact: true }).click();
+    await expect(page.locator('.preview-panel .scene-preview__state')).toHaveCount(0);
+    await page.getByRole('button', { name: '素材库', exact: true }).click();
+    await expect(card.locator('img')).toBeVisible();
     expect(await card.locator('img').evaluate((image: HTMLImageElement) => image.complete && image.naturalWidth === 160)).toBe(true);
-    await openProjectFromList(page); await expect(page.locator('.preview-panel .scene-preview__state')).toHaveCount(0);
     expect(selected.map(value => value.candidateId)).toEqual([chosen]); expect(await readFile(asset.path, 'utf8')).toBe(bytes); expect(await saved(request, project.id)).toEqual(project);
   } finally { await rm(source, { recursive: true, force: true }); }
 });
@@ -105,7 +118,8 @@ test('pages every scoped record with causes and history, changes scope safely an
     database.transaction(() => { for (let index = 0; index < 101; index++) { const id = `${project.id}-page-${index}`, path = join(system.dataDirectory, 'projects', project.id, 'assets', `${index}.png`); missingAssets.add(path); store.put('asset', id, { ...base, id, name: `缺失素材 ${index}`, path }); } })();
     store.put('run-snapshot', `${project.id}-history`, { project: { id: project.id }, assets: [{ ...base, id: 'historical-unsafe', name: '旧快照越界素材', path: join(tmpdir(), 'outside-workspace.png') }] });
   } finally { database.close(); }
-  await open(page, project); const starts: unknown[] = []; page.on('request', request => { if (request.url().endsWith('/__desktop_rpc') && request.postDataJSON()?.method === 'asset.recovery.start') starts.push(request.postDataJSON().params); });
+  const withMissingImage = await attachMissingImage(request, project, `${project.id}-page-0`);
+  await open(page, withMissingImage); const starts: unknown[] = []; page.on('request', request => { if (request.url().endsWith('/__desktop_rpc') && request.postDataJSON()?.method === 'asset.recovery.start') starts.push(request.postDataJSON().params); });
   const dialog = await recovery(page); await expect(dialog.locator('.asset-recovery__item')).toHaveCount(100);
   await dialog.getByRole('button', { name: '下一页素材清单', exact: true }).click(); await expect(dialog.locator('.asset-recovery__item')).toHaveCount(2);
   const unsafe = dialog.locator('[data-asset-id="historical-unsafe"]'); await expect(unsafe).toContainText('路径不可安全恢复'); await expect(unsafe).toContainText('当前工作区之外');
@@ -115,12 +129,12 @@ test('pages every scoped record with causes and history, changes scope safely an
   await scope.selectOption(project.id); await expect(dialog.getByText('检查完成', { exact: true })).toBeVisible();
   await page.screenshot({ path: info.outputPath('complete-recovery-list-dark-1536.png') });
   await dialog.getByRole('button', { name: '关闭', exact: true }).click(); await setWorkspaceTheme(page, 'light'); await page.setViewportSize({ width: 600, height: 900 });
-  await page.getByRole('button', { name: '恢复缺失素材', exact: true }).click(); const narrow = page.getByRole('dialog', { name: '恢复缺失素材', exact: true }); await expect(narrow).toBeVisible();
+  const narrow = await recovery(page);
   const directory = narrow.getByLabel('查找目录', { exact: true });
   await expect(directory).toBeEnabled();
   await directory.focus(); await expect(directory).toBeFocused();
   expect(await narrow.evaluate(element => element.scrollWidth <= element.clientWidth + 1)).toBe(true); await page.screenshot({ path: info.outputPath('complete-recovery-list-light-600.png') });
-  await page.keyboard.press('Escape'); await expect(narrow).toHaveCount(0); await expect(page.getByRole('button', { name: '恢复缺失素材', exact: true })).toBeFocused();
+  await page.keyboard.press('Escape'); await expect(narrow).toHaveCount(0); await expect(page.getByRole('button', { name: '更多', exact: true })).toBeFocused();
 });
 
 test('automatically retries failed real video, source duration, waveform and local mix after recovery without changing the editor selection', async ({ page, request }, info) => {
@@ -148,7 +162,7 @@ test('automatically retries failed real video, source duration, waveform and loc
     await expect(page.locator('.clip-timing').getByRole('alert')).toContainText('无法读取');
     await expect.poll(() => rpcFailures.length).toBe(2); rpcPhase = 'recovery';
     const dialog = await restore(page, source); await dialog.getByRole('button', { name: '关闭', exact: true }).click();
-    await openProjectFromList(page); await expect(page.getByLabel('镜头标题', { exact: true })).toHaveValue('保留所选镜头');
+    await expect(page.getByLabel('镜头标题', { exact: true })).toHaveValue('保留所选镜头');
     await expect(page.locator('.preview-panel .scene-preview__state')).toHaveCount(0); await expect(page.locator('.audio-waveform')).toHaveAttribute('data-status', 'ready');
     await expect(page.locator('.clip-timing')).toContainText('可用素材出点上限 2.000 秒');
     await expect(page.locator('.preview-panel .prepared-mix-preview')).toHaveAttribute('data-status', 'ready', { timeout: 20_000 });
@@ -166,7 +180,8 @@ test('reloads the first page of a new generation after another view rescans the 
     try {
       database.transaction(() => { for (let index = 0; index < 101; index++) { const id = `${project.id}-${index}`, path = join(system.dataDirectory, 'projects', project.id, 'assets', `${index}.png`); missingAssets.add(path); store.put('asset', id, { id, projectId: project.id, name: `待检查 ${index}`, path, kind: 'image', mimeType: 'image/png', size: 7, sha256: createHash('sha256').update('missing').digest('hex'), version: 1, createdAt: '', active: true, retained: false, provenance: '' }); } })();
     } finally { database.close(); }
-    await open(page, project); let jobId = '';
+    const withMissingImage = await attachMissingImage(request, project, `${project.id}-0`);
+    await open(page, withMissingImage); let jobId = '';
     page.on('request', request => { if (request.url().endsWith('/__desktop_rpc') && request.postDataJSON()?.method === 'asset.recovery.get') jobId = request.postDataJSON().params.jobId; });
     const dialog = await recovery(page); await expect(dialog.locator('.asset-recovery__item')).toHaveCount(100); expect(jobId).toBeTruthy();
     await rpc(request, 'asset.recovery.scan', { jobId, directory: source });
@@ -182,8 +197,9 @@ test('reloads the first page of a new generation after another view rescans the 
 test('cancels a real controlled scan and continues after an unreadable source directory', async ({ page, request }, info) => {
   const source = await mkdtemp(join(tmpdir(), 'vq-recovery-cancel-ui-')), path = join(source, 'source.svg');
   await writeFile(path, '<svg xmlns="http://www.w3.org/2000/svg" width="1" height="1"/>');
-  const project = await rpc<ProjectDocument>(request, 'project.create', { title: `素材扫描取消 ${randomUUID().slice(0, 8)}` });
-  const asset = await rpc<AssetRecord>(request, 'asset.import', { projectId: project.id, path, kind: 'image' }); await rm(asset.path); missingAssets.add(asset.path);
+  const created = await rpc<ProjectDocument>(request, 'project.create', { title: `素材扫描取消 ${randomUUID().slice(0, 8)}` });
+  const asset = await rpc<AssetRecord>(request, 'asset.import', { projectId: created.id, path, kind: 'image' }); await rm(asset.path); missingAssets.add(asset.path);
+  const project = await attachMissingImage(request, created, asset.id);
   const { system } = await rpc<{ system: { dataDirectory: string } }>(request, 'workspace.summary'), database = openDatabase(system.dataDirectory);
   const options: AssetRecoveryOptions = { directory: system.dataDirectory, store: new DocumentStore(database) }, manager = createAssetRecovery(options);
   let release!: () => void, entered!: () => void;

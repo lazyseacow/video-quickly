@@ -1,5 +1,5 @@
 import { lazy, Suspense, useEffect, useRef, useState, type ReactNode } from 'react';
-import { ArrowLeft, Layers, Plus, RefreshCw } from 'lucide-react';
+import { ArrowLeft, FolderOpen, Layers, Pencil, Plus, RefreshCw, RotateCcw, Trash2, Unlink2 } from 'lucide-react';
 import { formatFrameRate, projectDetailSchema, projectSchema, productionQueueEnqueueResultSchema, recordPageSchema, workDefaultsSchema, workSchema, type ProjectDocument, type ProjectSummary, type StoryWork } from '@video-quickly/contracts';
 import { rpc } from '../lib/client';
 import { useRecordPage } from '../lib/use-record-page';
@@ -45,7 +45,12 @@ export default function WorksPanel({ workspace, notify, onBack, onOpen, onOpenOu
     {works.length > 0 && <div className="work-cards">{works.map(work => <article className="section-card work-card" key={work.id}>
       <h2>{work.title}</h2>{work.description && <p className="work-card__description">{work.description}</p>}
       <p className="tiny-meta">{workspace.projects.filter(project => project.episode?.workId === work.id).length} 集</p>
-      <div className="work-actions"><Button onClick={() => setSelected(work)}>查看分集</Button><Button variant="ghost" onClick={() => void archive(work)}>{work.archived ? '恢复作品' : '归档作品'}</Button></div>
+      <div className="work-actions">
+        <IconButton label="查看分集" onClick={() => setSelected(work)}><Layers size={16} aria-hidden="true" /></IconButton>
+        <IconButton label={work.archived ? '恢复作品' : '归档作品'} onClick={() => void archive(work)}>
+          {work.archived ? <RotateCcw size={16} aria-hidden="true" /> : <Trash2 size={16} aria-hidden="true" />}
+        </IconButton>
+      </div>
     </article>)}</div>}
     {!works.length && !library.error && (loading
       ? <p className="muted" role="status">正在读取作品…</p>
@@ -188,9 +193,9 @@ function WorkEpisodes({ work, workspace, notify, onOpen, onOpenOutput }: { work:
             </div>
           </div>
           <div className="work-actions">
-            <Button onClick={() => onOpen(project.id)}>打开分集</Button>
-            {canSelect && <Button variant="ghost" onClick={() => setAttaching(project)}>编辑分集</Button>}
-            {!work.archived && <Button variant="ghost" onClick={() => void detach(project)}>移出作品</Button>}
+            <IconButton label="打开分集" onClick={() => onOpen(project.id)}><FolderOpen size={16} aria-hidden="true" /></IconButton>
+            {canSelect && <IconButton label="编辑分集" onClick={() => setAttaching(project)}><Pencil size={16} aria-hidden="true" /></IconButton>}
+            {!work.archived && <IconButton label="移出作品" onClick={() => void detach(project)}><Unlink2 size={16} aria-hidden="true" /></IconButton>}
           </div>
         </article>;
       })}</div> : <EmptyState icon={<Layers size={24} />}

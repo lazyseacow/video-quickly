@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
-import { RotateCcw, Trash2, Users, Plus, ChevronDown, Upload, Sparkles } from 'lucide-react';
+import { RotateCcw, Trash2, Users, Plus, ChevronDown, Upload, Sparkles, Pencil } from 'lucide-react';
 import { assetListItemSchema, assetSchema, CHARACTER_REFERENCE_VIEW_LABELS, characterProfileSchema, getMediaAdapters, recordPageSchema, type AssetRecord, type CharacterProfile, type ModelProfile } from '@video-quickly/contracts';
 import { Button, Dialog, EmptyState, Field, IconButton, Notice, Select } from '../components/Primitives';
 import { useChargeRpc, useConfirmation } from '../components/ConfirmationDialog';
@@ -30,7 +30,10 @@ export default function CharactersPage({ workspace, action }: { workspace: Works
     <div className="page-toolbar"><div className="tabs"><button aria-label="可用角色" aria-pressed={!archived} type="button" className={!archived ? 'active' : ''} onClick={() => setArchived(false)}>可用</button><button aria-pressed={archived} type="button" className={archived ? 'active' : ''} onClick={() => setArchived(true)}>已归档</button></div></div>
     {library.error ? <Notice kind="error">{library.error}<Button aria-label="重试读取角色" onClick={library.refresh}>重试</Button></Notice> : error && <Notice kind="error">{error}</Notice>}
     {loading && <p role="status" className="muted">正在读取角色…</p>}
-    <div className="character-cards">{characters.map(character => <article className="character-card" key={character.id}><CharacterThumbnail character={character} /><div className="character-card__body"><h3>{character.name}</h3><p>{character.description || '尚未填写角色设定'}</p><span className="tiny-meta">{character.referenceAssetIds.length} 张参考图 · 修订 {character.revision}</span><div className="character-card__actions"><Button aria-label="编辑角色" onClick={() => setEditing(character)}>编辑</Button><IconButton label={`${archived ? '恢复' : '归档'}角色：${character.name}`} onClick={() => void changeArchive(character)}>{archived ? <RotateCcw size={15} /> : <Trash2 size={15} />}</IconButton></div></div></article>)}</div>
+    <div className="character-cards">{characters.map(character => <article className="character-card" key={character.id}><CharacterThumbnail character={character} /><div className="character-card__body"><h3>{character.name}</h3><p>{character.description || '尚未填写角色设定'}</p><span className="tiny-meta">{character.referenceAssetIds.length} 张参考图 · 修订 {character.revision}</span><div className="character-card__actions">
+      <IconButton label="编辑角色" onClick={() => setEditing(character)}><Pencil size={16} aria-hidden="true" /></IconButton>
+      <IconButton label={`${archived ? '恢复' : '归档'}角色：${character.name}`} onClick={() => void changeArchive(character)}>{archived ? <RotateCcw size={15} /> : <Trash2 size={15} />}</IconButton>
+    </div></div></article>)}</div>
     {!characters.length && !loading && !library.error && <EmptyState icon={<Users size={25} />} title={archived ? '没有归档角色' : '还没有角色参考'} description={archived ? '归档的角色可在这里恢复。' : '添加角色设定和参考图，供不同项目复用。'} />}
     {!library.stale && library.nextCursor !== null && <Button aria-label="加载更多角色" busy={library.loadingMore} disabled={!library.canLoadMore} onClick={() => void library.loadMore()}><ChevronDown size={15} />加载更多</Button>}
     {editing && <CharacterEditor character={editing === 'new' ? undefined : editing} version={workspace.version} models={workspace.models} action={action} onClose={() => setEditing(undefined)} onSaved={() => { setEditing(undefined); library.refresh(); }} />}

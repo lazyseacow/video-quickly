@@ -81,9 +81,11 @@ export default function SkillStudio({ workspace, action, onOpenOutput }: { works
               {source && <p className="tiny-meta">{source}</p>}
             </div>
             {group && <div className="skill-studio-group__actions">
-              <Button aria-label={`编辑分组“${name}”`} disabled={groupBusy} onClick={() => setEditingGroup(group)}>编辑分组</Button>
-              <Button aria-label={`${allEnabled ? '停用' : '启用'}分组“${name}”`} busy={groupBusy} disabled={hasBusySkill} onClick={() => void perform(id, 'skill.group.toggle', { id, enabled: !allEnabled }, '分组启用状态已更新')}>{allEnabled ? '停用整组' : '启用整组'}</Button>
-              <Button variant="ghost" aria-label={`卸载分组“${name}”`} disabled={groupBusy || hasBusySkill} onClick={() => void uninstallGroup(group)}><Trash2 size={15} />卸载分组</Button>
+              <IconButton label={`编辑分组“${name}”`} disabled={groupBusy} onClick={() => setEditingGroup(group)}><Pencil size={16} aria-hidden="true" /></IconButton>
+              <IconButton label={`${allEnabled ? '停用' : '启用'}分组“${name}”`} busy={groupBusy} disabled={hasBusySkill} onClick={() => void perform(id, 'skill.group.toggle', { id, enabled: !allEnabled }, '分组启用状态已更新')}>
+                {allEnabled ? <ToggleRight size={16} aria-hidden="true" /> : <ToggleLeft size={16} aria-hidden="true" />}
+              </IconButton>
+              <IconButton label={`卸载分组“${name}”`} disabled={groupBusy || hasBusySkill} onClick={() => void uninstallGroup(group)}><Trash2 size={16} aria-hidden="true" /></IconButton>
             </div>}
           </div>
           <div className="skill-studio-group__cards" id={panelId} hidden={!expanded}>
@@ -97,8 +99,10 @@ export default function SkillStudio({ workspace, action, onOpenOutput }: { works
               </div>
               <div className="list-card__actions">
                 <IconButton label={`查看“${skill.name}”`} onClick={() => setSelected(skill)}><Pencil size={16} /></IconButton>
-                <Button role="switch" className="skill-toggle" aria-label={`“${skill.name}”启用状态`} aria-checked={skill.enabled} title={skill.enabled ? '停用 Skill' : '启用 Skill'} variant={skill.enabled ? 'primary' : 'default'} static busy={skillBusy(skill.id)} onClick={() => void perform(skill.id, 'skill.toggle', { skillId: skill.id, enabled: !skill.enabled }, skill.enabled ? 'Skill 已停用' : 'Skill 已启用')}>{!skillBusy(skill.id) && (skill.enabled ? <ToggleRight size={18} /> : <ToggleLeft size={18} />)}{skill.enabled ? '已启用' : '已停用'}</Button>
-                <Button variant="ghost" aria-label={`卸载“${skill.name}”`} disabled={skillBusy(skill.id)} onClick={() => void uninstallSkill(skill)}><Trash2 size={15} />卸载</Button>
+                <IconButton role="switch" label={`“${skill.name}”启用状态`} aria-checked={skill.enabled} title={skill.enabled ? '停用 Skill' : '启用 Skill'} busy={skillBusy(skill.id)} onClick={() => void perform(skill.id, 'skill.toggle', { skillId: skill.id, enabled: !skill.enabled }, skill.enabled ? 'Skill 已停用' : 'Skill 已启用')}>
+                  {skill.enabled ? <ToggleRight size={16} aria-hidden="true" /> : <ToggleLeft size={16} aria-hidden="true" />}
+                </IconButton>
+                <IconButton label={`卸载“${skill.name}”`} disabled={skillBusy(skill.id)} onClick={() => void uninstallSkill(skill)}><Trash2 size={16} aria-hidden="true" /></IconButton>
               </div>
             </article>)}
           </div>

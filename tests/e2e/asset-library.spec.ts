@@ -6,7 +6,7 @@ import { test } from './isolated-workspace';
 import { rpc } from './native-video-fixture';
 import { setWorkspaceTheme } from './workspace-settings';
 
-test('fits more assets and removes a filtered selection after confirmation', async ({ page, request, isolatedWorkspace }, info) => {
+test('previews assets, moves a filtered selection to the recycle bin and restores its original record', async ({ page, request, isolatedWorkspace }, info) => {
   const illustration = '<svg xmlns="http://www.w3.org/2000/svg" width="320" height="180"><path fill="#5e87a6" d="M0 0h320v180H0z"/><circle fill="#f1dbad" cx="239" cy="49" r="23"/><path fill="#314c63" d="M0 170 95 75l77 81 65-56 83 65v15H0z"/></svg>';
   async function importFile(name: string, bytes: string) {
     const path = join(isolatedWorkspace.directory, name);
@@ -36,6 +36,10 @@ test('fits more assets and removes a filtered selection after confirmation', asy
   const heading = (asset: AssetRecord) => page.getByRole('heading', { name: asset.name, exact: true });
   const card = (asset: AssetRecord) => page.locator('.asset-card').filter({ has: heading(asset) });
   await expect(heading(first)).toBeVisible();
+  await expect(page.getByRole('button', { name: '恢复缺失素材', exact: true })).toHaveCount(0);
+  await expect(card(first).locator('.asset-actions').getByRole('button')).toHaveCount(2);
+  await expect(card(first).getByRole('button', { name: '保留此版本', exact: true })).toBeEnabled();
+  await expect(card(first).getByRole('button', { name: `移除素材“${first.name}”`, exact: true })).toBeEnabled();
   await expect.poll(() => card(first).locator('img').evaluate((img: HTMLImageElement) => img.naturalWidth)).toBeGreaterThan(0);
   await expect(heading(first)).toHaveAttribute('title', first.name);
   expect(await page.locator('.asset-grid').evaluate(grid => getComputedStyle(grid).gridTemplateColumns.split(' ').length)).toBe(6);
@@ -54,6 +58,11 @@ test('fits more assets and removes a filtered selection after confirmation', asy
   await expect(preview).toBeFocused();
   await page.getByRole('heading', { name: '素材库', exact: true }).hover();
   await page.screenshot({ path: info.outputPath('asset-library-dark-1464.png') });
+  const trash = page.getByRole('button', { name: '回收站', exact: true });
+  const back = page.getByRole('button', { name: '返回素材库', exact: true });
+  await trash.click();
+  await expect(page.getByText('回收站为空', { exact: true })).toBeVisible();
+  await back.click();
 
   await page.getByRole('button', { name: '多选', exact: true }).click();
   const choice = (asset: AssetRecord) => page.getByRole('checkbox', { name: `选择“${asset.name}”`, exact: true });
@@ -114,6 +123,25 @@ test('fits more assets and removes a filtered selection after confirmation', asy
   await expect(choice(document)).not.toBeChecked();
   await page.getByRole('button', { name: '退出多选', exact: true }).click();
   await expect(card(document).getByRole('button', { name: `移除素材“${document.name}”` })).toBeEnabled();
+
+  await trash.press('Enter');
+  await expect(page.getByRole('heading', { name: '素材回收站', exact: true })).toBeVisible();
+  await expect(heading(first)).toBeVisible();
+  await expect(heading(second)).toHaveCount(0);
+  await expect(heading(used)).toHaveCount(0);
+  await expect(heading(retained)).toHaveCount(0);
+  await expect(page.getByRole('button', { name: '多选', exact: true })).toHaveCount(0);
+  const restore = card(first).getByRole('button', { name: `恢复素材“${first.name}”`, exact: true });
+  expect(await page.locator('.page-body').evaluate(element => element.scrollWidth <= element.clientWidth)).toBe(true);
+  await expect(page.locator('.toast')).toHaveCount(0);
+  await page.screenshot({ path: info.outputPath('asset-recycle-bin-light-600.png') });
+  await restore.press('Enter');
+  await expect(heading(first)).toHaveCount(0);
+  await expect(back).toBeFocused();
+  await back.press('Enter');
+  await expect(heading(first)).toBeVisible();
+  expect(await rpc(request, 'asset.getMany', { assetIds: [first.id] })).toEqual([first]);
+  expect(await readFile(first.path, 'utf8')).toBe(illustration);
 });
 
 test('selects loaded assets across pages without adding new rows to the selection automatically', async ({ page, request, isolatedWorkspace }) => {
@@ -143,4 +171,18 @@ test('selects loaded assets across pages without adding new rows to the selectio
   await confirmation.getByRole('button', { name: '确认移除', exact: true }).click();
   await expect(page.getByText('没有此类素材', { exact: true })).toBeVisible();
   expect(await rpc(request, 'asset.list', { kind: 'document' })).toEqual({ items: [], nextCursor: null });
+
+  await page.reload();
+  await page.getByRole('button', { name: '素材库', exact: true }).click();
+  await page.getByRole('button', { name: '资料', exact: true }).click();
+  await page.getByRole('button', { name: '回收站', exact: true }).click();
+  const restoreOlder = page.getByRole('button', { name: `恢复素材“${older.name}”`, exact: true });
+  const more = page.getByRole('button', { name: '加载更多素材', exact: true });
+  await expect(more).toBeEnabled();
+  await expect(restoreOlder).toHaveCount(0);
+  await more.click();
+  await restoreOlder.click();
+  await expect(restoreOlder).toHaveCount(0);
+  await page.getByRole('button', { name: '返回素材库', exact: true }).click();
+  await expect(page.getByRole('heading', { name: older.name, exact: true })).toBeVisible();
 });

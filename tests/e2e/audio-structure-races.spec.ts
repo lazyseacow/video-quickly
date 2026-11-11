@@ -126,12 +126,14 @@ test('rejects a split when another view replaces audio during the preceding save
   await page.getByLabel('镜头标题', { exact: true }).fill('分割前媒体基线'); const gate = await gateFirstSave(page);
   try {
     await page.getByRole('button', { name: '在播放头处分割镜头', exact: true }).click(); await gate.started;
-    // A second view uses the public media-binding operation while this page's save is still pending.
-    const replacement = await rpc<ProjectDocument>(request, 'asset.select', { projectId: project.id, revision: project.revision, shotId: 'target-b', assetId: asset.id }); gate.release();
+    // A second view imports new audio while this page's save is still pending.
+    const imported = await rpc<AssetRecord>(request, 'asset.import', { projectId: project.id, shotId: 'target-b', path: asset.path, kind: 'audio' });
+    const replacement = await saved(request, project.id);
+    gate.release();
     await expect(page.getByRole('alert').filter({ hasText: /时间|素材|配音|变化|修改/ })).toBeVisible();
     await expect(page.locator('#project-outline .outline-shot')).toHaveCount(2); await expect(page.getByLabel('镜头标题', { exact: true })).toHaveValue('分割前媒体基线'); await expect(page.locator('.project-heading-copy')).toContainText('未保存');
     const result = await saved(request, project.id);
-    expect(result).toEqual(replacement); expect(result.shots).toHaveLength(2); expect(result.shots[1]).toMatchObject({ audioAssetId: asset.id, audioInUs: 0 });
+    expect(result).toEqual(replacement); expect(result.shots).toHaveLength(2); expect(result.shots[1]).toMatchObject({ audioAssetId: imported.id, audioInUs: 0 });
     expect(gate.writes()).toBe(1); await healthy(page, errors);
   } finally { gate.release(); }
 });

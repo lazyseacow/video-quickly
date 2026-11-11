@@ -87,6 +87,7 @@ test('downloads the whole saved project from its card and retains the MP4 after 
   await page.setViewportSize({ width: 390, height: 844 }); await page.goto('/');
   const card = page.locator('.project-card').filter({ has: page.getByRole('heading', { name: project.title, exact: true }) });
   const download = card.getByRole('button', { name: `下载“${project.title}”的完整视频`, exact: true });
+  await expect(card.locator('.project-card-footer').getByRole('button')).toHaveText(['', '', '']);
   let attempts = 0, enter!: () => void, release!: () => void;
   const entered = new Promise<void>(resolve => { enter = resolve; }), pending = new Promise<void>(resolve => { release = resolve; });
   await page.route('**/__desktop_rpc', async route => {

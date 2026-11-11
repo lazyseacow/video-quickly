@@ -102,7 +102,7 @@ describe('asset-page character references', () => {
     await expect(save('有效参考', [assets[0].id])).resolves.toMatchObject({ referenceAssetIds: [assets[0].id] });
   });
 
-  it('removes a batch atomically and safely retries the same IDs', async () => {
+  it('moves a batch to the recycle bin atomically and restores the original records', async () => {
     const { assets: [first, legacy, inUse, retained], store, runtime, save } = await fixture(4);
     store.put('asset', legacy.id, { ...legacy, active: undefined });
     await save('使用中的参考', [inUse.id]);
@@ -124,5 +124,17 @@ describe('asset-page character references', () => {
     expect(after.version).toBe(before.version + 1);
     await expect(remove(first.id, legacy.id)).resolves.toEqual({ deleted: true });
     expect(await runtime.dispatch('workspace.summary')).toMatchObject({ version: after.version, assetsVersion: after.assetsVersion });
+
+    const trash = assetsPageSchema.parse(await runtime.dispatch('asset.list', { trashed: true }));
+    expect(trash.items.map(asset => asset.id)).toEqual([legacy.id, first.id]);
+    const restore = (assetId: string) => runtime.dispatch('asset.restore', { assetId });
+    await expect(restore('missing-asset')).rejects.toThrow('素材不存在');
+    await expect(restore(legacy.id)).resolves.toEqual({ restored: true });
+    expect(store.get<AssetRecord>('asset', legacy.id)).toEqual(legacy);
+    expect(await runtime.dispatch('workspace.summary')).toMatchObject({ version: after.version + 1, assetsVersion: after.assetsVersion + 1 });
+    await expect(restore(legacy.id)).resolves.toEqual({ restored: true });
+    expect(await runtime.dispatch('workspace.summary')).toMatchObject({ version: after.version + 1, assetsVersion: after.assetsVersion + 1 });
+    const remaining = assetsPageSchema.parse(await runtime.dispatch('asset.list', { trashed: true }));
+    expect(remaining.items.map(asset => asset.id)).toEqual([first.id]);
   });
 });

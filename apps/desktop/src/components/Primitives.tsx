@@ -7,8 +7,10 @@ export function Button({ children, variant = 'default', className = '', busy = f
   return <button type="button" {...props} disabled={props.disabled || busy} className={`button button--${variant} ${isStatic ? 'button--static' : ''} ${className}`} aria-busy={busy || undefined}>{busy && <LoaderCircle className="spin" size={16} aria-hidden="true" />}{children}</button>;
 }
 
-export function IconButton({ label, children, className = '', ...props }: ComponentProps<'button'> & { label: string }) {
-  return <button type="button" {...props} title={props.title ?? label} aria-label={label} className={`icon-button ${className}`}>{children}</button>;
+export function IconButton({ label, children, className = '', busy = false, ...props }: ComponentProps<'button'> & { label: string; busy?: boolean }) {
+  return <button type="button" {...props} title={props.title ?? label} aria-label={label} disabled={busy || props.disabled} aria-busy={busy || props['aria-busy']} className={`icon-button ${className}`}>
+    {busy ? <LoaderCircle className="spin" size={16} aria-hidden="true" /> : children}
+  </button>;
 }
 
 export function Select({ children, multiple, size, className = '', ...props }: ComponentProps<'select'>) {

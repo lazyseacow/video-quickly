@@ -32,7 +32,7 @@
 .batch-export__path { display: flex; gap: var(--space-3); margin-top: var(--space-2); font-size: var(--text-size-micro); line-height: var(--line-height-body); }
 .batch-export__path > span { flex: 0 0 38px; color: var(--text-subtle); }
 .batch-export__path code { min-width: 0; overflow-wrap: anywhere; }
-.batch-export__result > .button { margin-top: var(--space-3); }
+.batch-export__result > .icon-button { margin-top: var(--space-3); }
 .batch-export-dialog .dialog__body > .notice:last-child { margin-top: var(--space-4); }
 .batch-export-dialog .settings-sections .batch-export__history { padding-top: 0; border-top: 0; }
 .batch-export-dialog .settings-sections .batch-export__configuration { margin-bottom: 0; }

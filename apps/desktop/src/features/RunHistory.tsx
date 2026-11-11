@@ -1,8 +1,8 @@
 import { lazy, Suspense, useRef, useState } from 'react';
-import { ChevronDown, History, RefreshCw, RotateCcw, Square, Trash2 } from 'lucide-react';
+import { ChevronDown, FolderOpen, History, ListTree, Play, RefreshCw, RotateCcw, Square, Trash2 } from 'lucide-react';
 import { isRunActive, recordPageSchema, runStatusSchema, runSummarySchema, type RunSummary } from '@video-quickly/contracts';
 import { useConfirmation } from '../components/ConfirmationDialog';
-import { Button, EmptyState, Field, Notice, Select, Status, statusLabels } from '../components/Primitives';
+import { Button, EmptyState, Field, IconButton, Notice, Select, Status, statusLabels } from '../components/Primitives';
 import { useRecordPage } from '../lib/use-record-page';
 import type { Action, StepOutputSelection, WorkspaceView } from '../lib/types';
 import './run-history.css';
@@ -66,11 +66,12 @@ export default function RunsPage({ workspace, action, onOpen, onOpenOutput }: { 
       return <article className="run-card" key={run.id} data-run-id={run.id}><div className="run-card__header"><History size={17} /><h3>{title}</h3><Status value={run.status} /></div><div className="run-card__meta"><span>{createdAt}</span><span>修订 {run.projectRevision} · 流程 v{run.workflowVersion}</span><span>{completed} 个步骤已完成</span>{run.productionQueueId && <span>分集生产队列</span>}{run.purpose === 'workflow-assistant' && <span>任务修改建议</span>}{run.purpose === 'prompt-trial' && <span>{run.promptSessionId ? `提示词实验 · 草稿 v${run.promptSessionRevision}` : 'AI 填写草稿'}</span>}{run.selection && (run.purpose !== 'prompt-trial' || run.promptSessionId) && <span>{run.selection.mode === 'node' ? '单步骤执行' : '所选步骤及后续'}</span>}</div>
         {run.error && <div className="run-error"><Notice kind="error">{run.error}</Notice></div>}<div className="progress-line"><span style={{ width: `${run.status === 'succeeded' ? 100 : Math.min(100, completed / Math.max(1, run.stepCount ?? project?.workflowNodeCount ?? 1) * 100)}%` }} /></div>
         <div className="run-card__actions">
-          {['failed', 'needs_attention', 'waiting_external', 'waiting_review', 'queued'].includes(run.status) && <Button aria-label="继续执行" variant="primary" onClick={() => void action('run.resume', { runId: run.id }, '已请求继续执行')}><RotateCcw size={15} />继续</Button>}
-          {['running', 'queued', 'waiting_external', 'retry_scheduled'].includes(run.status) && <Button onClick={() => void action('run.cancel', { runId: run.id }, '已请求停止')}><Square size={14} />停止</Button>}
-          {run.status === 'canceled' && (!run.purpose || run.purpose === 'production') && !run.productionQueueItemId && <Button onClick={() => { if (run.selection) setRestartRun(run); else void action('run.start', { projectId: run.projectId, parentRunId: run.id }, '已请求重新制作'); }}><RotateCcw size={15} />重新制作</Button>}
-          <Button onClick={() => setInspectedRunId(run.id)}>查看步骤</Button><Button variant="ghost" onClick={() => onOpen(run.projectId)}>打开项目</Button>
-          <Button variant="ghost" aria-label="删除制作记录" title={deletable ? undefined : '请先停止制作并等待任务结束'} busy={deletingRunId === run.id} disabled={!deletable || Boolean(deletingRunId)} onClick={() => void deleteRun(run, title, createdAt)}><Trash2 size={15} />删除</Button>
+          <IconButton label="查看步骤" onClick={() => setInspectedRunId(run.id)}><ListTree size={16} aria-hidden="true" /></IconButton>
+          <IconButton label="打开项目" onClick={() => onOpen(run.projectId)}><FolderOpen size={16} aria-hidden="true" /></IconButton>
+          {['failed', 'needs_attention', 'waiting_external', 'waiting_review', 'queued'].includes(run.status) && <IconButton label="继续执行" onClick={() => void action('run.resume', { runId: run.id }, '已请求继续执行')}><Play size={16} aria-hidden="true" /></IconButton>}
+          {['running', 'queued', 'waiting_external', 'retry_scheduled'].includes(run.status) && <IconButton label="停止" onClick={() => void action('run.cancel', { runId: run.id }, '已请求停止')}><Square size={16} aria-hidden="true" /></IconButton>}
+          {run.status === 'canceled' && (!run.purpose || run.purpose === 'production') && !run.productionQueueItemId && <IconButton label="重新制作" onClick={() => { if (run.selection) setRestartRun(run); else void action('run.start', { projectId: run.projectId, parentRunId: run.id }, '已请求重新制作'); }}><RotateCcw size={16} aria-hidden="true" /></IconButton>}
+          <IconButton label="删除制作记录" title={deletable ? undefined : '请先停止制作并等待任务结束'} busy={deletingRunId === run.id} disabled={!deletable || Boolean(deletingRunId)} onClick={() => void deleteRun(run, title, createdAt)}><Trash2 size={16} aria-hidden="true" /></IconButton>
         </div>
       </article>;
     })}

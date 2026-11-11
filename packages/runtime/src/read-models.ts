@@ -113,9 +113,9 @@ export function createReadModels(database: Database.Database, store: DocumentSto
     const rows = database.prepare(`SELECT rowid AS cursor, activity_id, status, input_hash, remote_id, error, started_at, completed_at FROM activities WHERE run_id = @runId AND (@before IS NULL OR rowid < @before) AND ${stepFilter('activity_id')} ORDER BY rowid DESC LIMIT @limit`).all({ runId, before: before ?? null, nodeId: nodeId ?? null, nodes: JSON.stringify(ids), limit: limit + 1 }) as ActivityRow[];
     return page(rows, limit, row => ({ id: row.activity_id, runId, nodeId: activityNodeId(row.activity_id, ids), status: (row.status === 'dispatched' ? 'submitted' : row.status) as ActivityRecord['status'], inputHash: row.input_hash, remoteTaskId: row.remote_id ?? undefined, attempt: 1, createdAt: row.started_at, updatedAt: row.completed_at ?? row.started_at, error: row.error ?? undefined }));
   }
-  function assets(before: number | undefined, limit: number, kind?: AssetRecord['kind']): RecordPage<AssetListItem> {
-    // Match the partial index and give SQLite a direct rowid bound on subsequent pages.
-    const conditions = ["asset.kind = 'asset'", "coalesce(json_extract(asset.body, '$.active'), 1) = 1"];
+  function assets(before: number | undefined, limit: number, kind?: AssetRecord['kind'], trashed = false): RecordPage<AssetListItem> {
+    // Keep active reads on their partial index and use a rowid bound for both views.
+    const conditions = ["asset.kind = 'asset'", trashed ? "json_extract(asset.body, '$.active') = 0" : "coalesce(json_extract(asset.body, '$.active'), 1) = 1"];
     const parameters: Record<string, string | number> = { limit: limit + 1 };
     if (before !== undefined) {
       conditions.push('asset.rowid < @before');

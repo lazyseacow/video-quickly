@@ -278,7 +278,9 @@ describe('on-demand workspace reads', () => {
   it('updates indexed asset usage with edits and rolls its projection back with the project', async () => {
     const { runtime, project, directory } = await fixture(10);
     const assetId = `${project.id}-asset-999`;
-    await runtime.dispatch('asset.select', { assetId, projectId: project.id, shotId: project.shots[0].id, revision: 1 });
+    await runtime.dispatch('project.update', { projectId: project.id, revision: project.revision, patch: {
+      shots: [{ ...project.shots[0], assetId }, ...project.shots.slice(1)],
+    } });
     const assets = recordPageSchema(assetListItemSchema).parse(await runtime.dispatch('asset.list', { limit: 1 }));
     expect(assets.items[0]).toMatchObject({ id: assetId, inUse: true });
     await expect(runtime.dispatch('asset.delete', { assetId })).rejects.toThrow('正在使用');

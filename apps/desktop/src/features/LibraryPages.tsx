@@ -1,8 +1,8 @@
 import { desktopBridge, pathExample } from '../lib/desktop';
 import { lazy, Suspense, useEffect, useId, useLayoutEffect, useRef, useState } from 'react';
-import { Code2, Eye, EyeOff, File, FileImage, FolderOpen, Image, Link, ListChecks, LoaderCircle, Mic, Pencil, RefreshCw, Search, Server, ShieldCheck, Trash2, Video, Upload, Plus, RotateCcw, Download, Check } from 'lucide-react';
+import { ArrowLeft, Code2, Eye, EyeOff, File, FileImage, FolderOpen, Image, ListChecks, LoaderCircle, Mic, Pencil, RefreshCw, Search, Server, ShieldCheck, Trash2, Video, Upload, Plus, RotateCcw, Download } from 'lucide-react';
 import { modelConnectionTypes, getModelConnectionType, validateModelConnection, modelToolProtocolIssue, platformForConnection, modelAuthModeSchema, modelDiscoverySchema, type ModelAuthMode, type ModelDiscovery, type ModelConnectionType, getModelParameterFields, getMediaAdapters, mediaAdapters, textProtocols, textProtocolSchema, type TextProtocol } from '@video-quickly/contracts';
-import { assetListItemSchema, currencySchema, isRunActive, projectDetailSchema, recordPageSchema, runSummarySchema, jsonValueSchema, modelPlatforms, getModelPlatform, modelPlatformSchema, modelPricingSchema, validateModelParameters, type ModelPricing, type ModelPlatform, type AssetListItem, type ProjectSummary, type JsonValue, type ModelCapability, type ModelProfile, type ProjectDocument } from '@video-quickly/contracts';
+import { assetListItemSchema, currencySchema, isRunActive, recordPageSchema, runSummarySchema, jsonValueSchema, modelPlatforms, getModelPlatform, modelPlatformSchema, modelPricingSchema, validateModelParameters, type ModelPricing, type ModelPlatform, type AssetListItem, type ProjectSummary, type JsonValue, type ModelCapability, type ModelProfile, type ProjectDocument } from '@video-quickly/contracts';
 import { Button, Combobox, Dialog, EmptyState, Field, IconButton, Notice, Select } from '../components/Primitives';
 import { ScenePreview } from '../components/ScenePreview';
 import type { Action, WorkspaceView, StepOutputSelection } from '../lib/types';
@@ -20,8 +20,6 @@ import SettingsSections from '../components/SettingsSections';
 import PlatformIcon from '../components/PlatformIcon';
 import './model-connections.css';
 const WorksPanel = lazy(() => import('./WorksPanel'));
-const ImageGridDialog = lazy(() => import('../components/ImageGridDialog'));
-const AssetRecoveryDialog = lazy(() => import('../components/AssetRecoveryDialog'));
 
 type PageProps = { workspace: WorkspaceView; action: Action };
 const capabilityLabels: Record<ModelCapability, string> = { text: '文本问答', image: '图片生成', video: '视频生成', vision: '图片理解', tools: '工具调用', 'structured-output': '结构化输出' };
@@ -208,12 +206,12 @@ export function ProjectsPage({ workspace, action, notify, onOpen, onCreate, onOp
           {!project.episode && project.episodeSource && <p className="tiny-meta">来源：{project.episodeSource.workTitle} · 第 {project.episodeSource.number} 集</p>}
           <div className="project-card-footer">
             <span className="tiny-meta">{new Date(project.updatedAt).toLocaleDateString('zh-CN')}</span>
-            {archived ? <Button onClick={() => void action('project.restore', { projectId: project.id }, '项目已恢复')}><RotateCcw size={14} />恢复项目</Button> : !selecting && <>
-              <IconButton label={`下载“${project.title}”的完整视频`} title={project.shotCount ? '下载完整视频（MP4）' : '添加镜头后可下载完整视频'} disabled={Boolean(downloadingId) || !project.shotCount} onClick={() => void downloadProject(project)}>
-                {downloadingId === project.id ? <LoaderCircle className="spin" size={14} /> : <Download size={15} />}
+            {archived ? <IconButton label="恢复项目" onClick={() => void action('project.restore', { projectId: project.id }, '项目已恢复')}><RotateCcw size={16} aria-hidden="true" /></IconButton> : !selecting && <>
+              <IconButton label="继续创作" data-guide="project-open" onClick={() => onOpen(project.id)}><FolderOpen size={16} aria-hidden="true" /></IconButton>
+              <IconButton label={`下载“${project.title}”的完整视频`} title={project.shotCount ? '下载完整视频（MP4）' : '添加镜头后可下载完整视频'} busy={downloadingId === project.id} disabled={Boolean(downloadingId) || !project.shotCount} onClick={() => void downloadProject(project)}>
+                <Download size={16} aria-hidden="true" />
               </IconButton>
-              <IconButton label={`将“${project.title}”移入回收站`} onClick={() => void archiveProject(project)}><Trash2 size={14} /></IconButton>
-              <Button data-guide="project-open" onClick={() => onOpen(project.id)}>继续创作</Button>
+              <IconButton label={`将“${project.title}”移入回收站`} onClick={() => void archiveProject(project)}><Trash2 size={16} aria-hidden="true" /></IconButton>
             </>}
           </div>
         </div>
@@ -531,22 +529,22 @@ function canRemoveAsset(asset: AssetListItem) {
 
 export function AssetsPage({ workspace, action, project }: PageProps & { project?: ProjectDocument }) {
   const [importing, setImporting] = useState(false);
-  const [recovering, setRecovering] = useState(false);
+  const [trashed, setTrashed] = useState(false);
   const [source, setSource] = useState('');
   const [filter, setFilter] = useState('all');
   const [selectedIds, setSelectedIds] = useState<Set<string>>();
   const [removing, setRemoving] = useState(false);
   const allAssets = useRef<HTMLButtonElement>(null);
   const selectionButton = useRef<HTMLButtonElement>(null);
+  const trashToggle = useRef<HTMLButtonElement>(null);
   const removalInFlight = useRef(false);
   const confirm = useConfirmation();
-  const library = useRecordPage('asset.list', filter === 'all' ? {} : { kind: filter }, workspace.version, assetsPageSchema, workspace.assetsVersion);
+  const library = useRecordPage('asset.list', { kind: filter === 'all' ? undefined : filter, trashed: trashed || undefined }, workspace.version, assetsPageSchema, workspace.assetsVersion);
   const assets = library.stale ? [] : library.items;
   const loading = !assets.length && !library.error && (library.busy || !library.hasLoaded);
   const removable = selectedIds ? assets.filter(canRemoveAsset) : [];
   const selected = removable.filter(asset => selectedIds?.has(asset.id));
   const allSelected = removable.length > 0 && selected.length === removable.length;
-  const projects = workspace.projects.filter(item => !item.archived);
 
   useEffect(() => {
     if (!library.hasLoaded || library.stale) return;
@@ -579,9 +577,9 @@ export function AssetsPage({ workspace, action, project }: PageProps & { project
     if (removalInFlight.current || !selected.length) return;
     removalInFlight.current = true;
     try {
-      if (!await confirm({ title: '批量移除素材记录？', description: `将从素材库中移除 ${selected.length} 条记录，素材文件会保留。需要再次使用时可重新导入。`, confirmLabel: '确认移除' })) return;
+      if (!await confirm({ title: '批量移除素材记录？', description: `将 ${selected.length} 条记录移入回收站。素材文件会保留，可在回收站恢复。`, confirmLabel: '确认移除' })) return;
       setRemoving(true);
-      const result = await action('asset.deleteMany', { assetIds: selected.map(asset => asset.id) }, `已移除 ${selected.length} 条素材记录`);
+      const result = await action('asset.deleteMany', { assetIds: selected.map(asset => asset.id) }, `已将 ${selected.length} 条素材记录移入回收站`);
       if (result !== null) setSelectedIds(ids => ids && new Set());
       else library.refresh();
       if (document.activeElement === document.body) selectionButton.current?.focus({ preventScroll: true });
@@ -592,10 +590,12 @@ export function AssetsPage({ workspace, action, project }: PageProps & { project
   }
   return <div className="content-page">
     <div className="page-heading">
-      <h1>素材库</h1>
+      <h1>{trashed ? '素材回收站' : '素材库'}</h1>
       <div className="heading-actions">
-        <Button aria-label="恢复缺失素材" onClick={() => setRecovering(true)}><RotateCcw size={15} />恢复缺失素材</Button>
-        <Button aria-label="导入素材" variant="primary" onClick={() => setImporting(true)}><Upload size={15} />导入</Button>
+        <Button ref={trashToggle} disabled={removing} onClick={() => { setSelectedIds(undefined); setTrashed(value => !value); }}>
+          {trashed ? <><ArrowLeft size={16} aria-hidden="true" />返回素材库</> : <><Trash2 size={16} aria-hidden="true" />回收站</>}
+        </Button>
+        {!trashed && <Button aria-label="导入素材" variant="primary" onClick={() => setImporting(true)}><Upload size={15} />导入</Button>}
       </div>
     </div>
     <div className={`page-toolbar library-toolbar${selectedIds ? ' library-toolbar--selecting' : ''}`}>
@@ -611,73 +611,58 @@ export function AssetsPage({ workspace, action, project }: PageProps & { project
           <span className="tiny-meta" role="status">已选 {selected.length} 项</span>
           <Button variant="danger" busy={removing} disabled={!selected.length} onClick={() => void removeSelected()}><Trash2 size={15} />批量移除</Button>
         </> : library.hasLoaded && !library.stale && <span className="tiny-meta">{assets.length} 个素材</span>}
-        <Button ref={selectionButton} disabled={!selectedIds && (removing || !assets.length)} onClick={() => setSelectedIds(ids => ids ? undefined : new Set())}>
+        {!trashed && <Button ref={selectionButton} disabled={!selectedIds && (removing || !assets.length)} onClick={() => setSelectedIds(ids => ids ? undefined : new Set())}>
           <ListChecks size={15} />{selectedIds ? '退出多选' : '多选'}
-        </Button>
+        </Button>}
       </div>
     </div>
     {library.error && <Notice kind="error">{library.error}<Button aria-label="重试读取素材" onClick={library.refresh}>重试</Button></Notice>}
     {loading && <p role="status" className="muted">正在读取素材…</p>}
-    {assets.length > 0 && <div className="asset-grid">{assets.map(asset => <AssetCard key={asset.id} asset={asset} action={action} projects={projects} initialProject={project}
+    {assets.length > 0 && <div className="asset-grid">{assets.map(asset => <AssetCard key={asset.id} asset={asset} action={action} onRestored={() => {
+      if (document.activeElement === document.body) trashToggle.current?.focus({ preventScroll: true });
+    }}
       selection={selectedIds ? { checked: selectedIds.has(asset.id), busy: removing, onChange: checked => selectAsset(asset.id, checked) } : undefined} />)}</div>}
-    {!loading && !library.error && assets.length === 0 && <EmptyState icon={<Image size={25} />} title={filter === 'all' ? '还没有素材' : '没有此类素材'} description={filter === 'all' ? '导入自有或已授权的图片、视频、音频和资料。' : '查看全部素材，或导入此类型的文件。'}>{filter !== 'all' && <Button onClick={showAllAssets}>查看全部素材</Button>}</EmptyState>}
-    {!library.stale && library.nextCursor !== null && <Button aria-label="加载更多素材" className="button-full" busy={library.loadingMore} disabled={!library.canLoadMore} onClick={() => void library.loadMore()}>加载更多</Button>}{importing && <Dialog title="导入本地素材" onClose={() => setImporting(false)}><form onSubmit={event => { event.preventDefault(); void action('asset.import', { path: source, projectId: project?.id }, '素材已导入').then(result => { if (result !== null) { setImporting(false); setSource(''); } }); }}><div className="dialog__body"><Field label="文件路径"><PathPicker label="文件路径" autoFocus required value={source} onChange={setSource} placeholder={pathExample('image')} /></Field><p className="tiny-meta">请使用自己创作或已获授权的素材。源文件会保留。</p></div><div className="dialog__footer"><Button onClick={() => setImporting(false)}>取消</Button><Button variant="primary" type="submit"><Upload size={15} />导入</Button></div></form></Dialog>}{recovering && <Suspense fallback={null}><AssetRecoveryDialog project={project} directory={workspace.system.dataDirectory} onClose={() => setRecovering(false)} /></Suspense>}</div>;
+    {!loading && !library.error && assets.length === 0 && <EmptyState icon={trashed ? <Trash2 size={25} /> : <Image size={25} />}
+      title={filter !== 'all' ? '没有此类素材' : trashed ? '回收站为空' : '还没有素材'}
+      description={trashed ? '移入回收站的素材可在此恢复。' : filter === 'all' ? '导入自有或已授权的图片、视频、音频和资料。' : '查看全部素材，或导入此类型的文件。'}>
+      {filter !== 'all' && <Button onClick={showAllAssets}>{trashed ? '查看全部回收素材' : '查看全部素材'}</Button>}
+    </EmptyState>}
+    {!library.stale && library.nextCursor !== null && <Button aria-label="加载更多素材" className="button-full" busy={library.loadingMore} disabled={!library.canLoadMore} onClick={() => void library.loadMore()}>加载更多</Button>}{importing && <Dialog title="导入本地素材" onClose={() => setImporting(false)}><form onSubmit={event => { event.preventDefault(); void action('asset.import', { path: source, projectId: project?.id }, '素材已导入').then(result => { if (result !== null) { setImporting(false); setSource(''); } }); }}><div className="dialog__body"><Field label="文件路径"><PathPicker label="文件路径" autoFocus required value={source} onChange={setSource} placeholder={pathExample('image')} /></Field><p className="tiny-meta">请使用自己创作或已获授权的素材。源文件会保留。</p></div><div className="dialog__footer"><Button onClick={() => setImporting(false)}>取消</Button><Button variant="primary" type="submit"><Upload size={15} />导入</Button></div></form></Dialog>}</div>;
 }
 
-function AssetCard({ asset, action, projects, initialProject, selection }: {
-  asset: AssetListItem; action: Action; projects: ProjectSummary[]; initialProject?: ProjectDocument;
+function AssetCard({ asset, action, onRestored, selection }: {
+  asset: AssetListItem; action: Action; onRestored: () => void;
   selection?: { checked: boolean; busy: boolean; onChange: (checked: boolean) => void };
 }) {
-  const [cuttingGrid, setCuttingGrid] = useState(false);
   const [previewing, setPreviewing] = useState(false);
+  const [restoring, setRestoring] = useState(false);
   const confirm = useConfirmation();
   async function removeAsset() {
-    if (!await confirm({ title: '移除素材记录？', description: `“${asset.name}”将从素材库中移除，素材文件会保留。需要再次使用时可重新导入。`, confirmLabel: '确认移除' })) return;
-    await action('asset.delete', { assetId: asset.id }, '素材记录已移除');
+    if (!await confirm({ title: '移除素材记录？', description: `“${asset.name}”将移入回收站。素材文件会保留，可在回收站恢复。`, confirmLabel: '确认移除' })) return;
+    await action('asset.delete', { assetId: asset.id }, '素材已移入回收站');
+  }
+  async function restoreAsset() {
+    setRestoring(true);
+    try {
+      if (await action('asset.restore', { assetId: asset.id }, '素材已恢复') !== null) onRestored();
+    } finally {
+      setRestoring(false);
+    }
   }
   const availability = useAssetAvailability(asset.id);
   const [image, setImage] = useState<string>();
   const [error, setError] = useState(false);
-  const [selecting, setSelecting] = useState(false);
-  const [projectId, setProjectId] = useState(initialProject?.id ?? projects[0]?.id ?? '');
-  const [shotId, setShotId] = useState('');
-  const [loadedTarget, setTarget] = useState<ProjectDocument>();
-  const [targetError, setTargetError] = useState('');
-  const [targetReload, setTargetReload] = useState(0);
-  const target = loadedTarget?.id === projectId ? loadedTarget : undefined;
   useEffect(() => {
     let active = true;
     setError(false); setImage(undefined);
     if (asset.kind === 'image') void getAssetUrl(asset.path).then(url => { if (active) setImage(assetAvailabilityUrl(url, asset.id)); }).catch(() => { if (active) setError(true); });
     return () => { active = false; };
   }, [asset.kind, asset.path, availability]);
-  useEffect(() => {
-    if (!selecting || !projectId) return;
-    let active = true; setTarget(undefined); setTargetError(''); setShotId('');
-    void rpc('project.get', { projectId }).then(value => {
-      const project = projectDetailSchema.parse(value).project;
-      if (active) { setTarget(project); setShotId(project?.shots[0]?.id ?? ''); }
-    }).catch(error => { if (active) setTargetError(error instanceof Error ? error.message : String(error)); });
-    return () => { active = false; };
-  }, [selecting, projectId, targetReload]);
-  const targetLoading = Boolean(projectId && !target && !targetError);
-  const shotPlaceholder = !projectId ? '先选择项目' : targetError ? '镜头读取失败' : targetLoading ? '正在读取镜头…' : '暂无镜头';
   const removable = canRemoveAsset(asset);
   const checked = removable && selection?.checked;
   const source = asset.provenance === '用户导入' ? undefined : asset.provenance;
   const size = asset.size < 1024 * 1024 ? `${Math.round(asset.size / 1024)} KB` : `${(asset.size / (1024 * 1024)).toFixed(1)} MB`;
-  const media = ['image', 'audio', 'video'].includes(asset.kind);
   const Icon = asset.kind === 'image' ? FileImage : asset.kind === 'video' ? Video : asset.kind === 'audio' ? Mic : File;
-  async function apply() {
-    if (!target || !shotId) return;
-    const shot = target.shots.find(shot => shot.id === shotId);
-    const previous = asset.kind === 'video' ? shot?.videoAssetId : asset.kind === 'audio' ? shot?.audioAssetId : shot?.assetId;
-    if (shot && (previous && previous !== asset.id || shot.clipEdit || asset.kind !== 'audio' && shot.sceneTemplate) && !await confirm({ title: '替换镜头素材？', description: `将把“${asset.name}”应用到“${target.title}”的镜头“${shot.title}”，替换对应的素材关联及剪辑设置。原素材文件会保留。`, confirmLabel: '确认替换', variant: 'primary' })) return;
-    const value = asset.projectId && asset.projectId !== target.id
-      ? await action('asset.import', { path: asset.path, projectId: target.id, shotId }, '素材已复制并应用到镜头')
-      : await action('asset.select', { assetId: asset.id, projectId: target.id, shotId, revision: target.revision }, '素材已应用到镜头');
-    if (value !== null) setSelecting(false);
-  }
   const thumbnail = image && !error ? <img src={image} alt={asset.name} loading="lazy" decoding="async" onError={() => setError(true)} /> : <Icon size={31} role={error ? 'img' : undefined} aria-label={error ? `无法预览“${asset.name}”` : undefined} />;
   return <article className="asset-card" data-selected={checked || undefined}>
     <div className="asset-card__preview">
@@ -696,17 +681,15 @@ function AssetCard({ asset, action, projects, initialProject, selection }: {
       </div>
     </div>
     {!selection && <div className="asset-actions">
-      {asset.kind === 'image' && <IconButton label={`网格切图“${asset.name}”`} onClick={() => setCuttingGrid(true)}><FileImage size={15} /></IconButton>}
-      {media && <IconButton label={`将“${asset.name}”用于镜头`} onClick={() => { setSelecting(true); setShotId(target?.shots[0]?.id ?? ''); }}><Link size={15} /></IconButton>}
-      <IconButton label={asset.retained ? '取消保留此版本' : '保留此版本'} aria-pressed={asset.retained} onClick={() => void action('asset.retain', { assetId: asset.id, retained: !asset.retained }, asset.retained ? '已取消保留' : '此版本已保留')}><ShieldCheck size={15} /></IconButton>
-      <IconButton label={`移除素材“${asset.name}”`} disabled={!removable} onClick={() => void removeAsset()}><Trash2 size={15} /></IconButton>
+      {asset.active ? <>
+        <IconButton label={asset.retained ? '取消保留此版本' : '保留此版本'} aria-pressed={asset.retained} onClick={() => void action('asset.retain', { assetId: asset.id, retained: !asset.retained }, asset.retained ? '已取消保留' : '此版本已保留')}><ShieldCheck size={16} aria-hidden="true" /></IconButton>
+        <IconButton label={`移除素材“${asset.name}”`} title="移入回收站" disabled={!removable} onClick={() => void removeAsset()}><Trash2 size={16} aria-hidden="true" /></IconButton>
+      </> : <IconButton label={`恢复素材“${asset.name}”`} busy={restoring} onClick={() => void restoreAsset()}><RotateCcw size={16} aria-hidden="true" /></IconButton>}
     </div>}
     {previewing && <Dialog title={asset.name} className="dialog--wide asset-image-dialog" onClose={() => setPreviewing(false)}>
       <div className="dialog__body">
         {image && !error ? <img src={image} alt={asset.name} decoding="async" onError={() => setError(true)} /> : <Notice kind="error">无法读取此图片。</Notice>}
       </div>
     </Dialog>}
-    {selecting && <Dialog title="应用素材到镜头" onClose={() => setSelecting(false)}><div className="dialog__body"><p>{asset.name}</p>{targetError && <Notice kind="error">{targetError}<Button aria-label="重试读取目标镜头" onClick={() => setTargetReload(value => value + 1)}>重试</Button></Notice>}<Field label="目标项目"><Select value={projectId} disabled={!projects.length} onChange={event => { setProjectId(event.target.value); setShotId(''); }}><option value="" disabled>{projects.length ? '选择项目' : '暂无项目'}</option>{projects.map(project => <option key={project.id} value={project.id}>{project.title}</option>)}</Select></Field><Field label="目标镜头"><Select value={shotId} disabled={!target?.shots.length} aria-busy={targetLoading} onChange={event => setShotId(event.target.value)}><option key={shotPlaceholder} value="" disabled>{shotPlaceholder}</option>{target?.shots.map((shot, index) => <option key={shot.id} value={shot.id}>{index + 1}. {shot.title}</option>)}</Select></Field>{asset.projectId && target && asset.projectId !== target.id && <Notice>素材将复制到目标项目，源项目保持独立。</Notice>}</div><div className="dialog__footer"><Button onClick={() => setSelecting(false)}>取消</Button><Button aria-label="应用此版本" variant="primary" disabled={!target || !shotId} onClick={() => void apply()}><Check size={14} />应用</Button></div></Dialog>}
-    {cuttingGrid && <Suspense fallback={null}><ImageGridDialog asset={asset} onClose={() => setCuttingGrid(false)} /></Suspense>}
   </article>;
 }

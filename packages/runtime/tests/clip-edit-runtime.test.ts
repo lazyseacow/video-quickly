@@ -32,7 +32,8 @@ it('rejects dangling or mutable edit records and protects every original media f
   await expect(runtime.dispatch('project.update', { projectId: project.id, revision: project.revision, patch: { clipEditPlans: [] } })).rejects.toThrow('不存在');
   await expect(runtime.dispatch('project.update', { projectId: project.id, revision: project.revision, patch: { clipEditPlans: project.clipEditPlans!.map(plan => ({ ...plan, spans: plan.spans.map((span, index) => index ? span : { ...span, audioInUs: span.audioInUs + 1 }) })) } })).rejects.toThrow('原地改写');
   await expect(runtime.dispatch('project.update', { projectId: project.id, revision: project.revision, patch: { clipEditSources: project.clipEditSources!.map(source => ({ ...source, assetHashes: source.assetHashes.map(value => ({ ...value, sha256: 'f'.repeat(64) })) })) } })).rejects.toThrow('校验值');
-  const replaced = projectSchema.parse(await runtime.dispatch('asset.select', { projectId: project.id, shotId: 'shot', assetId: assets[2].id, revision: project.revision }));
+  await runtime.dispatch('asset.import', { projectId: project.id, shotId: 'shot', path: assets[2].path, kind: 'audio' });
+  const replaced = (await runtime.dispatch('project.get', { projectId: project.id }) as { project: ProjectDocument }).project;
   expect(resolveShotSpans(replaced.shots[0], replaced).map(span => [span.audioInUs, span.videoInUs])).toEqual([[0, 2_000_000], [2_000_000, 5_000_000]]);
   await expect(runtime.dispatch('asset.delete', { assetId: assets[0].id })).rejects.toThrow('正在使用');
   const restored = restoreShotRanges(replaced, 'shot'); expect(restored.shots[0]).toMatchObject({ audioAssetId: assets[0].id, videoAssetId: assets[1].id, durationUs: 8_000_000 });

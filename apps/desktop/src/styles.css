@@ -65,7 +65,7 @@ button svg { stroke-width: 1.75px; }
 .icon-button { min-width: var(--control-hit-size); height: var(--control-hit-size); border: 1px solid transparent; border-radius: var(--radius-pill); display: inline-grid; place-items: center; padding: 0; background: transparent; color: var(--text-secondary); transition: background-color var(--motion-fast) var(--motion-ease), color var(--motion-fast) var(--motion-ease); }
 .icon-button:not(:disabled):hover { color: var(--text); background: var(--surface-hover); }
 .icon-button:not(:disabled):active { color: var(--accent); background: var(--surface-selected); }
-.icon-button[aria-pressed='true'] { background: var(--surface-selected); color: var(--accent); }
+.icon-button:is([aria-pressed='true'], [aria-checked='true']) { background: var(--surface-selected); color: var(--accent); }
 .page-body { flex: 1; min-height: 0; overflow: auto; }
 .workbench { height: 100%; min-height: 650px; display: flex; flex-direction: column; }
 .project-heading { min-height: 87px; padding: var(--space-5) var(--space-6); display: flex; align-items: center; gap: var(--space-4); }
@@ -220,8 +220,7 @@ button svg { stroke-width: 1.75px; }
 .project-card-body { display: grid; gap: var(--space-3); padding: var(--space-4); }
 .project-card-body h3 { font-size: var(--text-size-subtitle); font-weight: var(--font-weight-semibold); margin: 0; }
 .project-card-footer { display: flex; align-items: center; gap: var(--space-2); }
-.project-card-footer .button { margin-left: auto; }
-.project-card-footer .icon-button { height: 40px; }
+.project-card-footer > .tiny-meta { margin-inline-end: auto; }
 .section-card { background: var(--surface); border: 1px solid var(--border); box-shadow: var(--shadow); border-radius: var(--radius-large); padding: var(--space-6); margin-bottom: var(--space-5); }
 .section-card h2 { font-size: var(--text-size-body); font-weight: var(--font-weight-medium); margin-bottom: var(--space-5); }
 .list-card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-medium); margin-bottom: var(--space-3); padding: var(--space-5); display: flex; align-items: center; gap: var(--space-4); }

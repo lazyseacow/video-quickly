@@ -28,35 +28,6 @@ async function fixture(request: APIRequestContext) {
 async function open(page: Page, title: string) { await page.goto('/'); await expect(page).toHaveTitle(/Video Quickly/); await openProjectFromList(page, title); }
 const viewports = [{ width: 1536, height: 960, theme: 'dark' }, { width: 390, height: 844, theme: 'light' }];
 
-for (const viewport of viewports) test(`previews and saves deterministic grid crops without rebinding the shot at ${viewport.width}px`, async ({ page, request }, info) => {
-  const source = await fixture(request), errors: string[] = []; page.on('pageerror', error => errors.push(error.message));
-  try {
-    await page.setViewportSize(viewport); await page.addInitScript(theme => localStorage.setItem('vq-theme', theme), viewport.theme);
-    await page.goto('/'); await page.getByRole('button', { name: '素材库', exact: true }).click();
-    await page.getByRole('button', { name: `网格切图“${source.asset.name}”`, exact: true }).click();
-    const dialog = page.getByRole('dialog', { name: '网格切图', exact: true });
-    await expect(dialog.getByRole('combobox', { name: '网格行数', exact: true })).toBeEnabled();
-    await expect(dialog.getByAltText('网格切图原图')).toBeVisible();
-    await dialog.getByRole('combobox', { name: '网格列数', exact: true }).selectOption('3');
-    await dialog.getByRole('button', { name: '保存 6 张切图', exact: true }).click();
-    await expect(dialog.getByText('已保存 6 张切图，来源和像素区域已记录。', { exact: true })).toBeVisible();
-    await expect(dialog.getByAltText(/^切图 \d+$/)).toHaveCount(6);
-    expect(await dialog.evaluate(element => element.scrollWidth <= element.clientWidth + 1)).toBe(true);
-    await page.screenshot({ path: info.outputPath(`image-grid-${viewport.width}.png`) });
-    const crops = await rpc<AssetRecord[]>(request, 'image.cutGrid', { assetId: source.asset.id, rows: 2, columns: 3 });
-    expect(crops.map(asset => [asset.width, asset.height])).toEqual([[53, 45], [54, 45], [54, 45], [53, 46], [54, 46], [54, 46]]);
-    expect(crops.every(asset => asset.derivation?.sourceAssetId === source.asset.id && asset.derivation.sourceSha256 === source.asset.sha256)).toBe(true);
-    expect(await source.current()).toEqual(source.project);
-    await dialog.getByRole('button', { name: '关闭', exact: true }).click();
-    await page.getByRole('button', { name: `网格切图“${source.asset.name}”`, exact: true }).click();
-    await dialog.getByRole('combobox', { name: '网格列数', exact: true }).selectOption('3');
-    await dialog.getByRole('button', { name: '保存 6 张切图', exact: true }).click();
-    await expect(dialog.getByText('已保存 6 张切图，来源和像素区域已记录。', { exact: true })).toBeVisible();
-    expect((await rpc<AssetRecord[]>(request, 'image.cutGrid', { assetId: source.asset.id, rows: 2, columns: 3 })).map(asset => asset.id)).toEqual(crops.map(asset => asset.id));
-    expect(errors).toEqual([]); await expect(page.locator('vite-error-overlay')).toHaveCount(0);
-  } finally { await source.close(); }
-});
-
 for (const viewport of viewports) test(`generates a masked image candidate and applies it explicitly with undo at ${viewport.width}px`, async ({ page, request }, info) => {
   const source = await fixture(request), resultBytes = png('green'), calls: Array<{ path: string; source: Buffer; mask: Buffer; prompt: string }> = [], errors: string[] = [];
   const server = createServer({ keepAliveTimeout: 0 }, (incoming, response) => { void (async () => {
