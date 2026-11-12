@@ -8,8 +8,12 @@ const styleOutputSchema = z.strictObject({ text: documentText.describe('完整�
 
 export const editingOutputSchema = z.strictObject({ text: z.string().regex(/\S/).describe('剪辑 Agent 的操作摘要') });
 
-export type WorkflowOutputVersion = 1 | 2;
-export const WORKFLOW_OUTPUT_VERSION = 2;
+export type WorkflowOutputVersion = 1 | 2 | 3;
+export const WORKFLOW_OUTPUT_VERSION = 3;
+
+export function usesPlanningFields(version?: WorkflowOutputVersion): boolean {
+  return version !== undefined && version >= 2;
+}
 
 const documentContracts = {
   brief: { kind: 'brief' as const, label: '创意简报', name: 'video_brief', schema: briefOutputSchema, jsonSchema: z.toJSONSchema(briefOutputSchema), fieldOutput: false },
@@ -63,7 +67,31 @@ export const storyboardOutputSchema = z.strictObject({
   entities: z.array(z.strictObject(generatedEntity)).max(100)
     .refine(entities => new Set(entities.map(entity => entity.key)).size === entities.length, '创作设定编号不能重复。').default([]),
 });
-export const storyboardJsonSchema = z.toJSONSchema(storyboardOutputSchema, { io: 'input' });
+const storyboardJsonSchema = z.toJSONSchema(storyboardOutputSchema, { io: 'input' });
+
+const storyboardVisualText = shotSchema.shape.visualPrompt.trim().min(1);
+const structuredStoryboardShotSchema = storyboardOutputSchema.shape.shots.element.omit({ visualPrompt: true }).extend({
+  durationUs: shotSchema.shape.durationUs,
+  initialFrame: storyboardVisualText,
+  characterPositions: storyboardVisualText,
+  actionTimeline: z.array(z.strictObject({
+    startUs: z.number().int().nonnegative(),
+    endUs: z.number().int().positive(),
+    action: storyboardVisualText,
+  })).min(1),
+});
+const structuredStoryboardOutputSchema = storyboardOutputSchema.extend({
+  shots: z.array(structuredStoryboardShotSchema).min(1).max(MAX_STORYBOARD_SHOTS),
+});
+const structuredStoryboardJsonSchema = z.toJSONSchema(structuredStoryboardOutputSchema, { io: 'input' });
+
+export type GeneratedStoryboardShot = z.infer<typeof generatedShotSchema> | z.infer<typeof structuredStoryboardShotSchema>;
+
+export function storyboardOutputContract(version?: WorkflowOutputVersion) {
+  if (version === 3) return { schema: structuredStoryboardOutputSchema, jsonSchema: structuredStoryboardJsonSchema, structured: true };
+  if (version) return { schema: storyboardOutputSchema, jsonSchema: storyboardJsonSchema, structured: false };
+  return { schema: legacyStoryboardOutputSchema, jsonSchema: legacyStoryboardJsonSchema, structured: false };
+}
 
 export function manualPlanningOutput(project: ProjectDocument, node: WorkflowNode, version?: WorkflowOutputVersion): JsonValue | undefined {
   const step = productionPlanningStep(project.workflow, node);
@@ -77,7 +105,7 @@ export function manualPlanningOutput(project: ProjectDocument, node: WorkflowNod
     return { shots: project.shots, ...(project.creativeContext ? { creativeContext: project.creativeContext } : {}), source: 'project' } as unknown as JsonValue;
   }
   const contract = documentContracts[step];
-  const fields = version === 2 ? project.workflow.production.manualPlanningFields?.[step] : undefined;
+  const fields = usesPlanningFields(version) ? project.workflow.production.manualPlanningFields?.[step] : undefined;
   return { ...validateOutput(contract.schema, { text: project[step] }, `手动${contract.label}`), ...(fields && formatPlanningDocument(step, fields) === project[step] ? { fields } : {}), source: 'project' };
 }
 

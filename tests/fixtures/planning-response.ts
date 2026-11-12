@@ -13,11 +13,25 @@ export function planningFixtureResponse(prompt: string, text: string): string {
 
 export const storyboardOutlineRequest = (prompt: string) => prompt.includes('分镜生成阶段：全片大纲。');
 
+type StoryboardFixtureShot = { id?: string; title: string; visualPrompt?: unknown; durationUs?: unknown; initialFrame?: unknown };
+
+function structuredFixtureShot(shot: StoryboardFixtureShot) {
+  if (!shot || 'initialFrame' in shot || typeof shot.visualPrompt !== 'string') return shot;
+  const { visualPrompt, durationUs = 1_000_000, ...fields } = shot;
+  return {
+    ...fields, durationUs,
+    initialFrame: visualPrompt || '固定机位拍摄当前场景。',
+    characterPositions: '无人出镜。',
+    actionTimeline: [{ startUs: 0, endUs: typeof durationUs === 'number' ? durationUs : 1_000_000, action: '镜头保持当前构图。' }],
+  };
+}
+
 export function storyboardFixtureResponse(prompt: string, text: string): string {
   const outline = storyboardOutlineRequest(prompt);
   const planned = /^本批镜头计划：(.+)$/m.exec(prompt);
-  if (!outline && !planned) return text;
-  let source: { shots?: { id?: string; title: string }[]; entities?: unknown[] };
+  const structured = prompt.includes('"initialFrame"') && prompt.includes('"actionTimeline"');
+  if (!outline && !planned && !structured) return text;
+  let source: { shots?: StoryboardFixtureShot[]; entities?: unknown[] };
   try { source = JSON.parse(text); } catch { return text; }
   if (!Array.isArray(source?.shots)) return text;
   if (outline) return JSON.stringify({
@@ -25,7 +39,8 @@ export function storyboardFixtureResponse(prompt: string, text: string): string 
     shots: source.shots.map(({ id, title }) => ({ id, title, beat: '交代当前叙事要点。' })),
     entities: source.entities ?? [],
   });
-  if (!planned) return text;
+  const shots = structured ? source.shots.map(structuredFixtureShot) : source.shots;
+  if (!planned) return JSON.stringify({ ...source, shots });
   const slots = JSON.parse(planned[1]) as { number: number }[];
-  return JSON.stringify({ shots: slots.map(({ number }) => ({ ...source.shots?.[number - 1], number })) });
+  return JSON.stringify({ shots: slots.map(({ number }) => ({ ...shots[number - 1], number })) });
 }

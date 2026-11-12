@@ -1,8 +1,28 @@
 import { createCanvas, loadImage } from '@napi-rs/canvas';
 import type { ImageRectangle } from '@video-quickly/contracts';
 
+function imageBytesForCanvas(bytes: Buffer): Buffer {
+  if (bytes.subarray(0, 8).toString('hex') !== '89504e470d0a1a0a') return bytes;
+  // Canvas can mistake an SVG inside a PNG's C2PA manifest for the image
+  // format. Omit the manifest only from the buffer used to decode pixels.
+  const parts: Buffer[] = [];
+  let retainedStart = 0;
+  for (let offset = 8; offset + 12 <= bytes.length;) {
+    const end = offset + 12 + bytes.readUInt32BE(offset);
+    if (end > bytes.length) return bytes;
+    const type = bytes.toString('latin1', offset + 4, offset + 8);
+    if (type === 'IEND') return retainedStart ? Buffer.concat([...parts, bytes.subarray(retainedStart)]) : bytes;
+    if (type === 'caBX') {
+      if (offset > retainedStart) parts.push(bytes.subarray(retainedStart, offset));
+      retainedStart = end;
+    }
+    offset = end;
+  }
+  return bytes;
+}
+
 export async function readToolImage(bytes: Buffer) {
-  const image = await loadImage(bytes);
+  const image = await loadImage(imageBytesForCanvas(bytes));
   if (!image.width || !image.height || image.width * image.height > 32_000_000) throw new Error('图片须为有效图片，且不超过 3200 万像素。');
   return image;
 }

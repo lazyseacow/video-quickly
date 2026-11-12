@@ -25,6 +25,7 @@ for (const viewport of [{ width: 1536, height: 960, theme: 'dark' }, { width: 39
     const formats = dialog.getByRole('tablist', { name: '导出类型', exact: true });
     const mp4 = formats.getByRole('tab', { name: 'MP4', exact: true });
     const path = dialog.getByLabel('输出文件路径', { exact: true });
+    await expect(path).toHaveAccessibleDescription('留空时保存到项目的输出目录。');
     await expect(formats.getByRole('tab')).toHaveText(['MP4', '其他导出']);
     await expect(mp4).toHaveAttribute('aria-selected', 'true');
     await expect(dialog.getByRole('tabpanel', { name: 'MP4', exact: true }).getByLabel('输出文件路径', { exact: true })).toBeInViewport({ ratio: 1 });

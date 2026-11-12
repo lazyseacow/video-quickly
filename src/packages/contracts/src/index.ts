@@ -12,6 +12,8 @@ import { nodeKindSchema, workflowNodeSchema, workflowSchema, workflowStageSchema
 export { nodeKindSchema, promptBindingsSchema, promptLibraryItemSchema, promptTemplateReferenceSchema, subflowDefinitionSchema, subflowInputSchema, subflowOutputSchema, subflowReferenceSchema, workflowNodeSchema, workflowSchema, workflowStageSchema, workflowTemplateSchema, workflowValueBindingSchema, type PromptBindings, type PromptLibraryItem, type SubflowDefinition, type SubflowReference, type WorkflowDefinition, type WorkflowNode, type WorkflowStage, type WorkflowTemplate } from './workflow-schema.js';
 export { chargeActionRequestSchema, isChargeAction, type ChargeAction } from './charge-confirmation.js';
 export { retryAfterMilliseconds } from './http-retry.js';
+import { modelHttpErrorMessage } from './model-request-errors.js';
+export { modelHttpErrorMessage, modelRequestFailure, ModelServiceResponseError, parseModelServiceJson } from './model-request-errors.js';
 export * from './model-alternatives.js';
 import { sceneTemplateSchema } from './scene-templates.js';
 import { claimSchema, researchSourceSchema } from './research.js';
@@ -27,7 +29,7 @@ export * from './asset-recovery.js';
 export { skillPromptContext, appendSkillContext, supportsSkillScript } from './skill-context.js';
 export { motionKeyframesSchema, type MotionKeyframe, type MotionEasing } from './keyframes.js';
 export { modelPlatforms, getModelPlatform, platformForConnection } from './model-platforms.js';
-export { textProtocols, mediaAdapters, getMediaAdapters } from './model-protocols.js';
+export { textProtocols, textModelRoute, textModelBasePath, mediaAdapters, getMediaAdapters } from './model-protocols.js';
 export { modelConnectionTypes, getModelConnectionType, modelToolProtocolIssue, validateModelConnection } from './model-connections.js';
 export { providerReportedUsage, sumProviderUsage } from './provider-usage.js';
 export { audioProcessingSchema, audioMixSettingsSchema, usesVideoAudio, DEFAULT_AUDIO_PROCESSING, DEFAULT_AUDIO_MIX_SETTINGS, preparedAudioMixSchema, audioMixJobSchema, audioMixPrepareResultSchema, audioLevelWindowSchema, silenceDetectionSchema, type PreparedAudioMix, type AudioMixJob, type AudioMixPrepareResult, type AudioLevelWindow, type SilenceDetection } from './audio-processing.js';
@@ -44,7 +46,7 @@ export class MediaRequestRejectedError extends Error {
   constructor(readonly status: number, readonly reason?: 'output-image-moderation') {
     super(reason === 'output-image-moderation'
       ? `模型服务的内容审核拦截了生成的图片（HTTP ${status}）。请调整生成描述或参考图后重试。`
-      : `模型服务已拒绝素材生成请求（HTTP ${status}），请核对模型、尺寸和请求参数。`);
+      : modelHttpErrorMessage(status));
     this.name = 'MediaRequestRejectedError';
   }
 }
@@ -178,7 +180,7 @@ export const shotCandidateSchema = z.object({
 }).refine(value => value.baseline.id === value.shotId && value.shot.id === value.shotId, '候选与原始镜头编号须一致');
 export type ShotCandidate = z.infer<typeof shotCandidateSchema>;
 export { applyShotCandidate } from './shot-candidates.js';
-export { defaultVideoRequestSeconds, getModelParameterFields, modelParameterValue, withModelParameter, validateModelParameters, requestModelParameters, imageSequenceMode, singleImageRequestModel } from './model-parameters.js';
+export { defaultVideoRequestSeconds, getModelParameterFields, modelParameterValue, withModelParameter, parametersForTextProtocol, validateModelParameters, requestModelParameters, imageSequenceMode, singleImageRequestModel } from './model-parameters.js';
 export { hasTemplateValue, imageReferenceLimit, planReferenceImageSequences, seedreamTextOnly, seedreamSingleImageV5 } from './image-sequences.js';
 export { validateWorkflowComposition, workflowNodesWithSubflows, workflowEdgesWithSubflows, resolveSubflowInputs, substituteSubflowInputs, subflowNodeId, subflowThreadId, subflowValueAt } from './workflow-composition.js';
 export { resolveWorkflowStages, type ResolvedWorkflowStage } from './workflow-stages.js';
@@ -461,7 +463,7 @@ export const promptSessionSchema = z.object({
 });
 export type PromptSession = z.infer<typeof promptSessionSchema>;
 export { resolvePromptBindings, applyPromptLibraryItem, supportsPromptExperiment } from './prompt-bindings.js';
-export { buildMediaPrompt, characterReferencePrompt, generationFramePrompt, singleFrameVideoModel, needsComposedSceneFrame, usesVideoSceneImage, characterSceneFirstFrame, videoReferenceImages, type VideoReferenceImages } from './media-prompts.js';
+export { buildMediaPrompt, characterReferencePrompt, generationFramePrompt, singleFrameVideoModel, needsComposedSceneFrame, usesVideoSceneImage, characterSceneFirstFrame, stripVisualPromptOutputSpecs, videoReferenceImages, type VideoReferenceImages } from './media-prompts.js';
 export const runStepStatusSchema = z.enum(['pending', 'running', 'waiting_review', 'waiting_external', 'retry_scheduled', 'needs_attention', 'succeeded', 'failed', 'canceled', 'skipped', 'not_recorded']);
 export const modelResponseIssueSchema = z.object({ path: z.string(), message: z.string() });
 export type ModelResponseIssue = z.infer<typeof modelResponseIssueSchema>;

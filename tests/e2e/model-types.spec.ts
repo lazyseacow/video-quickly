@@ -1,4 +1,4 @@
-import { expect, test, type APIRequestContext } from '@playwright/test';
+import { expect, test, type APIRequestContext, type Locator } from '@playwright/test';
 import type { ModelConnectionType, ModelProfile } from '@video-quickly/contracts';
 import { selectModel, addModelConnection, settingField } from './settings';
 import { modelCatalog } from './model-catalog';
@@ -10,6 +10,14 @@ test.afterEach(async () => { await catalog.close(); });
 async function models(request: APIRequestContext) {
   const response = await request.post('/__desktop_rpc', { data: { method: 'workspace.summary' } });
   const payload = await response.json(); expect(response.ok()).toBe(true); expect(payload.error).toBeUndefined(); return (payload.result as { models: ModelProfile[] }).models;
+}
+
+async function expectBasicConnection(dialog: Locator) {
+  await expect(dialog.getByRole('tablist')).toHaveCount(0);
+  await expect(dialog.getByRole('checkbox')).toHaveCount(0);
+  await expect(dialog.getByText('模型能力', { exact: true })).toHaveCount(0);
+  await expect(dialog.getByLabel('模型参数 JSON', { exact: true })).toHaveCount(0);
+  await expect(dialog.getByText('费用估算', { exact: true })).toHaveCount(0);
 }
 
 for (const viewport of [{ width: 1536, height: 960, theme: 'dark' }, { width: 390, height: 844, theme: 'light' }]) {
@@ -24,38 +32,44 @@ for (const viewport of [{ width: 1536, height: 960, theme: 'dark' }, { width: 39
     await expect(picker.locator('.dialog__surface')).toHaveCSS('opacity', '1');
     await page.screenshot({ path: info.outputPath('model-type-picker.png') });
     await picker.getByRole('button', { name: '关闭对话框', exact: true }).click(); await expect(picker).toHaveCount(0);
-    const cases: Array<{ type: string; kind: ModelConnectionType; platform: string; capability: 'text' | 'image' | 'video'; parameterTab: string }> = [
-      { type: '文本模型', kind: 'text', platform: 'anthropic', capability: 'text', parameterTab: '文本参数' },
-      { type: '图片模型', kind: 'image', platform: 'seedream', capability: 'image', parameterTab: '图片参数' },
-      { type: '视频模型', kind: 'video', platform: 'seedance', capability: 'video', parameterTab: '视频参数' },
+    const cases: Array<{ type: string; kind: ModelConnectionType; platform: string }> = [
+      { type: '文本模型', kind: 'text', platform: 'anthropic' },
+      { type: '图片模型', kind: 'image', platform: 'seedream' },
+      { type: '视频模型', kind: 'video', platform: 'seedance' },
     ];
     for (const item of cases) {
       await page.getByRole('group', { name: '模型类型筛选' }).getByRole('button', { name: item.type, exact: true }).click();
-      const dialog = await addModelConnection(page, item.type); const name = `分类型 ${item.capability} ${viewport.width}`;
+      const dialog = await addModelConnection(page, item.type); const name = `分类型 ${item.kind} ${viewport.width}`;
+      await expect(dialog.getByLabel('连接名称', { exact: true })).toBeFocused();
       await (await settingField(dialog, '模型平台')).selectOption(item.platform);
-      await expect(dialog.getByLabel('API 协议', { exact: true })).toHaveCount(1); await expect(dialog.locator('.capability-grid')).toHaveCount(0);
+      await expect(dialog.getByLabel('API 协议', { exact: true })).toHaveCount(1);
       if (item.kind === 'text') await expect(dialog.getByLabel('API 协议', { exact: true })).toHaveValue('messages');
       await (await settingField(dialog, '连接名称')).fill(name); await (await settingField(dialog, '服务地址')).fill(catalog.baseUrl);
       await dialog.getByRole('button', { name: '获取模型列表', exact: true }).click();
-      await selectModel(dialog, `fixture-${item.capability}`);
-      if (item.kind === 'text') {
-        const tools = dialog.getByRole('checkbox', { name: '工具调用', exact: true });
-        await expect(tools).not.toBeChecked(); await tools.check();
-      }
-      for (const tab of ['文本参数', '图片参数', '视频参数', '配音参数', '识别参数']) {
-        if (tab === item.parameterTab) await expect(dialog.getByRole('tab', { name: tab, exact: true })).toBeVisible();
-        else await expect(dialog.getByRole('tab', { name: tab, exact: true })).toHaveCount(0);
-      }
-      if (item.kind === 'video') {
-        await dialog.getByRole('tab', { name: '视频参数', exact: true }).click();
-        await expect(dialog.locator('.model-parameters input[type="checkbox"]')).toHaveCount(0);
-      }
-      await expect(dialog.locator('.dialog__footer')).toBeInViewport({ ratio: 1 }); await page.screenshot({ path: info.outputPath(`model-${item.capability}.png`) });
+      await selectModel(dialog, `fixture-${item.kind}`);
+      await expectBasicConnection(dialog);
+      await expect(dialog.locator('.dialog__footer')).toBeInViewport({ ratio: 1 }); await page.screenshot({ path: info.outputPath(`model-${item.kind}.png`) });
       await dialog.getByRole('button', { name: '保存连接', exact: true }).click(); await expect(dialog).toHaveCount(0);
       const saved = (await models(request)).find(model => model.name === name)!;
-      expect(saved.connectionType).toBe(item.kind); expect(saved.capabilities).toEqual(item.kind === 'text' ? ['text', 'tools'] : [item.capability]);
+      expect(saved.connectionType).toBe(item.kind); expect(saved.capabilities).toEqual([item.kind]);
+      expect(saved.parameters).toEqual({}); expect(saved.pricing).toBeUndefined();
       expect(saved.provider).toBe(item.platform === 'seedream' || item.platform === 'seedance' ? item.platform : 'openai-compatible');
       await expect(page.locator('.list-card').filter({ has: page.getByRole('heading', { name, exact: true }) })).toContainText(item.type);
+      await page.getByRole('button', { name: `编辑“${name}”`, exact: true }).click();
+      const editor = page.getByRole('dialog', { name: '编辑模型连接', exact: true });
+      await expectBasicConnection(editor);
+      const nameInput = editor.getByLabel('连接名称', { exact: true });
+      await expect(nameInput).toHaveValue(name);
+      await expect(editor.locator('.dialog__footer')).toBeInViewport({ ratio: 1 });
+      if (item.kind === 'text') {
+        await page.screenshot({ path: info.outputPath('model-text-edit.png') });
+        await nameInput.clear();
+        await editor.getByRole('button', { name: '保存连接', exact: true }).click();
+        await expect(nameInput).toBeFocused();
+        await nameInput.fill(name);
+      }
+      await editor.getByRole('button', { name: '取消', exact: true }).click();
+      await expect(editor).toHaveCount(0);
     }
     await expect(page.getByRole('heading', { name: '凭据保存在本机', exact: true })).toHaveCount(0);
     await page.screenshot({ path: info.outputPath('model-connections-page.png') });
@@ -65,7 +79,6 @@ for (const viewport of [{ width: 1536, height: 960, theme: 'dark' }, { width: 39
     await expect(page.locator('.list-card').filter({ hasText: `分类型 image ${viewport.width}` })).toHaveCount(0);
     await page.getByRole('button', { name: `编辑“分类型 video ${viewport.width}”`, exact: true }).click();
     const reopened = page.getByRole('dialog', { name: '编辑模型连接', exact: true }); await expect(reopened.getByLabel('API 协议', { exact: true })).toHaveValue('seedance');
-    await expect(reopened.getByRole('tab', { name: '视频参数', exact: true })).toBeVisible(); await expect(reopened.locator('.capability-grid')).toHaveCount(0);
     await expect(page).toHaveTitle(/Video Quickly/); await expect(page.locator('vite-error-overlay')).toHaveCount(0); expect(errors).toEqual([]);
     expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(viewport.width + 1);
   });

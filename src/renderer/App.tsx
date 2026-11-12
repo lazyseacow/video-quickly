@@ -63,7 +63,10 @@ export default function App() {
   const pageScroll = useRef(new Map<Page, number>());
   const navigationGuide = useRef<{ page: Page; complete: () => void } | undefined>(undefined);
   const [projectId, setProjectId] = useState<string>();
-  const [theme, setTheme] = useState<'light' | 'dark'>(() => localStorage.getItem('vq-theme') === 'dark' ? 'dark' : 'light');
+  const [theme, setTheme] = useState<'light' | 'dark'>(() => {
+    const initialTheme = document.documentElement.dataset.theme ?? localStorage.getItem('vq-theme');
+    return initialTheme === 'dark' ? 'dark' : 'light';
+  });
   const [toast, setToast] = useState<ToastMessage>();
   const [creation, setCreation] = useState<{ template?: SeriesTemplate }>();
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -172,6 +175,7 @@ export default function App() {
   }, [refresh]);
   useLayoutEffect(() => {
     document.documentElement.dataset.theme = theme;
+    document.querySelector('meta[name="color-scheme"]')?.setAttribute('content', theme);
     document.querySelector('meta[name="theme-color"]')?.setAttribute('content', getComputedStyle(document.documentElement).getPropertyValue('--background').trim());
     localStorage.setItem('vq-theme', theme);
   }, [theme]);

@@ -29,14 +29,14 @@ const methodWords = new Set(('workspace snapshot summary project create get upda
   'skill import group resource toggle tool register cost billing task tasks character references workflow workflowTemplate seriesTemplate render batch export research search analyze source read ' +
   'asset select retain waveform caption system status runtime reconnect host secret set audio preview levels silence mix prepare edit history undo redo readiness recovery scan confirm').split(' '));
 const builtinNodeIds = new Set(['brief', 'research', 'style', 'script', 'assets', 'video', 'animation', 'export', 'review', 'join', 'condition', 'subflow', 'agent']);
-const errorNames = new Set(['Error', 'TypeError', 'SyntaxError', 'RangeError', 'ReferenceError', 'AggregateError', 'URIError', 'EvalError', 'AbortError', 'TimeoutError', 'ZodError', 'AmbiguousActivityError', 'ActivityInputChangedError', 'LockedShotChangeError', 'VideoGenerationError', 'ModelResponseValidationError', 'TextRequestRejectedError', 'MediaRequestRejectedError']);
+const errorNames = new Set(['Error', 'TypeError', 'SyntaxError', 'RangeError', 'ReferenceError', 'AggregateError', 'URIError', 'EvalError', 'AbortError', 'TimeoutError', 'ZodError', 'AmbiguousActivityError', 'UnconfirmedActivityError', 'ActivityInputChangedError', 'LockedShotChangeError', 'VideoGenerationError', 'ModelResponseValidationError', 'ModelServiceResponseError', 'TextRequestRejectedError', 'MediaRequestRejectedError']);
 const errorCodes = new Set([
   'EACCES', 'EADDRINUSE', 'EADDRNOTAVAIL', 'EAGAIN', 'EAI_AGAIN', 'EBADF', 'EBUSY', 'ECANCELED', 'ECONNABORTED', 'ECONNREFUSED', 'ECONNRESET',
   'EEXIST', 'EHOSTDOWN', 'EHOSTUNREACH', 'EINTR', 'EINVAL', 'EIO', 'EISDIR', 'ELOOP', 'EMFILE', 'ENAMETOOLONG', 'ENETDOWN', 'ENETUNREACH',
   'ENFILE', 'ENOENT', 'ENOMEM', 'ENOSPC', 'ENOSYS', 'ENOTDIR', 'ENOTEMPTY', 'ENOTFOUND', 'ENOTSUP', 'EPERM', 'EPIPE', 'EPROTO', 'EROFS',
   'ESPIPE', 'ESRCH', 'ETIMEDOUT', 'EXDEV', 'ABORT_ERR', 'UND_ERR_SOCKET', 'UND_ERR_CONNECT_TIMEOUT', 'UND_ERR_HEADERS_TIMEOUT',
   'UND_ERR_BODY_TIMEOUT', 'UND_ERR_ABORTED', 'UND_ERR_RES_CONTENT_LENGTH_MISMATCH',
-  'ERR_TLS_CERT_ALTNAME_INVALID', 'CERT_HAS_EXPIRED', 'DEPTH_ZERO_SELF_SIGNED_CERT', 'SELF_SIGNED_CERT_IN_CHAIN', 'UNABLE_TO_VERIFY_LEAF_SIGNATURE',
+  'ERR_TLS_CERT_ALTNAME_INVALID', 'CERT_HAS_EXPIRED', 'DEPTH_ZERO_SELF_SIGNED_CERT', 'SELF_SIGNED_CERT_IN_CHAIN', 'UNABLE_TO_VERIFY_LEAF_SIGNATURE', 'UNABLE_TO_GET_ISSUER_CERT_LOCALLY',
 ]);
 
 function frameLocation(file: string, line: string, column: string): string {

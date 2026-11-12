@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import { afterEach, expect, it } from 'vitest';
 import { applyResearchClaims, createNativeVideoWorkflow, projectSchema, researchResultSchema, runSchema, type ModelProfile, type ProjectDocument, type ResearchSource, type UsageRecord } from '@video-quickly/contracts';
 import { createRuntime, SimulatedProcessExit, type RuntimeOptions } from '../src/packages/runtime/src';
+import { storyboardFixtureResponse } from './fixtures/planning-response';
 
 const directories: string[] = [], servers: Server[] = [];
 const runtimes = new Set<ReturnType<typeof createRuntime>>();
@@ -18,10 +19,14 @@ async function fixture(options: Partial<RuntimeOptions> = {}) {
   const requestReceived = new Promise<void>(resolve => { received = resolve; });
   const requests: Array<{ model: string; messages: Array<{ content: string }> }> = [], state = { sourceId: '', drop: false, hold: false, script: false };
   const server = createServer((request, response) => { void (async () => {
-    let body = ''; for await (const chunk of request) body += chunk.toString(); requests.push(JSON.parse(body)); received();
+    let body = ''; for await (const chunk of request) body += chunk.toString();
+    const payload = JSON.parse(body); requests.push(payload); received();
     if (state.drop) { response.destroy(); return; } if (state.hold) return;
     response.setHeader('content-type', 'application/json');
-    response.end(JSON.stringify({ choices: [{ message: { content: JSON.stringify(state.script ? { shots: [{ title: '候选镜头', narration: '候选文案', visualPrompt: '候选画面' }] } : { claims: [{ text: '纸张由植物纤维构成', status: 'verified', evidence: [{ sourceId: state.sourceId, quote: '纸张由植物纤维构成。' }], shotIds: ['shot-1'] }] }) } }], usage: { prompt_tokens: 20, completion_tokens: 30, total_tokens: 50 } }));
+    const content = state.script
+      ? storyboardFixtureResponse(payload.messages[0].content, JSON.stringify({ shots: [{ title: '候选镜头', narration: '候选文案', visualPrompt: '候选画面' }] }))
+      : JSON.stringify({ claims: [{ text: '纸张由植物纤维构成', status: 'verified', evidence: [{ sourceId: state.sourceId, quote: '纸张由植物纤维构成。' }], shotIds: ['shot-1'] }] });
+    response.end(JSON.stringify({ choices: [{ message: { content } }], usage: { prompt_tokens: 20, completion_tokens: 30, total_tokens: 50 } }));
   })().catch(error => response.destroy(error instanceof Error ? error : undefined)); });
   servers.push(server); await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve)); const address = server.address(); if (!address || typeof address === 'string') throw new Error('测试服务地址无效');
   const runtime = open(directory, options), original = projectSchema.parse(await runtime.dispatch('project.create', { title: '研究核验项目' }));

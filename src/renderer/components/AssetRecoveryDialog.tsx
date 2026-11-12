@@ -107,7 +107,12 @@ export default function AssetRecoveryDialog({ project, directory, onClose }: { p
     <div className="dialog__body asset-recovery__body">
       <p className="asset-recovery__intro">查找相同内容，恢复到原素材位置。素材关联和历史制作快照继续有效。</p>
       <div className="asset-recovery__controls"><Field label="恢复范围"><Select value={scope} disabled={active || busy} onChange={event => setScope(event.target.value)}><option value="">整个工作区（含历史与回收站）</option>{project && <option value={project.id}>当前项目：{project.title}</option>}</Select></Field><Button aria-label="重新检查素材" disabled={active || busy} onClick={() => void start(true)}><RefreshCw size={16} />重新检查</Button></div>
-      <form className="asset-recovery__directory" onSubmit={event => { event.preventDefault(); void perform('scan'); }}><Field label="查找目录" hint="按完整摘要和文件大小匹配，跳过符号链接。原位置的异内容文件会保留。"><PathPicker label="查找目录" mode="directory" value={source} onChange={setSource} required disabled={active || busy} placeholder={pathExample('backup')} /></Field><Button type="submit" disabled={!job || active || busy || !source.trim()}><FolderSearch size={16} />扫描目录</Button></form>
+      <form className="asset-recovery__directory" onSubmit={event => { event.preventDefault(); void perform('scan'); }}>
+        <Field label="查找目录" hint="按完整摘要和文件大小匹配，跳过符号链接。原位置的异内容文件会保留。">
+          {field => <PathPicker field={field} label="查找目录" mode="directory" value={source} onChange={setSource} required disabled={active || busy} placeholder={pathExample('backup')} />}
+        </Field>
+        <Button type="submit" disabled={!job || active || busy || !source.trim()}><FolderSearch size={16} />扫描目录</Button>
+      </form>
       {error && <Notice kind="error">{error}<Button onClick={() => { setError(''); if (job) void read(job.id).then(page => { if (page) setRetry(value => value + 1); }); else void start(true); }}>重新读取状态</Button></Notice>}
       {!job && !error && <p role="status">正在检查素材…</p>}
       {job && <>

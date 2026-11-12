@@ -6,6 +6,18 @@ export const textProtocols: readonly { id: TextProtocol; label: string; path: st
   { id: 'messages', label: 'Anthropic Messages', path: 'messages' },
 ];
 
+type TextModelProtocol = Pick<ModelProfile, 'provider' | 'textProtocol'>;
+
+export function textModelRoute(model: TextModelProtocol): string {
+  return model.provider === 'ollama' ? 'api/chat' : textProtocols.find(item => item.id === (model.textProtocol ?? 'chat-completions'))!.path;
+}
+
+export function textModelBasePath(pathname: string, model: TextModelProtocol): string | undefined {
+  const route = `/${textModelRoute(model)}`;
+  const path = pathname.replace(/\/+$/, '');
+  return path.endsWith(route) ? path.slice(0, -route.length) : undefined;
+}
+
 export const mediaAdapters: readonly { id: ModelProfile['provider']; label: string; capabilities: readonly ModelCapability[] }[] = [
   { id: 'openai-compatible', label: 'OpenAI 兼容接口', capabilities: ['image', 'video'] },
   { id: 'seedream', label: 'Seedream 图片接口', capabilities: ['image'] },

@@ -111,7 +111,10 @@ test('exports three actual MP4 aspect ratios, restores the exact batch and leave
   await expect(dialog.locator('[role="tabpanel"]:visible')).toHaveCount(1);
   await page.screenshot({ path: info.outputPath('batch-export-target-sections.png') });
   const portrait = dialog.getByRole('region', { name: '导出规格 竖屏 9:16', exact: true }); await portrait.getByText('调整竖屏 9:16规格', { exact: true }).click(); await portrait.getByLabel('视频帧率', { exact: true }).selectOption('60'); await portrait.getByLabel('素材适配', { exact: true }).selectOption('cover');
-  const destination = info.outputPath('three-ratios'); await (await settingField(dialog, '批量输出目录')).fill(destination);
+  const destination = info.outputPath('three-ratios');
+  const directory = await settingField(dialog, '批量输出目录');
+  await expect(directory).toHaveAccessibleDescription('留空使用项目输出目录；各批次和规格独立保存。');
+  await directory.fill(destination);
   await dialog.getByRole('tab', { name: '导出规格', exact: true }).click(); await expect(dialog.getByLabel('横屏 16:9 短边（像素）', { exact: true })).toHaveValue('144');
   await dialog.getByRole('tab', { name: '输出设置', exact: true }).click(); await expect(dialog.getByLabel('批量输出目录', { exact: true })).toHaveValue(destination);
   const batch = await startBatch(page, dialog); expect(batch.projectRevision).toBe(project.revision);

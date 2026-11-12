@@ -25,8 +25,6 @@
 .settings-sections__preview-toggle { display: none; }
 .settings-sections .series-settings-editor__group { margin: 0; padding: 0; border: 0; }
 .settings-sections .series-settings-editor__group > legend { margin-bottom: var(--space-5); }
-.settings-sections .model-parameters fieldset:first-child { margin-top: 0; padding-top: 0; border: 0; }
-.settings-sections .model-parameters legend { margin-bottom: var(--space-5); }
 @media (max-width: 800px) {
   .settings-sections, .settings-sections--preview { display: flex; flex-direction: column; }
   .settings-sections__nav { flex: 0 0 auto; flex-direction: row; padding: var(--space-2) var(--space-4); border: 0; border-bottom: 1px solid var(--border); overflow-x: auto; }

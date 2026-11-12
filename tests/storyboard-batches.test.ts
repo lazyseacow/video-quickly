@@ -6,6 +6,7 @@ import { modelSchema, projectSchema, runInspectionSchema, runSchema, runStepPayl
 import { createRuntime, SimulatedProcessExit, type RuntimeOptions } from '../src/packages/runtime/src';
 import { DocumentStore, openDatabase } from '../src/packages/runtime/src/database';
 import { TextRequestRejectedError } from '../src/packages/runtime/src/providers';
+import * as workflowPrompts from '../src/packages/runtime/src/workflow-prompts';
 import { storyboardFixtureResponse } from './fixtures/planning-response';
 
 const directories: string[] = [], runtimes = new Set<ReturnType<typeof createRuntime>>();
@@ -49,16 +50,22 @@ async function fixture(provider: NonNullable<RuntimeOptions['provider']>, { fail
   };
 }
 
-it('retains validated shots and the rate limit deadline across a restart, then reissues only the rejected batch', async () => {
+it.each([{ format: 'current', legacy: false }, { format: 'legacy', legacy: true }])('retains validated shots and the rate limit deadline across a restart with $format prompts', async ({ legacy }) => {
   const calls: string[] = [];
   const retryAt = new Date(Date.now() + 60_000).toISOString();
+  const buildWorkflowPrompt = workflowPrompts.buildWorkflowPrompt;
+  const legacyBuilder = legacy ? vi.spyOn(workflowPrompts, 'buildWorkflowPrompt').mockImplementation((...args) => {
+    args[8] = { ...args[8], legacyPlanningProfile: true };
+    return buildWorkflowPrompt(...args);
+  }) : undefined;
   const source = await fixture(async ({ prompt, operationId }) => {
     calls.push(operationId.slice(operationId.indexOf(':storyboard:') + ':storyboard:'.length));
     expect(prompt).toContain('新生成或改写的视频镜头至少 4 秒');
     expect(prompt).toContain(operationId.includes(':outline:') ? '大纲按此下限安排全片节奏' : 'durationUs 填写不小于 4000000');
+    expect(prompt.includes('成片规格：')).toBe(legacy && calls.length <= 3);
     if (operationId.endsWith(':2:response:1')) throw new TextRequestRejectedError(429, false, { kind: 'rate', retryAt });
     return storyboardFixtureResponse(prompt, generated);
-  });
+  }).finally(() => legacyBuilder?.mockRestore());
   expect(calls).toEqual(['outline:response:1', '1:response:1', '2:response:1']);
   const stopped = await source.inspect();
   expect(stopped.recovery.resume).toBe(false);
@@ -106,6 +113,9 @@ it('revalidates a saved batch with an empty role whitelist and generates only th
   const source = await fixture(async ({ prompt, operationId }) => {
     calls.push(operationId.split(':storyboard:')[1]);
     if (!operationId.includes(':outline:')) expect(prompt).toContain('每个镜头的 characterKeys 都填 []');
+    if (operationId.includes(':storyboard:2:')) {
+      expect(prompt).toContain('前一镜已校验的画面资料："初始画面\\n王林沿河岸前行');
+    }
     const response = storyboardFixtureResponse(prompt, JSON.stringify(script));
     if (!operationId.endsWith(':2:response:1')) return response;
     savedText = response;
@@ -114,7 +124,7 @@ it('revalidates a saved batch with an empty role whitelist and generates only th
   expect((await source.output()).modelResponse?.issues).toEqual([{ path: 'shots[0].entityKeys[0]', message: '分镜引用的创作设定不存在。' }]);
   const originalDraft = (await source.output()).partialStoryboard;
   expect(originalDraft?.shots).toHaveLength(5);
-  expect(originalDraft?.shots[1].visualPrompt).toBe('王林沿河岸前行');
+  expect(originalDraft?.shots[1].visualPrompt).toContain('初始画面\n王林沿河岸前行');
 
   // Seed the receipt left by the previous validator, retaining its original input hash and attempt.
   const receiptId = `${source.run.id}:script:storyboard:2:1`;
@@ -137,8 +147,8 @@ it('revalidates a saved batch with an empty role whitelist and generates only th
   expect(output.outline).toBe(originalDraft?.outline);
   expect(runStepPayloadSchema.shape.partialStoryboard.unwrap().shape.shots.parse(shots.slice(0, 5))).toEqual(originalDraft?.shots);
   expect(shots).toHaveLength(12);
-  expect(shots[1]).toMatchObject({ characterIds: [], visualPrompt: '王林沿河岸前行', creativeEntityKeys: ['river', 'wanglin'] });
-  expect(shots[5]).toMatchObject({ characterIds: [], visualPrompt: '王林沿河岸前行', creativeEntityKeys: ['river', 'wanglin'] });
+  expect(shots[1]).toMatchObject({ characterIds: [], visualPrompt: expect.stringContaining('初始画面\n王林沿河岸前行'), creativeEntityKeys: ['river', 'wanglin'] });
+  expect(shots[5]).toMatchObject({ characterIds: [], visualPrompt: expect.stringContaining('初始画面\n王林沿河岸前行'), creativeEntityKeys: ['river', 'wanglin'] });
 });
 
 it('reuses the response from an automatic batch retry after interruption before commit', async () => {

@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { creativeCharacterBindings, MAX_STORYBOARD_SHOTS, projectCharacterIds, shotSchema, sumProviderUsage, type CharacterProfile, type ProjectDocument, type ProviderUsage, type Shot, type StoryboardPart } from '@video-quickly/contracts';
+import { creativeCharacterBindings, MAX_STORYBOARD_SHOTS, projectCharacterIds, shotSchema, stripVisualPromptOutputSpecs, sumProviderUsage, type CharacterProfile, type ProjectDocument, type ProviderUsage, type Shot, type StoryboardPart } from '@video-quickly/contracts';
 import type { GithubTrendingRanking } from '@video-quickly/integrations/research';
 import type Database from 'better-sqlite3';
 import { fingerprint, type ActivityJournal, type ActivitySafety } from './activities.js';
@@ -7,7 +7,7 @@ import { validateGithubTrendingStoryboard } from './github-trending.js';
 import { ModelResponseValidationError, parseModelJson, responseIssues, type createModelResponses } from './model-responses.js';
 import { textIncompleteMessage, type TextGenerationResult } from './providers.js';
 import type { createRunProgress } from './run-progress.js';
-import { storyboardOutputSchema } from './workflow-outputs.js';
+import { storyboardOutputContract, storyboardOutputSchema, type WorkflowOutputVersion } from './workflow-outputs.js';
 import { materializeStoryboardBatch, mergeStoryboardEntities, storyboardPlacements, UNKNOWN_CHARACTER_KEY_MESSAGE, type StoryboardPromptStage } from './workflow-prompts.js';
 
 export const STORYBOARD_BATCH_SIZE = 5;
@@ -21,7 +21,6 @@ const outlineSchema = z.strictObject({
   entities: storyboardOutputSchema.shape.entities,
 });
 const outlineJsonSchema = z.toJSONSchema(outlineSchema, { io: 'input' });
-const numberedShotSchema = storyboardOutputSchema.shape.shots.element.extend({ number: z.number().int().min(1).max(MAX_STORYBOARD_SHOTS) });
 type Outline = z.infer<typeof outlineSchema>;
 
 function partActivityId(nodeId: string, part: StoryboardPart) {
@@ -65,22 +64,26 @@ function checkOutline(outline: Outline, project: ProjectDocument, ranking?: Gith
   return { ...outline, creativeContext };
 }
 
-function batchStage(plan: Outline, offset: number, count: number, part: Extract<StoryboardPart, { kind: 'batch' }>, shots: StoryboardPromptStage['shots'], jsonSchema: Record<string, unknown>, automaticCasting?: boolean): StoryboardPromptStage {
+function batchStage(plan: Outline, offset: number, count: number, part: Extract<StoryboardPart, { kind: 'batch' }>, shots: StoryboardPromptStage['shots'], jsonSchema: Record<string, unknown>, options: { structured: boolean; previousVisual?: string; automaticCasting?: boolean }): StoryboardPromptStage {
+  const { structured, previousVisual, automaticCasting } = options;
   return {
     shots,
     contract: [
       `分镜生成阶段：第 ${part.index}/${part.batches} 批镜头。`,
       `全片大纲（共 ${plan.shots.length} 个镜头）：${plan.outline}`,
       offset > 0 ? `上一个镜头要点：${plan.shots[offset - 1].beat}` : '',
+      previousVisual ? `前一镜已校验的画面资料：${JSON.stringify(previousVisual)}` : '',
       `本批镜头计划：${JSON.stringify(plan.shots.slice(offset, offset + count).map((shot, index) => ({ ...shot, number: offset + index + 1 })))}`,
       offset + count < plan.shots.length ? `下一个镜头要点：${plan.shots[offset + count].beat}` : '',
       `只返回合法 JSON 对象 {"shots":[…]}，严格按给定顺序返回这 ${count} 个镜头。每个镜头沿用计划的 number，只填写本批。已有镜头可使用对应 id，新镜头省略 id。`,
-      '每项包含 title、narration、visualPrompt、durationUs，可提供 soundPrompt。时长用整数微秒，台词匹配单镜头时长。画面描述明确主体、动作、景别、构图和光线，沿用全片风格。用 characterKeys 引用角色白名单，无人出镜时用 []；用 entityKeys 引用已定稿的文字设定。按本批分配的 repositories 在对应旁白写出完整仓库名。',
+      `每项包含 title、narration、${structured ? 'initialFrame、characterPositions、actionTimeline' : 'visualPrompt'}、durationUs，可提供 soundPrompt。时长用整数微秒，台词匹配单镜头时长。画面描述明确主体、动作、景别、构图和光线，沿用全片风格。用 characterKeys 引用角色白名单，无人出镜时用 []；用 entityKeys 引用已定稿的文字设定。按本批分配的 repositories 在对应旁白写出完整仓库名。`,
       automaticCasting ? '每个实际出镜的反复出现人物都要绑定。已选角色填写 characterKeys，其余人物填写全片大纲中对应的 entityKeys。即使镜头使用别名或只拍侧脸、背影，也引用同一人物；旁白提及但未出镜的人物省略。' : '',
       `机器校验的 JSON Schema：${JSON.stringify(jsonSchema)}`,
     ].filter(Boolean).join('\n'),
   };
 }
+
+type StoryboardPromptBuilder = (legacyPlanningProfile?: boolean) => string;
 
 interface PartRequest {
   operationId: string;
@@ -103,9 +106,10 @@ interface StoryboardExecution {
   ranking?: GithubTrendingRanking;
   signal: AbortSignal;
   safety: ActivitySafety;
-  outlinePrompt: string;
+  outlinePrompt: StoryboardPromptBuilder;
+  outputContractVersion?: WorkflowOutputVersion;
   automaticCasting?: boolean;
-  batchPrompt: (stage: StoryboardPromptStage, context: ProjectDocument['creativeContext'], repositories: GithubTrendingRanking['repositories']) => string;
+  batchPrompt: (stage: StoryboardPromptStage, context: ProjectDocument['creativeContext'], repositories: GithubTrendingRanking['repositories']) => StoryboardPromptBuilder;
   canRetryWithPromptFormat: (response: TextGenerationResult) => boolean;
   request: (request: PartRequest) => Promise<string | TextGenerationResult>;
 }
@@ -116,11 +120,15 @@ export async function executeStoryboard(options: StoryboardExecution) {
   const { journal, responses, progress, runId, nodeId, project, characters, ranking, batchSize } = options;
   const progressId = `${runId}:${nodeId}`;
   const hasCharacterBindings = projectCharacterIds(project).length > 0;
-  async function executePart<P, T>(part: StoryboardPart, label: string, request: Pick<PartRequest, 'prompt' | 'outputSchema' | 'outputSchemaName'>, schema: z.ZodType<P>, validate: (payload: P) => T, batch?: { completed: number; total: number; count: number }) {
+  async function executePart<P, T>(part: StoryboardPart, label: string, buildPrompt: StoryboardPromptBuilder, request: Pick<PartRequest, 'outputSchema' | 'outputSchemaName'>, schema: z.ZodType<P>, validate: (payload: P) => T, batch?: { completed: number; total: number; count: number }) {
     options.signal.throwIfAborted();
     const id = partActivityId(nodeId, part);
-    if (journal.get(runId, id)?.status !== 'completed') progress.storyboard(progressId, part, batch?.completed, batch?.total);
-    const input = { parent: options.inputHash, prompt: request.prompt, outputSchema: request.outputSchema };
+    const previous = journal.get(runId, id);
+    if (previous?.status !== 'completed') progress.storyboard(progressId, part, batch?.completed, batch?.total);
+    const prompt = buildPrompt();
+    const currentInput = { parent: options.inputHash, prompt, outputSchema: request.outputSchema };
+    // Older batch receipts hashed the prompt with project output settings attached.
+    const input = previous && previous.input_hash !== fingerprint(currentInput) ? { ...currentInput, prompt: buildPrompt(true) } : currentInput;
     return journal.execute<PartResult<T>>(runId, id, input, options.safety, async ({ operationId, recordRemoteId }) => {
       // Apply the guidance only at dispatch so existing activity and response hashes still match.
       const characterGuidance = part.kind === 'batch' && !hasCharacterBindings
@@ -131,7 +139,7 @@ export async function executeStoryboard(options: StoryboardExecution) {
         generate: () => {
           const issues = responses.retryIssues(operationId);
           const correction = issues?.length ? `\n\n上次${label}返回的字段校验错误：${JSON.stringify(issues)}\n请修正并返回本部分的完整 JSON 对象。` : '';
-          return options.request({ ...request, operationId, attempt: responses.attempt(operationId), prompt: request.prompt + correction + characterGuidance });
+          return options.request({ ...request, operationId, attempt: responses.attempt(operationId), prompt: prompt + correction + characterGuidance });
         },
       });
       let generated = await generate();
@@ -166,11 +174,13 @@ export async function executeStoryboard(options: StoryboardExecution) {
   }
 
   const { data: plan, usage: outlineUsage } = await executePart(
-    { kind: 'outline' }, '全片大纲', { prompt: options.outlinePrompt, outputSchema: outlineJsonSchema, outputSchemaName: 'video_storyboard_outline' }, outlineSchema,
+    { kind: 'outline' }, '全片大纲', options.outlinePrompt, { outputSchema: outlineJsonSchema, outputSchemaName: 'video_storyboard_outline' }, outlineSchema,
     outline => checkOutline(outline, project, ranking),
   );
   const placements = storyboardPlacements(project.shots, plan.shots);
   const batchProject = { ...project, creativeContext: plan.creativeContext };
+  const batchContract = storyboardOutputContract(options.outputContractVersion ?? 1);
+  const numberedShotSchema = batchContract.schema.shape.shots.element.extend({ number: z.number().int().min(1).max(MAX_STORYBOARD_SHOTS) });
   const batches = Math.ceil(placements.length / batchSize);
   const shots: Shot[] = [], usages = [outlineUsage];
   for (let index = 1; index <= batches; index++) {
@@ -182,8 +192,12 @@ export async function executeStoryboard(options: StoryboardExecution) {
     const existing = positions.flatMap(position => position.before ? [position.before] : []);
     const names = new Set(plan.shots.slice(offset, offset + positions.length).flatMap(shot => shot.repositories ?? []).map(name => name.toLowerCase()));
     const repositories = ranking?.repositories.filter(repo => names.has(repo.name.toLowerCase())) ?? [];
-    const prompt = options.batchPrompt(batchStage(plan, offset, positions.length, part, existing, outputSchema, options.automaticCasting), plan.creativeContext, repositories);
-    const batch = await executePart(part, `第 ${index}/${batches} 批分镜`, { prompt, outputSchema, outputSchemaName: 'video_storyboard_batch' }, schema, output => {
+    const stage = batchStage(plan, offset, positions.length, part, existing, outputSchema, {
+      structured: batchContract.structured, automaticCasting: options.automaticCasting,
+      previousVisual: batchContract.structured ? stripVisualPromptOutputSpecs(shots.at(-1)?.visualPrompt ?? '') : undefined,
+    });
+    const buildPrompt = options.batchPrompt(stage, plan.creativeContext, repositories);
+    const batch = await executePart(part, `第 ${index}/${batches} 批分镜`, buildPrompt, { outputSchema, outputSchemaName: 'video_storyboard_batch' }, schema, output => {
       const generated = output.shots.map(({ number, ...shot }, slot) => {
         if (number !== offset + slot + 1) throw new ModelResponseValidationError([{ path: `shots[${slot}].number`, message: '请按本批计划的镜头序号依次返回。' }]);
         if (shot.id !== undefined && shot.id !== positions[slot].before?.id) throw new ModelResponseValidationError([{ path: `shots[${slot}].id`, message: '请沿用本镜头已有编号，新镜头省略 id。' }]);

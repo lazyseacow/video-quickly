@@ -17,15 +17,61 @@ async function openApp(page: Page) {
 
 test('starts in light mode and preserves an explicit dark preference after reload', async ({ page }) => {
   await openApp(page);
+  const colorScheme = page.locator('meta[name="color-scheme"]');
   await expect(page.locator('html')).toHaveAttribute('data-theme', 'light');
   await setWorkspaceTheme(page, 'dark');
   await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark');
+  await expect(colorScheme).toHaveAttribute('content', 'dark');
   await page.reload();
   await expect(page.getByRole('navigation', { name: '主导航', exact: true })).toBeVisible();
   await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark');
   await expect(page.getByRole('button', { name: '设置', exact: true })).toBeVisible();
   await setWorkspaceTheme(page, 'light');
   await expect(page.locator('html')).toHaveAttribute('data-theme', 'light');
+  await expect(colorScheme).toHaveAttribute('content', 'light');
+});
+
+test('applies the default and saved color schemes before the renderer loads', async ({ page }) => {
+  await page.route('**/assets/*.js', route => route.abort());
+  await page.emulateMedia({ colorScheme: 'dark' });
+  await page.goto('/');
+  const root = page.locator('html');
+  const colorScheme = page.locator('meta[name="color-scheme"]');
+  await expect(page.locator('#root')).toBeEmpty();
+  await expect(root).toHaveCSS('color-scheme', 'light');
+  await expect(colorScheme).toHaveAttribute('content', 'light');
+
+  await page.evaluate(() => localStorage.setItem('vq-theme', 'dark'));
+  await page.emulateMedia({ colorScheme: 'light' });
+  await page.reload();
+  await expect(page.locator('#root')).toBeEmpty();
+  await expect(root).toHaveAttribute('data-theme', 'dark');
+  await expect(root).toHaveCSS('color-scheme', 'dark');
+  await expect(colorScheme).toHaveAttribute('content', 'dark');
+});
+
+test('keeps a modal open when selecting text across its backdrop', async ({ page }) => {
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  await openApp(page);
+  const trigger = page.getByRole('button', { name: '新建项目', exact: true });
+  await trigger.click();
+  const dialog = page.getByRole('dialog', { name: '新建视频项目', exact: true });
+  const name = dialog.getByRole('textbox', { name: '项目名称', exact: true });
+  await name.fill('拖选时保留正在编辑的项目名称');
+  const [field, modal] = await Promise.all([name.boundingBox(), dialog.boundingBox()]);
+  if (!field || !modal) throw new Error('Expected a visible modal and project name field');
+  const y = field.y + field.height / 2;
+  const backdrop = modal.x / 2;
+  await page.mouse.move(field.x + field.width / 4, y);
+  await page.mouse.down();
+  await page.mouse.move(backdrop, y, { steps: 5 });
+  await page.mouse.up();
+  await expect(dialog).toBeVisible();
+  await expect(name).toHaveValue('拖选时保留正在编辑的项目名称');
+
+  await page.mouse.click(backdrop, y);
+  await expect(dialog).toHaveCount(0);
+  await expect(trigger).toBeFocused();
 });
 
 test('shares typography and spacing roles across the workspace, navigation and dialogs', async ({ page }) => {

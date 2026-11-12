@@ -71,7 +71,9 @@ export default function ProjectExportDialog({ project, workspace, action, onClos
     <div className="dialog__body"><SettingsSections layout="tabs" label="导出类型" value={section} onValueChange={setSection} sections={[
       { id: 'video', label: 'MP4', content: <>
         <VideoSettings profile={exportProfile} onChange={setExportProfile} mode="delivery" />
-        <Field label="输出文件路径" hint="留空时保存到项目的输出目录。"><PathPicker label="输出文件路径" mode="save" value={outputPath} onChange={setOutputPath} extensions={['mp4']} disabled={active} placeholder={pathExample('export')} /></Field>
+        <Field label="输出文件路径" hint="留空时保存到项目的输出目录。">
+          {field => <PathPicker field={field} label="输出文件路径" mode="save" value={outputPath} onChange={setOutputPath} extensions={['mp4']} disabled={active} placeholder={pathExample('export')} />}
+        </Field>
       </> },
       { id: 'other', label: '其他导出', content: <div className="export-dialog__formats">
         <Button static variant="ghost" disabled={active} onClick={() => setEditorOpen(true)}><Film size={16} aria-hidden="true" />剪映／CapCut 工程</Button>

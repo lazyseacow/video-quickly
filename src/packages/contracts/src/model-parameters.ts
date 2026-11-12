@@ -77,6 +77,23 @@ export function withModelParameter(parameters: Record<string, JsonValue>, key: s
   return result;
 }
 
+function validNumberParameter(value: JsonValue, field: ModelParameterField): boolean {
+  return typeof value === 'number' && Number.isFinite(value) && (!field.integer || Number.isSafeInteger(value))
+    && (field.min === undefined || value >= field.min) && (field.max === undefined || value <= field.max);
+}
+
+export function parametersForTextProtocol(model: WithParameters): Record<string, JsonValue> {
+  if (model.provider !== 'openai-compatible') return model.parameters;
+  const { max_tokens, max_completion_tokens, max_output_tokens, ...parameters } = model.parameters;
+  const maximum = max_tokens ?? max_completion_tokens ?? max_output_tokens;
+  if (maximum !== undefined) parameters[model.textProtocol === 'responses' ? 'max_output_tokens' : 'max_tokens'] = maximum;
+  for (const field of getModelParameterFields(model)) {
+    const value = parameters[field.key];
+    if (field.operation === 'text' && field.type === 'number' && value !== undefined && !validNumberParameter(value, field)) delete parameters[field.key];
+  }
+  return parameters;
+}
+
 /** Validate only supported structured fields; unknown advanced parameters are retained. */
 export function validateModelParameters(model: WithParameters): void {
   if (model.provider === 'ollama' && model.capabilities.includes('text')) {
@@ -89,7 +106,7 @@ export function validateModelParameters(model: WithParameters): void {
     if (field.required && (value === undefined || typeof value === 'string' && !value.trim())) throw new Error(`请填写${field.label}。`);
     if (value === undefined) continue;
     if (field.type === 'number') {
-      if (typeof value !== 'number' || !Number.isFinite(value) || field.integer && !Number.isSafeInteger(value) || field.min !== undefined && value < field.min || field.max !== undefined && value > field.max) throw new Error(`${field.label}须为${field.integer ? '整数' : '有限数值'}${field.min !== undefined ? `，不小于 ${field.min}` : ''}${field.max !== undefined ? `，不大于 ${field.max}` : ''}。`);
+      if (!validNumberParameter(value, field)) throw new Error(`${field.label}须为${field.integer ? '整数' : '有限数值'}${field.min !== undefined ? `，不小于 ${field.min}` : ''}${field.max !== undefined ? `，不大于 ${field.max}` : ''}。`);
     } else if (typeof value !== 'string' || !value.trim()) throw new Error(`${field.label}须为非空文字，留空时请移除该参数。`);
     else if (field.options && !field.customSize && !field.options.includes(value)) throw new Error(`${field.label}须为 ${field.options.join(' / ')}。`);
     else if (field.key === 'size' && !(/^\d{2,5}x\d{2,5}$/.test(value) && value.split('x').every(part => Number(part) > 0) || field.operation === 'image' && (model.provider === 'seedream' ? /^(?:1|1\.5|2|3|4)K$/.test(value) : value === 'auto'))) throw new Error(`${field.label}须使用宽x高${field.operation === 'image' ? model.provider === 'seedream' ? '或模型支持的 K 档位' : '或 auto' : ''}。`);

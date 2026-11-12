@@ -1,4 +1,4 @@
-import { getModelConnectionType, modelParameterValue, requestModelParameters, retryAfterMilliseconds, textProtocols, withModelParameter, type JsonValue, type ModelCapability, type ModelConnectionType, type ModelDiscovery, type ModelProfile, type ProviderUsage } from '@video-quickly/contracts';
+import { getModelConnectionType, getModelPlatform, modelHttpErrorMessage, modelParameterValue, ModelServiceResponseError, parseModelServiceJson, requestModelParameters, retryAfterMilliseconds, textModelRoute, textModelBasePath, withModelParameter, type JsonValue, type ModelCapability, type ModelConnectionType, type ModelDiscovery, type ModelProfile, type ProviderUsage } from '@video-quickly/contracts';
 import { z } from 'zod';
 
 export type ModelRequestPhase = 'prepare' | 'send' | 'headers' | 'read' | 'parse' | 'validate';
@@ -50,7 +50,7 @@ function textRateLimitMessage(limit?: TextRateLimit) {
 export class TextRequestRejectedError extends Error {
   constructor(readonly status: number, readonly unsupportedOutputFormat = false, readonly rateLimit?: TextRateLimit) {
     super(status === 429 ? textRateLimitMessage(rateLimit)
-      : unsupportedOutputFormat ? `模型服务不支持本次输出格式（HTTP ${status}），请求已被拒绝。` : `模型服务已拒绝请求（HTTP ${status}），请核对请求参数、模型及访问权限。`);
+      : unsupportedOutputFormat ? `模型服务不支持本次输出格式（HTTP ${status}），请求已被拒绝。` : modelHttpErrorMessage(status));
     this.name = 'TextRequestRejectedError';
   }
 }
@@ -82,12 +82,47 @@ function maasRequestFormatRejection(value: unknown): boolean {
 export { providerReportedUsage as textProviderUsage } from '@video-quickly/contracts';
 import { providerReportedUsage as textProviderUsage } from '@video-quickly/contracts';
 
-function modelEndpoint(base: string, route: string): string {
+function modelEndpoint(base: URL, route: string): string {
   const url = new URL(base);
   if (!['https:', 'http:'].includes(url.protocol) || url.username || url.password) throw new Error('服务地址须为不含账号密码的 HTTP 或 HTTPS 地址。');
   url.pathname = `${url.pathname.replace(/\/$/, '')}/${route}`;
   url.search = '';
   return url.toString();
+}
+
+const bailianRegionalHosts = new Set([
+  'dashscope.aliyuncs.com', 'dashscope-intl.aliyuncs.com', 'dashscope-us.aliyuncs.com', 'cn-hongkong.dashscope.aliyuncs.com',
+]);
+
+function officialMessagesRoutes(model: ModelProfile, url = new URL(model.baseUrl)) {
+  if (model.provider !== 'openai-compatible' || model.connectionType !== 'text' || model.textProtocol !== 'messages') return undefined;
+  const path = model.fullUrl ? textModelBasePath(url.pathname, model) : url.pathname.replace(/\/+$/, '');
+  const host = url.hostname;
+  if ((host === 'api.moonshot.cn' || host === 'api.moonshot.ai')
+    && (path === '/anthropic/v1' || !model.fullUrl && (path === '/anthropic' || path === '/v1'))) {
+    return { platform: 'moonshot', generationBase: '/anthropic/v1', catalogBase: '/v1' } as const;
+  }
+  const bailianWorkspace = host.endsWith('.maas.aliyuncs.com') && !host.startsWith('token-plan.');
+  if ((bailianWorkspace || bailianRegionalHosts.has(host))
+    && (path === '/apps/anthropic/v1' || !model.fullUrl && (path === '/apps/anthropic' || path === '/compatible-mode/v1'))) {
+    return { platform: 'qwen', generationBase: '/apps/anthropic/v1', catalogBase: '/api/v1' } as const;
+  }
+  return undefined;
+}
+
+function modelServiceBaseUrl(model: ModelProfile): URL {
+  const url = new URL(model.baseUrl);
+  if (model.fullUrl) return url;
+  const official = officialMessagesRoutes(model, url);
+  const path = url.pathname.replace(/\/+$/, '');
+  if (official) {
+    url.pathname = official.generationBase;
+  } else if (model.provider === 'ollama' && path.endsWith('/api')) {
+    url.pathname = path.slice(0, -'/api'.length);
+  } else if (model.provider === 'openai-compatible' && model.textProtocol === 'messages' && url.hostname === 'api.anthropic.com' && !path) {
+    url.pathname = '/v1';
+  }
+  return url;
 }
 
 export async function fetchModelRequest(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
@@ -112,18 +147,21 @@ export async function fetchModelRequest(input: RequestInfo | URL, init?: Request
 }
 
 export function textModelEndpoint(model: ModelProfile): string {
-  if (model.fullUrl) return model.baseUrl;
-  const route = model.provider === 'ollama' ? 'api/chat' : textProtocols.find(item => item.id === (model.textProtocol ?? 'chat-completions'))!.path;
-  return modelEndpoint(model.baseUrl, route);
+  return model.fullUrl ? model.baseUrl : modelEndpoint(modelServiceBaseUrl(model), textModelRoute(model));
 }
 
 export function modelHeaders(model: ModelProfile, secret?: string): Record<string, string> {
   const messages = model.provider === 'openai-compatible' && model.connectionType === 'text' && model.textProtocol === 'messages';
-  const auth = model.authMode === 'bearer' || model.authMode === 'x-api-key' ? model.authMode : messages ? 'x-api-key' : 'bearer';
   const headers: Record<string, string> = { 'Content-Type': 'application/json' };
   if (messages) headers['anthropic-version'] = '2023-06-01';
   if (secret) {
-    if (auth === 'x-api-key') headers['x-api-key'] = secret;
+    const url = new URL(model.baseUrl);
+    const official = officialMessagesRoutes(model, url);
+    const customGateway = !official && url.hostname !== 'ollama.com'
+      && getModelPlatform({ provider: model.provider, baseUrl: model.baseUrl }).id === 'custom';
+    // Existing gateways can have their own header convention.
+    const savedAuth = customGateway ? model.authMode : undefined;
+    if (official?.platform === 'qwen' || savedAuth === 'x-api-key' || customGateway && messages && savedAuth !== 'bearer') headers['x-api-key'] = secret;
     else headers.Authorization = `Bearer ${secret}`;
   }
   return headers;
@@ -197,14 +235,14 @@ export async function readModelResponse(response: Response, onRequestPhase?: Tex
   onRequestPhase?.('read');
   const maximum = 4 * 1024 * 1024;
   if (Number(response.headers.get('content-length')) > maximum) { await response.body?.cancel(); throw new Error('模型文本结果超过 4 MB，请缩小请求范围。'); }
-  if (!response.body) throw new Error('模型未返回响应内容。');
+  if (!response.body) throw new ModelServiceResponseError('empty');
   const reader = response.body.getReader(), chunks: Uint8Array[] = []; let size = 0;
   try {
     for (;;) { const item = await reader.read(); if (item.done) break; size += item.value.byteLength; if (size > maximum) { await reader.cancel(); throw new Error('模型文本结果超过 4 MB，请缩小请求范围。'); } chunks.push(item.value); }
   } finally { reader.releaseLock(); }
   const text = Buffer.concat(chunks, size).toString('utf8');
   onRequestPhase?.('parse');
-  return JSON.parse(text);
+  return parseModelServiceJson(text);
 }
 
 const quotaCodes = new Set<unknown>(['insufficient_quota', 'organization_spend_limit_exceeded', 'billing_hard_limit_reached']);
@@ -280,7 +318,7 @@ export const generateText: TextProvider = async ({ model, secret, prompt, operat
   }
   const data = await readModelResponse(response, onRequestPhase);
   onRequestPhase?.('validate');
-  if (!data || typeof data !== 'object') throw new Error('模型服务返回了无效结果。');
+  if (!data || typeof data !== 'object') throw new ModelServiceResponseError('format');
   const value = data as Record<string, unknown>;
   if (!ollama && protocol === 'responses') {
     const incompleteReason = responsesIncompleteReason(value);
@@ -297,14 +335,23 @@ export const generateText: TextProvider = async ({ model, secret, prompt, operat
     return { text, usage: textProviderUsage(value), ...(incomplete ? { incomplete: true, incompleteReason: 'max_output_tokens' } : {}) };
   }
   const message = ollama ? value.message : Array.isArray(value.choices) ? (value.choices[0] as { message?: unknown } | undefined)?.message : undefined;
-  if (!message || typeof message !== 'object') throw new Error('模型结果缺少消息内容。');
+  if (!message || typeof message !== 'object') throw new ModelServiceResponseError('format');
   const content = (message as { content?: unknown }).content;
-  if (typeof content !== 'string' || (!content.trim() && !outputSchema)) throw new Error('模型未返回文本内容。');
+  if (typeof content !== 'string') throw new ModelServiceResponseError('format');
+  if (!content.trim() && !outputSchema) throw new ModelServiceResponseError('empty');
   const incomplete = ollama ? value.done_reason === 'length' : (value.choices as { finish_reason?: string }[])[0]?.finish_reason === 'length';
   return { text: content, usage: textProviderUsage(value, ollama), ...(incomplete ? { incomplete: true, incompleteReason: 'max_output_tokens' } : {}) };
 };
 
+function modelConnectionResult(modelId: string, models: string[]) {
+  return { connected: true, models, message: models.includes(modelId) ? '连接正常，已找到配置的模型。' : '服务可连接，请确认模型 ID。' };
+}
+
 export async function testModelConnection(model: ModelProfile, secret?: string) {
+  if (officialMessagesRoutes(model)) {
+    const catalog = await discoverModels(model, secret);
+    return modelConnectionResult(model.model, catalog.items.map(item => item.id));
+  }
   const headers = modelHeaders(model, secret), signal = AbortSignal.timeout(15_000);
   if (model.fullUrl) {
     const response = await fetchModelRequest(textModelEndpoint(model), { method: 'HEAD', headers, signal });
@@ -312,9 +359,9 @@ export async function testModelConnection(model: ModelProfile, secret?: string) 
     return { connected: true, models: [], message: '服务地址可访问。可通过一次生成确认模型和参数。' };
   }
   const route = model.provider === 'ollama' ? 'api/tags' : model.provider === 'comfyui' ? 'system_stats' : 'models';
-  const response = await fetchModelRequest(modelEndpoint(model.baseUrl, route), { headers, signal });
+  const response = await fetchModelRequest(modelEndpoint(modelServiceBaseUrl(model), route), { headers, signal });
   if (!response.ok) { await response.body?.cancel(); throw Object.assign(new Error(`连接检查返回 HTTP ${response.status}。`), { status: response.status }); }
-  const data: unknown = await response.json();
+  const data = parseModelServiceJson(await response.text());
   const entries = data && typeof data === 'object' ? data as Record<string, unknown> : {};
   const rows = model.provider === 'ollama' ? entries.models : entries.data;
   const modelIds = Array.isArray(rows) ? rows.flatMap(item => {
@@ -323,7 +370,7 @@ export async function testModelConnection(model: ModelProfile, secret?: string) 
     const identifier = record.id ?? record.name;
     return typeof identifier === 'string' ? [identifier] : [];
   }) : [];
-  return { connected: true, models: modelIds, message: modelIds.includes(model.model) ? '连接正常，已找到配置的模型。' : '服务可连接，请确认模型 ID 与能力配置。' };
+  return modelConnectionResult(model.model, modelIds);
 }
 
 function discoveredModelTime(row: Record<string, unknown>): number {
@@ -377,41 +424,78 @@ function arkCatalogCapabilities(row: Record<string, unknown>, type: ModelConnect
   return capabilities;
 }
 
+const bailianCatalogSchema = z.object({
+  output: z.object({
+    total: z.number().int().nonnegative(), page_no: z.number().int().positive(), page_size: z.number().int().positive(),
+    models: z.array(z.unknown()),
+  }),
+});
+
 export async function discoverModels(model: ModelProfile, secret?: string): Promise<ModelDiscovery> {
   if (model.provider === 'comfyui') return { source: 'workflow', items: [{ id: 'workflow', label: '使用工作流中的模型' }], message: 'ComfyUI 的模型由所配置工作流指定。' };
-  if (model.fullUrl) return { source: 'remote', items: [], message: '完整请求地址使用手动填写的模型 ID。' };
-  const host = new URL(model.baseUrl).hostname;
+  const baseUrl = modelServiceBaseUrl(model);
+  const official = officialMessagesRoutes(model, baseUrl);
+  if (official) {
+    baseUrl.pathname = official.catalogBase;
+  } else if (model.fullUrl) {
+    const basePath = textModelBasePath(baseUrl.pathname, model);
+    if (basePath === undefined) return { source: 'remote', items: [], message: '无法从此完整请求地址确定模型列表。请填写提供模型列表的 API 地址前缀。' };
+    baseUrl.pathname = basePath;
+  }
+  const host = baseUrl.hostname;
   const filterOpenAI = model.provider === 'openai-compatible' && (model.platform === 'openai' || host === 'api.openai.com');
   const filterArk = ['volcengine', 'seedream', 'seedance'].some(platform => platform === model.platform || platform === model.provider)
     || host.endsWith('.volces.com') && host.startsWith('ark.');
+  const bailianCatalog = official?.platform === 'qwen';
+  const messagesCatalog = !official && model.textProtocol === 'messages';
+  const headers = modelHeaders(official ? { ...model, textProtocol: undefined, authMode: undefined } : model, secret);
+  const catalogUrl = new URL(modelEndpoint(baseUrl, model.provider === 'ollama' ? 'api/tags' : 'models'));
+  if (bailianCatalog) {
+    catalogUrl.searchParams.set('capabilities', 'TG');
+    catalogUrl.searchParams.set('page_size', '100');
+  }
   const items = new Map<string, ModelDiscovery['items'][number] & { timestamp: number; retired: boolean }>();
   let after: string | undefined;
   const signal = AbortSignal.timeout(15_000);
-  for (let page = 0; page < 20; page++) {
-    const url = new URL(modelEndpoint(model.baseUrl, model.provider === 'ollama' ? 'api/tags' : 'models'));
-    if (model.textProtocol === 'messages') { url.searchParams.set('limit', '1000'); if (after) url.searchParams.set('after_id', after); }
-    const response = await fetchModelRequest(url, { headers: modelHeaders(model, secret), signal });
+  for (let page = 1; page <= 20; page++) {
+    const url = new URL(catalogUrl);
+    if (bailianCatalog) url.searchParams.set('page_no', String(page));
+    if (messagesCatalog) { url.searchParams.set('limit', '1000'); if (after) url.searchParams.set('after_id', after); }
+    const response = await fetchModelRequest(url, { headers, signal });
     if (!response.ok) { await response.body?.cancel(); throw Object.assign(new Error('读取模型列表返回 HTTP ' + response.status), { status: response.status }); }
     const data = await readModelResponse(response);
     if (!data || typeof data !== 'object') throw new Error('模型列表格式无效。');
-    const value = data as Record<string, unknown>, rows = Array.isArray(value.data) ? value.data : value.models;
+    const value = data as Record<string, unknown>;
+    let bailianPage: z.infer<typeof bailianCatalogSchema>['output'] | undefined;
+    if (bailianCatalog) {
+      const parsed = bailianCatalogSchema.safeParse(value);
+      if (!parsed.success || parsed.data.output.page_no !== page) throw new Error('模型列表格式无效。');
+      bailianPage = parsed.data.output;
+    }
+    const rows = bailianPage?.models ?? (Array.isArray(value.data) ? value.data : value.models);
     if (!Array.isArray(rows)) throw new Error('模型列表格式无效。');
     for (const entry of rows) {
       if (!entry || typeof entry !== 'object' || Array.isArray(entry)) continue;
-      const row = entry as Record<string, unknown>, id = row.id ?? row.name ?? row.model;
+      const row = entry as Record<string, unknown>, id = bailianCatalog ? row.model : row.id ?? row.name ?? row.model;
       if (typeof id !== 'string' || !id.trim() || id.length > 200 || filterOpenAI && !matchesOpenAIConnection(id, model)) continue;
       const capabilities = filterArk ? arkCatalogCapabilities(row, model.connectionType, model.textProtocol) : undefined;
       if (capabilities === false) continue;
-      const name = typeof row.display_name === 'string' ? row.display_name : typeof row.displayName === 'string' ? row.displayName : id;
+      const displayName = bailianCatalog ? row.name : typeof row.display_name === 'string' ? row.display_name : row.displayName;
+      const name = typeof displayName === 'string' ? displayName : id;
       const shutdown = typeof row.shutdown_date === 'string' ? Date.parse(row.shutdown_date) : NaN;
       items.set(id, { id, label: name === id ? id : name + ' · ' + id, ...(capabilities ? { capabilities } : {}), timestamp: Math.max(discoveredModelTime(row), items.get(id)?.timestamp ?? Number.NEGATIVE_INFINITY), retired: row.lifecycle === 'retired' || Number.isFinite(shutdown) && shutdown <= Date.now() });
     }
-    if (!value.has_more) break;
-    if (typeof value.last_id !== 'string' || value.last_id === after || page === 19) throw new Error('模型列表分页不完整，请重新读取完整目录。');
-    after = value.last_id;
+    const hasMore = bailianPage ? page * bailianPage.page_size < bailianPage.total : value.has_more;
+    if (!hasMore) break;
+    if (bailianPage && page < 20 && rows.length) continue;
+    if (!bailianPage && page < 20 && typeof value.last_id === 'string' && value.last_id !== after) {
+      after = value.last_id;
+      continue;
+    }
+    throw new Error('模型列表分页不完整，请重新读取完整目录。');
   }
   const sorted = [...items.values()].filter(item => !item.retired).sort((a, b) => a.timestamp === b.timestamp ? 0 : b.timestamp - a.timestamp)
     .map(({ id, label, capabilities }) => ({ id, label, ...(capabilities ? { capabilities } : {}) }));
   const guidance = filterOpenAI ? '已按当前连接类型筛选。' : '请选择与当前连接类型对应的型号。';
-  return { source: 'remote', items: sorted, message: sorted.length ? `已读取 ${sorted.length} 个模型。${guidance}` : '服务未返回适合当前连接类型的模型。可手动填写模型 ID，或核对连接后重试。' };
+  return { source: 'remote', items: sorted, message: sorted.length ? `已读取 ${sorted.length} 个模型。${guidance}` : '服务未返回适合当前连接类型的模型。请核对连接后重试。' };
 }

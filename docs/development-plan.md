@@ -13,7 +13,7 @@
 | 编辑与恢复 | 统一增量命令、连续输入合并、最多 50 步撤销／重做、IndexedDB 草稿；保存前意图落盘、保存期间新输入、外部修订冲突与重启恢复 | [编辑与恢复](workspace-editing.md#编辑与恢复)、`project-editing.spec.ts`、`draft-save-ordering.spec.ts` |
 | 剪辑与声音 | 多选、成组移动／复制／删除、分割、入出点、吸附；真实波形、字幕编辑、背景音乐及视频原声开关 | [剪辑与声音](workspace-editing.md#镜头剪辑区间)、`clip-editing.spec.ts`、`video-original-audio.spec.ts` |
 | 文稿剪辑 | 来源匹配的逐词／句段时间戳、手选区间、真实停顿检测；Source／Plan 同步裁切画面、音频和字幕，恢复当前源窗口 | [文稿与备份](workspace-editing.md#文稿剪辑与源窗口恢复)、`transcript-editing.spec.ts` |
-| 模型与候选 | 文本、图片、视频和音频连接；协议参数与高级 JSON；单镜头生成候选、对比、按字段应用、修订与素材保护 | [角色、参数与费用](workspace-editing.md#角色模型参数与费用)、`model-protocols.spec.ts`、`shot-regeneration.spec.ts` |
+| 模型与候选 | 文本、图片和视频的基本连接；从服务目录选择型号并读取能力；单镜头生成候选、对比、按字段应用、修订与素材保护 | [角色、参数与费用](workspace-editing.md#角色模型参数与费用)、`model-protocols.spec.ts`、`shot-regeneration.spec.ts` |
 | 制作前检查 | 「更多」提供手动检查。开始制作前核对本次保存的配置与素材，有阻塞时显示问题步骤和修复入口，通过后直接提交 | [制作前检查](workspace-editing.md#制作前检查)、`project-readiness.spec.ts` |
 | 素材恢复 | 当前项目或整个工作区的缺失清单、目录扫描、完整摘要匹配、候选确认、分页批量恢复与取消；保留冻结身份并自动刷新媒体 | [批量素材恢复](workspace-editing.md#批量素材恢复)、`asset-recovery.spec.ts` |
 | 创作一致性 | 项目角色池、连续性及人物／场景／道具文字设定；从空分镜自动建立白名单角色绑定，实际发送逐镜头参考图；冻结恢复、候选保护和格式 5 备份 | [角色与创作设定](workspace-editing.md#角色模型参数与费用)、`creative-context.test.ts`、`creative-context-runtime.test.ts`、`creative-context.spec.ts` |

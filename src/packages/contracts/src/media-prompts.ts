@@ -15,6 +15,28 @@ export function generationFramePrompt({ width, height, fitMode, frameRate }: Vid
   return `按 ${width} × ${height} 像素${ratio ? `（${ratio}）` : ''}的目标画幅构图。${global}素材适配采用${VIDEO_FIT_MODE_LABELS[fitMode]}。${composition}`;
 }
 
+const outputSpecFields = [
+  /^(?:分辨率[:：]\s*)?\d+\s*[×x]\s*\d+(?:\s*(?:px|像素))?$/i,
+  /^(?:(?:比例|宽高比|画幅比例)[:：]\s*)?\d+\s*[:：]\s*\d+$/,
+  /^(?:帧率[:：]\s*)?\d+(?:\.\d+)?\s*(?:fps|帧\/秒)$/i,
+];
+const fitModeText = new Set([...Object.values(VIDEO_FIT_MODE_LABELS), '等比完整显示', '裁切填满']);
+
+export function stripVisualPromptOutputSpecs(prompt: string): string {
+  // Only strip leading sentences or lines made up entirely of output settings.
+  let remaining = prompt;
+  while (remaining) {
+    const text = remaining.trimStart();
+    const prefix = /^([^。\r\n]+?)(?:。|\.(?=\s|$)|\r?\n|$)/.exec(text);
+    if (!prefix) break;
+    const fields = prefix[1].split(/[，,、；;]/).map(field => field.trim());
+    if (!fields.every(field => outputSpecFields.some(pattern => pattern.test(field))
+      || fitModeText.has(field.replace(/^(?:(?:画面|素材)?适配(?:方式)?[:：]|素材适配采用)\s*/, '')))) break;
+    remaining = text.slice(prefix[0].length).trimStart();
+  }
+  return remaining;
+}
+
 export function characterReferencePrompt(selected: CharacterProfile[], referenceIds: readonly string[] = [...new Set(selected.flatMap(profile => profile.referenceAssetIds))]): string {
   if (!selected.length) return '';
   return ['角色一致性要求：', ...selected.map(profile => {
@@ -101,7 +123,7 @@ export function characterSceneFirstFrame(project: ProjectDocument, node: Workflo
 }
 
 /** Builds the per-shot prompt for both offline preview and generation. */
-export function buildMediaPrompt(project: ProjectDocument, node: WorkflowNode, shot: Shot, characters: CharacterProfile[] = [], model?: ModelProfile, hasSceneImage = false, upstream: Record<string, JsonValue> = {}, unifiedShotProfile = true, videoReferences?: VideoReferenceImages): string {
+export function buildMediaPrompt(project: ProjectDocument, node: WorkflowNode, shot: Shot, characters: CharacterProfile[] = [], model?: ModelProfile, hasSceneImage = false, upstream: Record<string, JsonValue> = {}, videoReferences?: VideoReferenceImages): string {
   const selected = (shot.characterIds ?? []).map(id => {
     const profile = characters.find(profile => profile.id === id);
     if (!profile) throw new Error('缺少镜头所选角色的快照。');
@@ -113,11 +135,19 @@ export function buildMediaPrompt(project: ProjectDocument, node: WorkflowNode, s
   const references = videoReferences?.referenceIds ?? (sceneFirstFrame ? [] : [...new Set([...(sourceId ? [sourceId] : []), ...selected.flatMap(profile => profile.referenceAssetIds), ...creativeReferenceAssetIds(project, shot)])]);
   const multimodal = videoReferences ? videoReferences.mode === 'multiple' : Boolean(project.workflow.production?.referenceAudioAssetIds?.length) || references.length > 0 && model?.parameters.characterReferenceMode === 'reference_image';
   const video = isVideoGenerationNode(node);
-  const prompt = [sourceId ? '图片 1 为待修改原图，保留未要求修改的部分。' : '', project.style, shot.visualPrompt, shotCreativePrompt(project, shot), resolvePromptBindings(node, project, shot, upstream).prompt, characterReferencePrompt(selected, references), sceneFirstFrame ? '以镜头首帧中的人物形象和构图为准。' : creativeReferencePrompt(project, shot, references), generationFramePrompt(project.profile, video && unifiedShotProfile),
-    ...(video ? [videoReferences && videoReferences.mode !== 'text' ? '全镜头保持参考人物的身份、五官比例、发型和关键辨识特征。动作与运镜按分镜推进。仅在明确要求时改变服装或造型。' : '',
+  const prompt = [
+    sourceId ? '图片 1 为待修改原图，保留未要求修改的部分。' : '',
+    project.style,
+    video ? stripVisualPromptOutputSpecs(shot.visualPrompt) : shot.visualPrompt,
+    shotCreativePrompt(project, shot),
+    resolvePromptBindings(node, project, shot, upstream).prompt,
+    characterReferencePrompt(selected, references),
+    sceneFirstFrame ? '以镜头首帧中的人物形象和构图为准。' : creativeReferencePrompt(project, shot, references),
+    ...(video ? [
+      videoReferences && videoReferences.mode !== 'text' ? '全镜头保持参考人物的身份、五官比例、发型和关键辨识特征。动作与运镜按分镜推进。仅在明确要求时改变服装或造型。' : '',
       shot.narration.trim() ? `实际台词（只朗读以下正文）：${JSON.stringify(shot.narration)}` : '本镜头不需要人声。',
       `声音要求：${[node.config.soundPrompt, shot.soundPrompt].filter(Boolean).join('\n')}`,
-      '画面不生成字幕或文字；台词、人声和环境音直接包含在视频音轨中。'] : []),
+      '画面不生成字幕或文字；台词、人声和环境音直接包含在视频音轨中。'] : [generationFramePrompt(project.profile)]),
   ].filter(Boolean).join('\n');
   const sceneIndex = videoReferences?.frame ? references.indexOf(videoReferences.frame.id) + 1 : 0;
   return prompt + (model?.provider === 'seedance' && multimodal && hasSceneImage

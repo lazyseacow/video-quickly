@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createServer, type RequestListener, type Server } from 'node:http';
 import { afterEach, expect, it } from 'vitest';
-import { modelSchema, projectSchema, runSchema, workflowNodeSchema } from '@video-quickly/contracts';
+import { modelSchema, projectSchema, runInspectionSchema, runSchema, workflowNodeSchema } from '@video-quickly/contracts';
 import { createRuntime, SimulatedProcessExit, type RuntimeOptions } from '../src/packages/runtime/src/index';
 import { ActivityJournal, AmbiguousActivityError } from '../src/packages/runtime/src/activities';
 import { openDatabase } from '../src/packages/runtime/src/database';
@@ -105,15 +105,31 @@ it('records interrupted-run recovery and committed-result reuse without repeatin
   expect(records.find(record => record.event === 'node.execution_completed')).toMatchObject({ durationMs: expect.any(Number) });
 });
 
-it.each([429, 503])('records real model HTTP %i failures with safe status and request context', async status => {
+it.each([
+  { status: 200, reason: '模型服务返回的响应格式无效', unresolved: true },
+  { status: 401, reason: '模型服务鉴权失败', unresolved: false },
+  { status: 429, reason: '限流或额度限制', unresolved: false },
+  { status: 503, reason: '模型服务暂时不可用', unresolved: true },
+])('shows $reason for HTTP $status and records safe request context', async ({ status, reason, unresolved }) => {
   const baseUrl = await service((request, response) => { request.resume(); response.writeHead(status).end('private-provider-response'); });
   const directory = await location(), runtime = open(directory);
   const model = modelSchema.parse(await runtime.dispatch('model.save', { model: { name: 'private-model-name', provider: 'openai-compatible', baseUrl, model: 'fixture', connectionType: 'text', capabilities: ['text'] } }));
   const project = await workflow(runtime, model.id), run = runSchema.parse(await runtime.dispatch('run.start', { projectId: project.id }, { requestId: 55 }));
-  await runtime.waitForIdle(); await close(runtime);
+  await runtime.waitForIdle();
+  const inspection = runInspectionSchema.parse(await runtime.dispatch('run.inspect', { runId: run.id }));
+  expect(inspection.run.error).toContain(reason);
+  expect(inspection.steps[0]).toMatchObject({ reason: expect.stringContaining(reason), unknownSubmission: unresolved, retry: { allowed: !unresolved } });
+  expect(inspection.steps[0].error).not.toContain('private-provider-response');
+  if (status === 401) {
+    await expect(runtime.dispatch('model.test', { modelId: model.id })).rejects.toThrow(reason);
+    expect(await runtime.dispatch('model.discover', { model })).toMatchObject({ message: expect.stringContaining(reason), items: [] });
+  }
+  await close(runtime);
   const { records, text } = await logs(directory);
   expect(records.find(record => record.event === 'rpc.completed' && record.requestId === 55)).toMatchObject({ runId: run.id, projectId: project.id });
-  expect(records.find(record => record.event === 'provider.request_failed')).toMatchObject({ level: 'error', runId: run.id, nodeId: 'brief', modelId: model.id, error: { statusCode: status } });
+  expect(records.find(record => record.event === 'provider.request_failed')).toMatchObject({ level: 'error', runId: run.id, nodeId: 'brief', modelId: model.id,
+    error: status === 200 ? { name: 'ModelServiceResponseError' } : { statusCode: status },
+  });
   expect(text).not.toContain('private-provider-response'); expect(text).not.toContain(baseUrl);
 });
 

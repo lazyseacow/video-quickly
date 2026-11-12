@@ -68,6 +68,21 @@ for (const { width, height, theme } of [
     await content.evaluate(element => { element.scrollTop = 0; });
     await dialog.screenshot({ path: info.outputPath(`production-spacing-${width}-${theme}.png`) });
 
+    const source = await original.inputValue();
+    const initial = await bounds(original);
+    await original.fill('这是一行项目原文。\n'.repeat(6));
+    const expanded = await bounds(original);
+    expect(expanded.height).toBeGreaterThan(initial.height);
+    expect(expanded.width).toBeCloseTo(initial.width, 0);
+    await original.fill('这是一行项目原文。\n'.repeat(40));
+    const capped = await original.evaluate(element => ({ height: element.getBoundingClientRect().height, overflow: element.scrollHeight - element.clientHeight }));
+    expect(capped.height).toBeLessThanOrEqual(height / 4 + 1);
+    expect(capped.overflow).toBeGreaterThan(0);
+    await expect(next).toBeInViewport({ ratio: 1 });
+    if (width === 1024) await dialog.screenshot({ path: info.outputPath('production-original-text.png') });
+    await original.fill(source);
+    expect((await bounds(original)).height).toBeCloseTo(initial.height, 0);
+
     await productionStep(dialog, '模型与素材');
     const models = await Promise.all(['文本模型', '视频模型', '图片模型'].map(name => bounds(dialog.getByRole('combobox', { name, exact: true }))));
     for (const model of models) expect(model.width).toBeCloseTo(body.width, 0);

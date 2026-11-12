@@ -70,7 +70,7 @@
 .production-settings__storyboard .video-settings > .field-row { grid-template-columns: repeat(4, minmax(0, 1fr)); gap: var(--space-form-disclosure) var(--space-form-group); }
 .production-settings__models { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: end; gap: var(--space-form-group); }
 .production-settings__reference-models { align-items: start; }
-.production-settings__original-text { width: 100%; }
+.production-settings__original-text { width: 100%; field-sizing: content; max-block-size: min(8lh, 25dvh); overflow-y: auto; }
 .production-settings__planning-content { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: var(--space-form-group); }
 .production-settings__planning-entry, .production-settings__planning-entry .field { min-width: 0; margin: 0; }
 .production-settings__planning-entry textarea, .button.production-settings__storyboard-action { min-block-size: calc(2 * var(--control-height)); }

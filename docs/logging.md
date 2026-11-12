@@ -84,6 +84,8 @@ UUID 和内建节点编号可直接关联；用户自定义标识符使用稳定
 
 文本 `TypeError` 先看 `requestPhase` 和 `error.cause.code`；多地址连接失败时还需查看 `error.cause.errors`。`send` 表示响应头尚未返回，不能据此判断服务端是否已接收请求；`read` 表示读取响应正文时失败。
 
+「本次制作」和模型连接检查会把可识别的网络错误、HTTP 状态和无效响应显示为具体原因及处理建议。运行记录保存固定文案，提交结果待核对时同时保留对应状态。供应商原始错误正文、地址和凭据仅按既有脱敏规则处理。
+
 ## 实现与验证
 
 文件写入与大小轮转由 `src/packages/runtime/src/logging.ts` 统一封装 electron-log 的独立 Node 入口，固定版本见 [Runtime 包清单](../src/packages/runtime/package.json)。封装关闭默认控制台输出，并替换库内部文件错误通知中的原始异常转发。

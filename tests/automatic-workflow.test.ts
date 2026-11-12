@@ -111,6 +111,7 @@ it('freezes the project original from the current form for a storyboard draft re
   const draft = { projectId: project.id, node, context: { brief: '四秒水彩短片。', originalText } };
   const shots = Array.from({ length: 6 }, (_, index) => ({ title: `旅人入城 ${index + 1}`, narration: '', visualPrompt: '水彩绘制的旅人', durationUs: 4_000_000 }));
   const output = JSON.stringify({ shots });
+  const expectedShots = shots.map(shot => ({ ...shot, visualPrompt: expect.stringContaining('初始画面\n水彩绘制的旅人') }));
   let rejectBatch = true;
   provider.mockImplementation(async ({ prompt, operationId }) => {
     if (rejectBatch && operationId.endsWith(':storyboard:2:response:1')) { rejectBatch = false; return '{}'; }
@@ -126,7 +127,7 @@ it('freezes the project original from the current form for a storyboard draft re
   const reopened = createRuntime(options); runtimes.add(reopened);
   await reopened.dispatch('run.step.retry', { runId: failed.id, nodeId: node.id });
   await reopened.waitForIdle();
-  expect(await reopened.dispatch('node.result', { runId: failed.id, nodeId: node.id })).toMatchObject({ shots });
+  expect(await reopened.dispatch('node.result', { runId: failed.id, nodeId: node.id })).toMatchObject({ shots: expectedShots });
   const frozenCalls = provider.mock.calls.map(([call]) => call);
   expect(frozenCalls.map(call => call.operationId.split(':storyboard:')[1])).toEqual(['outline:response:1', '1:response:1', '2:response:1', '2:response:2']);
   for (const { prompt } of frozenCalls) {
@@ -138,7 +139,7 @@ it('freezes the project original from the current form for a storyboard draft re
   provider.mockClear();
   const fresh = runSchema.parse(await reopened.dispatch('planning.prefill.start', { ...draft, context: { brief: draft.context.brief }, projectRevision: revised.revision, requestId: randomUUID() }));
   await reopened.waitForIdle();
-  expect(await reopened.dispatch('node.result', { runId: fresh.id, nodeId: node.id })).toMatchObject({ shots });
+  expect(await reopened.dispatch('node.result', { runId: fresh.id, nodeId: node.id })).toMatchObject({ shots: expectedShots });
   expect(provider).toHaveBeenCalledTimes(3);
   for (const [{ prompt }] of provider.mock.calls) {
     expect(prompt).toContain(`项目原文：\n${revisedText}`);
@@ -248,7 +249,10 @@ it.each(['brief', 'style'] as const)('blocks downstream work until the %s output
 
 it('rejects storyboard fields outside the advertised production schema', async () => {
   const { runtime, project, provider } = await fixture();
-  const invalid = JSON.stringify({ shots: [{ number: 1, title: '水滴的旅程', narration: '', visualPrompt: '', assetId: 'untrusted-asset' }] });
+  const invalid = JSON.stringify({ shots: [{
+    number: 1, title: '水滴的旅程', narration: '', initialFrame: '一滴雨水悬在叶尖。', characterPositions: '无人出镜。',
+    actionTimeline: [{ startUs: 0, endUs: 4_000_000, action: '雨滴从叶尖落下。' }], durationUs: 4_000_000, assetId: 'untrusted-asset',
+  }] });
   provider.mockResolvedValueOnce(JSON.stringify({ outline: '水滴的旅程', shots: [{ title: '水滴的旅程', beat: '水滴落下。' }] })).mockResolvedValueOnce(invalid);
   const run = runSchema.parse(await runtime.dispatch('run.start', { projectId: project.id, nodeId: 'script' }));
   await runtime.waitForIdle();

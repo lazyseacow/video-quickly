@@ -16,7 +16,7 @@ for (const viewport of [{ width: 1536, height: 960, theme: 'dark' }, { width: 39
     });
     await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve)); const address = server.address(); if (!address || typeof address === 'string') throw new Error('无测试端口');
     const baseUrl = `http://127.0.0.1:${address.port}/updated/v1`, name = `密钥保留 ${viewport.width}`;
-    const created = await request.post('/__desktop_rpc', { data: { method: 'model.save', params: { model: { name, platform: 'custom', provider: 'openai-compatible', baseUrl: `http://127.0.0.1:${address.port}/original`, model: 'fixture-key-model', connectionType: 'text', capabilities: ['text'] }, secret: 'retained-ui-fixture-key' } } });
+    const created = await request.post('/__desktop_rpc', { data: { method: 'model.save', params: { model: { name, platform: 'custom', provider: 'openai-compatible', baseUrl: `http://127.0.0.1:${address.port}/original`, model: 'fixture-key-model', connectionType: 'text', capabilities: ['text', 'vision', 'tools'] }, secret: 'retained-ui-fixture-key' } } });
     const original = (await created.json()).result as ModelProfile; expect(original.hasSecret).toBe(true);
     page.on('pageerror', error => errors.push(error.message));
     page.on('request', outgoing => { if (outgoing.url().endsWith('/__desktop_rpc') && outgoing.method() === 'POST') inputs.push(outgoing.postDataJSON()); });
@@ -36,7 +36,7 @@ for (const viewport of [{ width: 1536, height: 960, theme: 'dark' }, { width: 39
     await dialog.getByRole('button', { name: '保存连接', exact: true }).click(); await expect(dialog).toHaveCount(0);
     const summary = await request.post('/__desktop_rpc', { data: { method: 'workspace.summary' } });
     const saved = ((await summary.json()).result.models as ModelProfile[]).find(value => value.id === original.id);
-    expect(saved).toMatchObject({ baseUrl, hasSecret: true, credentialRef: original.credentialRef });
+    expect(saved).toMatchObject({ baseUrl, capabilities: original.capabilities, hasSecret: true, credentialRef: original.credentialRef });
     await page.getByRole('button', { name: `编辑“${name}”`, exact: true }).click();
     const reopened = page.getByRole('dialog', { name: '编辑模型连接', exact: true });
     await expect(await settingField(reopened, 'API Key')).toHaveAttribute('placeholder', '••••••••••••');
@@ -196,31 +196,42 @@ test('keeps catalogue selection available after retrying an empty catalogue', as
   await dialog.getByRole('button', { name: '取消', exact: true }).click();
 });
 
-test('allows a manual model ID for a custom video service without a catalogue', async ({ page, request }, info) => {
+test('requires a catalogue for a new connection and retains a saved model when its catalogue is unavailable', async ({ page, request }, info) => {
   const calls: string[] = [];
   server = createServer((incoming, response) => { calls.push(incoming.url!); response.writeHead(404).end(); });
   await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
   const address = server.address(); if (!address || typeof address === 'string') throw new Error('无测试端口');
-  const baseUrl = `http://127.0.0.1:${address.port}`, name = '自定义视频手填模型';
+  const baseUrl = `http://127.0.0.1:${address.port}`, name = '已保存的自定义视频模型';
+  const parameters = { requestPath: 'generate', requestTemplate: { model: '{{model}}', prompt: '{{prompt}}' }, resultUrlPath: 'url' };
+  const created = await request.post('/__desktop_rpc', { data: { method: 'model.save', params: { model: {
+    name, baseUrl, platform: 'custom', provider: 'custom-http', connectionType: 'video', model: 'saved-video', capabilities: ['video'], parameters,
+  } } } });
+  expect((await created.json()).error).toBeUndefined();
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto('/'); await page.getByRole('button', { name: '模型连接', exact: true }).click();
   const dialog = await addModelConnection(page, '视频模型');
   await (await settingField(dialog, '模型平台')).selectOption('custom');
   await (await settingField(dialog, 'API 协议')).selectOption('custom-http');
-  await (await settingField(dialog, '连接名称')).fill(name);
+  await (await settingField(dialog, '连接名称')).fill('未配置模型列表的视频连接');
   await (await settingField(dialog, '服务地址')).fill(baseUrl);
   await dialog.getByRole('button', { name: '获取模型列表', exact: true }).click();
   await expect(dialog.getByRole('status')).toContainText('HTTP 404');
-  await (await settingField(dialog, '模型来源')).selectOption('manual');
-  await (await settingField(dialog, '模型 ID')).fill('ep-manual-video');
-  await page.screenshot({ path: info.outputPath('model-manual-video.png') });
-  await (await settingField(dialog, '模型参数 JSON')).fill(JSON.stringify({ requestPath: 'generate', requestTemplate: { model: '{{model}}', prompt: '{{prompt}}' }, resultUrlPath: 'url' }));
-  await dialog.getByRole('button', { name: '保存连接', exact: true }).click();
-  await expect(dialog).toHaveCount(0);
+  await expect(dialog.getByLabel('模型来源', { exact: true })).toHaveCount(0);
+  await expect(dialog.getByRole('combobox', { name: '模型 ID', exact: true })).toBeDisabled();
+  await expect(dialog.getByRole('button', { name: '保存连接', exact: true })).toBeDisabled();
+  await dialog.getByRole('button', { name: '取消', exact: true }).click();
+  await page.getByRole('button', { name: `编辑“${name}”`, exact: true }).click();
+  const editor = page.getByRole('dialog', { name: '编辑模型连接', exact: true });
+  await editor.getByRole('button', { name: '获取模型列表', exact: true }).click();
+  await expect(editor.getByRole('status')).toContainText('HTTP 404');
+  await expect(editor.getByRole('combobox', { name: '模型 ID', exact: true })).toHaveValue('saved-video');
+  await page.screenshot({ path: info.outputPath('model-saved-without-catalogue.png') });
+  await editor.getByRole('button', { name: '保存连接', exact: true }).click();
+  await expect(editor).toHaveCount(0);
   const summary = await request.post('/__desktop_rpc', { data: { method: 'workspace.summary' } });
   const saved = ((await summary.json()).result.models as ModelProfile[]).find(value => value.name === name);
-  expect(saved).toMatchObject({ provider: 'custom-http', connectionType: 'video', model: 'ep-manual-video', capabilities: ['video'] });
-  expect(calls).toEqual(['/models']);
+  expect(saved).toMatchObject({ provider: 'custom-http', connectionType: 'video', model: 'saved-video', capabilities: ['video'], parameters });
+  expect(calls).toEqual(['/models', '/models']);
 });
 
 test('detaches saved and draft credentials when the service origin changes', async ({ page, request }) => {
@@ -289,6 +300,38 @@ test('filters OpenAI discovery by connection type', async ({ page }, info) => {
   await expect(videoPlatform.locator('option[value="openai"]')).toHaveCount(0);
   await videoPlatform.selectOption('custom');
   await expect(video.getByLabel('API 协议', { exact: true }).locator('option[value="openai-compatible"]')).toHaveText('OpenAI 兼容视频接口');
+});
+
+test('saves the selected catalogue capabilities automatically', async ({ page, request }) => {
+  server = createServer({ keepAliveTimeout: 0 }, (_request, response) => response.end(JSON.stringify({ data: [
+    { id: 'catalog-vision', domain: 'VLM', modalities: { input_modalities: ['text', 'image'], output_modalities: ['text'] },
+      features: { tools: { function_calling: true }, structured_outputs: { json_object: true } } },
+    { id: 'catalog-text', domain: 'LLM' },
+  ] })));
+  await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
+  const address = server.address(); if (!address || typeof address === 'string') throw new Error('无测试端口');
+  const name = '服务目录能力验收';
+  async function savedModel() {
+    const response = await request.post('/__desktop_rpc', { data: { method: 'workspace.summary' } });
+    return ((await response.json()).result.models as ModelProfile[]).find(value => value.name === name);
+  }
+  await page.goto('/'); await page.getByRole('button', { name: '模型连接', exact: true }).click();
+  const dialog = await addModelConnection(page);
+  await (await settingField(dialog, '模型平台')).selectOption('volcengine');
+  await (await settingField(dialog, '连接名称')).fill(name);
+  await (await settingField(dialog, '服务地址')).fill(`http://127.0.0.1:${address.port}/v1`);
+  await dialog.getByRole('button', { name: '获取模型列表', exact: true }).click();
+  await selectModel(dialog, 'catalog-vision');
+  await expect(dialog.getByRole('checkbox')).toHaveCount(0);
+  await dialog.getByRole('button', { name: '保存连接', exact: true }).click(); await expect(dialog).toHaveCount(0);
+  expect(await savedModel()).toMatchObject({ model: 'catalog-vision', capabilities: ['text', 'vision', 'tools', 'structured-output'] });
+
+  await page.getByRole('button', { name: `编辑“${name}”`, exact: true }).click();
+  const editor = page.getByRole('dialog', { name: '编辑模型连接', exact: true });
+  await editor.getByRole('button', { name: '获取模型列表', exact: true }).click();
+  await selectModel(editor, 'catalog-text');
+  await editor.getByRole('button', { name: '保存连接', exact: true }).click(); await expect(editor).toHaveCount(0);
+  expect(await savedModel()).toMatchObject({ model: 'catalog-text', capabilities: ['text'] });
 });
 
 test('keeps the latest service results after the address changes', async ({ page }) => {

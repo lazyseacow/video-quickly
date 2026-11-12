@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, expect, it } from 'vitest';
 import { modelSchema, workflowNodeSchema, type ModelProfile, type RunRecord, type TextProtocol, type WorkspaceSnapshot } from '@video-quickly/contracts';
-import { discoverModels, generateText, shouldRetryWithPromptFormat, testModelConnection, textRequestParameters, TextRequestRejectedError } from '../src/providers.js';
+import { discoverModels, generateText, modelHeaders, shouldRetryWithPromptFormat, testModelConnection, textRequestParameters, TextRequestRejectedError } from '../src/providers.js';
 import { createRuntime } from '../src/index.js';
 
 const servers: Server[] = [], directories: string[] = [], runtimes: ReturnType<typeof createRuntime>[] = [];
@@ -29,6 +29,17 @@ function model(baseUrl: string, textProtocol?: TextProtocol): ModelProfile {
 }
 const openaiUsage = { input_tokens: 100, output_tokens: 20, total_tokens: 120, input_tokens_details: { cached_tokens: 10 } };
 const anthropicUsage = { input_tokens: 80, output_tokens: 20, cache_read_input_tokens: 10, cache_creation_input_tokens: 10 };
+
+it.each([
+  { baseUrl: 'https://api.openai.com/v1', protocol: 'responses', version: undefined },
+  { baseUrl: 'https://api.anthropic.com/v1', protocol: 'messages', version: '2023-06-01' },
+  { baseUrl: 'https://ollama.com/v1', protocol: 'messages', version: '2023-06-01' },
+] as const)('uses documented Bearer authentication for $baseUrl', ({ baseUrl, protocol, version }) => {
+  const headers = modelHeaders({ ...model(baseUrl, protocol), authMode: 'x-api-key' }, 'fixture-secret');
+  expect(headers.Authorization).toBe('Bearer fixture-secret');
+  expect(headers['x-api-key']).toBeUndefined();
+  expect(headers['anthropic-version']).toBe(version);
+});
 
 it('offers a prompt-only retry for empty incomplete Responses with automatic formatting', () => {
   const selected = model('http://127.0.0.1/v1', 'responses');

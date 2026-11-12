@@ -36,8 +36,12 @@ export default function EditorProjectExport({ project, onClose }: { project: Pro
       <Notice>工程导出为实验功能。草稿需要本机剪辑软件创建的明文空草稿模板；未选择模板时，将生成素材与时间线交接包。</Notice>
       <fieldset disabled={busy} className="editor-project-export__fields"><legend>剪辑工程设置</legend>
         <Field label="剪辑软件"><Select value={target} onChange={event => { setTarget(event.target.value === 'capcut' ? 'capcut' : 'jianying'); setTemplate(''); setResult(undefined); }}><option value="jianying">剪映</option><option value="capcut">CapCut</option></Select></Field>
-        <Field label="空草稿模板（可选）" hint="选择本机目标软件生成的 draft_info.json 或 draft_content.json；模板须为空、未加密，不会修改源文件。"><PathPicker label="空草稿模板（可选）" value={template} onChange={value => { setTemplate(value); setResult(undefined); }} extensions={['json']} placeholder="留空导出剪辑交接包" /></Field>
-        <Field label="工程输出目录" hint="留空使用项目导出目录；每次创建独立文件夹。请选择软件草稿库以外的位置。"><PathPicker label="工程输出目录" mode="directory" value={destination} onChange={setDestination} placeholder="选择或填写文件夹路径" /></Field>
+        <Field label="空草稿模板（可选）" hint="选择本机目标软件生成的 draft_info.json 或 draft_content.json；模板须为空、未加密，不会修改源文件。">
+          {field => <PathPicker field={field} label="空草稿模板（可选）" value={template} onChange={value => { setTemplate(value); setResult(undefined); }} extensions={['json']} placeholder="留空导出剪辑交接包" />}
+        </Field>
+        <Field label="工程输出目录" hint="留空使用项目导出目录；每次创建独立文件夹。请选择软件草稿库以外的位置。">
+          {field => <PathPicker field={field} label="工程输出目录" mode="directory" value={destination} onChange={setDestination} placeholder="选择或填写文件夹路径" />}
+        </Field>
       </fieldset>
       <details className="editor-project-export__scope"><summary>导出内容与编辑范围</summary><ul>
         <li>画面效果、动画、裁切与转场已合成为视频，按分镜保留剪切点。</li>

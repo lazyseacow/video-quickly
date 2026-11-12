@@ -33,7 +33,8 @@ async function regenerate(runtime: ReturnType<typeof createRuntime>, project: Pr
 async function fixture(options: Partial<RuntimeOptions> = {}) {
   const directory = await mkdtemp(join(tmpdir(), 'video-quickly-regeneration-')); directories.push(directory);
   const requests: Array<{ path: string; body: Record<string, unknown> }> = [];
-  const script = { title: '候选标题', narration: '候选旁白', visualPrompt: '候选画面', durationUs: 4_000_000 };
+  const script = { title: '候选标题', narration: '候选旁白', durationUs: 4_000_000, initialFrame: '木盒在饭桌中央，侧面中景。', characterPositions: '无人出镜。',
+    actionTimeline: [{ startUs: 0, endUs: 4_000_000, action: '镜头缓慢推近木盒。' }] };
   const state = { scriptShots: [script], dropRequests: false };
   const png = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScLbtAAAAABJRU5ErkJggg==';
   const server = createServer((request, response) => { void (async () => {

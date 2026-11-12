@@ -123,7 +123,9 @@ it('keeps explicit model edits from the workflow editor when unified defaults ch
   expect(project.workflow.nodes.find(node => node.id === 'style')).toMatchObject({ modelId: 'next-shared', config: { modelOverride: false } });
 });
 
-async function fixture(audio = true, failpoint?: RuntimeOptions['failpoint'], shotCount = 1) {
+type StoryboardVisual = { initialFrame: string; characterPositions: string; actionTimeline: { startUs: number; endUs: number; action: string }[] };
+
+async function fixture(audio = true, failpoint?: RuntimeOptions['failpoint'], shotCount = 1, visuals: StoryboardVisual[] = []) {
   const directory = await mkdtemp(join(tmpdir(), 'vq-native-video-')); directories.push(directory);
   const source = join(directory, 'source.mp4');
   await runMedia(ffmpeg, ['-hide_banner', '-loglevel', 'error', '-y', '-f', 'lavfi', '-i', 'color=c=blue:s=160x90:r=30:d=1', ...(audio ? ['-f', 'lavfi', '-i', 'sine=frequency=440:sample_rate=48000:duration=1'] : []), '-c:v', 'libx264', '-pix_fmt', 'yuv420p', ...(audio ? ['-c:a', 'aac', '-shortest'] : ['-an']), source]);
@@ -141,7 +143,7 @@ async function fixture(audio = true, failpoint?: RuntimeOptions['failpoint'], sh
   });
   servers.push(server); await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
   const address = server.address(); if (!address || typeof address === 'string') throw new Error('Fixture server unavailable'); baseUrl = `http://127.0.0.1:${address.port}`;
-  const storyboard = JSON.stringify({ shots: Array.from({ length: shotCount }, (_, index) => ({ title: `视频镜头 ${index + 1}`, narration: '雨落下了。', visualPrompt: '蓝色天空', soundPrompt: '轻声讲述，雨声', durationUs: 2_000_000 })) });
+  const storyboard = JSON.stringify({ shots: Array.from({ length: shotCount }, (_, index) => ({ title: `视频镜头 ${index + 1}`, narration: '雨落下了。', soundPrompt: '轻声讲述，雨声', durationUs: 2_000_000, ...(visuals[index] ?? { visualPrompt: '蓝色天空' }) })) });
   const options: RuntimeOptions = { dataDirectory: directory, seed: false, ffmpegPath: ffmpeg, preflightActivity: validateMediaActivity, executeActivity: createActivityExecutor({ ffmpegPath: ffmpeg }), failpoint,
     provider: async ({ prompt }) => { textCalls++; return prompt.includes('自动视频制作步骤：旁白与分镜') ? storyboardFixtureResponse(prompt, storyboard) : planningFixtureResponse(prompt, '连续的蓝色画面与自然声音。'); } };
   const runtime = createRuntime(options); runtimes.add(runtime);
@@ -177,8 +179,23 @@ it.skipIf(!mediaAvailable)('produces videos from existing storyboard frames or t
   expect(source.received[1].content).toEqual([{ type: 'text', text: expect.stringContaining('蓝色雨衣') }]);
 });
 
-it.skipIf(!mediaAvailable)('uses one storyboard profile for every generated clip and exports their native sound', async () => {
-  const source = await fixture(true, undefined, 2);
+it.skipIf(!mediaAvailable)('submits self-contained shots with one profile and exports their native sound', async () => {
+  const visuals: StoryboardVisual[] = [
+    {
+      initialFrame: '180×320，9:16，60fps，模糊背景填充。院内中景，柔和日光照着木饭桌和矮板凳。王林穿粗布短褐。',
+      characterPositions: '王林站在饭桌左侧，四叔面向饭桌坐在板凳上，父母并肩站在桌后。',
+      actionTimeline: [
+        { startUs: 0, endUs: 800_000, action: '王林用袖口擦净板凳，抬头望向四叔。' },
+        { startUs: 800_000, endUs: 2_000_000, action: '四叔从怀中取出两本线装书放到木桌上，书和手完整入画。' },
+      ],
+    },
+    {
+      initialFrame: '院门虚化在木饭桌后。柔和日光下，两本朴素线装书叠在桌上。近景，书和手完整入画。王林穿粗布短褐。',
+      characterPositions: '王林站在木饭桌左侧俯身看书，四叔坐在矮板凳上，父母在桌后微笑。',
+      actionTimeline: [{ startUs: 0, endUs: 2_000_000, action: '王林脸颊微红，双手捧起两本书，低头翻看。' }],
+    },
+  ];
+  const source = await fixture(true, undefined, 2, visuals);
   const profile = { ...source.configured.profile, width: 180, height: 320, frameRate: { numerator: 60, denominator: 1 }, fitMode: 'blur' };
   await source.runtime.dispatch('project.update', { projectId: source.configured.id, revision: source.configured.revision, patch: { profile } });
   const ready = await source.runtime.dispatch('project.readiness', { projectId: source.configured.id }) as { ready: boolean }; expect(ready.ready).toBe(true);
@@ -190,12 +207,14 @@ it.skipIf(!mediaAvailable)('uses one storyboard profile for every generated clip
     expect(shot).toMatchObject({ soundPrompt: '轻声讲述，雨声', durationUs: 1_000_000, audioProcessing: { version: 2, videoAudio: { enabled: true } } });
     expect(shot.audioAssetId).toBeUndefined();
   }
+  expect(project.shots[0].visualPrompt).toContain('0.8–2 秒 四叔从怀中取出两本线装书放到木桌上，书和手完整入画。');
+  expect(project.shots[1].visualPrompt).toContain('0–2 秒 王林脸颊微红，双手捧起两本书，低头翻看。');
   expect(source.counts()).toEqual({ submissions: 2, textCalls: 4 });
-  for (const body of source.received) {
-    expect(body).toMatchObject({ generate_audio: true, ratio: '9:16' });
-    expect(JSON.stringify(body)).toContain('分镜全局帧率为 60 fps');
-    expect(JSON.stringify(body)).toContain('雨落下了。');
-    expect(JSON.stringify(body)).toContain('轻声讲述');
+  for (const [index, body] of source.received.entries()) {
+    expect(body).toMatchObject({ generate_audio: true, ratio: '9:16', duration: 2 });
+    const [{ text }] = body.content as { text: string }[];
+    for (const value of ['初始画面', '人物站位', '动作时间轴', visuals[index].characterPositions, project.shots[index].visualPrompt, '书和手完整入画', '雨落下了。', '轻声讲述']) expect(text).toContain(value);
+    expect(text).not.toMatch(/180\s*×\s*320|9:16|60\s*fps|模糊背景填充/);
   }
   const script = await source.runtime.dispatch('run.step.payload', { runId: started.id, nodeId: 'script', kind: 'output' });
   expect(script).toMatchObject({ value: { profile } });
@@ -206,7 +225,8 @@ it.skipIf(!mediaAvailable)('uses one storyboard profile for every generated clip
     expect(await probeMedia(asset.path, ffprobe)).toMatchObject({ width: 180, height: 320, frameRate: '60/1', audio: true });
   }
   const payload = await source.runtime.dispatch('run.step.payload', { runId: started.id, nodeId: 'export', kind: 'output' }) as { value: { videoPath: string; subtitlePath: string } };
-  expect((await probeMedia(payload.value.videoPath, ffprobe)).audio).toBe(true); expect(await readFile(payload.value.subtitlePath, 'utf8')).toBe('');
+  expect(await probeMedia(payload.value.videoPath, ffprobe)).toMatchObject({ width: 180, height: 320, frameRate: '60/1', audio: true });
+  expect(await readFile(payload.value.subtitlePath, 'utf8')).toBe('');
   const backup = await source.runtime.dispatch('project.backup', { projectId: project.id }) as { path: string };
   expect(JSON.parse(await readFile(join(backup.path, 'project.json'), 'utf8'))).toMatchObject({ schemaVersion: 9, project: { workflow: { production: { manualPlanningFields: { brief: { topic: expect.any(String) } } } } } });
 });

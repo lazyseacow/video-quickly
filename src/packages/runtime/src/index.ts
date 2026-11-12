@@ -9,18 +9,18 @@ import { readGithubTrending, readResearchSource, selectResearchPassages, parseRe
 import type { MediaDiagnosticEvent } from '@video-quickly/integrations';
 import { SqliteSaver } from '@langchain/langgraph-checkpoint-sqlite';
 import {
-  applyShotCandidate, assetSchema, characterProfileSchema, claimSchema, clipSourceAssetIds, DEFAULT_VIDEO_PROFILE, editorExportInputSchema, LockedShotChangeError, modelSchema, pageInputSchema, projectSchema, providerUsageSchema, runSchema, sumProviderUsage, runSelectionSchema, runStatusSchema, shotCandidateFieldSchema, shotCandidateKindSchema, shotCandidateSchema, shotSchema, validateClipEditContent, validateClipEditHistory, validateModelConnection, validateModelParameters, videoProfileSchema, workflowSchema,
+  applyShotCandidate, assetSchema, characterProfileSchema, claimSchema, clipSourceAssetIds, DEFAULT_VIDEO_PROFILE, editorExportInputSchema, LockedShotChangeError, modelRequestFailure, modelSchema, pageInputSchema, parametersForTextProtocol, projectSchema, providerUsageSchema, runSchema, sumProviderUsage, runSelectionSchema, runStatusSchema, shotCandidateFieldSchema, shotCandidateKindSchema, shotCandidateSchema, shotSchema, validateClipEditContent, validateClipEditHistory, validateModelConnection, validateModelParameters, videoProfileSchema, workflowSchema,
   type AssetRecord, type AudioWaveform, type CharacterProfile, type JsonValue, type ModelCapability, type ModelProfile, type PreparedAudioMix, type ProjectDocument, type ReadinessIssue, type RunEvent, type RunPlan, type RunRecord, type RunSelection, type RunSummary, type RuntimeEvent, type RuntimeSystem, type Shot, type ShotCandidate, type SkillPackage, type WorkflowDefinition, type WorkflowNode, type WorkspaceSnapshot,
 } from '@video-quickly/contracts';
-import { ActivityJournal, AGENT_CONTINUATION_EXHAUSTED, AgentCompletionError, AmbiguousActivityError, fingerprint, SimulatedProcessExit, type ActivityHooks, type ActivitySafety } from './activities.js';
+import { ActivityJournal, AGENT_CONTINUATION_EXHAUSTED, AgentCompletionError, AmbiguousActivityError, fingerprint, SimulatedProcessExit, UnconfirmedActivityError, type ActivityHooks, type ActivitySafety } from './activities.js';
 import { openDatabase, DocumentStore } from './database.js';
 import { activityNodeId, createReadModels } from './read-models.js';
 import { createExecutionGraph } from './graph.js';
 import { AsyncLocalStorageProviderSingleton } from '@langchain/core/singletons';
 import { validateWorkflowComposition, workflowNodesWithSubflows, workflowEdgesWithSubflows, resolveSubflowInputs, substituteSubflowInputs, subflowNodeId, subflowThreadId, subflowValueAt, type SubflowDefinition } from '@video-quickly/contracts';
 import { createWorkflowTemplateLibrary } from './workflow-templates.js';
-import { buildWorkflowPrompt, parseWorkflowScript, withStoryboardTiming, type StoryboardPromptStage, type WorkflowUpstreamResult } from './workflow-prompts.js';
-import { editingOutputSchema, legacyStoryboardJsonSchema, manualPlanningOutput, parseProductionDocument, productionDocumentContract, storyboardJsonSchema, validateProductionMediaOutput, validateProductionMediaPreview, WORKFLOW_OUTPUT_VERSION } from './workflow-outputs.js';
+import { buildWorkflowPrompt, parseWorkflowScript, withStoryboardGuidance, type StoryboardPromptStage, type WorkflowUpstreamResult } from './workflow-prompts.js';
+import { editingOutputSchema, manualPlanningOutput, parseProductionDocument, productionDocumentContract, storyboardOutputContract, usesPlanningFields, validateProductionMediaOutput, validateProductionMediaPreview, WORKFLOW_OUTPUT_VERSION } from './workflow-outputs.js';
 import { githubTrendingPrompt, githubTrendingRequest, githubTrendingSummary, validateGithubTrendingStoryboard } from './github-trending.js';
 import { storyboardWebPrompt, storyboardWebRequest, type StoryboardWebReader, type StoryboardWebResearch } from './storyboard-research.js';
 import { executeStoryboard, STORYBOARD_BATCH_SIZE, storyboardOutlineStage } from './storyboard-generation.js';
@@ -549,7 +549,7 @@ export function createRuntime(options: RuntimeOptions) {
     if (store.get('run-application', runId) || videoNodeId && videoApplication?.nodeIds.includes(videoNodeId)) return;
     const working = store.get<ProjectDocument>('run-project', runId);
     if (!working) return;
-    const includePlanningFields = saved.outputContractVersion === 2;
+    const includePlanningFields = usesPlanningFields(saved.outputContractVersion);
     const includeTimelineEdits = saved.nodes.some(node => node.id === saved.videoEditingAgentId && node.config.timelineEdits === true);
     const output = productionOutput(working, includePlanningFields, includeTimelineEdits), outputDigest = fingerprint(output);
     if (outputDigest === (videoApplication?.outputDigest ?? fingerprint(productionOutput(saved.project, includePlanningFields, includeTimelineEdits)))) return;
@@ -639,11 +639,11 @@ export function createRuntime(options: RuntimeOptions) {
     const outputContractVersion = baseline.workflow.id === 'native-video' ? WORKFLOW_OUTPUT_VERSION : undefined;
     const batchedStoryboard = prefill && node.kind === 'script' && !baselineShot;
     const originalText = baselineShot ? undefined : projectOriginalText(inputProject);
-    const prompt = media ? appendSkillContext(buildMediaPrompt(inputProject, node, shot!, bundle.characters, model, hasImage, values, true, videoInputs?.[0]), node, skills)
+    const prompt = media ? appendSkillContext(buildMediaPrompt(inputProject, node, shot!, bundle.characters, model, hasImage, values, videoInputs?.[0]), node, skills)
       : buildWorkflowPrompt(inputProject, node, skills, Boolean(baselineShot), bundle.characters, upstream, outputContractVersion,
         batchedStoryboard ? storyboardOutlineStage(inputProject, false) : undefined, { originalText });
     const references = frozenAssets.map(({ id, name, kind }) => ({ id, name, kind }));
-    const preview: PromptPreview = { digest: '', prompt: withStoryboardTiming(prompt, node.kind), node, model, skills, projectRevision: baseline.revision, variables: resolved.variables, references, upstream: upstream.map(({ nodeId, label, kind }) => ({ nodeId, label, kind })) };
+    const preview: PromptPreview = { digest: '', prompt: withStoryboardGuidance(prompt, node.kind, outputContractVersion), node, model, skills, projectRevision: baseline.revision, variables: resolved.variables, references, upstream: upstream.map(({ nodeId, label, kind }) => ({ nodeId, label, kind })) };
     const saved: RunSnapshot = { project: baseline, models: model ? [model] : [], skills, mcpServers: [], nodes: [node], handlerVersion: 1, unifiedShotProfile: true, characters: bundle.characters, characterAssets: bundle.assets, assets: frozenAssets,
       includeProjectOriginalText: true, useOriginalVideoReferences: true,
       ...(outputContractVersion ? { outputContractVersion } : {}), ...(batchedStoryboard ? { storyboardBatchSize: STORYBOARD_BATCH_SIZE } : {}), selection: { nodeId: node.id, mode: 'node' }, ...(candidate ? { regeneration: { shotId: baselineShot.id, baseline: baselineShot, kind } } : {}), trial: { inputProject, upstream, preview } };
@@ -1218,28 +1218,30 @@ export function createRuntime(options: RuntimeOptions) {
     }
     const fixedOutputs = Boolean(saved.outputContractVersion);
     const document = productionDocumentContract(node, saved.outputContractVersion);
-    const scriptJsonSchema = fixedOutputs ? storyboardJsonSchema : legacyStoryboardJsonSchema;
-    const outputSchema = node.kind === 'script' && !storyboardBatchSize ? scriptJsonSchema : document?.jsonSchema;
+    const outputSchema = node.kind === 'script' && !storyboardBatchSize ? storyboardOutputContract(saved.outputContractVersion).jsonSchema : document?.jsonSchema;
     const input = { project: executionProject, node, model: selectedModel ?? null, skills: saved.skills.filter(skill => node.skillIds.includes(skill.id)), handlerVersion: saved.handlerVersion, ...(fixedOutputs ? { outputContractVersion: saved.outputContractVersion } : {}), ...(storyboardBatchSize ? { storyboardBatchSize } : {}), ...(saved.unifiedShotProfile ? { unifiedShotProfile: true } : {}), ...(saved.exportBatch ? { exportBatch: saved.exportBatch, assets: saved.assets } : {}), ...(githubTrending ? { githubTrending } : {}), ...(webResearch ? { webResearch } : {}) };
     const retryIssues = outputSchema ? modelResponses.retryIssues(`${runId}:${node.id}`) : undefined;
     const upstream = usesProvider && !saved.assistant && !researchContext ? upstreamResults(runId, node, saved) : [];
     const originalText = saved.includeProjectOriginalText ? projectOriginalText(saved.trial?.inputProject ?? saved.project)
       : saved.includeEpisodeOriginalText ? (saved.project.episode ?? saved.project.episodeSource)?.originalText : undefined;
-    const workflowPrompt = (project: ProjectDocument, stage?: StoryboardPromptStage) => buildWorkflowPrompt(project, node, saved.skills, Boolean(saved.regeneration), executionCharacters, upstream, saved.outputContractVersion, stage,
-      { unifiedShotProfile: Boolean(saved.unifiedShotProfile), originalText, originalTextLabel: saved.includeProjectOriginalText ? '项目原文' : '本集原文' });
+    const workflowPrompt = (project: ProjectDocument, stage?: StoryboardPromptStage, legacyPlanningProfile = false) => buildWorkflowPrompt(project, node, saved.skills, Boolean(saved.regeneration), executionCharacters, upstream, saved.outputContractVersion, stage,
+      { legacyPlanningProfile, unifiedShotProfile: Boolean(saved.unifiedShotProfile), originalText, originalTextLabel: saved.includeProjectOriginalText ? '项目原文' : '本集原文' });
     const outlineStage = storyboardBatchSize ? storyboardOutlineStage(executionProject, Boolean(githubTrending), node.config.automaticCasting === true) : undefined;
     const originalScript = outlineStage && node.config.automaticCasting === true && !(saved.includeProjectOriginalText && originalText?.trim())
       ? (saved.includeProjectOriginalText ? saved.project.brief : saved.project.episode?.originalText || saved.project.brief).trim() : '';
-    const basePrompt = saved.assistant ? node.prompt
-      : researchContext ? researchPrompt(executionProject, node, saved.skills, researchContext)
-      : usesProvider ? [workflowPrompt(executionProject, outlineStage),
-        originalScript && originalScript !== executionProject.brief ? `项目原始剧本或创作要求：\n${originalScript}` : ''].filter(Boolean).join('\n\n') : '';
     const webPrompt = githubTrending ? githubTrendingPrompt(githubTrending) : webResearch ? storyboardWebPrompt(webResearch) : '';
     const resultLabel = document?.label ?? '分镜';
     const correction = retryIssues?.length ? `\n\n上次${resultLabel}返回的字段校验错误：${JSON.stringify(retryIssues)}\n本次请修正上述字段，${document ? '' : '仍依据本次已完成的简报与风格'}返回完整 JSON 对象，不要只返回修补片段。` : '';
-    const prompt = `${basePrompt}${webPrompt ? `\n\n${webPrompt}` : ''}${correction}`;
+    const buildPrompt = (legacyPlanningProfile = false) => {
+      const basePrompt = saved.assistant ? node.prompt
+        : researchContext ? researchPrompt(executionProject, node, saved.skills, researchContext)
+        : usesProvider ? [workflowPrompt(executionProject, outlineStage, legacyPlanningProfile),
+          originalScript && originalScript !== executionProject.brief ? `项目原始剧本或创作要求：\n${originalScript}` : ''].filter(Boolean).join('\n\n') : '';
+      return `${basePrompt}${webPrompt ? `\n\n${webPrompt}` : ''}${correction}`;
+    };
+    const prompt = buildPrompt();
     if (!cached || cached.status === 'prepared') runInspector.captureInput(runId, node.id, { inputHash: fingerprint(input), recordedAt: now(),
-      prompt: usesProvider || saved.trial ? redactInspectionText(saved.trial?.preview.prompt ?? withStoryboardTiming(prompt, node.kind), text => redactError(text, saved.models, transientSecrets, Number.POSITIVE_INFINITY)) : undefined });
+      prompt: usesProvider || saved.trial ? redactInspectionText(saved.trial?.preview.prompt ?? withStoryboardGuidance(prompt, node.kind, saved.outputContractVersion), text => redactError(text, saved.models, transientSecrets, Number.POSITIVE_INFINITY)) : undefined });
     const capability: ModelCapability | undefined = node.kind === 'assets' ? 'image' : node.kind === 'animation' ? 'video' : usesProvider ? 'text' : undefined;
     const responseAttempt = outputSchema ? modelResponses.attempt(`${runId}:${node.id}`) : undefined;
     const costOperation = selectedModel && capability && !deepAgent && !storyboardBatchSize ? `${runId}:${node.id}${responseAttempt ? `:response:${responseAttempt}` : ''}` : undefined;
@@ -1256,7 +1258,7 @@ export function createRuntime(options: RuntimeOptions) {
         const requestText = async (request: { prompt: string; operationId: string; outputSchema?: Record<string, unknown>; outputSchemaName?: string }, receipt?: { operationId: string; attempt: number }) => {
           runProgress.phase(context.operationId, 'requesting');
           // Apply timing guidance after the storyboard journal has fingerprinted its prompt.
-          const modelPrompt = withStoryboardTiming(request.prompt, node.kind);
+          const modelPrompt = withStoryboardGuidance(request.prompt, node.kind, saved.outputContractVersion);
           if (request.outputSchema) runInspector.captureInput(runId, node.id, { inputHash: fingerprint(input), recordedAt: now(), prompt: redactInspectionText(modelPrompt, text => redactError(text, saved.models, transientSecrets, Number.POSITIVE_INFINITY)) });
           const started = performance.now();
           let requestPhase: ModelRequestPhase | undefined;
@@ -1290,10 +1292,12 @@ export function createRuntime(options: RuntimeOptions) {
         if (storyboardBatchSize) {
           const storyboard = await executeStoryboard({
             journal, responses: modelResponses, progress: runProgress, runId, nodeId: node.id, inputHash: fingerprint(input), batchSize: storyboardBatchSize,
-            project: executionProject, characters: executionCharacters, ranking: githubTrending, signal: controller.signal, safety, outlinePrompt: prompt, automaticCasting: node.config.automaticCasting === true,
-            batchPrompt: (stage, creativeContext, repositories) => {
+            project: executionProject, characters: executionCharacters, ranking: githubTrending, signal: controller.signal, safety, automaticCasting: node.config.automaticCasting === true,
+            outputContractVersion: saved.outputContractVersion,
+            outlinePrompt: legacyPlanningProfile => legacyPlanningProfile ? buildPrompt(true) : prompt,
+            batchPrompt: (stage, creativeContext, repositories) => legacyPlanningProfile => {
               const sources = githubTrending ? `本批对应的 GitHub Trending 资料：${JSON.stringify(repositories)}` : webPrompt;
-              return [workflowPrompt({ ...executionProject, creativeContext }, stage), sources].filter(Boolean).join('\n\n');
+              return [workflowPrompt({ ...executionProject, creativeContext }, stage, legacyPlanningProfile), sources].filter(Boolean).join('\n\n');
             },
             canRetryWithPromptFormat: response => !modelResponses.promptFormat(context.operationId) && shouldRetryWithPromptFormat(selectedModel, response),
             request: async ({ operationId, attempt, ...request }) => {
@@ -1343,7 +1347,7 @@ export function createRuntime(options: RuntimeOptions) {
               path: '$', message: textIncompleteMessage(generated.incompleteReason ?? 'unknown', document ? 'document' : 'storyboard'),
             }], resultLabel);
             if (document) return { ...parseProductionDocument(text, document), ...metadata } as JsonValue;
-            const script = parseWorkflowScript(text, executionProject, Boolean(saved.regeneration), executionCharacters, fixedOutputs);
+            const script = parseWorkflowScript(text, executionProject, Boolean(saved.regeneration), executionCharacters, saved.outputContractVersion);
             if (githubTrending) validateGithubTrendingStoryboard(script.shots, githubTrending);
             return { text, ...metadata, ...script } as JsonValue;
           } catch (error) {
@@ -1576,7 +1580,8 @@ export function createRuntime(options: RuntimeOptions) {
       const latest = run(runId);
       if (latest.status === 'canceled') return;
       const message = redactError(error instanceof Error ? error.message : '运行失败', availableModels(), transientSecrets);
-      const status = error instanceof AmbiguousActivityError || message.includes('请') || message.includes('先') ? 'needs_attention' : 'failed';
+      const status = error instanceof UnconfirmedActivityError ? 'failed'
+        : error instanceof AmbiguousActivityError || message.includes('请') || message.includes('先') ? 'needs_attention' : 'failed';
       updateRun(runId, { status, error: message });
       recordEvent(runId, 'run.failed', message, latest.currentNodeId, error);
     }).finally(() => { active.delete(runId); });
@@ -2203,13 +2208,32 @@ export function createRuntime(options: RuntimeOptions) {
           secret = rememberSecret(await options.secretStore?.get(previous.credentialRef));
         }
         try { return await discoverModels(draft, secret); }
-        catch (error) { return { source: 'remote', items: [], message: error instanceof Error && /^读取模型列表返回 HTTP \d+$/.test(error.message) ? `${error.message}。可手动填写模型 ID，或核对地址与密钥后重试。` : '暂时无法读取模型列表。可手动填写模型 ID，或核对连接后重试。' }; }
+        catch (error) {
+          const failure = modelRequestFailure(error);
+          return { source: 'remote', items: [], message: failure ? `读取模型列表失败。${failure.reason}。请${failure.guidance}。` : '暂时无法读取模型列表。请核对连接后重试。' };
+        }
       }
       case 'model.save': {
-        const input = z.object({ model: modelSchema.partial().required({ name: true, provider: true, baseUrl: true, model: true, capabilities: true, connectionType: true }), secret: z.string().optional() }).parse(rawParams);
+        const input = z.object({
+          model: modelSchema.partial().required({ name: true, provider: true, baseUrl: true, model: true, capabilities: true, connectionType: true }).extend({
+            parameters: modelSchema.shape.parameters.removeDefault().optional(),
+            enabled: modelSchema.shape.enabled.removeDefault().optional(),
+          }),
+          secret: z.string().optional(),
+        }).parse(rawParams);
         const id = input.model.id || randomUUID();
         const previous = store.get<ModelProfile>('model', id);
-        const configuration = { ...previous, ...input.model, parameters: input.model.parameters ?? previous?.parameters ?? {} };
+        const sameAdapter = previous?.provider === input.model.provider && previous.connectionType === input.model.connectionType;
+        const configuration = {
+          ...previous, ...input.model,
+          enabled: input.model.enabled ?? previous?.enabled,
+          textProtocol: input.model.textProtocol ?? (sameAdapter ? previous.textProtocol : undefined),
+          parameters: input.model.parameters ?? (sameAdapter ? previous.parameters : undefined) ?? {},
+        };
+        if (input.model.parameters === undefined && sameAdapter && configuration.connectionType === 'text'
+          && (previous.textProtocol ?? 'chat-completions') !== (configuration.textProtocol ?? 'chat-completions')) {
+          configuration.parameters = parametersForTextProtocol(configuration);
+        }
         validateModelConnection(configuration);
         validateModelParameters(configuration);
         const sameOrigin = previous && new URL(previous.baseUrl).origin === new URL(input.model.baseUrl).origin;
@@ -2270,7 +2294,13 @@ export function createRuntime(options: RuntimeOptions) {
         const { modelId } = z.object({ modelId: z.string() }).parse(rawParams);
         const model = store.get<ModelProfile>('model', modelId); if (!model) throw new Error('模型不存在。');
         validateModelConnection(model);
-        return testModelConnection(model, model.credentialRef ? rememberSecret(await options.secretStore?.get(model.credentialRef)) : undefined);
+        const secret = model.credentialRef ? rememberSecret(await options.secretStore?.get(model.credentialRef)) : undefined;
+        try { return await testModelConnection(model, secret); }
+        catch (error) {
+          const failure = modelRequestFailure(error);
+          if (!failure) throw error;
+          throw new Error(`${failure.reason}。请${failure.guidance}。`, { cause: error });
+        }
       }
       case 'model.delete': {
         const { modelId } = z.object({ modelId: z.string() }).parse(rawParams);
@@ -2460,7 +2490,7 @@ export function createRuntime(options: RuntimeOptions) {
           const repeated = appliedReceipt(); if (repeated) return repeated;
           const latest = verifiedProject(); requireCandidateAssets(checkedAssets);
           const working = applyMediaResult(restoreStoryboard ? input : latest, input, node, result, assets);
-          if (restoreStoryboard) return saveApplied(projectWithProductionOutput(latest, productionOutput(working, saved.outputContractVersion === 2)));
+          if (restoreStoryboard) return saveApplied(projectWithProductionOutput(latest, productionOutput(working, usesPlanningFields(saved.outputContractVersion))));
           return saveApplied(working, working !== latest);
         }
         throw new Error('此步骤结果无需写入项目。');

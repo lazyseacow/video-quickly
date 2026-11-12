@@ -114,7 +114,11 @@ export default function BatchExportDialog({ project, initialSection, onClose, no
         <Button aria-label="添加规格" variant="ghost" disabled={targets.length >= 8} onClick={() => setTargets(values => { const profile = structuredClone(values.find(target => target.selected)?.profile ?? project.profile); return [...values, { id: crypto.randomUUID(), label: `自定义 ${values.length + 1}`, profile, selected: true, shortSide: String(Math.min(profile.width, profile.height)), ratio: profile.width / profile.height }]; })}><Plus size={13} />添加规格</Button>
         {!selected.length && <p className="field-error">请至少勾选一个导出规格。</p>}{invalid && !invalid.success && <p role="alert" className="field-error">{invalid.error.issues[0]?.message}</p>}
       </fieldset> },
-      { id: 'output', label: '输出设置', icon: FolderOpen, content: <fieldset className="batch-export__configuration" disabled={Boolean(busy)}><legend>输出设置</legend><Field label="批量输出目录" hint="留空使用项目输出目录；各批次和规格独立保存。"><PathPicker label="批量输出目录" mode="directory" value={destination} onChange={setDestination} placeholder="选择或填写文件夹路径" /></Field></fieldset> },
+      { id: 'output', label: '输出设置', icon: FolderOpen, content: <fieldset className="batch-export__configuration" disabled={Boolean(busy)}><legend>输出设置</legend>
+        <Field label="批量输出目录" hint="留空使用项目输出目录；各批次和规格独立保存。">
+          {field => <PathPicker field={field} label="批量输出目录" mode="directory" value={destination} onChange={setDestination} placeholder="选择或填写文件夹路径" />}
+        </Field>
+      </fieldset> },
       { id: 'history', label: '导出记录', icon: History, content: <section className="batch-export__history" aria-label="批量导出进度"><div className="batch-export__history-heading"><h3>导出记录</h3><Button aria-label="刷新导出记录" variant="ghost" busy={listBusy} onClick={() => void loadHistory()}><RefreshCw size={13} />刷新</Button></div>
         {listError && <Notice kind="error">{listError}</Notice>}
         {(history.length > 0 || current) && <Field label="批量导出记录"><Select value={selectedId ?? ''} disabled={Boolean(busy)} onChange={event => { setSelectedId(event.target.value); setError(''); }}><option value="" disabled>选择批量导出记录</option>{current && !history.some(item => item.id === current.id) && <option value={current.id}>{new Date(current.createdAt).toLocaleString('zh-CN')} · 修订 {current.projectRevision} · {labels[current.status]}</option>}{history.map(item => <option key={item.id} value={item.id}>{new Date(item.createdAt).toLocaleString('zh-CN')} · 修订 {item.projectRevision} · {labels[item.status]}</option>)}</Select></Field>}

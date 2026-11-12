@@ -1,4 +1,5 @@
 import { confirmAction } from './confirmation-actions';
+import { storyboardFixtureResponse } from '../fixtures/planning-response';
 import { openProjectFromList } from './workspace-navigation';
 import { setWorkspaceTheme } from './workspace-settings';
 import { execFileSync } from 'node:child_process';
@@ -49,14 +50,17 @@ async function fixture(media?: { image: Buffer; audio: Buffer; video: Buffer }) 
   const server = createServer({ keepAliveTimeout: 0 }, (incoming, response) => {
     const chunks: Buffer[] = []; incoming.on('data', chunk => chunks.push(chunk));
     incoming.on('end', () => { void (async () => {
-      const path = incoming.url ?? ''; requests.push({ path, body: Buffer.concat(chunks).toString() });
+      const path = incoming.url ?? '', body = Buffer.concat(chunks).toString();
+      requests.push({ path, body });
       if (path === '/fixture.mp4' && media) { response.setHeader('Content-Type', 'video/mp4'); response.end(media.video); return; }
       if (path.endsWith('/chat/completions')) {
         const number = ++calls, waiting = gate;
         if (waiting) await waiting;
         if (failure) { response.statusCode = 500; response.end('isolated model failure'); return; }
         response.setHeader('Content-Type', 'application/json');
-        response.end(JSON.stringify({ choices: [{ message: { content: JSON.stringify({ shots: [{ title: `候选标题 ${number}`, narration: `候选旁白 ${number}`, visualPrompt: `候选画面 ${number}`, durationUs: 3_000_000 }] }) } }] })); return;
+        const output = JSON.stringify({ shots: [{ title: `候选标题 ${number}`, narration: `候选旁白 ${number}`, visualPrompt: `候选画面 ${number}`, durationUs: 3_000_000 }] });
+        const content = storyboardFixtureResponse(JSON.parse(body).messages[0].content, output);
+        response.end(JSON.stringify({ choices: [{ message: { content } }] })); return;
       }
       if (path.endsWith('/images/generations') && media) { response.setHeader('Content-Type', 'application/json'); response.end(JSON.stringify({ data: [{ b64_json: media.image.toString('base64') }] })); return; }
       if (path.endsWith('/audio/speech') && media) { response.setHeader('Content-Type', 'audio/mpeg'); response.end(media.audio); return; }
@@ -158,7 +162,8 @@ test('recovers background generation, offers explicit resume, and retains the di
     expect(service.requests).toHaveLength(1);
     service.fail(true); await dialog.getByLabel('生成模型', { exact: true }).selectOption(connection.id);
     await dialog.getByRole('button', { name: '生成候选', exact: true }).click(); await confirmAction(page, '确认生成');
-    await expect(dialog.getByRole('alert')).toContainText('外部调用未完成，结果需要核对。');
+    await expect(dialog.getByRole('alert')).toContainText('模型服务内部出错（HTTP 500）');
+    await expect(dialog.getByRole('alert')).toContainText('本次请求结果待核对。');
     expect(service.requests).toHaveLength(2);
     expect((await rpc<{ total: number }>(request, 'shot.candidates', { projectId: project.id, shotId: 'target-1' })).total).toBe(1);
     const remote = await rpc<ProjectDocument>(request, 'project.update', { projectId: project.id, revision: project.revision, patch: { shots: project.shots.map((shot, index) => index ? shot : { ...shot, narration: '另一视图的人工旁白' }) } });

@@ -1,8 +1,8 @@
 import { z } from 'zod';
-import { createSceneTemplate, creativeCharacterBindings, creativeContextSchema, generationFramePrompt, LockedShotChangeError, projectCharacterIds, resolvePromptBindings, shotSchema, validateCreativeReferences, type CharacterProfile, type JsonValue, type ProjectDocument, type SkillPackage, type WorkflowNode } from '@video-quickly/contracts';
+import { createSceneTemplate, creativeCharacterBindings, creativeContextSchema, generationFramePrompt, LockedShotChangeError, projectCharacterIds, resolvePromptBindings, shotSchema, stripVisualPromptOutputSpecs, validateCreativeReferences, type CharacterProfile, type JsonValue, type ProjectDocument, type SkillPackage, type WorkflowNode } from '@video-quickly/contracts';
 import { ModelResponseValidationError, parseModelJson, responseIssues } from './model-responses.js';
 import { skillPromptContext } from '@video-quickly/contracts';
-import { legacyStoryboardJsonSchema, legacyStoryboardOutputSchema, productionDocumentContract, storyboardJsonSchema, storyboardOutputSchema, type WorkflowOutputVersion } from './workflow-outputs.js';
+import { legacyStoryboardOutputSchema, productionDocumentContract, storyboardOutputContract, type GeneratedStoryboardShot, type WorkflowOutputVersion } from './workflow-outputs.js';
 import { omitLegacyExportTimeline } from './legacy-export-timeline.js';
 
 export interface WorkflowUpstreamResult {
@@ -18,9 +18,19 @@ export interface StoryboardPromptStage {
   shots: PromptShot[];
 }
 
-export function withStoryboardTiming(prompt: string, kind: WorkflowNode['kind']): string {
+// Append at dispatch so saved storyboard batch input hashes remain valid.
+export function withStoryboardGuidance(prompt: string, kind: WorkflowNode['kind'], version?: WorkflowOutputVersion): string {
   if (kind !== 'script') return prompt;
-  return `${prompt}\n\n新生成或改写的视频镜头至少 4 秒，反应、过场和无台词镜头同样适用。大纲按此下限安排全片节奏。生成详细分镜时，durationUs 填写不小于 4000000 的整数微秒。短节拍可用动作延续或自然停顿来安排。已有锁定镜头保留原时长。`;
+  const { structured } = storyboardOutputContract(version);
+  return [prompt,
+    '新生成或改写的视频镜头至少 4 秒，反应、过场和无台词镜头同样适用。大纲按此下限安排全片节奏。生成详细分镜时，durationUs 填写不小于 4000000 的整数微秒。短节拍可用动作延续或自然停顿来安排。已有锁定镜头保留原时长。',
+    '每个详细镜头须能独立生成。重述本镜实际可见的服装、场景布局、光线及道具状态，保持与前后镜头一致。把需要沿用的细节写清楚，避免用「承接上镜」或「同上」代替描述。保留手部和关键道具完整入画等具体构图要求。分辨率、画幅比例、帧率和素材适配方式由制作设置管理，不写入镜头画面。',
+    structured ? [
+      '详细分镜分别填写 initialFrame、characterPositions 和 actionTimeline。initialFrame 描述第一帧的场景、光线、道具、景别、机位及构图。characterPositions 写清出镜者的名字、起始位置、朝向及彼此和道具的相对位置，无人时填写「无人物出镜」。',
+      'actionTimeline 是按开始时间排序的动作数组，每个镜头独立从 0 开始。每段填写 startUs、endUs（整数微秒）和 action，重新点明人物或物件，写清动作起止状态及运镜或切镜。所有时间段须处于本镜头 durationUs 内。静态镜头也用时间段描述持续的画面。',
+      '现有分镜标记 durationFixed 的镜头按现有时长编排。单镜头改写默认按当前时长编排，用户明确要求调整时长时才改。',
+    ].join('\n') : '详细分镜的 visualPrompt 按「初始画面」「人物站位」「动作时间轴」分段。第一段交代开场场景、光线、道具和取景，第二段交代每位出镜者的起始位置与朝向，最后一段从本镜头的 0 秒开始写每段动作的起止时间、主体和运镜。',
+  ].join('\n\n');
 }
 
 function promptUpstreamResult(result: WorkflowUpstreamResult): WorkflowUpstreamResult {
@@ -47,15 +57,22 @@ export function buildWorkflowPrompt(
   upstreamResults: WorkflowUpstreamResult[] = [],
   version?: WorkflowOutputVersion,
   storyboard?: StoryboardPromptStage,
-  { unifiedShotProfile = true, originalText, originalTextLabel = '项目原文' }: {
-    unifiedShotProfile?: boolean; originalText?: string; originalTextLabel?: '项目原文' | '本集原文';
+  { legacyPlanningProfile = false, unifiedShotProfile = true, originalText, originalTextLabel = '项目原文' }: {
+    legacyPlanningProfile?: boolean; unifiedShotProfile?: boolean; originalText?: string; originalTextLabel?: '项目原文' | '本集原文';
   } = {},
 ): string {
   const fixedOutputs = Boolean(version);
+  const scriptOutput = storyboardOutputContract(version);
   const document = productionDocumentContract(node, version);
   const documentInstruction = document?.fieldOutput ? '分字段填写' : document ? '在 text 字段中写入' : '只返回';
   const bindings = creativeCharacterBindings(project, characters);
-  const shots = (storyboard?.shots ?? project.shots).map(({ id, title, narration, visualPrompt, soundPrompt, durationUs, locked, characterIds, creativeEntityKeys }) => ({ id, title, narration, visualPrompt, soundPrompt, durationUs, locked, characterIds, creativeEntityKeys }));
+  const planning = node.kind === 'brief' || node.kind === 'style' || node.kind === 'script';
+  const includeProfile = !planning || legacyPlanningProfile;
+  const fixedDurations = scriptOutput.structured && node.kind === 'script' ? new Set(project.shots.filter(shot => shot.clipEdit).map(shot => shot.id)) : undefined;
+  const shots = (storyboard?.shots ?? project.shots).map(({ id, title, narration, visualPrompt, soundPrompt, durationUs, locked, characterIds, creativeEntityKeys }) => ({
+    id, title, narration, visualPrompt: includeProfile ? visualPrompt : stripVisualPromptOutputSpecs(visualPrompt), soundPrompt, durationUs, locked, characterIds, creativeEntityKeys,
+    ...(fixedDurations?.has(id) ? { durationFixed: true } : {}),
+  }));
   const legacyScript = node.kind === 'script' && !storyboard;
   const sourceText = !singleShot && (node.kind === 'brief' || node.kind === 'script') && originalText?.trim() ? originalText : undefined;
   const contract = storyboard?.contract ?? (node.kind === 'brief'
@@ -64,10 +81,12 @@ export function buildWorkflowPrompt(
       ? `输出规范：${documentInstruction}可直接用于分镜与画面生成的中文风格正文，明确画风、色彩、构图、光线、角色外观和场景连续性。以已生成的创意简报为依据，沿用已有角色设定；不创建角色库编号或宣称已生成参考图。`
       : node.kind === 'script'
         ? [
-          '输出规范：只返回一个合法 JSON 对象，不使用 Markdown 代码围栏或解释文字：{"shots":[{"title":"镜头标题","narration":"可直接配音的旁白","visualPrompt":"可直接生成画面的完整描述","durationUs":8000000,"characterKeys":[],"entityKeys":[]}],"entities":[]}。',
-          'shots 按播放顺序排列，包含 1–100 个镜头。title 为 1–160 字符，narration 不超过 10000 字符，visualPrompt 不超过 20000 字符。durationUs 是 500000–600000000 范围内的整数微秒，1000000 微秒等于 1 秒；按旁白正常语速和画面节奏分配时长。',
-          '字段名称严格使用示例中的英文名称，不能改用中文字段、snake_case 或嵌套 narration/visualPrompt 对象。文本字段即使为空也必须是字符串，数组即使为空也使用 []，durationUs 使用 JSON 数字，不加引号，不用秒数或时长描述。返回前逐项核对字段类型、取值范围、引用与 JSON 完整性。',
-          `机器校验的 JSON Schema：${JSON.stringify(fixedOutputs ? storyboardJsonSchema : legacyStoryboardJsonSchema)}`,
+          scriptOutput.structured
+            ? '输出规范：只返回一个合法 JSON 对象，例如 {"shots":[{"title":"打开木盒","narration":"","initialFrame":"柔和日光照在饭桌的木盒上，中景，双手和木盒完整入画。","characterPositions":"王林站在桌边，面对木盒。","actionTimeline":[{"startUs":0,"endUs":4000000,"action":"王林双手掀开木盒盖，镜头缓慢推近。"}],"durationUs":4000000,"characterKeys":[],"entityKeys":[]}],"entities":[]}。'
+            : '输出规范：只返回一个合法 JSON 对象，不使用 Markdown 代码围栏或解释文字：{"shots":[{"title":"镜头标题","narration":"可直接配音的旁白","visualPrompt":"可直接生成画面的完整描述","durationUs":8000000,"characterKeys":[],"entityKeys":[]}],"entities":[]}。',
+          `shots 按播放顺序排列，包含 1–100 个镜头。title 为 1–160 字符，narration 不超过 10000 字符，${scriptOutput.structured ? '三部分画面正文合计不超过 20000 字符' : 'visualPrompt 不超过 20000 字符'}。durationUs 是 500000–600000000 范围内的整数微秒，1000000 微秒等于 1 秒；按旁白正常语速和画面节奏分配时长。`,
+          `字段名称严格使用示例中的英文名称，${scriptOutput.structured ? '按示例填写各字段的类型' : '不能改用中文字段、snake_case 或嵌套 narration/visualPrompt 对象'}。文本字段即使为空也必须是字符串，数组即使为空也使用 []，durationUs 使用 JSON 数字，不加引号，不用秒数或时长描述。返回前逐项核对字段类型、取值范围、引用与 JSON 完整性。`,
+          `机器校验的 JSON Schema：${JSON.stringify(scriptOutput.jsonSchema)}`,
           '根据已生成的简报与风格组织完整叙事。旁白只写实际朗读内容，画面描述明确主体、动作、环境、景别、构图和光线，并保持角色与风格连续；静音镜头可使用空旁白。',
           ...(project.workflow.production ? ['每个镜头可额外提供 soundPrompt 字符串，描述说话者、语气、环境音与音乐。台词写入 narration，声音方向写入 soundPrompt，供视频模型同步生成声音。每个镜头的台词须适合所选视频模型的单段时长。'] : []),
           '已有镜头可返回其原 id；未返回 id 时按原位置匹配。新镜头省略 id，由系统分配。不得编造素材 ID、路径、角色 ID、字幕时间戳或下载地址；素材引用和字幕由后续步骤生成。',
@@ -91,14 +110,14 @@ export function buildWorkflowPrompt(
       `${originalTextLabel}：\n${sourceText}`,
     ] : []),
     `当前视觉风格：${project.style}`,
-    `成片规格：${JSON.stringify(project.profile)}`,
+    ...(includeProfile ? [`成片规格：${JSON.stringify(project.profile)}`] : []),
     `现有分镜：${JSON.stringify(shots)}`,
     ...(bindings.length ? [`角色白名单文字设定（仅文字，没有发送参考图；只通过 key 引用）：\n${JSON.stringify(bindings.map(({ key, profile }) => ({ key, name: profile.name, description: profile.description })))}`] : []),
     ...(project.creativeContext ? [`项目文字设定与连续性要求：\n${JSON.stringify({ entities: project.creativeContext.entities.map(({ key, kind, name, description }) => ({ key, kind, name, description })), continuity: project.creativeContext.continuity })}`] : []),
     ...(upstreamResults.length ? [`上游已完成步骤的实际产物：\n${JSON.stringify(upstreamResults.map(promptUpstreamResult))}`] : []),
     skillPromptContext(node, skills),
     resolvePromptBindings(node, project, project.shots.length === 1 ? project.shots[0] : undefined, Object.fromEntries(upstreamResults.map(result => [result.nodeId, result.output]))).prompt,
-    ...(node.kind === 'style' || node.kind === 'script' ? [generationFramePrompt(project.profile, node.kind === 'script' && unifiedShotProfile)] : []),
+    ...(legacyPlanningProfile && (node.kind === 'style' || node.kind === 'script') ? [generationFramePrompt(project.profile, node.kind === 'script' && unifiedShotProfile)] : []),
     contract,
     ...(document ? [document.fieldOutput
       ? `最终回复只返回一个完整的 JSON 对象，字段名称按 Schema 填写，可选内容为空时用空字符串。机器校验的 JSON Schema：${JSON.stringify(document.jsonSchema)}`
@@ -113,11 +132,11 @@ export function parseWorkflowShots(text: string, previous: ProjectDocument['shot
   return parseWorkflowScript(text, { shots: previous, scenePreset: preset }, singleShot).shots;
 }
 
-export function parseWorkflowScript(text: string, project: ScriptProject, singleShot = false, characters: CharacterProfile[] = [], fixedOutputs = false) {
+export function parseWorkflowScript(text: string, project: ScriptProject, singleShot = false, characters: CharacterProfile[] = [], version?: WorkflowOutputVersion) {
   try {
     const payload = parseModelJson(text);
     if (payload && typeof payload === 'object' && !Array.isArray(payload) && !('shots' in payload)) invalid('shots', '缺少分镜数组；顶层必须是 {"shots":[…],"entities":[]}，不能直接返回单个镜头对象。');
-    const parsed = (fixedOutputs ? storyboardOutputSchema : legacyStoryboardOutputSchema).parse(payload);
+    const parsed = storyboardOutputContract(version).schema.parse(payload);
     return materializeScript(parsed, project, singleShot, characters);
   }
   catch (error) {
@@ -129,7 +148,7 @@ export function parseWorkflowScript(text: string, project: ScriptProject, single
 
 function invalid(path: string, message: string): never { throw new ModelResponseValidationError([{ path, message }]); }
 export const UNKNOWN_CHARACTER_KEY_MESSAGE = '分镜引用的角色键不在本次角色白名单中。';
-type ScriptOutput = z.infer<typeof legacyStoryboardOutputSchema>;
+type ScriptOutput = { shots: GeneratedStoryboardShot[]; entities: z.infer<typeof legacyStoryboardOutputSchema>['entities'] };
 type ScriptProject = Pick<ProjectDocument, 'shots' | 'scenePreset' | 'creativeContext'>;
 type Shot = ProjectDocument['shots'][number];
 export interface StoryboardPlacement { id: string; before?: Shot }
@@ -170,6 +189,29 @@ export function materializeStoryboardBatch(shots: ScriptOutput['shots'], project
   return materializeScript({ shots: batch, entities: [] }, project, false, characters, placements).shots;
 }
 
+function storyboardDescription(text: string, path: string): string {
+  const description = stripVisualPromptOutputSpecs(text).trim();
+  if (!description || /^(?:同上|(?:承接|沿用|延续)(?:上|前)(?:一|一个)?镜(?:头)?|(?:与|和)(?:上|前)(?:一|一个)?镜(?:头)?(?:保持)?一致)[。！.!\s]*$/.test(description)) {
+    invalid(path, '请直接描述当前镜头的可见细节，使镜头能独立生成。');
+  }
+  return description;
+}
+
+function storyboardVisualPrompt(shot: GeneratedStoryboardShot, durationUs: number, index: number): string {
+  if ('visualPrompt' in shot) return stripVisualPromptOutputSpecs(shot.visualPrompt);
+  const path = `shots[${index}]`;
+  const initialFrame = storyboardDescription(shot.initialFrame, `${path}.initialFrame`);
+  const characterPositions = storyboardDescription(shot.characterPositions, `${path}.characterPositions`);
+  const actions = shot.actionTimeline.map(({ startUs, endUs, action }, actionIndex) => {
+    const entry = `${path}.actionTimeline[${actionIndex}]`;
+    if (actionIndex === 0 && startUs !== 0) invalid(`${entry}.startUs`, '动作时间轴须从本镜头的 0 开始。');
+    if (startUs < (shot.actionTimeline[actionIndex - 1]?.startUs ?? 0)) invalid(`${entry}.startUs`, '请按动作的开始时间排序。');
+    if (endUs <= startUs || endUs > durationUs) invalid(`${entry}.endUs`, `动作结束时间须晚于开始时间，并在 ${durationUs} 微秒的镜头时长内。`);
+    return `${startUs / 1_000_000}–${endUs / 1_000_000} 秒 ${storyboardDescription(action, `${entry}.action`)}`;
+  });
+  return [`初始画面\n${initialFrame}`, `人物站位\n${characterPositions}`, `动作时间轴\n${actions.join('\n')}`].join('\n\n');
+}
+
 function materializeScript(parsed: ScriptOutput, project: ScriptProject, singleShot: boolean, characters: CharacterProfile[], placements?: readonly StoryboardPlacement[]) {
   const previous = project.shots, preset = project.scenePreset;
   if (singleShot && parsed.entities.length) invalid('entities', '单镜头候选不能新增创作设定，请在项目制作设置中添加。');
@@ -190,7 +232,8 @@ function materializeScript(parsed: ScriptOutput, project: ScriptProject, singleS
     if (resolved.length !== 1 || !baseline) invalid('shots', '单镜头重新生成必须恰好返回一条镜头。');
     const shot = resolved[0];
     if (shot.id && shot.id !== baseline.id) invalid('shots[0].id', '单镜头重新生成必须沿用目标镜头编号。');
-    return { shots: [shotSchema.parse({ ...baseline, title: shot.title, narration: shot.narration, visualPrompt: shot.visualPrompt, soundPrompt: shot.soundPrompt ?? baseline.soundPrompt, durationUs: baseline.clipEdit ? baseline.durationUs : shot.durationUs ?? baseline.durationUs })], ...(creativeContext ? { creativeContext } : {}) };
+    const durationUs = baseline.clipEdit ? baseline.durationUs : shot.durationUs ?? baseline.durationUs;
+    return { shots: [shotSchema.parse({ ...baseline, title: shot.title, narration: shot.narration, visualPrompt: storyboardVisualPrompt(shot, durationUs, 0), soundPrompt: shot.soundPrompt ?? baseline.soundPrompt, durationUs })], ...(creativeContext ? { creativeContext } : {}) };
   }
   const positions = placements ?? storyboardPlacements(previous, resolved);
   const shots = resolved.map((shot, index) => {
@@ -198,7 +241,8 @@ function materializeScript(parsed: ScriptOutput, project: ScriptProject, singleS
     if (before?.locked) return before;
     if (project.creativeContext?.characterIds.length && before?.characterIds === undefined && shot.characterKeys === undefined) invalid(`shots[${index}].characterKeys`, '已选择项目角色池，请让分镜为每个新镜头提供 characterKeys；无人出镜时使用空数组。');
     const sceneTemplate = before ? before.sceneTemplate : preset ? { ...createSceneTemplate(preset.kind), palette: preset.palette, motion: preset.motion } : undefined;
-    return shotSchema.parse({ ...before, title: shot.title, narration: shot.narration, visualPrompt: shot.visualPrompt, soundPrompt: shot.soundPrompt ?? before?.soundPrompt, captionStyle: before?.captionStyle, claimIds: before?.claimIds ?? [], characterIds: before?.characterIds ?? shot.characterIds, creativeEntityKeys: before?.creativeEntityKeys ?? shot.entityKeys, sceneTemplate, id, durationUs: before?.clipEdit ? before.durationUs : shot.durationUs ?? before?.durationUs ?? 8_000_000 });
+    const durationUs = before?.clipEdit ? before.durationUs : shot.durationUs ?? before?.durationUs ?? 8_000_000;
+    return shotSchema.parse({ ...before, title: shot.title, narration: shot.narration, visualPrompt: storyboardVisualPrompt(shot, durationUs, index), soundPrompt: shot.soundPrompt ?? before?.soundPrompt, captionStyle: before?.captionStyle, claimIds: before?.claimIds ?? [], characterIds: before?.characterIds ?? shot.characterIds, creativeEntityKeys: before?.creativeEntityKeys ?? shot.entityKeys, sceneTemplate, id, durationUs });
   });
   validateCreativeReferences({ shots, creativeContext });
   return { shots, ...(creativeContext ? { creativeContext } : {}) };

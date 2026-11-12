@@ -1,4 +1,4 @@
-import { MediaRequestRejectedError, VideoGenerationError } from '@video-quickly/contracts';
+import { MediaRequestRejectedError, modelRequestFailure, VideoGenerationError } from '@video-quickly/contracts';
 import { createHash } from 'node:crypto';
 import type Database from 'better-sqlite3';
 import { LockedShotChangeError } from '@video-quickly/contracts';
@@ -8,6 +8,7 @@ import { ModelResponseValidationError } from './model-responses.js';
 import { TextRequestRejectedError } from './providers.js';
 
 export type ActivitySafety = 'local' | 'idempotent' | 'external';
+export const UNCONFIRMED_ACTIVITY_MESSAGE = '外部调用未完成，结果需要核对。';
 export interface ActivityRecord {
   run_id: string;
   activity_id: string;
@@ -25,6 +26,13 @@ export class AmbiguousActivityError extends Error {
   constructor(readonly activityId: string) {
     super('上次请求的结果尚未确认，请先核对服务端任务，再决定是否重新生成。');
     this.name = 'AmbiguousActivityError';
+  }
+}
+
+export class UnconfirmedActivityError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'UnconfirmedActivityError';
   }
 }
 
@@ -132,14 +140,19 @@ export class ActivityJournal {
       if (error instanceof SimulatedProcessExit) throw error;
       const knownResponse = error instanceof ModelResponseValidationError || error instanceof TextRequestRejectedError || error instanceof MediaRequestRejectedError || error instanceof AgentCompletionError;
       const status = safety === 'external' && !knownResponse ? 'unknown' : 'failed';
-      const message = knownResponse || error instanceof LockedShotChangeError || error instanceof VideoGenerationError ? error.message : safety === 'external' ? '外部调用未完成，结果需要核对。' : error instanceof Error ? error.message : '活动执行失败';
+      const safeMessage = knownResponse || error instanceof LockedShotChangeError || error instanceof VideoGenerationError;
+      const failure = safety === 'external' && !safeMessage ? modelRequestFailure(error) : undefined;
+      const unconfirmedMessage = failure ? `${failure.reason}。${failure.guidance}。本次请求结果待核对。`
+        : (previous?.status === 'unknown' ? previous.error : undefined) || UNCONFIRMED_ACTIVITY_MESSAGE;
+      const message = safeMessage ? error.message
+        : safety === 'external' ? unconfirmedMessage : error instanceof Error ? error.message : '活动执行失败';
       this.database.prepare('UPDATE activities SET status = ?, error = ? WHERE run_id = ? AND activity_id = ?').run(status, message, runId, activityId);
       logger?.error('activity.failed', { status, durationMs: Math.round(performance.now() - started), error: logError(error) });
       // LangGraph also persists thrown errors in pending writes. Replace the
       // error before crossing that boundary; redacting only UI logs is too late.
       if (error instanceof TextRequestRejectedError) throw new TextRequestRejectedError(error.status, error.unsupportedOutputFormat, error.rateLimit);
       if (error instanceof MediaRequestRejectedError) throw new MediaRequestRejectedError(error.status, error.reason);
-      if (safety === 'external') throw new Error(message);
+      if (safety === 'external') throw safeMessage ? new Error(message) : new UnconfirmedActivityError(message);
       throw error;
     }
   }

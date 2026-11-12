@@ -5,6 +5,7 @@ import { createServer, type RequestListener, type Server } from 'node:http';
 import { mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { basename, join, relative } from 'node:path';
+import { crc32 } from 'node:zlib';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { assetSchema, characterProfileSchema, createNativeVideoWorkflow, DEFAULT_VIDEO_PROFILE, skillSchema, type ModelProfile, type ProjectDocument } from '@video-quickly/contracts';
 import { createActivityExecutor, validateMediaActivity, type MediaActivityContext, type MediaDiagnosticEvent } from './index';
@@ -90,8 +91,15 @@ describe('storyboard image sequences', () => {
     expect(requests).toEqual(['/images/generations', '/first.png', '/second.png', '/second.png']);
   });
 
-  it.each(['openai-compatible', 'seedream', 'custom-http'] as const)('continues adjacent shots with the first frame through %s', async provider => {
-    const png = await fixtureCharacterImage();
+  it.each(['openai-compatible', 'seedream', 'custom-http'] as const)('uses the original first frame with PNG content credentials through %s', async provider => {
+    const source = await fixtureCharacterImage();
+    const credentials = Buffer.from('caBXimage/svg+xml\0<svg xmlns="http://www.w3.org/2000/svg"/>');
+    const chunk = Buffer.alloc(credentials.length + 8);
+    chunk.writeUInt32BE(credentials.length - 4);
+    credentials.copy(chunk, 4);
+    chunk.writeUInt32BE(crc32(credentials), chunk.length - 4);
+    const headerEnd = 8 + 12 + source.readUInt32BE(8);
+    const png = Buffer.concat([source.subarray(0, headerEnd), chunk, source.subarray(headerEnd)]);
     const requests: Array<{ path: string; prompt: string; images: unknown }> = [];
     const baseUrl = await listen(async (request, response) => {
       const path = request.url!;
@@ -105,7 +113,8 @@ describe('storyboard image sequences', () => {
     context.model = { ...context.model!, provider, model: provider === 'seedream' ? 'doubao-seedream-5-0-pro' : 'gpt-image-fixture', parameters:
       provider === 'custom-http' ? { requestPath: 'render', requestTemplate: { prompt: '{{prompt}}', images: '{{character_images}}' }, resultBase64Path: 'data.0.b64_json' } : {},
     };
-    await createActivityExecutor()(context);
+    const output = await createActivityExecutor()(context) as { assets: unknown[] };
+    expect(await readFile(assetSchema.parse(output.assets[0]).path)).toEqual(png);
     expect(requests.map(request => request.path)).toEqual({ 'openai-compatible': ['/images/generations', '/images/edits'], seedream: ['/images/generations', '/images/generations'], 'custom-http': ['/render', '/render'] }[provider]);
     expect(requests[0].prompt).toContain('树木和纸张');
     expect(requests[1].prompt).toContain('沿石阶转身');
@@ -250,11 +259,16 @@ describe('media generation request receipts', () => {
     context.project.shots[0].characterIds = ['role'];
     context.project.shots[0].assetId = context.assets[0].id;
     context.node = context.project.workflow.nodes.find(node => node.id === 'video')!;
+    context.project.profile = { ...context.project.profile, width: 160, height: 90 };
+    context.unifiedShotProfile = true;
     context.model = { ...context.model!, provider: 'comfyui', connectionType: 'video', capabilities: ['video'], model: 'workflow', parameters: {
-      workflow: { '6': { inputs: { text: '', references: [] } } }, inputMapping: { prompt: '6.text', character_images: '6.references' },
+      workflow: { '6': { inputs: { text: '', references: [], width: 0, height: 0, fps: 0 } } },
+      inputMapping: { prompt: '6.text', character_images: '6.references', width: '6.width', height: '6.height', fps: '6.fps' },
     } };
     await expect(createActivityExecutor()(context)).resolves.toMatchObject({ assets: [{ kind: 'video', shotId: 'shot-1' }] });
-    expect(submitted).toMatchObject({ prompt: { '6': { inputs: { text: expect.stringContaining('角色「小青」'), references: [`data:image/png;base64,${reference.toString('base64')}`] } } } });
+    expect(submitted).toMatchObject({ prompt: { '6': { inputs: {
+      text: expect.stringContaining('角色「小青」'), references: [`data:image/png;base64,${reference.toString('base64')}`], width: 160, height: 90, fps: 30,
+    } } } });
     expect(requests).toEqual(['/prompt', '/history/video-task', '/view?filename=clip.mp4&subfolder=&type=output']);
   });
 
@@ -526,7 +540,10 @@ describe('media generation request receipts', () => {
     context.apiKey = 'fixture-only-secret';
     const result = await createActivityExecutor()(context);
     expect(contentType).toMatch(/^multipart\/form-data;/);
-    expect(generationRequest.replaceAll('\r\n', '\n')).toContain('手绘\n树木和纸张\n镜头缓慢推进，保持人物一致。');
+    const multipart = generationRequest.replaceAll('\r\n', '\n');
+    expect(multipart).toContain('手绘\n树木和纸张\n镜头缓慢推进，保持人物一致。');
+    expect(multipart).toContain('name="size"\n\n1920x1080');
+    expect(multipart).not.toContain('1920 × 1080');
     expect(contentAuthorization).toBe('Bearer fixture-only-secret');
     expect(result).toMatchObject({ assets: [{ kind: 'video', shotId: 'shot-1' }] });
   });

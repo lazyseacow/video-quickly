@@ -79,12 +79,23 @@ it('saves invalid raw text, exposes exact redacted errors, and retries only scri
   expect(logs).not.toContain('fixture-private-value'); expect(logs).not.toContain('不要写入错误信息');
 });
 
-it('keeps unresolved text submissions unknown and blocks both retry and duplicate resume requests', async () => {
-  const f = await fixture(async () => { throw new Error('transport disconnected'); });
-  const failed = (await f.inspect()).steps.find(step => step.id === 'script');
-  expect(failed).toMatchObject({ status: 'failed', unknownSubmission: true, retry: { allowed: false } });
+it.each([
+  { cause: Object.assign(new Error('private-transport-message'), { code: 'ECONNRESET' }), reason: '网络连接被重置（ECONNRESET）' },
+  { cause: new AggregateError([Object.assign(new Error('private-transport-message'), { code: 'ENOTFOUND' })]), reason: '服务域名解析失败（ENOTFOUND）' },
+  { cause: new DOMException('private-transport-message', 'TimeoutError'), reason: '等待服务响应超时' },
+  { cause: Object.assign(new Error('private-transport-message'), { code: 'CERT_HAS_EXPIRED' }), reason: '无法验证服务的 TLS 证书（CERT_HAS_EXPIRED）' },
+])('shows $reason and blocks retries of unresolved text submissions', async ({ cause, reason }) => {
+  const f = await fixture(async () => {
+    throw new TypeError('fetch failed', { cause });
+  });
+  const inspection = await f.inspect();
+  const failed = inspection.steps.find(step => step.id === 'script');
+  expect(inspection.run.error).toContain(reason);
+  expect(failed).toMatchObject({ status: 'failed', unknownSubmission: true, reason: expect.stringContaining(reason), retry: { allowed: false } });
+  expect(JSON.stringify(inspection)).not.toContain('private-transport-message');
   await expect(f.runtime.dispatch('run.step.retry', { runId: f.run.id, nodeId: 'script' })).rejects.toThrow('核对');
   await f.runtime.dispatch('run.resume', { runId: f.run.id }); await f.runtime.waitForIdle();
+  expect((await f.inspect()).steps.find(step => step.id === 'script')?.reason).toContain(reason);
   expect(f.provider).toHaveBeenCalledTimes(3); expect(f.tail).not.toHaveBeenCalled();
 });
 

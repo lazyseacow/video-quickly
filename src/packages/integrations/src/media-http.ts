@@ -1,4 +1,4 @@
-import { MediaRequestRejectedError, retryAfterMilliseconds } from '@video-quickly/contracts';
+import { MediaRequestRejectedError, ModelServiceResponseError, parseModelServiceJson, retryAfterMilliseconds } from '@video-quickly/contracts';
 import { z } from 'zod';
 import type { MediaActivityContext } from './media-context.js';
 
@@ -73,9 +73,10 @@ export async function requestJson(url: string, context: Pick<MediaActivityContex
       throw Object.assign(new Error(`模型请求未完成（HTTP ${response.status}），请检查服务配置`), { status: response.status, retryAfterMs: retryAfterMilliseconds(response.headers.get('retry-after')) });
     }
     const bytes = await boundedResponseBytes(response, 64 * 1024 * 1024);
-    const result = objectSchema.parse(JSON.parse(new TextDecoder().decode(bytes)));
+    const result = objectSchema.safeParse(parseModelServiceJson(new TextDecoder().decode(bytes)));
+    if (!result.success) throw new ModelServiceResponseError('format', { cause: result.error });
     context.onDiagnostic?.({ event: 'media.request_completed', level, phase, statusCode, byteSize: bytes.byteLength, durationMs: performance.now() - started });
-    return result;
+    return result.data;
   } catch (error) {
     context.onDiagnostic?.({ event: 'media.request_failed', level: context.signal.aborted ? 'warn' : 'error', phase, statusCode, durationMs: performance.now() - started, error });
     throw error;

@@ -11,6 +11,7 @@ import {
   getMediaAdapters, isModelGenerationNode, jsonValueSchema, modelSchema, pageInputSchema, runInspectionSchema, runStepPayloadSchema, skillSchema, workflowNodeSchema, workflowSchema,
   type JsonValue, type ModelProfile, type ProjectDocument, type RecordPage, type RunInspection, type RunRecord, type RunStepSummary, type SkillPackage, type StepOutputVersion, type WorkflowNode,
 } from '@video-quickly/contracts';
+import { UNCONFIRMED_ACTIVITY_MESSAGE } from './activities.js';
 import { DocumentStore } from './database.js';
 import { activityNodeId, createReadModels } from './read-models.js';
 import { createModelResponses } from './model-responses.js';
@@ -128,11 +129,14 @@ export function createRunInspector(options: {
       const responseAvailable = nodeProgress?.storyboard
         ? Boolean(store.get('model-response-head', responseId))
         : has('model-response-head', node.id);
-      const recordedError = current && run.error ? run.error : receipt?.error ? String(redact(receipt.error)) : undefined;
+      const receiptError = receipt?.error ? String(redact(receipt.error)) : undefined;
+      const unknownSubmission = unknown && Boolean(receipt?.unknown_count);
+      const unconfirmedError = unknownSubmission && receiptError !== UNCONFIRMED_ACTIVITY_MESSAGE ? receiptError : undefined;
+      const recordedError = unconfirmedError ?? (current && run.error ? run.error : receiptError);
       const rejection = current && responseAvailable && recordedError?.includes('HTTP 429') ? responses.current(responseId)?.rejection : undefined;
       const error = rejection?.status === 429 ? new TextRequestRejectedError(429, false, rejection.rateLimit).message : recordedError;
       const reason = status === 'waiting_review' ? '历史步骤已暂停，继续后自动执行后续步骤。'
-        : unknown && receipt?.unknown_count ? '上次外部提交的结果尚未确认，请先核对服务端任务；这里不会重新提交。'
+        : unknownSubmission ? unconfirmedError ?? '上次外部提交的结果尚未确认，请先核对服务端任务。'
         : status === 'waiting_external' ? '等待已有外部任务的结果，继续时优先查询原任务。'
         : status === 'retry_scheduled' ? '执行已安排重试。'
         : status === 'failed' || status === 'needs_attention' ? error ?? '执行已中断，请核对活动记录后决定如何继续。'
@@ -165,7 +169,7 @@ export function createRunInspector(options: {
         ? '应用剪辑调整' : node.label;
       return { id: node.id, label, kind: node.kind, description: node.description, requiresReview: node.requiresReview, modelGeneration: isModelGenerationNode(node), status, reason,
         inputAvailable: has('node-project', node.id), outputAvailable: has('node-result', node.id), responseAvailable, activityCount: receipt?.count ?? 0,
-        unknownSubmission: unknown && Boolean(receipt?.unknown_count), retry, progress: nodeProgress, startedAt: receipt?.started_at, completedAt: status === 'succeeded' ? receipt?.completed_at ?? undefined : undefined, error };
+        unknownSubmission, retry, progress: nodeProgress, startedAt: receipt?.started_at, completedAt: status === 'succeeded' ? receipt?.completed_at ?? undefined : undefined, error };
     });
     const retryStep = steps.some(step => step.retry?.allowed && step.error && (step.progress?.storyboard || step.responseAvailable && step.error.includes('HTTP 429')));
     const selectedNode = nodeId ? store.get<WorkflowNode>('node-definition', `${runId}:${nodeId}`) ?? saved?.nodes.find(node => node.id === nodeId) : undefined, model = selectedNode?.modelId ? saved?.models.find(value => value.id === selectedNode.modelId) : undefined;

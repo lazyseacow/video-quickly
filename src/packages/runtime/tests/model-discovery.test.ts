@@ -2,8 +2,8 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, expect, it } from 'vitest';
-import { modelSchema, type ModelProfile } from '@video-quickly/contracts';
+import { afterEach, expect, it, vi } from 'vitest';
+import { modelDiscoverySchema, modelSchema, type ModelProfile } from '@video-quickly/contracts';
 import { discoverModels, generateText, testModelConnection } from '../src/providers';
 import { createRuntime } from '../src/index.js';
 
@@ -101,7 +101,7 @@ it('asks to retry when OpenAI returns no models for the selected connection type
   const result = await discoverModels(model(base, { platform: 'openai', connectionType: 'text' }));
   expect(result.items).toEqual([]);
   expect(result.message).toContain('未返回适合当前连接类型的模型');
-  expect(result.message).toContain('手动填写');
+  expect(result.message).toContain('请核对连接后重试');
 });
 
 it('omits the retired official Videos API while keeping the compatible gateway catalogue', async () => {
@@ -188,7 +188,119 @@ it('reads paginated Messages models and locally installed Ollama models', async 
     const next = new URL(request.url!, 'http://localhost').searchParams.has('after_id');
     response.end(JSON.stringify({ data: [{ id: next ? 'claude-2' : 'claude-1', created_at: next ? '2026-10-30T00:00:00Z' : '2025-01-01T00:00:00Z' }], has_more: !next, last_id: next ? 'claude-2' : 'claude-1' }));
   });
-  expect((await discoverModels(model(base, { textProtocol: 'messages', platform: 'anthropic' }), 'fixture-key')).items.map(item => item.id)).toEqual(['claude-2', 'claude-1']);
+  expect((await discoverModels(model(base, { textProtocol: 'messages', platform: 'qwen' }), 'fixture-key')).items.map(item => item.id)).toEqual(['claude-2', 'claude-1']);
   expect((await discoverModels(model(base, { provider: 'ollama' }))).items).toEqual([{ id: 'new-local-model', label: 'new-local-model' }, { id: 'qwen3:8b', label: 'qwen3:8b' }, { id: 'local-model', label: 'local-model' }]);
   expect(paths).toEqual(['/gateway/v1/models?limit=1000', '/gateway/v1/models?limit=1000&after_id=claude-1', '/gateway/v1/api/tags']);
+});
+
+it('uses the Ollama API prefix for catalogue, connection check and generation', async () => {
+  const calls: string[] = [];
+  const base = await service((request, response) => {
+    calls.push(`${request.method} ${request.url}`);
+    if (request.url === '/gateway/v1/api/tags') response.end(JSON.stringify({ models: [{ name: 'fixture' }] }));
+    else if (request.url === '/gateway/v1/api/chat') response.end(JSON.stringify({ message: { content: 'Ollama' } }));
+    else response.writeHead(404).end();
+  });
+  const selected = model(`${base}/api/`, { provider: 'ollama', model: 'fixture' });
+  expect((await discoverModels(selected)).items.map(item => item.id)).toEqual(['fixture']);
+  await expect(testModelConnection(selected)).resolves.toMatchObject({ connected: true, models: ['fixture'] });
+  await expect(generateText({ model: selected, prompt: 'fixture', operationId: 'ollama-prefix' })).resolves.toMatchObject({ text: 'Ollama' });
+  expect(calls).toEqual(['GET /gateway/v1/api/tags', 'GET /gateway/v1/api/tags', 'POST /gateway/v1/api/chat']);
+});
+
+it('uses versioned Messages and model routes with the official Claude host as the base', async () => {
+  const selected = model('https://api.anthropic.com', { textProtocol: 'messages', model: 'fixture' });
+  const calls: string[] = [];
+  const service = vi.spyOn(globalThis, 'fetch').mockImplementation(async input => {
+    const request = new Request(input);
+    const url = new URL(request.url);
+    expect(url.origin).toBe('https://api.anthropic.com');
+    calls.push(`${request.method} ${url.pathname}${url.search}`);
+    if (url.pathname === '/v1/models') return Response.json({ data: [{ id: 'fixture' }] });
+    if (url.pathname === '/v1/messages') return Response.json({ content: [{ type: 'text', text: 'Claude' }], stop_reason: 'end_turn' });
+    return new Response(null, { status: 404 });
+  });
+  try {
+    expect((await discoverModels(selected)).items.map(item => item.id)).toEqual(['fixture']);
+    await expect(testModelConnection(selected)).resolves.toMatchObject({ connected: true, models: ['fixture'] });
+    await expect(generateText({ model: selected, prompt: 'fixture', operationId: 'claude-prefix' })).resolves.toMatchObject({ text: 'Claude' });
+    expect(calls).toEqual(['GET /v1/models?limit=1000', 'GET /v1/models', 'POST /v1/messages']);
+  } finally { service.mockRestore(); }
+});
+
+it('reads and saves Bailian Messages models from the paginated workspace catalogue', async () => {
+  const origin = 'https://fixture.cn-beijing.maas.aliyuncs.com';
+  const selected = model(`${origin}/apps/anthropic`, { platform: 'qwen', textProtocol: 'messages' });
+  const secret = 'bailian-fixture-key';
+  const calls: string[] = [];
+  const service = vi.spyOn(globalThis, 'fetch').mockImplementation(async input => {
+    const request = new Request(input), url = new URL(request.url);
+    expect(url.origin).toBe(origin);
+    calls.push(`${request.method} ${url.pathname}${url.search}`);
+    if (url.pathname === '/api/v1/models') {
+      expect(request.headers.get('authorization')).toBe(`Bearer ${secret}`);
+      expect(request.headers.get('x-api-key')).toBeNull();
+      const page = Number(url.searchParams.get('page_no'));
+      const models = page === 1 ? Array.from({ length: 100 }, (_, index) => ({ model: `qwen-${index}` }))
+        : [{ model: 'qwen-picked', name: '百炼候选' }];
+      return Response.json({ output: { page_no: page, page_size: 100, total: 101, models } });
+    }
+    if (url.pathname === '/apps/anthropic/v1/messages') {
+      expect(request.headers.get('x-api-key')).toBe(secret);
+      expect(request.headers.get('authorization')).toBeNull();
+      expect(await request.json()).toMatchObject({ model: 'qwen-picked' });
+      return Response.json({ content: [{ type: 'text', text: '百炼' }], stop_reason: 'end_turn' });
+    }
+    return new Response(null, { status: 404 });
+  });
+  const directory = await mkdtemp(join(tmpdir(), 'vq-bailian-catalog-'));
+  const keys = new Map<string, string>();
+  const runtime = createRuntime({ dataDirectory: directory, secretStore: {
+    async get(key) { return keys.get(key); }, async set(key, value) { keys.set(key, value); }, async delete(key) { keys.delete(key); },
+  } });
+  try {
+    const discovery = modelDiscoverySchema.parse(await runtime.dispatch('model.discover', { model: selected, secret }));
+    expect(discovery.items).toHaveLength(101);
+    const picked = discovery.items.at(-1)!;
+    expect(picked).toMatchObject({ id: 'qwen-picked', label: '百炼候选 · qwen-picked' });
+    const saved = modelSchema.parse(await runtime.dispatch('model.save', { model: { ...selected, model: picked.id }, secret }));
+    expect(saved).toMatchObject({ model: picked.id, baseUrl: selected.baseUrl });
+    const full = { ...saved, baseUrl: `${origin}/apps/anthropic/v1/messages`, fullUrl: true };
+    const rediscovered = modelDiscoverySchema.parse(await runtime.dispatch('model.discover', { model: full }));
+    expect(rediscovered.items).toEqual(discovery.items);
+    await expect(runtime.dispatch('model.test', { modelId: saved.id })).resolves.toMatchObject({ connected: true, models: expect.arrayContaining([picked.id]) });
+    await expect(generateText({ model: saved, secret, prompt: 'fixture', operationId: 'bailian-messages' })).resolves.toMatchObject({ text: '百炼' });
+    const pages = [1, 2].map(page => `GET /api/v1/models?capabilities=TG&page_size=100&page_no=${page}`);
+    expect(calls).toEqual([...pages, ...pages, ...pages, 'POST /apps/anthropic/v1/messages']);
+  } finally {
+    service.mockRestore();
+    await runtime.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+it.each([
+  { origin: 'https://api.moonshot.cn', path: '/v1', fullUrl: false },
+  { origin: 'https://api.moonshot.cn', path: '/anthropic', fullUrl: false },
+  { origin: 'https://api.moonshot.ai', path: '/anthropic/v1/messages', fullUrl: true },
+])('uses the official Kimi catalogue for Messages at $origin $path', async ({ origin, path, fullUrl }) => {
+  const selected = model(origin + path, { platform: 'moonshot', textProtocol: 'messages', fullUrl, model: 'kimi-fixture' });
+  const calls: string[] = [];
+  const service = vi.spyOn(globalThis, 'fetch').mockImplementation(async input => {
+    const request = new Request(input), url = new URL(request.url);
+    expect(url.origin).toBe(origin);
+    expect(request.headers.get('authorization')).toBe('Bearer kimi-fixture-key');
+    expect(request.headers.get('x-api-key')).toBeNull();
+    calls.push(`${request.method} ${url.pathname}${url.search}`);
+    if (url.pathname === '/v1/models') return Response.json({ object: 'list', data: [{ id: selected.model, object: 'model' }] });
+    if (url.pathname === '/anthropic/v1/messages') return Response.json({ content: [{ type: 'text', text: 'Kimi' }], stop_reason: 'end_turn' });
+    return new Response(null, { status: 404 });
+  });
+  try {
+    const secret = 'kimi-fixture-key';
+    expect((await discoverModels(selected, secret)).items).toEqual([{ id: selected.model, label: selected.model }]);
+    await expect(testModelConnection(selected, secret)).resolves.toMatchObject({ connected: true, models: [selected.model] });
+    await expect(generateText({ model: selected, secret, prompt: 'fixture', operationId: 'kimi-messages' })).resolves.toMatchObject({ text: 'Kimi' });
+    expect(calls).toEqual(['GET /v1/models', 'GET /v1/models', 'POST /anthropic/v1/messages']);
+  } finally { service.mockRestore(); }
 });

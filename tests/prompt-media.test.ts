@@ -43,7 +43,8 @@ async function fixture(kind: 'image' | 'video') {
   const sceneBytes = Buffer.concat([png, Buffer.from('scene')]), scenePath = join(directory, 'scene.png');
   await writeFile(scenePath, sceneBytes);
   const scene = assetSchema.parse(await runtime.dispatch('asset.import', { projectId: created.id, path: scenePath, kind: 'image' }));
-  const shot = shotSchema.parse({ id: 'first', title: '第一镜', narration: '找到盒子了。', visualPrompt: '小青在花园找到木盒', durationUs: 1000000, assetId: scene.id, characterIds: [character.id] });
+  const visualPrompt = kind === 'video' ? '160×90，16:9，30fps，等比完整显示。模糊背景。小青在花园找到木盒，手和木盒完整入画。' : '小青在花园找到木盒';
+  const shot = shotSchema.parse({ id: 'first', title: '第一镜', narration: '找到盒子了。', visualPrompt, durationUs: 1000000, assetId: scene.id, characterIds: [character.id] });
   const other = shotSchema.parse({ ...shot, id: 'other', title: '其他镜头', characterIds: [] });
   const project = projectSchema.parse(await runtime.dispatch('project.update', { projectId: created.id, revision: created.revision, patch: { shots: [shot, other], workflow: { ...created.workflow, production: { ...created.workflow.production, referenceMode: 'existing' } } } }));
   const node = project.workflow.nodes.find(node => kind === 'image' ? node.kind === 'assets' : node.id === 'video')!;
@@ -66,6 +67,8 @@ for (const kind of ['image', 'video'] as const) it(`previews the exact ${kind} r
       ...[png, source.sceneBytes].map(bytes => ({ type: 'image_url', role: 'reference_image', image_url: { url: `data:image/png;base64,${bytes.toString('base64')}` } })),
     ]);
     expect(preview.prompt).toContain('图片 2 为当前场景构图参考。');
+    expect(preview.prompt).toContain('模糊背景。小青在花园找到木盒，手和木盒完整入画。');
+    expect(preview.prompt).not.toMatch(/160\s*×\s*90|16:9|30\s*fps|等比完整显示|素材适配采用/);
   }
   expect((await source.runtime.dispatch('project.get', { projectId: source.project.id }) as { project: unknown }).project).toEqual(source.project);
   const page = await source.runtime.dispatch('shot.candidates', { projectId: source.project.id, shotId: source.draft.shotId }) as { items: ShotCandidate[] };

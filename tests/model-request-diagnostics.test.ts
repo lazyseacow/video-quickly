@@ -19,9 +19,9 @@ afterEach(async () => {
 it.each([
   { requestPhase: 'send', error: { name: 'TypeError', cause: { code: 'UND_ERR_SOCKET' } } },
   { requestPhase: 'read', error: { name: 'TypeError', cause: { code: 'UND_ERR_RES_CONTENT_LENGTH_MISMATCH' } } },
-  { requestPhase: 'parse', error: { name: 'SyntaxError' } },
+  { requestPhase: 'parse', error: { name: 'ModelServiceResponseError', cause: { name: 'SyntaxError' } } },
   { requestPhase: 'headers', error: { name: 'Error', statusCode: 503 } },
-  { requestPhase: 'validate', error: { name: 'Error' } },
+  { requestPhase: 'validate', error: { name: 'ModelServiceResponseError' } },
 ])('records the $requestPhase failure stage through a real model request without private content', async ({ requestPhase, error }) => {
   let requests = 0;
   const server = createServer(async (request, response) => {

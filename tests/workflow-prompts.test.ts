@@ -1,6 +1,6 @@
 import { expect, it } from 'vitest';
 import { createNativeVideoWorkflow, DEFAULT_VIDEO_PROFILE, projectSchema, shotSchema, skillSchema } from '@video-quickly/contracts';
-import { buildWorkflowPrompt, parseWorkflowShots } from '../src/packages/runtime/src/workflow-prompts';
+import { buildWorkflowPrompt, parseWorkflowScript, parseWorkflowShots } from '../src/packages/runtime/src/workflow-prompts';
 import { parseProductionDocument, productionDocumentContract } from '../src/packages/runtime/src/workflow-outputs';
 import { planningFixtureFields } from './fixtures/planning-response';
 
@@ -8,6 +8,39 @@ const project = () => projectSchema.parse({ id: 'prompt-project', title: '自动
 const generated = (title: string, extra: Record<string, unknown> = {}) => ({ title, narration: `${title}的旁白`, visualPrompt: `${title}的画面`, durationUs: 2_000_000, ...extra });
 const response = (...shots: ReturnType<typeof generated>[]) => JSON.stringify({ shots });
 const existing = (id: string, extra: Record<string, unknown> = {}) => shotSchema.parse({ id, ...generated(id), ...extra });
+
+const structuredShot = {
+  title: '桌边近景', narration: '', durationUs: 4_000_000,
+  initialFrame: '柔和日光照在院内饭桌上，线装书与王林的双手完整入画。',
+  characterPositions: '王林站在桌边，面对木饭桌上的书。',
+  actionTimeline: [{ startUs: 0, endUs: 4_000_000, action: '王林双手捧起两本线装书。' }],
+};
+
+it.each([
+  { patch: { initialFrame: '承接上镜。' }, field: 'initialFrame' },
+  { patch: { characterPositions: '同上' }, field: 'characterPositions' },
+  { patch: { actionTimeline: [{ startUs: 500_000, endUs: 4_000_000, action: '王林翻书。' }] }, field: 'actionTimeline[0].startUs' },
+  { patch: { actionTimeline: [{ startUs: 0, endUs: 5_000_000, action: '王林翻书。' }] }, field: 'actionTimeline[0].endUs' },
+])('rejects incomplete or out-of-range structured storyboard field $field', ({ patch, field }) => {
+  const text = JSON.stringify({ shots: [{ ...structuredShot, ...patch }] });
+  expect(() => parseWorkflowScript(text, project(), false, [], 3)).toThrow(`shots[0].${field}`);
+});
+
+it('renders the three visual sections for a single-shot rewrite and reads version 2 responses', () => {
+  const current = { ...project(), shots: [existing('first', { durationUs: 4_000_000 })] };
+  const { shots } = parseWorkflowScript(JSON.stringify({ shots: [structuredShot] }), current, true, [], 3);
+  expect(shots[0].id).toBe('first');
+  expect(shots[0].visualPrompt).toBe(`初始画面\n${structuredShot.initialFrame}\n\n人物站位\n${structuredShot.characterPositions}\n\n动作时间轴\n0–4 秒 王林双手捧起两本线装书。`);
+  expect(parseWorkflowScript(response(generated('旧镜头')), current, true, [], 2).shots[0].visualPrompt).toBe('旧镜头的画面');
+});
+
+it('plans actions against the fixed duration of an existing clipped shot', () => {
+  const current = { ...project(), shots: [existing('first', { clipEdit: { planId: 'plan', inUs: 0, restoreInUs: 0, restoreDurationUs: 4_000_000 } })] };
+  const node = current.workflow.nodes.find(node => node.kind === 'script')!;
+  expect(buildWorkflowPrompt(current, node, [], true, [], [], 3)).toContain('"durationFixed":true');
+  const text = JSON.stringify({ shots: [structuredShot] });
+  expect(() => parseWorkflowScript(text, current, true, [], 3)).toThrow('2000000 微秒的镜头时长内');
+});
 
 it('keeps the frozen brief output contract and validates fields for new runs', () => {
   const value = project(), node = value.workflow.nodes.find(node => node.id === 'brief')!;

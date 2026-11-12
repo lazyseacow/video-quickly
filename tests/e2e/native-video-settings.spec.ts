@@ -209,9 +209,12 @@ test('starts the default workflow, retries only the failed storyboard and finish
     expect([...retried.completedNodeIds].sort()).toEqual(['brief', 'script', 'style']);
     expect(source.requests).toHaveLength(5);
     expect(JSON.stringify(source.requests[4])).toContain('自动视频制作步骤：旁白与分镜');
-    expect(JSON.stringify(source.requests[4])).toContain('720 × 1280 像素（9:16）');
-    expect(JSON.stringify(source.requests[4])).toContain('分镜全局帧率为 60 fps');
-    expect(JSON.stringify(source.requests[4])).toContain('素材适配采用裁剪填满');
+    expect(JSON.stringify(source.requests[4])).toContain('分辨率、画幅比例、帧率和素材适配方式由制作设置管理，不写入镜头画面');
+    expect(JSON.stringify(source.requests[4])).toContain('durationUs 填写不小于 4000000');
+    expect(JSON.stringify(source.requests[4])).toContain('initialFrame、characterPositions、actionTimeline');
+    const storyboard = records.getByRole('region', { name: '分镜预览' });
+    for (const heading of ['初始画面', '人物站位', '动作时间轴']) await expect(storyboard).toContainText(heading);
+    for (const request of source.requests) expect(JSON.stringify(request)).not.toMatch(/成片规格：|720\s*×\s*1280|9:16|60\s*fps|裁剪填满/);
     await records.getByRole('button', { name: '继续原制作', exact: true }).click();
     await confirmAction(page, '确认继续制作');
     await records.getByRole('button', { name: '关闭对话框', exact: true }).click();
@@ -222,9 +225,9 @@ test('starts the default workflow, retries only the failed storyboard and finish
     const videoRequests = source.requests.filter(value => value.generate_audio === true);
     expect(videoRequests).toHaveLength(1);
     expect(videoRequests[0]).toMatchObject({ ratio: '9:16', resolution: '720p' });
-    expect(JSON.stringify(videoRequests[0])).toContain('720 × 1280 像素（9:16）');
-    expect(JSON.stringify(videoRequests[0])).toContain('分镜全局帧率为 60 fps');
-    expect(JSON.stringify(videoRequests[0])).toContain('素材适配采用裁剪填满');
+    const [{ text }] = videoRequests[0].content as { text: string }[];
+    for (const value of ['初始画面\n蓝色天空', '人物站位', '动作时间轴\n0–1 秒']) expect(text).toContain(value);
+    expect(text).not.toMatch(/720\s*×\s*1280|9:16|60\s*fps|裁剪填满/);
     expect(errors).toEqual([]); await expect(page.locator('vite-error-overlay')).toHaveCount(0);
     await page.screenshot({ path: info.outputPath('native-production-complete.png') });
     await page.getByRole('button', { name: '打开阶段：素材与配音', exact: true }).click(); await page.getByRole('dialog', { name: '本次制作', exact: true }).getByRole('navigation', { name: '本次制作步骤', exact: true }).getByRole('button', { name: /剪辑与运镜准备/ }).click();
