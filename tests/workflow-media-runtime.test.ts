@@ -43,9 +43,13 @@ it('recovers a rejected image in the same run and retains the completed sibling 
   expect(completed.run.status).toBe('succeeded'); expect(completed.steps[0].status).toBe('succeeded');
   expect(posts).toEqual([{ shot: 'shot-0', key: `${run.id}:images:shot-0` }, { shot: 'shot-1', key: `${run.id}:images:shot-1` }, { shot: 'shot-1', key: `${run.id}:images:shot-1:attempt:2` }]);
 });
-it('retries only the rejected short Seedance video with the corrected request duration', async () => {
+it.each([
+  { plannedSeconds: 3, requestSeconds: 4 },
+  { plannedSeconds: 20, requestSeconds: 15 },
+])('retries a rejected Seedance video from $plannedSeconds to $requestSeconds seconds and reuses completed clips', async ({ plannedSeconds, requestSeconds }) => {
   const clip = fixtureNativeVideo();
   const posts: { key: string | string[] | undefined; seconds: number }[] = [];
+  const prompts: string[] = [];
   const baseUrl = await service(async (request, response) => {
     if (request.method === 'POST') {
       const chunks: Buffer[] = [];
@@ -53,7 +57,8 @@ it('retries only the rejected short Seedance video with the corrected request du
       const form = await new Request('http://fixture.local', { method: 'POST', headers: { 'content-type': request.headers['content-type']! }, body: Buffer.concat(chunks) }).formData();
       const seconds = Number(form.get('seconds'));
       posts.push({ key: request.headers['idempotency-key'], seconds });
-      if (seconds < 4) { response.writeHead(400).end(); return; }
+      prompts.push(String(form.get('prompt')));
+      if (seconds < 4 || seconds > 15) { response.writeHead(400).end(); return; }
       response.end(JSON.stringify({ id: 'video-task' }));
     } else if (request.url === '/videos/video-task/content') {
       response.writeHead(200, { 'content-type': 'video/mp4' }).end(clip);
@@ -69,13 +74,13 @@ it('retries only the rejected short Seedance video with the corrected request du
     },
   });
   runtimes.push(runtime);
-  const project = projectSchema.parse(await runtime.dispatch('project.create', { title: '补拍短镜头', profile: { width: 160, height: 90, frameRate: { numerator: 30, denominator: 1 } } }));
+  const project = projectSchema.parse(await runtime.dispatch('project.create', { title: '补拍镜头', profile: { width: 160, height: 90, frameRate: { numerator: 30, denominator: 1 } } }));
   const model = await runtime.dispatch('model.save', { model: { name: 'Seedance 兼容网关', provider: 'openai-compatible', model: 'doubao-seedance-2-0-260128', baseUrl, connectionType: 'video', capabilities: ['video'] } }) as ModelProfile;
   const video = project.workflow.nodes.find(node => node.id === 'video')!;
   await runtime.dispatch('project.update', { projectId: project.id, revision: project.revision, patch: {
     shots: [
-      { id: 'shot-1', title: '已生成镜头', narration: '', visualPrompt: '主角缓步走近', durationUs: 4_000_000 },
-      { id: 'shot-7', title: '主角错愕反应', narration: '', visualPrompt: '主角错愕地抬头', durationUs: 3_000_000 },
+      { id: 'shot-1', title: '已生成镜头', narration: '', visualPrompt: '主角缓步走近', durationUs: 12_000_000 },
+      { id: 'shot-7', title: '主角错愕反应', narration: '', visualPrompt: `初始画面\n书和手完整入画。\n\n人物站位\n主角站在桌前。\n\n动作时间轴\n0–${plannedSeconds} 秒 主角错愕地抬头。`, durationUs: plannedSeconds * 1_000_000 },
     ],
     workflow: { ...project.workflow, id: 'video-retry', production: { ...project.workflow.production, videoModelId: model.id }, stages: undefined, nodes: [video], edges: [] },
   } });
@@ -97,11 +102,13 @@ it('retries only the rejected short Seedance video with the corrected request du
   const { value: { assets } } = await recovered.dispatch('run.step.payload', { runId: run.id, nodeId: 'video', kind: 'output' }) as { value: { assets: AssetRecord[] } };
   expect(assets).toEqual([before[0], expect.objectContaining({ shotId: 'shot-7', kind: 'video' })]);
   expect(posts).toEqual([
-    { key: `${run.id}:video:shot-1`, seconds: 4 },
-    { key: `${run.id}:video:shot-7`, seconds: 3 },
-    { key: `${run.id}:video:shot-7:attempt:2`, seconds: 3 },
-    { key: `${run.id}:video:shot-7:attempt:3`, seconds: 4 },
+    { key: `${run.id}:video:shot-1`, seconds: 12 },
+    { key: `${run.id}:video:shot-7`, seconds: plannedSeconds },
+    { key: `${run.id}:video:shot-7:attempt:2`, seconds: plannedSeconds },
+    { key: `${run.id}:video:shot-7:attempt:3`, seconds: requestSeconds },
   ]);
+  expect(prompts.at(-1)).toContain('书和手完整入画。');
+  expect(prompts.at(-1)).toContain(`0–${Math.min(plannedSeconds, requestSeconds)} 秒 主角错愕地抬头。`);
 });
 it('checks the whole batch before any fresh sibling POST when another shot has a prepared or unknown receipt', async () => {
   const posts: string[] = []; let release!: () => void, submitted!: () => void;

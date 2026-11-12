@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { createSceneTemplate, creativeCharacterBindings, creativeContextSchema, generationFramePrompt, LockedShotChangeError, projectCharacterIds, resolvePromptBindings, shotSchema, stripVisualPromptOutputSpecs, validateCreativeReferences, type CharacterProfile, type JsonValue, type ProjectDocument, type SkillPackage, type WorkflowNode } from '@video-quickly/contracts';
+import { createSceneTemplate, creativeCharacterBindings, creativeContextSchema, generationFramePrompt, isVideoGenerationNode, LockedShotChangeError, productionModelSetting, projectCharacterIds, resolvePromptBindings, seedance20DurationRange, shotSchema, stripVisualPromptOutputSpecs, validateCreativeReferences, type CharacterProfile, type JsonValue, type ModelProfile, type ProjectDocument, type SkillPackage, type WorkflowNode } from '@video-quickly/contracts';
 import { ModelResponseValidationError, parseModelJson, responseIssues } from './model-responses.js';
 import { skillPromptContext } from '@video-quickly/contracts';
 import { legacyStoryboardOutputSchema, productionDocumentContract, storyboardOutputContract, type GeneratedStoryboardShot, type WorkflowOutputVersion } from './workflow-outputs.js';
@@ -18,12 +18,23 @@ export interface StoryboardPromptStage {
   shots: PromptShot[];
 }
 
+export function storyboardVideoModel(project: ProjectDocument, models: ModelProfile[]): ModelProfile | undefined {
+  if (project.workflow.id !== 'native-video') return undefined;
+  const video = project.workflow.nodes.find(node => node.id === 'video' && isVideoGenerationNode(node));
+  if (!video) return undefined;
+  const setting = productionModelSetting(video);
+  const id = setting ? project.workflow.production[setting] : video.modelId;
+  return models.find(model => model.id === id && model.enabled && ['openai-compatible', 'seedance'].includes(model.provider) && seedance20DurationRange(model.model));
+}
+
 // Append at dispatch so saved storyboard batch input hashes remain valid.
-export function withStoryboardGuidance(prompt: string, kind: WorkflowNode['kind'], version?: WorkflowOutputVersion): string {
+export function withStoryboardGuidance(prompt: string, kind: WorkflowNode['kind'], version?: WorkflowOutputVersion, videoModel?: ModelProfile): string {
   if (kind !== 'script') return prompt;
   const { structured } = storyboardOutputContract(version);
+  const maximum = videoModel && seedance20DurationRange(videoModel.model)?.max;
   return [prompt,
     '新生成或改写的视频镜头至少 4 秒，反应、过场和无台词镜头同样适用。大纲按此下限安排全片节奏。生成详细分镜时，durationUs 填写不小于 4000000 的整数微秒。短节拍可用动作延续或自然停顿来安排。已有锁定镜头保留原时长。',
+    ...(maximum ? [`所选视频模型单次生成最多 ${maximum} 秒。大纲将超长段落按叙事节拍拆成多个可独立生成的镜头，保留关键动作和台词。新镜头的 durationUs 不超过 ${maximum * 1_000_000} 微秒，台词须能在本镜头内以自然语速说完。固定时长的已有镜头沿用原时长。`] : []),
     '每个详细镜头须能独立生成。重述本镜实际可见的服装、场景布局、光线及道具状态，保持与前后镜头一致。把需要沿用的细节写清楚，避免用「承接上镜」或「同上」代替描述。保留手部和关键道具完整入画等具体构图要求。分辨率、画幅比例、帧率和素材适配方式由制作设置管理，不写入镜头画面。',
     structured ? [
       '详细分镜分别填写 initialFrame、characterPositions 和 actionTimeline。initialFrame 描述第一帧的场景、光线、道具、景别、机位及构图。characterPositions 写清出镜者的名字、起始位置、朝向及彼此和道具的相对位置，无人时填写「无人物出镜」。',

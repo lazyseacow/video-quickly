@@ -3,6 +3,7 @@ import { formatFrameRate, VIDEO_FIT_MODE_LABELS, videoAspectRatioPreset, type Vi
 import { creativeEntityLabels, creativeReferenceAssetIds, hasCharacterAppearance, shotCreativePrompt } from './creative-context.js';
 import { isVideoGenerationNode, nativeReferenceStep } from './production.js';
 import { resolvePromptBindings } from './prompt-bindings.js';
+import { seedance20DurationRange } from './model-parameters.js';
 
 export function generationFramePrompt({ width, height, fitMode, frameRate }: VideoProfile, includeFrameRate = false): string {
   const ratio = videoAspectRatioPreset(width, height)?.label;
@@ -122,6 +123,24 @@ export function characterSceneFirstFrame(project: ProjectDocument, node: Workflo
     || characters.some(profile => profile.referenceAssetIds.length && shot.characterIds?.includes(profile.id)));
 }
 
+function videoVisualPrompt(shot: Shot, model?: ModelProfile): string {
+  const visual = stripVisualPromptOutputSpecs(shot.visualPrompt);
+  if (!model || !['openai-compatible', 'seedance'].includes(model.provider)) return visual;
+  const configured = model.provider === 'seedance' ? model.parameters.duration : model.parameters.seconds;
+  const range = seedance20DurationRange(model.model);
+  if (configured !== undefined || !range || shot.durationUs <= range.max * 1_000_000) return visual;
+
+  const heading = '\n\n动作时间轴\n';
+  const start = visual.indexOf(heading);
+  if (start < 0) return visual;
+  const offset = start + heading.length;
+  const scale = range.max * 1_000_000 / shot.durationUs;
+  const seconds = (value: string) => (Number(value) * scale).toFixed(9).replace(/\.?0+$/, '');
+  // Retain the saved storyboard and fit its generated time labels to the requested clip.
+  return visual.slice(0, offset) + visual.slice(offset).replace(/^(\d+(?:\.\d+)?)–(\d+(?:\.\d+)?) 秒 /gm,
+    (_label, begin: string, end: string) => `${seconds(begin)}–${seconds(end)} 秒 `);
+}
+
 /** Builds the per-shot prompt for both offline preview and generation. */
 export function buildMediaPrompt(project: ProjectDocument, node: WorkflowNode, shot: Shot, characters: CharacterProfile[] = [], model?: ModelProfile, hasSceneImage = false, upstream: Record<string, JsonValue> = {}, videoReferences?: VideoReferenceImages): string {
   const selected = (shot.characterIds ?? []).map(id => {
@@ -138,7 +157,7 @@ export function buildMediaPrompt(project: ProjectDocument, node: WorkflowNode, s
   const prompt = [
     sourceId ? '图片 1 为待修改原图，保留未要求修改的部分。' : '',
     project.style,
-    video ? stripVisualPromptOutputSpecs(shot.visualPrompt) : shot.visualPrompt,
+    video ? videoVisualPrompt(shot, model) : shot.visualPrompt,
     shotCreativePrompt(project, shot),
     resolvePromptBindings(node, project, shot, upstream).prompt,
     characterReferencePrompt(selected, references),

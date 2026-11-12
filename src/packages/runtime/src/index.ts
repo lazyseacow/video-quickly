@@ -19,7 +19,7 @@ import { createExecutionGraph } from './graph.js';
 import { AsyncLocalStorageProviderSingleton } from '@langchain/core/singletons';
 import { validateWorkflowComposition, workflowNodesWithSubflows, workflowEdgesWithSubflows, resolveSubflowInputs, substituteSubflowInputs, subflowNodeId, subflowThreadId, subflowValueAt, type SubflowDefinition } from '@video-quickly/contracts';
 import { createWorkflowTemplateLibrary } from './workflow-templates.js';
-import { buildWorkflowPrompt, parseWorkflowScript, withStoryboardGuidance, type StoryboardPromptStage, type WorkflowUpstreamResult } from './workflow-prompts.js';
+import { buildWorkflowPrompt, parseWorkflowScript, storyboardVideoModel, withStoryboardGuidance, type StoryboardPromptStage, type WorkflowUpstreamResult } from './workflow-prompts.js';
 import { editingOutputSchema, manualPlanningOutput, parseProductionDocument, productionDocumentContract, storyboardOutputContract, usesPlanningFields, validateProductionMediaOutput, validateProductionMediaPreview, WORKFLOW_OUTPUT_VERSION } from './workflow-outputs.js';
 import { githubTrendingPrompt, githubTrendingRequest, githubTrendingSummary, validateGithubTrendingStoryboard } from './github-trending.js';
 import { storyboardWebPrompt, storyboardWebRequest, type StoryboardWebReader, type StoryboardWebResearch } from './storyboard-research.js';
@@ -614,7 +614,8 @@ export function createRuntime(options: RuntimeOptions) {
     const node: WorkflowNode = { ...draft.node, requiresReview: false, ...(candidate ? { id: 'regenerate', config: { ...draft.node.config, operation: 'regenerate', shotId: baselineShot.id, regenerationKind: kind, instruction: '' } } : {}) };
     const bundle = characters.profilesFor(inputProject);
     await validateCharacterAssets(bundle.characters, bundle.assets, inputProject);
-    const model = availableModels().find(model => model.id === node.modelId);
+    const models = availableModels(), model = models.find(model => model.id === node.modelId);
+    const videoModel = node.kind === 'script' ? storyboardVideoModel(inputProject, models) : undefined;
     const videoInputs = model && isVideoGenerationNode(node) ? inputProject.shots.map(shot => videoReferenceImages(inputProject, node, model, shot, bundle.characters, assets)) : undefined;
     const sceneImageIds = videoInputs ? videoInputs.flatMap(input => input.frame ? [input.frame.id] : []) : inputProject.shots.flatMap(shot => shot.assetId && usesVideoSceneImage(inputProject, node, model, shot, bundle.characters) ? [shot.assetId] : []);
     for (const id of sceneImageIds) if (!assets.some(asset => asset.id === id && asset.active && asset.kind === 'image')) throw new Error('镜头参考图不可用，请重新选择后预览。');
@@ -643,8 +644,9 @@ export function createRuntime(options: RuntimeOptions) {
       : buildWorkflowPrompt(inputProject, node, skills, Boolean(baselineShot), bundle.characters, upstream, outputContractVersion,
         batchedStoryboard ? storyboardOutlineStage(inputProject, false) : undefined, { originalText });
     const references = frozenAssets.map(({ id, name, kind }) => ({ id, name, kind }));
-    const preview: PromptPreview = { digest: '', prompt: withStoryboardGuidance(prompt, node.kind, outputContractVersion), node, model, skills, projectRevision: baseline.revision, variables: resolved.variables, references, upstream: upstream.map(({ nodeId, label, kind }) => ({ nodeId, label, kind })) };
-    const saved: RunSnapshot = { project: baseline, models: model ? [model] : [], skills, mcpServers: [], nodes: [node], handlerVersion: 1, unifiedShotProfile: true, characters: bundle.characters, characterAssets: bundle.assets, assets: frozenAssets,
+    const preview: PromptPreview = { digest: '', prompt: withStoryboardGuidance(prompt, node.kind, outputContractVersion, videoModel), node, model, skills, projectRevision: baseline.revision, variables: resolved.variables, references, upstream: upstream.map(({ nodeId, label, kind }) => ({ nodeId, label, kind })) };
+    const frozenModels = [...(model ? [model] : []), ...(videoModel && videoModel.id !== model?.id ? [videoModel] : [])];
+    const saved: RunSnapshot = { project: baseline, models: frozenModels, skills, mcpServers: [], nodes: [node], handlerVersion: 1, unifiedShotProfile: true, characters: bundle.characters, characterAssets: bundle.assets, assets: frozenAssets,
       includeProjectOriginalText: true, useOriginalVideoReferences: true,
       ...(outputContractVersion ? { outputContractVersion } : {}), ...(batchedStoryboard ? { storyboardBatchSize: STORYBOARD_BATCH_SIZE } : {}), selection: { nodeId: node.id, mode: 'node' }, ...(candidate ? { regeneration: { shotId: baselineShot.id, baseline: baselineShot, kind } } : {}), trial: { inputProject, upstream, preview } };
     preview.digest = fingerprint(saved);
@@ -838,6 +840,9 @@ export function createRuntime(options: RuntimeOptions) {
     const ids = new Set(nodes.map(node => node.id));
     const composedNodes = workflowNodesWithSubflows({ ...value.workflow, nodes });
     const modelIds = new Set(composedNodes.flatMap(node => node.modelId ? [node.modelId] : []));
+    const models = availableModels();
+    const videoModel = nodes.some(node => node.kind === 'script') ? storyboardVideoModel(value, models) : undefined;
+    if (videoModel) modelIds.add(videoModel.id);
     const bundle = characters.profilesFor(value);
     const saved: RunSnapshot = {
       project: structuredClone(value), nodes, selection, handlerVersion: nodes.some(node => node.kind === 'subflow') ? 3 : 2,
@@ -846,7 +851,7 @@ export function createRuntime(options: RuntimeOptions) {
       useOriginalVideoReferences: true,
       ...(value.workflow.id === 'native-video' ? { outputContractVersion: WORKFLOW_OUTPUT_VERSION } : {}),
       ...(value.workflow.id === 'native-video' && nodes.some(node => node.kind === 'script' && node.modelId) ? { storyboardBatchSize: STORYBOARD_BATCH_SIZE } : {}),
-      models: availableModels().filter(model => composedNodes.some(node => node.kind === 'agent') || modelIds.has(model.id)),
+      models: models.filter(model => composedNodes.some(node => node.kind === 'agent') || modelIds.has(model.id)),
       ...await skillLibrary.prepareForNodes(composedNodes, { allowUnavailable: true }),
       mcpServers: store.list<McpServer>('mcp-server'), characters: bundle.characters, characterAssets: bundle.assets,
       assets: store.list<AssetRecord>('asset').filter(asset => !asset.projectId || asset.projectId === value.id),
@@ -1217,6 +1222,7 @@ export function createRuntime(options: RuntimeOptions) {
       }
     }
     const fixedOutputs = Boolean(saved.outputContractVersion);
+    const videoModel = node.kind === 'script' ? storyboardVideoModel(saved.trial?.inputProject ?? saved.project, saved.models) : undefined;
     const document = productionDocumentContract(node, saved.outputContractVersion);
     const outputSchema = node.kind === 'script' && !storyboardBatchSize ? storyboardOutputContract(saved.outputContractVersion).jsonSchema : document?.jsonSchema;
     const input = { project: executionProject, node, model: selectedModel ?? null, skills: saved.skills.filter(skill => node.skillIds.includes(skill.id)), handlerVersion: saved.handlerVersion, ...(fixedOutputs ? { outputContractVersion: saved.outputContractVersion } : {}), ...(storyboardBatchSize ? { storyboardBatchSize } : {}), ...(saved.unifiedShotProfile ? { unifiedShotProfile: true } : {}), ...(saved.exportBatch ? { exportBatch: saved.exportBatch, assets: saved.assets } : {}), ...(githubTrending ? { githubTrending } : {}), ...(webResearch ? { webResearch } : {}) };
@@ -1241,7 +1247,7 @@ export function createRuntime(options: RuntimeOptions) {
     };
     const prompt = buildPrompt();
     if (!cached || cached.status === 'prepared') runInspector.captureInput(runId, node.id, { inputHash: fingerprint(input), recordedAt: now(),
-      prompt: usesProvider || saved.trial ? redactInspectionText(saved.trial?.preview.prompt ?? withStoryboardGuidance(prompt, node.kind, saved.outputContractVersion), text => redactError(text, saved.models, transientSecrets, Number.POSITIVE_INFINITY)) : undefined });
+      prompt: usesProvider || saved.trial ? redactInspectionText(saved.trial?.preview.prompt ?? withStoryboardGuidance(prompt, node.kind, saved.outputContractVersion, videoModel), text => redactError(text, saved.models, transientSecrets, Number.POSITIVE_INFINITY)) : undefined });
     const capability: ModelCapability | undefined = node.kind === 'assets' ? 'image' : node.kind === 'animation' ? 'video' : usesProvider ? 'text' : undefined;
     const responseAttempt = outputSchema ? modelResponses.attempt(`${runId}:${node.id}`) : undefined;
     const costOperation = selectedModel && capability && !deepAgent && !storyboardBatchSize ? `${runId}:${node.id}${responseAttempt ? `:response:${responseAttempt}` : ''}` : undefined;
@@ -1258,7 +1264,7 @@ export function createRuntime(options: RuntimeOptions) {
         const requestText = async (request: { prompt: string; operationId: string; outputSchema?: Record<string, unknown>; outputSchemaName?: string }, receipt?: { operationId: string; attempt: number }) => {
           runProgress.phase(context.operationId, 'requesting');
           // Apply timing guidance after the storyboard journal has fingerprinted its prompt.
-          const modelPrompt = withStoryboardGuidance(request.prompt, node.kind, saved.outputContractVersion);
+          const modelPrompt = withStoryboardGuidance(request.prompt, node.kind, saved.outputContractVersion, videoModel);
           if (request.outputSchema) runInspector.captureInput(runId, node.id, { inputHash: fingerprint(input), recordedAt: now(), prompt: redactInspectionText(modelPrompt, text => redactError(text, saved.models, transientSecrets, Number.POSITIVE_INFINITY)) });
           const started = performance.now();
           let requestPhase: ModelRequestPhase | undefined;

@@ -23,9 +23,16 @@ export function singleImageRequestModel(model: ModelProfile): ModelProfile {
   return { ...model, provider, parameters };
 }
 
+const seedance20Duration = { min: 4, max: 15 } as const;
+
+export function seedance20DurationRange(modelId: string) {
+  return /^doubao-seedance-2-0(?:-(?:fast|mini))?(?:-\d+)?$/i.test(modelId) ? seedance20Duration : undefined;
+}
+
 export function defaultVideoRequestSeconds(modelId: string, durationUs: number): number {
-  const minimum = /^doubao-seedance-2-0(?:-(?:fast|mini))?(?:-\d+)?$/i.test(modelId) ? 4 : 1;
-  return Math.max(minimum, Math.ceil(durationUs / 1_000_000));
+  const seconds = Math.ceil(durationUs / 1_000_000);
+  const range = seedance20DurationRange(modelId);
+  return range ? Math.min(range.max, Math.max(range.min, seconds)) : Math.max(1, seconds);
 }
 
 export function getModelParameterFields(model: Context): ModelParameterField[] {

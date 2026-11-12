@@ -2,7 +2,7 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, expect, it, vi } from 'vitest';
-import { modelSchema, projectSchema, runInspectionSchema, runSchema, runStepPayloadSchema, workflowNodeSchema } from '@video-quickly/contracts';
+import { modelSchema, projectSchema, runInspectionSchema, runPlanSchema, runSchema, runStepPayloadSchema, workflowNodeSchema } from '@video-quickly/contracts';
 import { createRuntime, SimulatedProcessExit, type RuntimeOptions } from '../src/packages/runtime/src';
 import { DocumentStore, openDatabase } from '../src/packages/runtime/src/database';
 import { TextRequestRejectedError } from '../src/packages/runtime/src/providers';
@@ -22,6 +22,30 @@ const generatedShots = Array.from({ length: 12 }, (_, index) => ({
 }));
 const generatedEntities = [{ key: 'river', kind: 'scene', name: '河岸', description: '清晨的蓝色河岸' }];
 const generated = JSON.stringify({ shots: generatedShots, entities: generatedEntities });
+
+it('uses the selected Seedance clip limit in a storyboard-only run', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'vq-storyboard-batches-')); directories.push(directory);
+  const prompts: string[] = [];
+  const runtime = createRuntime({ dataDirectory: directory, seed: false, provider: async ({ prompt }) => {
+    prompts.push(prompt);
+    return storyboardFixtureResponse(prompt, generated);
+  } });
+  runtimes.add(runtime);
+  const text = modelSchema.parse(await runtime.dispatch('model.save', { model: { name: '分镜', provider: 'ollama', baseUrl: 'http://127.0.0.1:1', connectionType: 'text', capabilities: ['text'], model: 'fixture' } }));
+  const video = modelSchema.parse(await runtime.dispatch('model.save', { model: { name: 'Seedance', provider: 'openai-compatible', baseUrl: 'http://127.0.0.1:1', connectionType: 'video', capabilities: ['video'], model: 'doubao-seedance-2-0-260128' } }));
+  const base = projectSchema.parse(await runtime.dispatch('project.create', { title: '分镜时长限制' }));
+  const project = projectSchema.parse(await runtime.dispatch('project.update', { projectId: base.id, revision: base.revision, patch: {
+    workflow: { ...base.workflow, production: { ...base.workflow.production, textModelId: text.id, videoModelId: video.id } },
+  } }));
+  const selection = { nodeId: 'script', mode: 'node' };
+  const plan = runPlanSchema.parse(await runtime.dispatch('run.plan', { projectId: project.id, selection }));
+  expect(plan.blockedReason).toBe('');
+  const run = runSchema.parse(await runtime.dispatch('run.start', { projectId: project.id, selection: { ...selection, previewDigest: plan.digest } }));
+  await runtime.waitForIdle();
+  expect(runInspectionSchema.parse(await runtime.dispatch('run.inspect', { runId: run.id })).run.status).toBe('succeeded');
+  expect(prompts.length).toBeGreaterThan(1);
+  expect(prompts).toEqual(prompts.map(() => expect.stringContaining('所选视频模型单次生成最多 15 秒')));
+});
 
 async function fixture(provider: NonNullable<RuntimeOptions['provider']>, { failpoint, responses = false }: { failpoint?: RuntimeOptions['failpoint']; responses?: boolean } = {}) {
   const directory = await mkdtemp(join(tmpdir(), 'vq-storyboard-batches-')); directories.push(directory);

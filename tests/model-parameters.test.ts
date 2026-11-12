@@ -107,6 +107,7 @@ it('uses configured Seedance duration and references a shared character and scen
 
 it.each([
   { model: 'doubao-seedance-2-0-260128', width: 5040, height: 2160, ratio: '21:9', resolution: '4k', duration: 4, firstFrame: false },
+  { model: 'doubao-seedance-2-0-260128', width: 1920, height: 1080, ratio: '16:9', resolution: '1080p', shotSeconds: 20, duration: 15, firstFrame: false },
   { model: 'doubao-seedance-2-0-fast-260128', width: 864, height: 1080, ratio: 'adaptive', resolution: '720p', duration: 4, firstFrame: false },
   { model: 'doubao-seedance-2-5-260628', width: 2560, height: 1440, ratio: 'adaptive', resolution: '1080p', shotSeconds: 5, duration: 5, firstFrame: true },
   { model: 'ep-fixture', width: 1920, height: 1080, ratio: '16:9', resolution: undefined, duration: 2, firstFrame: false },

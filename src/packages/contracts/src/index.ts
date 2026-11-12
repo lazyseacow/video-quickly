@@ -180,7 +180,7 @@ export const shotCandidateSchema = z.object({
 }).refine(value => value.baseline.id === value.shotId && value.shot.id === value.shotId, '候选与原始镜头编号须一致');
 export type ShotCandidate = z.infer<typeof shotCandidateSchema>;
 export { applyShotCandidate } from './shot-candidates.js';
-export { defaultVideoRequestSeconds, getModelParameterFields, modelParameterValue, withModelParameter, parametersForTextProtocol, validateModelParameters, requestModelParameters, imageSequenceMode, singleImageRequestModel } from './model-parameters.js';
+export { defaultVideoRequestSeconds, getModelParameterFields, modelParameterValue, withModelParameter, parametersForTextProtocol, validateModelParameters, requestModelParameters, imageSequenceMode, singleImageRequestModel, seedance20DurationRange } from './model-parameters.js';
 export { hasTemplateValue, imageReferenceLimit, planReferenceImageSequences, seedreamTextOnly, seedreamSingleImageV5 } from './image-sequences.js';
 export { validateWorkflowComposition, workflowNodesWithSubflows, workflowEdgesWithSubflows, resolveSubflowInputs, substituteSubflowInputs, subflowNodeId, subflowThreadId, subflowValueAt } from './workflow-composition.js';
 export { resolveWorkflowStages, type ResolvedWorkflowStage } from './workflow-stages.js';
