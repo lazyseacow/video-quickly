@@ -264,18 +264,18 @@ it.skipIf(!mediaAvailable)('carries roles and textual continuity through real vi
   expect(media.width).toBe(160); expect(media.height).toBe(90); expect(media.audio).toBe(true); expect(media.duration).toBeGreaterThan(0);
 });
 
-it.skipIf(!mediaAvailable)('generates first frames by default and sends each one to the existing compatible video connection', async () => {
+it.skipIf(!mediaAvailable)('groups native Seedream first frames with shared image inputs and keeps shot-specific text settings', async () => {
   const shots = [
     { id: 'meeting', title: '双人见面', narration: '', visualPrompt: '小青与小红在门口见面', durationUs: 4_000_000, characterKeys: ['role-1', 'role-2'] },
-    { id: 'talking', title: '双人交谈', narration: '', visualPrompt: '小青与小红在喷泉边交谈', durationUs: 4_000_000, characterKeys: ['role-1', 'role-2'] },
-    { id: 'leaving', title: '小青离开', narration: '', visualPrompt: '小青独自走向木门', durationUs: 4_000_000, characterKeys: ['role-1'] },
+    { id: 'talking', title: '双人交谈', narration: '', visualPrompt: '小青与小红在喷泉边交谈', durationUs: 4_000_000, characterKeys: ['role-1', 'role-2'], entityKeys: ['lantern'] },
   ];
-  const frames = [await fixtureCharacterImage(), await fixtureCharacterImage(true), png];
-  const source = await fixture({ full: true, relay: true, scriptOutput: JSON.stringify({ shots }), imageResponse: prompt => frames[shots.findIndex(shot => prompt.includes(shot.visualPrompt))] });
-  await source.runtime.dispatch('model.save', { model: { ...source.image, model: 'doubao-seedream-5-0-lite-260128', parameters: { sequential_image_generation: 'auto', stream: true } } });
+  const entities = [{ key: 'lantern', kind: 'prop', name: '蓝色纸灯', description: '方形纸罩，温暖的橙色灯芯' }];
+  const frames = [await fixtureCharacterImage(), await fixtureCharacterImage(true)];
+  const source = await fixture({ full: true, relay: true, scriptOutput: JSON.stringify({ shots, entities }), imageResponse: (prompt, body) =>
+    body.sequential_image_generation === 'auto' ? frames : frames[shots.findIndex(shot => prompt.includes(shot.visualPrompt))] });
+  await source.runtime.dispatch('model.save', { model: { ...source.image, model: 'doubao-seedream-5-0-lite-260128' } });
   const project = projectSchema.parse(await source.runtime.dispatch('project.update', { projectId: source.project.id, revision: source.project.revision, patch: {
-    shots: shots.map(({ characterKeys, ...shot }) => ({ ...shot, characterIds: characterKeys.map(key => source.profiles[key === 'role-1' ? 0 : 1].id) })),
-    workflow: { ...source.project.workflow, production: { ...source.project.workflow.production, referenceMode: 'existing', groupReferenceImages: false } },
+    shots: shots.map(({ characterKeys, entityKeys: _entities, ...shot }) => ({ ...shot, characterIds: characterKeys.map(key => source.profiles[key === 'role-1' ? 0 : 1].id) })),
   } }));
   expect(project.workflow.production.referenceMode).toBe('generate');
   await expect(source.runtime.dispatch('billing.prepare', { method: 'run.start', params: { projectId: project.id, nodeId: 'video' } })).rejects.toThrow('缺少可用的首帧');
@@ -287,21 +287,31 @@ it.skipIf(!mediaAvailable)('generates first frames by default and sends each one
   await source.runtime.waitForIdle();
   const finished = runSchema.parse(await source.runtime.dispatch('run.get', { runId: started.id }));
   expect(finished.status, finished.error).toBe('succeeded');
-  const pictureCalls = source.requests.filter(request => request.path.endsWith('/images/generations'));
-  expect(pictureCalls).toHaveLength(3);
-  const pictures = shots.map(shot => pictureCalls.find(request => String(request.body.prompt).includes(shot.visualPrompt))!);
-  expect(pictureCalls[0]).toBe(pictures[0]);
+  const pictureCalls = source.requests.filter(request => request.path.includes('/images/'));
+  expect(pictureCalls).toHaveLength(1);
+  const [picture] = pictureCalls;
   const roleImages = source.referenceBytes.map(bytes => `data:image/png;base64,${bytes.toString('base64')}`);
-  const firstFrame = `data:image/png;base64,${frames[0].toString('base64')}`;
-  expect(pictures.map(request => request.body.image)).toEqual([roleImages, [...roleImages, firstFrame], [roleImages[0], firstFrame]]);
-  expect(pictures[1].body.prompt).toContain('图片 3 是第一镜首帧');
-  expect(pictures[2].body.prompt).toContain('图片 2 是第一镜首帧');
-  expect(pictureCalls.every(request => !('sequential_image_generation' in request.body) && !('stream' in request.body))).toBe(true);
+  expect(picture).toMatchObject({
+    path: '/v1/images/generations',
+    body: { model: 'doubao-seedream-5-0-lite-260128', image: roleImages, stream: false,
+      sequential_image_generation: 'auto', sequential_image_generation_options: { max_images: 2 } },
+  });
+  const prompt = String(picture.body.prompt);
+  const firstShot = prompt.indexOf(`镜头 1「${shots[0].title}」`), secondShot = prompt.indexOf(`镜头 2「${shots[1].title}」`);
+  expect(firstShot).toBeGreaterThanOrEqual(0);
+  expect(secondShot).toBeGreaterThan(firstShot);
+  expect(prompt.slice(firstShot, secondShot)).toContain(shots[0].visualPrompt);
+  expect(prompt.slice(firstShot, secondShot)).not.toContain('道具「蓝色纸灯」');
+  expect(prompt.slice(secondShot)).toContain(shots[1].visualPrompt);
+  expect(prompt.slice(secondShot)).toContain('道具「蓝色纸灯」：方形纸罩，温暖的橙色灯芯');
   const videoCalls = source.requests.filter(request => request.path === '/v1/videos');
-  expect(videoCalls).toHaveLength(3);
-  expect(source.requests.indexOf(pictureCalls[2])).toBeLessThan(source.requests.indexOf(videoCalls[0]));
+  expect(videoCalls).toHaveLength(2);
+  expect(source.requests.indexOf(picture)).toBeLessThan(source.requests.indexOf(videoCalls[0]));
   const produced = await source.current();
-  const { assets } = await source.runtime.dispatch('node.result', { runId: started.id, nodeId: 'assets' }) as { assets: AssetRecord[] };
+  const { assets, providerUsage } = await source.runtime.dispatch('node.result', { runId: started.id, nodeId: 'assets' }) as { assets: AssetRecord[]; providerUsage: { images: number } };
+  expect(assets.map(asset => asset.shotId)).toEqual(produced.shots.map(shot => shot.id));
+  expect(await Promise.all(assets.map(asset => readFile(asset.path)))).toEqual(frames);
+  expect(providerUsage).toMatchObject({ images: 2 });
   for (const [index, shot] of shots.entries()) {
     const request = videoCalls.find(call => String(call.body.prompt).includes(shot.visualPrompt));
     expect(request?.body).toMatchObject({ model: 'seedance-2-0-fixture', images: [frames[index].toString('base64')], prompt: expect.stringContaining('以镜头首帧中的人物形象和构图为准') });
@@ -510,13 +520,14 @@ it.skipIf(!mediaAvailable).each(['first-frame', 'multi-reference'] as const)('re
   const looks = source.requests.filter(request => request.path.endsWith('/images/generations') && String(request.body.prompt).includes('定妆设定图'));
   expect(looks).toHaveLength(1);
   expect(looks[0].body.prompt).toContain('老陈');
-  const images = source.requests.filter(request => request.path.endsWith('/images/edits'));
+  const images = source.requests.filter(request => request.path.includes('/images/') && !looks.includes(request));
   expect(images).toHaveLength(3);
   const roleImages = [{ image_url: `data:image/png;base64,${source.referenceBytes[0].toString('base64')}` }, { image_url: appearance }];
   const firstFrame = assets.find(asset => asset.shotId === result.shots[0].id)!;
   expect(images[0].body.images).toEqual(roleImages);
   expect(images[1].body.images).toEqual([...roleImages, { image_url: await imageUrl(firstFrame) }]);
-  expect(images[2].body.images).toEqual([{ image_url: await imageUrl(firstFrame) }]);
+  expect(images[2].path).toBe('/v1/images/generations');
+  expect(images[2].body).not.toHaveProperty('images');
   for (const request of images.slice(0, 2)) {
     expect(request.body.prompt).toContain('人物「老陈」参考图：图片 2');
   }

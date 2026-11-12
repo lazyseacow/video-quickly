@@ -35,8 +35,10 @@ test('shows actual media previews and compact file rows while keeping automatic 
   const { runId } = await rpc<{ runId: string }>(request, 'render.export', { projectId: project.id });
   await expect.poll(async () => (await rpc<RunSummary>(request, 'run.get', { runId })).status, { timeout: 20_000 }).toBe('succeeded');
   const output = await rpc<{ assets: AssetRecord[] }>(request, 'node.result', { runId, nodeId: 'export' });
-  expect(output.assets.map(asset => asset.name)).toEqual(['video.mp4', 'cover.png', 'subtitles.srt', 'timeline.json']);
-  expect(await rpc(request, 'asset.getMany', { assetIds: output.assets.map(asset => asset.id) })).toHaveLength(4);
+  expect(output).not.toHaveProperty('timelinePath');
+  expect(output.assets.map(asset => asset.name)).toEqual(['video.mp4', 'cover.png', 'subtitles.srt']);
+  expect(await rpc(request, 'asset.getMany', { assetIds: output.assets.map(asset => asset.id) })).toHaveLength(3);
+  expect(await readdir(dirname(output.assets[0].path))).not.toContain('timeline.json');
   const firstPage = await rpc<RecordPage<AssetListItem>>(request, 'asset.list', { hideExportOutputs: true, limit: 1 });
   expect(firstPage.items.map(asset => asset.id)).toEqual([subtitle.id]);
   expect(firstPage.nextCursor).not.toBeNull();
@@ -96,16 +98,12 @@ test('shows actual media previews and compact file rows while keeping automatic 
   await page.getByRole('button', { name: '打开阶段：审阅与导出', exact: true }).click();
   const runDialog = page.getByRole('dialog', { name: '本次制作', exact: true });
   await runDialog.getByRole('navigation', { name: '本次制作步骤', exact: true }).getByRole('button', { name: /导出成片/ }).click();
-  await runDialog.getByRole('button', { name: '查看 timeline.json', exact: true }).click();
-  const timeline = page.getByRole('dialog', { name: 'timeline.json', exact: true });
-  await expect(timeline.getByRole('region', { name: 'JSON 内容', exact: true })).toContainText('"videoSha256"');
-  await page.keyboard.press('Escape');
-  await expect(timeline).toHaveCount(0);
-  await expect(runDialog).toBeVisible();
+  await expect(runDialog.getByRole('region', { name: '产物媒体', exact: true }).locator('video')).toHaveJSProperty('videoWidth', 320);
+  await expect(runDialog.getByRole('button', { name: '查看 timeline.json', exact: true })).toHaveCount(0);
 });
 
 test('opens the exact JSON for same-named assets and identifies their projects in the list and confirmation', async ({ page, request, isolatedWorkspace }, info) => {
-  const name = '角色设定.json';
+  const name = 'timeline.json';
   const path = join(isolatedWorkspace.directory, name);
   const first = await rpc<ProjectDocument>(request, 'project.create', { title: '东街故事' });
   const second = await rpc<ProjectDocument>(request, 'project.create', { title: '西街故事' });

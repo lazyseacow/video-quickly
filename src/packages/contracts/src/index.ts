@@ -21,7 +21,7 @@ import { motionKeyframesSchema } from './keyframes.js';
 import { creativeContextSchema, creativeEntityKeysSchema } from './creative-context.js';
 export { creativeContextSchema, creativeEntitySchema, creativeEntityKeysSchema, creativeCharacterBindings, projectCharacterIds, validateCreativeReferences, shotCreativePrompt, creativeEntityLabels, creativeReferenceAssetIds, hasCharacterAppearance, isCreativeReferenceAsset, type CreativeContext, type CreativeEntity } from './creative-context.js';
 import { productionSettingsSchema, resolveProductionWorkflow } from './production.js';
-export { productionSettingsSchema, resolveProductionWorkflow, nativeReferenceStep, groupsReferenceImages, isVideoGenerationNode, isModelGenerationNode, captionsEnabled, productionEditingStep, productionEditingSkillIds, productionModelSetting, supportsProductionAgent, supportsAutomaticCasting, productionPlanningSteps, productionPlanningStep, usesManualPlanning, MAX_REFERENCE_AUDIO_BYTES, MAX_REFERENCE_AUDIOS, type ProductionPlanningStep, type ProductionSettings } from './production.js';
+export { productionSettingsSchema, resolveProductionWorkflow, nativeReferenceStep, groupsReferenceImages, groupsNativeFirstFrames, isVideoGenerationNode, isModelGenerationNode, captionsEnabled, productionEditingStep, productionEditingSkillIds, productionModelSetting, supportsProductionAgent, supportsAutomaticCasting, productionPlanningSteps, productionPlanningStep, usesManualPlanning, MAX_REFERENCE_AUDIO_BYTES, MAX_REFERENCE_AUDIOS, type ProductionPlanningStep, type ProductionSettings } from './production.js';
 export { MAX_STORYBOARD_SHOTS, planningDocumentSchemas, planningDocumentSections, formatPlanningDocument, type ManualPlanningFields, type PlanningDocumentKind } from './planning-fields.js';
 export * from './asset-recovery.js';
 export { skillPromptContext, appendSkillContext, supportsSkillScript } from './skill-context.js';
@@ -66,7 +66,7 @@ export type ExportTarget = z.infer<typeof exportTargetSchema>;
 export const exportBatchTargetSchema = exportTargetSchema.extend({
   status: z.enum(['queued', 'running', 'succeeded', 'failed', 'canceled', 'interrupted']),
   runId: z.string().optional(), progress: z.number().min(0).max(1).default(0), error: z.string().optional(),
-  videoPath: z.string().optional(), coverPath: z.string().optional(), subtitlePath: z.string().optional(), timelinePath: z.string().optional(),
+  videoPath: z.string().optional(), coverPath: z.string().optional(), subtitlePath: z.string().optional(),
 });
 export type ExportBatchTarget = z.infer<typeof exportBatchTargetSchema>;
 export const exportBatchSchema = z.object({

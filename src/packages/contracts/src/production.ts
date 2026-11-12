@@ -82,9 +82,9 @@ export function resolveProductionWorkflow(workflow: WorkflowDefinition): Workflo
     const config = { ...node.config };
     if (config.operation === 'prepare-references') {
       if (node === nativeReferences) {
-        if (firstFrames) config.useFirstShotReference = true;
-        else { delete config.useFirstShotReference; delete config.requiresModel; }
-        delete config.groupReferenceImages;
+        delete config.useFirstShotReference;
+        if (firstFrames) config.groupReferenceImages = true;
+        else { delete config.groupReferenceImages; delete config.requiresModel; }
       } else {
         delete config.useFirstShotReference;
         if (settings.referenceMode === 'generate') config.groupReferenceImages = settings.groupReferenceImages !== false;
@@ -106,6 +106,10 @@ export function resolveProductionWorkflow(workflow: WorkflowDefinition): Workflo
 export function groupsReferenceImages(node: Pick<WorkflowNode, 'kind' | 'config'>): boolean {
   return node.kind === 'assets' && node.config.operation === 'prepare-references' && node.config.referenceMode === 'generate'
     && (node.config.useFirstShotReference === true || node.config.groupReferenceImages === true) && typeof node.config.shotId !== 'string' && !node.config.imageEdit;
+}
+
+export function groupsNativeFirstFrames(workflow: Pick<WorkflowDefinition, 'id' | 'nodes'>, node: Pick<WorkflowNode, 'id' | 'kind' | 'config'>): boolean {
+  return node.config.groupReferenceImages === true && groupsReferenceImages(node) && nativeReferenceStep(workflow)?.id === node.id;
 }
 
 export function isVideoGenerationNode(node: Pick<WorkflowNode, 'kind' | 'config'>): boolean {

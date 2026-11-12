@@ -112,7 +112,6 @@ it.skipIf(!available)('uses one global video frame grid and the same sound mix t
   expect((await runMedia(ffprobe, ['-v', 'error', '-count_frames', '-select_streams', 'v:0', '-show_entries', 'stream=nb_read_frames', '-of', 'csv=p=0', rendered.videoPath])).trim()).toBe('63');
   const actual = await pcm(rendered.videoPath, directory, 'export');
   expect(amplitude(actual, 440, 1.6)).toBeGreaterThan(.17); expect(amplitude(actual, 880, 2)).toBeGreaterThan(.17); expect(amplitude(actual, 1320, 2.4)).toBeGreaterThan(.17);
-  const timeline = JSON.parse(await readFile(rendered.timelinePath, 'utf8')); expect(timeline.clips[1].startUs).toBe(1_300_000); expect(timeline.audioMix.sha256).toBe(mix.sha256); expect(timeline.renderSchedule.map((value: { frameCount: number }) => value.frameCount)).toEqual([32, 31]);
   async function pixel(file: string, frame: number, name: string) { const target = join(directory, `${name}.rgb`); await runMedia(ffmpeg, ['-v', 'error', '-y', '-i', file, '-vf', `select='eq(n,${frame})',scale=1:1`, '-frames:v', '1', '-pix_fmt', 'rgb24', '-f', 'rawvideo', target]); return readFile(target); }
   for (const outputFrame of [32, 43, 56]) {
     const time = timeAtFrame(outputFrame, doc.profile.frameRate) - 1_300_000, source = time < 400_000 ? time : time < 1_000_000 ? time + 400_000 : time + 1_000_000;

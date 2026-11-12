@@ -6,7 +6,8 @@ import { mkdtemp, readFile, rm, unlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { afterEach, expect, it } from 'vitest';
-import { captionsEnabled, createNativeVideoWorkflow, DEFAULT_VIDEO_PROFILE, getModelParameterFields, modelSchema, projectSchema, resolveProductionWorkflow, runInspectionSchema, runSchema, videoReferenceImages, type AssetRecord, type ProjectDocument, type ShotCandidate } from '@video-quickly/contracts';
+import { captionsEnabled, createNativeVideoWorkflow, DEFAULT_VIDEO_PROFILE, getModelParameterFields, modelSchema, planReferenceImageSequences, projectSchema, resolveProductionWorkflow, runInspectionSchema, runSchema, videoReferenceImages, type AssetRecord, type ProjectDocument, type ShotCandidate } from '@video-quickly/contracts';
+import { requestCostMetrics } from '../src/packages/runtime/src/costs';
 import { validateExecutionModel } from '../src/packages/runtime/src/execution-model';
 import { matchingStepModels } from '../src/renderer/lib/workflow-guidance';
 import { createRuntime, SimulatedProcessExit, type RuntimeOptions } from '../src/packages/runtime/src';
@@ -40,15 +41,37 @@ it('requires generated first frames only while the built-in image model is selec
   const initial = createNativeVideoWorkflow();
   const withImage = resolveProductionWorkflow({ ...initial, production: { ...initial.production, imageModelId: 'image' } });
   expect(withImage.production.referenceMode).toBe('generate');
-  expect(withImage.nodes.find(node => node.id === 'assets')).toMatchObject({ modelId: 'image', config: { useFirstShotReference: true } });
+  const imageStep = withImage.nodes.find(node => node.id === 'assets')!;
+  expect(imageStep).toMatchObject({ modelId: 'image', config: { groupReferenceImages: true } });
+  expect(imageStep.config.useFirstShotReference).toBeUndefined();
   expect(withImage.nodes.find(node => node.id === 'video')?.config.requiresShotFirstFrame).toBe(true);
   const cleared = resolveProductionWorkflow({ ...withImage, production: { ...withImage.production, imageModelId: undefined } });
   expect(cleared.production.referenceMode).toBe('existing');
   const assets = cleared.nodes.find(node => node.id === 'assets')!;
   expect(assets.modelId).toBeUndefined();
+  expect(assets.config.groupReferenceImages).toBeUndefined();
   expect(assets.config.useFirstShotReference).toBeUndefined();
   expect(cleared.nodes.find(node => node.id === 'video')?.config.requiresShotFirstFrame).toBeUndefined();
   expect(() => validateExecutionModel(assets, undefined)).not.toThrow();
+});
+
+it('keeps locked shots as native group boundaries and counts only generated first frames', () => {
+  const initial = createNativeVideoWorkflow();
+  const workflow = resolveProductionWorkflow({ ...initial, production: { ...initial.production, imageModelId: 'image' } });
+  const project = projectSchema.parse({ id: 'grouped-first-frames', title: '首帧分组', brief: '', profile: DEFAULT_VIDEO_PROFILE, revision: 1, createdAt: '', updatedAt: '', workflow,
+    shots: ['a', 'b', 'locked', 'c', 'd'].map(id => ({ id, title: id, narration: '', visualPrompt: '同一场景', durationUs: 1_000_000, locked: id === 'locked' })),
+  });
+  const node = workflow.nodes.find(node => node.id === 'assets')!;
+  const model = modelSchema.parse({ id: 'image', name: '图片模型', provider: 'openai-compatible', model: 'doubao-seedream-5-0-lite-260128', baseUrl: 'http://127.0.0.1:1', connectionType: 'image', capabilities: ['image'], createdAt: '', updatedAt: '' });
+  expect(planReferenceImageSequences({ project, node, model }).map(sequence => [sequence.seedream, sequence.batches.map(batch => batch.map(shot => shot.id))]))
+    .toEqual([[true, [['a', 'b']]], [true, [['c', 'd']]]]);
+  expect(requestCostMetrics(project, node, model)).toEqual({ source: 'request', requestCount: 2, images: 4 });
+
+  const { groupReferenceImages: _group, ...legacyConfig } = node.config;
+  const legacy = { ...node, config: { ...legacyConfig, useFirstShotReference: true } };
+  expect(planReferenceImageSequences({ project, node: legacy, model }).map(sequence => [sequence.seedream, sequence.batches.map(batch => batch.map(shot => shot.id))]))
+    .toEqual([[false, [['a'], ['b'], ['c'], ['d']]]]);
+  expect(requestCostMetrics(project, legacy, model)).toEqual({ source: 'request', requestCount: 4, images: 4 });
 });
 
 it('validates known Seedance audio-only combinations when no shot image is available', () => {

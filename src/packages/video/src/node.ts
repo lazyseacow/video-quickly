@@ -26,7 +26,7 @@ export interface RenderOptions {
   onProgress?: (value: number) => void;
   preparedAudioMix?: PreparedAudioMix;
 }
-export interface RenderResult { videoPath: string; coverPath: string; subtitlePath: string; timelinePath: string; warnings: string[] }
+export interface RenderResult { videoPath: string; coverPath: string; subtitlePath: string; warnings: string[] }
 
 function subtitleStyle(width:number,height: number): string {
   const geometry=captionGeometry(width,height);
@@ -262,7 +262,5 @@ export async function renderProject(options: RenderOptions): Promise<RenderResul
   await rename(temporaryVideo,videoPath);
   const coverPath=join(options.outputDirectory,'cover.png');
   await runMedia(ffmpeg,['-hide_banner','-loglevel','error','-y','-i',videoPath,'-frames:v','1',coverPath],{signal:options.signal});
-  const timelinePath=join(options.outputDirectory,'timeline.json');
-  await writeFile(timelinePath,JSON.stringify({profile,clips:buildTimeline(shots),musicClips:project.musicClips??[],audioMix:{...mix,path:undefined},renderSchedule:schedule,captionLayouts:shots.map(shot=>({shotId:shot.id,fontName:captionFontFor(shot),layout:captionLayoutFor(shot)})),warnings,videoSha256:await hashMediaFile(videoPath,options.signal)},null,2),'utf8');
-  return {videoPath,coverPath,subtitlePath,timelinePath,warnings};
+  return {videoPath,coverPath,subtitlePath,warnings};
 }

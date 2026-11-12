@@ -10,6 +10,8 @@
 .step-result__index { width: var(--space-6); text-align: left; }
 .step-result__copy { display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: baseline; gap: var(--space-3); margin: var(--space-2) 0 0 calc(var(--space-6) + var(--space-2)); font-size: var(--text-size-label); }
 .step-result__copy > span { color: var(--text-secondary); font-size: var(--text-size-caption); }
+.step-result__color-value { white-space: nowrap; }
+.step-result__color-swatch { display: inline-block; inline-size: .85em; block-size: .85em; margin-inline-end: var(--space-1); vertical-align: -.075em; border-radius: var(--radius-detail); outline: 1px solid var(--image-outline); outline-offset: -1px; forced-color-adjust: none; }
 .step-result__animation { margin: var(--space-2) 0 0 calc(var(--space-6) + var(--space-2)); }
 .step-result__document { line-height: var(--line-height-prose); }
 .step-result__document pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 360px; overflow: auto; font: var(--text-size-caption)/var(--line-height-body) var(--font-family-code); }

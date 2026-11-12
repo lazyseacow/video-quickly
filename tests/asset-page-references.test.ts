@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { assetListItemSchema, assetSchema, characterProfileSchema, jsonAssetPreviewSchema, recordPageSchema, type AssetRecord, type CharacterProfile } from '@video-quickly/contracts';
 import { createRuntime } from '../src/packages/runtime/src';
 import { DocumentStore, openDatabase } from '../src/packages/runtime/src/database';
+import { legacyTimelineName, localRenderProvenance } from '../src/packages/runtime/src/legacy-export-timeline';
 import { seedLargeWorkspace } from './fixtures/large-workspace';
 
 const fixtures: Array<{ directory: string; database: ReturnType<typeof openDatabase>; runtime: ReturnType<typeof createRuntime> }> = [];
@@ -63,7 +64,7 @@ describe('asset-page character references', () => {
       const projectQueries = queries.filter(sql => sql.includes('project_asset_references'));
       expect(projectQueries).toHaveLength(1);
       expect(queries.filter(sql => sql.includes("json_each(profile.body, '$.referenceAssetIds')"))).toHaveLength(1);
-      const plan = database.prepare(`EXPLAIN QUERY PLAN ${projectQueries[0]}`).all({ limit: 101 }) as { detail: string }[];
+      const plan = database.prepare(`EXPLAIN QUERY PLAN ${projectQueries[0]}`).all({ limit: 101, legacyTimelineName, localRenderProvenance }) as { detail: string }[];
       expect(plan.some(row => row.detail.includes('USING INDEX documents_active_assets'))).toBe(true);
       expect(plan.some(row => row.detail.includes('USE TEMP B-TREE'))).toBe(false);
       const derivationQueries = queries.filter(sql => sql.includes('$.derivation.sourceAssetId'));

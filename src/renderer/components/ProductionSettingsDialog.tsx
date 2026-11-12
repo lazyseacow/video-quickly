@@ -85,7 +85,7 @@ export default function ProductionSettingsDialog({ project, projectId, projectRe
   const automaticCasting = supportsAutomaticCasting(resolved);
   const nativeAssets = nativeReferenceStep(resolved);
   const nativeReferences = Boolean(nativeAssets);
-  const firstFrames = nativeAssets?.config.useFirstShotReference === true;
+  const firstFrames = nativeAssets?.config.referenceMode === 'generate';
   const showImageModel = nativeReferences || automaticCasting || resolved.production.referenceMode === 'generate';
   const groupReferenceImages = settings.groupReferenceImages !== false;
   const requiredModelTasks = resolved.nodes.filter(node => !usesManualPlanning(resolved, node) && stepGuidance(node).requiresModel);
@@ -315,7 +315,7 @@ export default function ProductionSettingsDialog({ project, projectId, projectRe
                 </Select>
               </Field>}
             </div>}
-            {nativeReferences ? <p className="field__hint">{firstFrames ? '后续镜头沿用第一镜首帧和各自绑定的角色参考图。' : '使用已有画面，或按文字描述生成视频。'}</p>
+            {nativeReferences ? <p className="field__hint">{firstFrames ? '角色和参考图相同的相邻镜头可用组图接口按组生成，各镜头保留自己的文字设定。其他模型按能力沿用组内首镜或逐镜生成。' : '使用已有画面，或按文字描述生成视频。'}</p>
               : automaticCasting && <p className="field__hint">反复出镜的人物缺少参考图时，使用图片模型自动定妆。留空时使用唯一可用的图片模型。</p>}
             <ReferenceAudioPicker assets={workspace.assets} value={settings.referenceAudioAssetIds ?? []} onChange={referenceAudioAssetIds => updateSettings({ referenceAudioAssetIds })} onImport={importReferenceAudio} disabled={Boolean(pending)} />
             {advanced({ id: 'materials', label: '模型与素材', nodeIds: resolved.nodes.filter(node => stepGuidance(node).capability && stepGuidance(node).capability !== 'text').map(node => node.id) })}
@@ -353,7 +353,7 @@ export default function ProductionSettingsDialog({ project, projectId, projectRe
                 <div><dt>视频模型</dt><dd>{modelName(settings.videoModelId)}</dd></div>
                 {!nativeReferences && <div><dt>参考素材</dt><dd>{{ none: '直接生成视频', existing: '使用已有参考图', generate: '先生成参考图' }[settings.referenceMode]}</dd></div>}
                 {showImageModel && <div><dt>图片模型</dt><dd>{imageField.value || imageField.required ? modelName(imageField.value) : nativeReferences ? '不生成首帧' : '按需自动选择'}</dd></div>}
-                {nativeReferences ? <div><dt>首帧生成</dt><dd>{firstFrames ? '沿用第一镜和角色参考图' : '使用已有画面或按文字生成视频'}</dd></div>
+                {nativeReferences ? <div><dt>首帧生成</dt><dd>{firstFrames ? '自动分组生成' : '使用已有画面或按文字生成视频'}</dd></div>
                   : settings.referenceMode === 'generate' && <div><dt>首帧生成</dt><dd>{groupReferenceImages ? '自动组图' : '逐镜生成'}</dd></div>}
                 <div><dt>参考音频</dt><dd>{settings.referenceAudioAssetIds?.length ? `已选择 ${settings.referenceAudioAssetIds.length} 段` : '未添加'}</dd></div>
               </dl>

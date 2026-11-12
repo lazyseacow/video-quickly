@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import type Database from 'better-sqlite3';
 import { z } from 'zod';
 import { costRequestMetricsSchema, costSummarySchema, tokenMetrics, getModelPlatform, costTaskDetailSchema, costTaskSchema, currencySchema, defaultVideoRequestSeconds, providerUsageSchema, requestModelParameters, usageRecordSchema, type CostRequestMetrics, type CostSummary, type ModelCapability, type ModelPricing, type ModelProfile, type ProjectDocument, type ProviderUsage, type UsageRecord, type TokenMetric, type WorkflowNode } from '@video-quickly/contracts';
-import { groupsReferenceImages, imageSequenceMode, planReferenceImageSequences, type CharacterProfile } from '@video-quickly/contracts';
+import { groupsNativeFirstFrames, groupsReferenceImages, imageSequenceMode, planReferenceImageSequences, type CharacterProfile } from '@video-quickly/contracts';
 import { DocumentStore } from './database.js';
 
 type CurrencyMetric = 'estimatedAmount' | 'actualAmount' | 'estimatedRecords' | 'actualRecords';
@@ -193,9 +193,10 @@ export function requestCostMetrics(project: ProjectDocument, node: WorkflowNode,
     const count = project.shots.filter(shot => !shot.locked).length;
     return { source: 'request', requestCount: count, images: count };
   }
-  // Locked shots may reuse existing receipts or assets. Without submission evidence, do not count them as requests.
-  if (project.shots.some(shot => shot.locked)) return { source: 'request' };
-  const count = project.shots.length;
+  const nativeFirstFrames = groupsNativeFirstFrames(project.workflow, node);
+  // Other workflows may regenerate or reuse locked assets; their request count is unknown.
+  if (!nativeFirstFrames && project.shots.some(shot => shot.locked)) return { source: 'request' };
+  const count = nativeFirstFrames ? project.shots.filter(shot => !shot.locked).length : project.shots.length;
   if (node.kind === 'assets') {
     if (count > 1 && groupsReferenceImages(node) && imageSequenceMode(model) === 'seedream') {
       const sequences = characters || !project.shots.some(shot => shot.characterIds?.length) ? planReferenceImageSequences({ project, node, model, characters }) : undefined;

@@ -9,7 +9,7 @@ import { DocumentStore } from './database.js';
 import { hashFileSha256 } from './file-hash.js';
 
 export interface ExportBatchSnapshot { project: ProjectDocument; assets: AssetRecord[]; characters: CharacterProfile[]; characterAssets: AssetRecord[] }
-export interface BatchRenderResult { videoPath: string; coverPath: string; subtitlePath: string; timelinePath: string; assets: AssetRecord[] }
+export interface BatchRenderResult { videoPath: string; coverPath: string; subtitlePath: string; assets: AssetRecord[] }
 export interface ExportBatchOptions {
   database: Database.Database; store: DocumentStore; dataDirectory: string; onChanged(): void;
   capture(projectId: string, revision: number): ExportBatchSnapshot;
@@ -21,8 +21,12 @@ export interface ExportBatchOptions {
 }
 
 const snapshotSchema = z.object({ project: projectSchema, assets: z.array(assetSchema), characters: z.array(characterProfileSchema), characterAssets: z.array(assetSchema) });
-const resultSchema = z.object({ videoPath: z.string().min(1), coverPath: z.string().min(1), subtitlePath: z.string().min(1), timelinePath: z.string().min(1), assets: z.array(assetSchema) });
-const outputFiles = [ ['videoPath', 'video', 'video.mp4'], ['coverPath', 'image', 'cover.png'], ['subtitlePath', 'subtitle', 'subtitles.srt'], ['timelinePath', 'document', 'timeline.json'] ] as const;
+const resultSchema = z.object({ videoPath: z.string().min(1), coverPath: z.string().min(1), subtitlePath: z.string().min(1), assets: z.array(z.unknown()) });
+const outputFiles = [
+  ['videoPath', 'video', 'video.mp4'],
+  ['coverPath', 'image', 'cover.png'],
+  ['subtitlePath', 'subtitle', 'subtitles.srt'],
+] as const;
 const batchIdInput = z.object({ batchId: z.string().min(1), projectId: z.string().optional() });
 const timestamp = () => new Date().toISOString();
 
@@ -41,9 +45,13 @@ async function verifyAssets(assets: AssetRecord[], signal?: AbortSignal) {
 
 export async function verifyBatchRenderResult(value: unknown, signal?: AbortSignal): Promise<BatchRenderResult> {
   const result = resultSchema.parse(value);
-  if (outputFiles.some(([field, kind]) => !result.assets.some(asset => asset.path === result[field] && asset.kind === kind))) throw new Error('导出运行未返回完整的四类产物。');
-  await verifyAssets(result.assets, signal);
-  return result;
+  const assets = outputFiles.map(([field, kind]) => {
+    const asset = result.assets.find(asset => asset && typeof asset === 'object' && 'path' in asset && asset.path === result[field] && 'kind' in asset && asset.kind === kind);
+    if (!asset) throw new Error('导出运行未返回完整的三类产物。');
+    return assetSchema.parse(asset);
+  });
+  await verifyAssets(assets, signal);
+  return { ...result, assets };
 }
 
 async function atomicJson(path: string, value: unknown) {
@@ -131,7 +139,7 @@ export function createExportBatchManager(options: ExportBatchOptions) {
           const output = await publish(get(id), target, rendered, controller.signal);
           await verifyAssets(output.assets, controller.signal);
           store.put('export-batch-result', resultId(id, target.id), output);
-          targetUpdate(id, target.id, { status: 'succeeded', progress: 1, error: undefined, videoPath: output.videoPath, coverPath: output.coverPath, subtitlePath: output.subtitlePath, timelinePath: output.timelinePath });
+          targetUpdate(id, target.id, { status: 'succeeded', progress: 1, error: undefined, videoPath: output.videoPath, coverPath: output.coverPath, subtitlePath: output.subtitlePath });
         } catch (error) {
           targetUpdate(id, target.id, { status: controller.signal.aborted ? job.interrupted ? 'interrupted' : 'canceled' : 'failed', error: controller.signal.aborted ? job.interrupted ? '导出已中断，请继续。' : '已取消当前导出。' : error instanceof Error ? error.message : String(error) });
         }

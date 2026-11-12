@@ -23,9 +23,11 @@ const style = {
   characterAppearance: '',
   sceneContinuity: '```html\n<img src="https://invalid.example/never-load.png" onerror="alert(1)">\n```\n最后一段仍然可读。',
 };
+const shotVisual = '背景#F7F5F0，阴影（#AbC）、透明区域 #0000 和强调色（#E0A030FF）。\n镜头编号 #123456789 和标识 #FEEDfaceZ 保持原样。';
 
 async function produced(page: Page, request: APIRequestContext, info: TestInfo) {
-  const source = await fixture(request, info, false, 1, { brief, style });
+  const firstScriptResponse = JSON.stringify({ shots: [{ number: 1, title: '生成的蓝色镜头', narration: '天空是蓝色的。', visualPrompt: shotVisual, soundPrompt: '自然讲述', durationUs: 1_000_000 }] });
+  const source = await fixture(request, info, false, 1, { brief, style, firstScriptResponse });
   try {
     await rpc(request, 'project.update', { projectId: source.project.id, patch: { workflow: { ...source.project.workflow, production: { ...source.project.workflow.production!, textModelId: source.models[0].id, videoModelId: source.video.id } } } });
     const run = await rpc<{ id: string }>(request, 'run.start', { projectId: source.project.id });
@@ -98,6 +100,18 @@ for (const { width, theme } of [{ width: 1536, theme: 'dark' }, { width: 1024, t
       await page.screenshot({ path: info.outputPath(`production-style-${width}-${theme}.png`) });
       await expect(navigation.getByRole('button').locator('strong')).toHaveText(['简报生成', '风格与角色生成', '分镜生成', '参考图生成', '镜头视频生成', '剪辑与运镜准备', '导出成片']);
       await expect(dialog.getByRole('button', { name: '编辑风格与角色', exact: true })).toBeInViewport();
+
+      await navigation.getByRole('button', { name: /分镜生成/ }).click();
+      const visualPrompt = dialog.getByRole('region', { name: '分镜预览' }).getByText(shotVisual, { exact: true });
+      await expect(visualPrompt).toBeVisible();
+      expect(await visualPrompt.textContent()).toBe(shotVisual);
+      const swatches = visualPrompt.locator('.step-result__color-swatch');
+      await expect(swatches).toHaveCount(4);
+      for (const [index, color] of ['rgb(247, 245, 240)', 'rgb(170, 187, 204)', 'rgba(0, 0, 0, 0)', 'rgb(224, 160, 48)'].entries()) {
+        await expect(swatches.nth(index)).toHaveCSS('background-color', color);
+      }
+      expect(await dialog.evaluate(element => element.scrollWidth <= element.clientWidth)).toBe(true);
+      await page.screenshot({ path: info.outputPath(`production-storyboard-${width}-${theme}.png`) });
       expect(detailReads).toEqual([]);
       expect(await saved(request, source.project.id)).toEqual(baseline); expect(source.requests.length).toBe(requests);
       await expect(page).toHaveTitle(/Video Quickly/); expect(new URL(page.url()).pathname).toBe('/');

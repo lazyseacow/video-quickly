@@ -91,7 +91,7 @@ it('restarts a canceled shot candidate with its original target, model and instr
 async function localArtifacts(context: ActivityExecutionContext) {
   const directory = join(context.dataDirectory, 'local-export', context.runId); await mkdir(directory, { recursive: true });
   const assets: AssetRecord[] = [], output: Record<string, string> = {};
-  for (const [field, kind, filename] of [['videoPath', 'video', 'video.mp4'], ['coverPath', 'image', 'cover.png'], ['subtitlePath', 'subtitle', 'subtitles.srt'], ['timelinePath', 'document', 'timeline.json']] as const) {
+  for (const [field, kind, filename] of [['videoPath', 'video', 'video.mp4'], ['coverPath', 'image', 'cover.png'], ['subtitlePath', 'subtitle', 'subtitles.srt']] as const) {
     const path = join(directory, filename), bytes = Buffer.from(`${context.project.title}:${context.project.profile.width}:${kind}`); await writeFile(path, bytes);
     output[field] = path; assets.push({ id: `${context.runId}:${kind}`, projectId: context.project.id, name: filename, kind, path, mimeType: 'application/octet-stream', size: bytes.length, sha256: createHash('sha256').update(bytes).digest('hex'), version: 1, createdAt: '', provenance: 'controlled local render boundary', retained: false, active: true });
   }

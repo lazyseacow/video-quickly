@@ -46,7 +46,9 @@ it.skipIf(!mediaAvailable)('burns inherited and per-shot font/color/opacity/posi
     const probe = await probeMedia(result.videoPath, ffprobe); expect(probe).toMatchObject({ width, height, frameRate: '30000/1001' }); expect(probe.videoDuration).toBeCloseTo(duration / 1e6, 3);
     expect(project).toEqual(before); expect(project.shots.every(shot => shot.captionTrack?.alignment === 'speech' && shot.captionTrack.cues[0].id === 'speech-original')).toBe(true);
     const ass = await readFile(join(outputDirectory, 'subtitles.ass'), 'utf8'); expect(ass).not.toContain('{\\pos(0,0)'); expect(ass).toContain('\\\u2060fs999'); expect(ass).toContain('\\\u2060N');
-    const timeline = JSON.parse(await readFile(result.timelinePath, 'utf8')); expect(timeline.captionLayouts[0].layout.style.fontId).toBe('sans'); expect(timeline.captionLayouts[1].layout.style.fontId).toBe('serif'); expect(timeline.captionLayouts[0].fontName).not.toBe(timeline.captionLayouts[1].fontName);
+    const captionFonts = [...ass.matchAll(/^Style: Caption\d+,([^,]+),/gm)].map(match => match[1]);
+    expect(captionFonts).toHaveLength(2);
+    expect(new Set(captionFonts).size).toBe(2);
     const measure = createCanvas(width, height).getContext('2d');
     const resolved = project.shots.map(shot => ({ ...shot, captionStyle: effectiveCaptionStyle(project, shot) }));
     expect(await readFile(result.subtitlePath, 'utf8')).toBe(createTimedSrt(resolved, (text, shot) => { const layout = resolveCaptionLayout(width, height, shot.captionStyle); measure.font = layout.font; return captionPages(text, line => measure.measureText(line).width, layout.textWidth, layout.maxLines); }));

@@ -1,7 +1,7 @@
 import { planningFixtureResponse, storyboardFixtureResponse } from '../../../../tests/fixtures/planning-response';
 import { spawnSync } from 'node:child_process';
 import { createServer, type Server } from 'node:http';
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { afterEach, expect, it } from 'vitest';
@@ -198,13 +198,11 @@ it.skipIf(!mediaAvailable).each(['MCP', 'legacy planning Skill'] as const)('resu
   expect(saved.workflow.production.subtitleMode).toBe('script');
   expect(saved.shots[0].assetId).toBeTruthy(); expect(saved.shots[0].videoAssetId).toBeTruthy();
   expect(await reopened.dispatch('node.result', { runId: run.id, nodeId: 'animation/tool/edit' })).toMatchObject({ appliedTransitions: [expectedFade()] });
-  const output = await reopened.dispatch('node.result', { runId: run.id, nodeId: 'export' }) as { videoPath: string; subtitlePath: string; timelinePath: string };
+  const output = await reopened.dispatch('node.result', { runId: run.id, nodeId: 'export' }) as { videoPath: string; subtitlePath: string };
   const exported = await probeMedia(output.videoPath, ffprobe);
   expect(exported).toMatchObject({ width: 160, height: 90, audio: true }); expect(exported.duration).toBeCloseTo(1.8, 1);
-  const timeline = JSON.parse(await readFile(output.timelinePath, 'utf8'));
-  expect(timeline.renderSchedule[1].firstFrame).toBe(expectedFade().startFrame);
-  expect(timeline.clips.map((clip: { shotId: string }) => clip.shotId)).toEqual([fromShotId, rightShotId, toShotId]);
-  expect(timeline.musicClips).toEqual(saved.musicClips);
+  expect(output).not.toHaveProperty('timelinePath');
+  expect(await readdir(dirname(output.videoPath))).not.toContain('timeline.json');
   const rgbPath = join(directory, 'export.rgb');
   await runMedia(ffmpeg, ['-v', 'error', '-i', output.videoPath, '-pix_fmt', 'rgb24', '-f', 'rawvideo', rgbPath]);
   const rgb = await readFile(rgbPath);

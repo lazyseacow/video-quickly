@@ -1,13 +1,14 @@
 import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
-import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join, relative } from 'node:path';
 import { afterEach, expect, it } from 'vitest';
 import { assetSchema, createSceneTemplate, DEFAULT_VIDEO_PROFILE, exportBatchSchema, projectSchema, runSchema, type AssetRecord, type ExportBatch, type ProjectDocument, type UsageRecord } from '@video-quickly/contracts';
 import { createActivityExecutor } from '../src/packages/integrations/src';
 import { createRuntime, type ActivityExecutionContext, type RuntimeOptions } from '../src/packages/runtime/src';
-import { batchTargetDirectory } from '../src/packages/runtime/src/export-batches';
+import { DocumentStore, openDatabase } from '../src/packages/runtime/src/database';
+import { batchTargetDirectory, type BatchRenderResult } from '../src/packages/runtime/src/export-batches';
 import { probeMedia } from '../src/packages/video/src/node';
 
 const ffmpeg = process.env.VIDEO_QUICKLY_FFMPEG ?? 'ffmpeg';
@@ -36,9 +37,9 @@ async function artifacts(context: ActivityExecutionContext) {
   const directory = join(context.dataDirectory, 'callback-output', createHash('sha256').update(context.operationId).digest('hex').slice(0, 16)); await mkdir(directory, { recursive: true });
   const assets: AssetRecord[] = [];
   const output: Record<string, unknown> = {};
-  for (const [field, kind, extension] of [['videoPath', 'video', 'mp4'], ['coverPath', 'image', 'png'], ['subtitlePath', 'subtitle', 'srt'], ['timelinePath', 'document', 'json']] as const) {
-    const path = join(directory, `${kind}.${extension}`), bytes = Buffer.from(`${context.project.title}:${context.project.profile.width}:${kind}`); await writeFile(path, bytes);
-    assets.push({ id: `${context.runId}-${kind}`, projectId: context.project.id, name: `${kind}.${extension}`, kind, path, mimeType: 'application/octet-stream', size: bytes.length, sha256: createHash('sha256').update(bytes).digest('hex'), version: 1, createdAt: '', provenance: 'controlled local export boundary', retained: false, active: true }); output[field] = path;
+  for (const [field, kind, filename] of [['videoPath', 'video', 'video.mp4'], ['coverPath', 'image', 'cover.png'], ['subtitlePath', 'subtitle', 'subtitles.srt']] as const) {
+    const path = join(directory, filename), bytes = Buffer.from(`${context.project.title}:${context.project.profile.width}:${kind}`); await writeFile(path, bytes);
+    assets.push({ id: `${context.runId}-${kind}`, projectId: context.project.id, name: filename, kind, path, mimeType: 'application/octet-stream', size: bytes.length, sha256: createHash('sha256').update(bytes).digest('hex'), version: 1, createdAt: '', provenance: 'controlled local export boundary', retained: false, active: true }); output[field] = path;
   }
   context.onProgress?.(.5); context.onProgress?.(1);
   return { ...output, assets } as unknown as Awaited<ReturnType<NonNullable<RuntimeOptions['executeActivity']>>>;
@@ -57,7 +58,11 @@ it.skipIf(!mediaAvailable)('really renders landscape, portrait and square from t
   for (const target of completed.targets) {
     const probe = await probeMedia(target.videoPath!, ffprobe); expect(probe).toMatchObject({ width: target.profile.width, height: target.profile.height }); expect(probe.videoDuration).toBeCloseTo(.5, 1);
     expect(relative(completed.destinationDirectory!, target.videoPath!).startsWith('..')).toBe(false);
-    const timeline = JSON.parse(await readFile(target.timelinePath!, 'utf8')) as { profile: unknown }; expect(timeline.profile).toEqual(target.profile);
+    const outputDirectory = dirname(target.videoPath!);
+    expect([target.coverPath, target.subtitlePath]).toEqual([join(outputDirectory, 'cover.png'), join(outputDirectory, 'subtitles.srt')]);
+    expect((await readdir(outputDirectory)).sort()).toEqual(['.outputs.json', 'cover.png', 'subtitles.srt', 'video.mp4']);
+    const receipt = JSON.parse(await readFile(join(outputDirectory, '.outputs.json'), 'utf8')) as { files: Record<string, string> };
+    expect(Object.keys(receipt.files).sort()).toEqual(['cover.png', 'subtitles.srt', 'video.mp4']);
     expect(target.progress).toBe(1); expect(target.runId).toBeTruthy();
   }
   expect((await runtime.dispatch('project.get', { projectId: project.id }) as { project: ProjectDocument }).project).toEqual(edited);
@@ -72,6 +77,56 @@ it('continues after one target fails and resumes only that target with the same 
   const first = await stat(partial.targets[0].videoPath!); fail = false;
   await runtime.dispatch('render.batch.resume', { batchId: batch.id }); await runtime.waitForIdle(); const completed = await get(runtime, batch.id);
   expect(completed.status).toBe('succeeded'); expect(completed.targets[1].runId).toBe(partial.targets[1].runId); expect(calls).toEqual([320, 180, 256, 180]); expect((await stat(completed.targets[0].videoPath!)).mtimeMs).toBe(first.mtimeMs);
+});
+
+it('reuses a completed legacy target with a missing timeline file when resuming a batch', async () => {
+  const { directory, runtime, project } = await fixture({ executeActivity: context => {
+    if (context.project.profile.width === 180) throw new Error('本地编码夹具失败');
+    return artifacts(context);
+  } });
+  const batch = await start(runtime, project, { targets: targets.slice(0, 2) });
+  await runtime.waitForIdle();
+  const partial = await get(runtime, batch.id);
+  expect(partial.targets.map(target => target.status)).toEqual(['succeeded', 'failed']);
+  await runtime.close();
+  runtimes.delete(runtime);
+
+  const completedTarget = partial.targets[0];
+  const outputDirectory = dirname(completedTarget.videoPath!);
+  const timelinePath = join(outputDirectory, 'timeline.json');
+  const receiptPath = join(outputDirectory, '.outputs.json');
+  const timelineBytes = Buffer.from('{}');
+  const timelineHash = createHash('sha256').update(timelineBytes).digest('hex');
+  const receipt = JSON.parse(await readFile(receiptPath, 'utf8')) as { files: Record<string, string> };
+  receipt.files['timeline.json'] = timelineHash;
+  const legacyReceipt = JSON.stringify(receipt);
+  await writeFile(receiptPath, legacyReceipt);
+  await expect(stat(timelinePath)).rejects.toMatchObject({ code: 'ENOENT' });
+  const legacyResultId = `${batch.id}:${completedTarget.id}`;
+  const database = openDatabase(directory);
+  try {
+    const store = new DocumentStore(database);
+    const result = store.get<BatchRenderResult>('export-batch-result', legacyResultId)!;
+    const timelineAsset: AssetRecord = {
+      ...result.assets[0], id: `${completedTarget.runId}-document`, name: 'timeline.json', kind: 'document',
+      path: timelinePath, mimeType: 'application/json', size: timelineBytes.length, sha256: timelineHash,
+    };
+    store.put('export-batch-result', legacyResultId, { ...result, timelinePath, assets: [...result.assets, timelineAsset] });
+    store.put('export-batch', batch.id, { ...partial, targets: [{ ...completedTarget, timelinePath }, partial.targets[1]] });
+  } finally { database.close(); }
+
+  const calls: number[] = [];
+  const restored = open(directory, { executeActivity: context => { calls.push(context.project.profile.width); return artifacts(context); } });
+  const previousVideoMtime = (await stat(completedTarget.videoPath!)).mtimeMs;
+  await restored.dispatch('render.batch.resume', { batchId: batch.id });
+  await restored.waitForIdle();
+  const completed = await restored.dispatch('render.batch.get', { batchId: batch.id }) as ExportBatch;
+  expect(completed.status).toBe('succeeded');
+  expect(completed.targets[0]).toEqual(completedTarget);
+  expect(calls).toEqual([180]);
+  expect((await stat(completedTarget.videoPath!)).mtimeMs).toBe(previousVideoMtime);
+  expect(await readFile(receiptPath, 'utf8')).toBe(legacyReceipt);
+  await expect(stat(timelinePath)).rejects.toMatchObject({ code: 'ENOENT' });
 });
 
 it('settles cancellation before returning and supports an immediate concurrent resume without redoing completed targets', async () => {

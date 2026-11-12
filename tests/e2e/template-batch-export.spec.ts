@@ -3,8 +3,8 @@ import { setWorkspaceTheme } from './workspace-settings';
 import { settingField, settingControl } from './settings';
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
-import { join } from 'node:path';
+import { mkdir, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { dirname, join } from 'node:path';
 import { expect, test, type APIRequestContext, type Locator, type Page } from '@playwright/test';
 import { createSceneTemplate, type AssetRecord, type ExportBatch, type ProjectDocument } from '@video-quickly/contracts';
 import { batchTargetDirectory } from '../../src/packages/runtime/src/export-batches';
@@ -44,7 +44,9 @@ async function assertMedia(batch: ExportBatch) {
     expect(result.streams[0]).toMatchObject({ width: target.profile.width, height: target.profile.height, r_frame_rate: `${target.profile.frameRate.numerator}/${target.profile.frameRate.denominator}` });
     expect(Number(result.format.duration)).toBeGreaterThanOrEqual(.95); expect(Number(result.format.duration)).toBeLessThan(1.2);
     const frame = execFileSync(process.env.VIDEO_QUICKLY_FFMPEG ?? 'ffmpeg', ['-hide_banner', '-loglevel', 'error', '-i', target.videoPath!, '-frames:v', '1', '-f', 'image2pipe', '-vcodec', 'png', '-']); expect(frame.subarray(0, 8)).toEqual(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]));
-    for (const path of [target.coverPath, target.subtitlePath, target.timelinePath]) { expect(path).toBeTruthy(); expect((await stat(path!)).isFile()).toBe(true); }
+    for (const path of [target.coverPath, target.subtitlePath]) { expect(path).toBeTruthy(); expect((await stat(path!)).isFile()).toBe(true); }
+    expect(target).not.toHaveProperty('timelinePath');
+    expect(await readdir(dirname(target.videoPath!))).not.toContain('timeline.json');
   }
 }
 
@@ -117,6 +119,7 @@ test('exports three actual MP4 aspect ratios, restores the exact batch and leave
   await dialog.getByRole('button', { name: '关闭', exact: true }).click(); await expect(dialog).toHaveCount(0); dialog = await openBatch(page); await expect((await settingField(dialog, '批量导出记录'))).toHaveValue(batch.id);
   await expect(dialog.getByRole('tab', { name: '导出记录', exact: true })).toHaveAttribute('aria-selected', 'true');
   const done = await completed(request, batch.id); await expect(dialog.locator('.batch-export__summary')).toContainText('全部完成'); expect(done.targets.map(target => [target.profile.width, target.profile.height])).toEqual([[256, 144], [144, 256], [144, 144]]); await assertMedia(done); expect(await savedProject(request, project.id)).toEqual(project);
+  await expect(dialog.locator('.batch-export__path > span')).toHaveText(['MP4', '封面', '字幕', 'MP4', '封面', '字幕', 'MP4', '封面', '字幕']);
   await dialog.locator('.batch-export__summary').scrollIntoViewIfNeeded(); await expect(dialog.locator('.dialog__surface')).toHaveCSS('opacity', '1'); await expect(dialog.getByRole('button', { name: '校验并恢复导出', exact: true })).toBeInViewport({ ratio: 1 }); await page.screenshot({ path: info.outputPath('batch-export-results-dark.png') });
   const first = done.targets[0].videoPath!, before = await stat(first), hash = createHash('sha256').update(await readFile(first)).digest('hex'); await dialog.getByRole('button', { name: '校验并恢复导出', exact: true }).click(); await completed(request, batch.id); expect((await stat(first)).mtimeMs).toBe(before.mtimeMs); expect(createHash('sha256').update(await readFile(first)).digest('hex')).toBe(hash);
   await dialog.getByRole('button', { name: '关闭', exact: true }).click(); await setWorkspaceTheme(page, 'light'); await page.setViewportSize({ width: 600, height: 900 }); dialog = await openBatch(page); await expect((await settingField(dialog, '批量导出记录'))).toHaveValue(batch.id); await dialog.locator('.batch-export__summary').scrollIntoViewIfNeeded(); await expect(dialog.locator('.dialog__surface')).toHaveCSS('opacity', '1'); await expect(dialog.getByRole('button', { name: '校验并恢复导出', exact: true })).toBeInViewport({ ratio: 1 }); expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1)).toBe(true); await page.screenshot({ path: info.outputPath('batch-export-results-light-600.png') }); expect(errors).toEqual([]);

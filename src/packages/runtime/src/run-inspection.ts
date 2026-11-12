@@ -17,6 +17,7 @@ import { createModelResponses } from './model-responses.js';
 import { createRunProgress } from './run-progress.js';
 import { readPartialStoryboard, storyboardResponseId } from './storyboard-generation.js';
 import { shouldRetryWithPromptFormat, TextRequestRejectedError } from './providers.js';
+import { omitLegacyExportTimeline } from './legacy-export-timeline.js';
 
 const runInput = z.object({ runId: z.string().min(1) });
 const stepInput = runInput.extend({ nodeId: z.string().min(1) });
@@ -186,6 +187,7 @@ export function createRunInspector(options: {
       regeneration: saved.regeneration, research: saved.research, exportBatch: saved.exportBatch,
       resolvedPrompt: captured?.prompt,
     }) : undefined;
+    if (kind === 'output' && node.kind === 'export' && value !== undefined) value = omitLegacyExportTimeline(value);
     if (kind === 'output' && node.kind === 'script' && value && typeof value === 'object' && !Array.isArray(value) && Array.isArray(value.shots)) {
       const { profile } = store.get<ProjectDocument>('node-project', `${runId}:${nodeId}`) ?? saved.project;
       value = { ...value, profile };
@@ -250,7 +252,7 @@ export function createRunInspector(options: {
         const row = database.prepare('SELECT rowid AS cursor, activity_id, input_hash, safety, status, remote_id, error, started_at, completed_at, result FROM activities WHERE run_id = ? AND rowid > ? AND rowid <= ? ORDER BY rowid LIMIT 1').get(runId, cursor, activityEnd) as { cursor: number; activity_id: string; result: string | null } | undefined;
         if (!row) break;
         if (!first) yield ','; first = false; cursor = row.cursor;
-        yield JSON.stringify(redact(json({ ...row, nodeId: activityNodeId(row.activity_id, (saved?.inspectionNodes ?? saved?.nodes)?.map(node => node.id) ?? []), result: row.result ? JSON.parse(row.result) : null })));
+        yield JSON.stringify(redact(json({ ...row, nodeId: activityNodeId(row.activity_id, (saved?.inspectionNodes ?? saved?.nodes)?.map(node => node.id) ?? []), result: row.result ? omitLegacyExportTimeline(JSON.parse(row.result)) : null })));
       }
       yield `],"captureCompletedAt":${JSON.stringify(new Date().toISOString())}}`;
     }

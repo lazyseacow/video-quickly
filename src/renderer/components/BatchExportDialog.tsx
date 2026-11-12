@@ -129,7 +129,7 @@ export default function BatchExportDialog({ project, initialSection, onClose, no
             <progress aria-label={`${target.label} 导出进度`} value={target.progress} max={1} />
             <span className="batch-export__percent">{Math.round(target.progress * 100)}%</span>
             {target.error && <p role="alert" className="field-error">{target.error}</p>}
-            {([['videoPath', 'MP4'], ['coverPath', '封面'], ['subtitlePath', '字幕'], ['timelinePath', '时间轴']] as const).map(([key, label]) => target[key] && <p className="batch-export__path" key={key}><span>{label}</span><code>{target[key]}</code></p>)}
+            {([['videoPath', 'MP4'], ['coverPath', '封面'], ['subtitlePath', '字幕']] as const).map(([key, label]) => target[key] && <p className="batch-export__path" key={key}><span>{label}</span><code>{target[key]}</code></p>)}
             {target.videoPath && nativeDesktop && <IconButton label="打开文件夹" onClick={() => void revealFile(target.videoPath!).catch(reason => setError(reason instanceof Error ? reason.message : String(reason)))}><FolderOpen size={16} aria-hidden="true" /></IconButton>}
           </article>)}</div>
         </> : <p className="tiny-meta">{selectedId ? '正在读取批量导出…' : listBusy ? '正在读取导出记录…' : '还没有批量导出记录。'}</p>}

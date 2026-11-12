@@ -4,7 +4,7 @@ import { mkdir, readFile, writeFile, rename } from 'node:fs/promises';
 import { basename, dirname, extname, join, resolve } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { prepareGeneratedVideo, renderProject } from '@video-quickly/video/node';
-import { buildMediaPrompt, characterSceneFirstFrame, getMediaAdapters, groupsReferenceImages, hasTemplateValue, imageReferenceLimit, MediaRequestRejectedError, isVideoGenerationNode, planReferenceImageSequences, seedreamTextOnly, singleFrameVideoModel, singleImageRequestModel, validateCreativeReferences, videoReferenceImages, type VideoReferenceImages } from '@video-quickly/contracts';
+import { buildMediaPrompt, characterSceneFirstFrame, getMediaAdapters, groupsNativeFirstFrames, groupsReferenceImages, hasTemplateValue, imageReferenceLimit, MediaRequestRejectedError, isVideoGenerationNode, planReferenceImageSequences, seedreamTextOnly, singleFrameVideoModel, singleImageRequestModel, validateCreativeReferences, videoReferenceImages, type VideoReferenceImages } from '@video-quickly/contracts';
 import { providerReportedUsage, sumProviderUsage, requestModelParameters, validateModelParameters, type ProviderUsage, type AssetRecord, type JsonValue, type ModelProfile, type Shot } from '@video-quickly/contracts';
 import { MediaRequestQueue } from './media-concurrency.js';
 import { MAX_CHARACTER_REFERENCE_BYTES, MAX_CHARACTER_REFERENCE_TOTAL_BYTES, resolveCharacterReferences, type ResolvedCharacterReferences } from './character-references.js';
@@ -49,8 +49,9 @@ function visualPrompt(context: MediaActivityContext, shot: Shot, references: Res
 
 type MediaPreflightContext = Pick<MediaActivityContext, 'project' | 'node' | 'assets' | 'model' | 'characters' | 'legacyVideoReferences'> & Partial<Pick<MediaActivityContext, 'operationId' | 'dataDirectory' | 'signal'>> & { pendingVideoInput?: boolean };
 
-function mediaRequestModel({ node, model }: Pick<MediaPreflightContext, 'node' | 'model'>): ModelProfile | undefined {
-  return model && node.config.useFirstShotReference === true && groupsReferenceImages(node) ? singleImageRequestModel(model) : model;
+function mediaRequestModel({ project, node, model }: Pick<MediaPreflightContext, 'project' | 'node' | 'model'>): ModelProfile | undefined {
+  const firstFrames = groupsNativeFirstFrames(project.workflow, node) || node.config.useFirstShotReference === true && groupsReferenceImages(node);
+  return model && firstFrames ? singleImageRequestModel(model) : model;
 }
 
 const mediaActivityDirectory = (dataDirectory: string, projectId: string, operationId: string) => resolve(dataDirectory, 'projects', projectId, 'activities', createHash('sha256').update(operationId).digest('hex').slice(0, 24));
@@ -122,6 +123,7 @@ export async function validateMediaActivity(context: MediaPreflightContext): Pro
   if (capability && !model.capabilities.includes(capability)) throw new Error(`所选模型不具备${capability === 'image' ? '图片' : '视频'}生成能力`);
   if (capability && !getMediaAdapters([capability]).some(adapter => adapter.id === model.provider)) throw new Error('所选模型的服务协议不适用于此制作步骤');
   if (capability === 'image' && ['openai-compatible', 'seedream'].includes(model.provider)) imageRequestSize(model, context.project.profile);
+  const nativeFirstFrames = groupsNativeFirstFrames(context.project.workflow, context.node);
   const sequences = capability === 'image' ? planReferenceImageSequences(context) : [];
   const nativeShots = new Set<string>(), anchoredShots = new Set<string>();
   for (const { seedream, batches } of sequences) {
@@ -137,6 +139,7 @@ export async function validateMediaActivity(context: MediaPreflightContext): Pro
     const directory = mediaActivityDirectory(context.dataDirectory, context.project.id, context.operationId);
     for (const shot of context.project.shots) {
       context.signal?.throwIfAborted();
+      if (nativeFirstFrames && shot.locked) continue;
       const receipt = await readReceipt(join(directory, `${mediaShotFileId(shot.id)}.receipt.json`));
       if (receipt && ['prepared', 'unknown'].includes(receipt.state)) throw new Error('有镜头上次提交结果不明确，核对服务端任务后再继续。');
     }
@@ -152,7 +155,7 @@ export async function validateMediaActivity(context: MediaPreflightContext): Pro
   for (const shot of context.project.shots) {
     context.signal?.throwIfAborted();
     const kind = context.node.kind === 'assets' ? 'image' : 'video';
-    if (shot.locked && kind === 'image' && context.node.config.useFirstShotReference === true && groupsReferenceImages(context.node)) continue;
+    if (shot.locked && kind === 'image' && (nativeFirstFrames || context.node.config.useFirstShotReference === true && groupsReferenceImages(context.node))) continue;
     const existing = context.assets.find(asset => asset.projectId === context.project.id && asset.shotId === shot.id && asset.kind === kind && asset.active);
     if (context.node.config.operation !== 'regenerate' && shot.locked && existing && await validAsset(existing)) continue;
     const plan = planVideoReferences(context, shot);
@@ -312,7 +315,10 @@ async function generateSeedreamBatch(context: MediaActivityContext & { model: Mo
   checkSequenceReceipt(receipt);
   if (receipt?.state !== 'download' && receipt?.state !== 'completed') {
     const references = await appendSequenceAnchor(await mediaReferences(context, shots[0]), anchor, context.signal);
-    const shotSpecific = context.promptOverride !== undefined || Object.values(context.node.promptBindings ?? {}).some(binding => 'shotPath' in binding);
+    const settingsKey = (shot: Shot) => JSON.stringify([...(shot.creativeEntityKeys ?? [])].sort());
+    const sharedSettings = settingsKey(shots[0]);
+    const shotSpecific = context.promptOverride !== undefined || Object.values(context.node.promptBindings ?? {}).some(binding => 'shotPath' in binding)
+      || shots.some(shot => settingsKey(shot) !== sharedSettings);
     const sharedPrompt = shotSpecific ? '' : visualPrompt(context, { ...shots[0], visualPrompt: '' }, references);
     const prompt = [
       `按下列镜头编号顺序生成恰好 ${shots.length} 张独立图片。每个镜头只对应一张完整首帧，不拼接、不添加编号和文字。保持同一人物的五官、发型和服装，画面动作、机位和环境变化遵循各镜头描述。${anchorPrompt(references, anchor)}`,
@@ -370,7 +376,8 @@ async function generateMedia(context: MediaActivityContext, directory: string, s
   if (!model) throw new Error('请为此步骤选择相应的生成模型，或先导入素材');
   const parameters = requestModelParameters(model, kind);
   if (kind === 'video') parameters.generate_audio = true;
-  const verifyImage = kind === 'image' && (Boolean(sequence) || context.node.config.useFirstShotReference === true && groupsReferenceImages(context.node));
+  const verifyImage = kind === 'image' && (Boolean(sequence) || groupsNativeFirstFrames(context.project.workflow, context.node)
+    || context.node.config.useFirstShotReference === true && groupsReferenceImages(context.node));
   const extension = kind === 'image' ? '.png' : '.mp4';
   const fileId = mediaShotFileId(shot.id);
   const destination = join(directory, `${fileId}${extension}`);
@@ -504,7 +511,7 @@ export function createActivityExecutor(options: { ffmpegPath?: string } = {}) {
       context.onDiagnostic?.({ event: 'media.render_completed', level: 'info', phase: 'render', durationMs: performance.now() - started });
       const assets = await Promise.all([
         assetFor(output.videoPath, context, 'video'), assetFor(output.coverPath, context, 'image'),
-        assetFor(output.subtitlePath, context, 'subtitle'), assetFor(output.timelinePath, context, 'document'),
+        assetFor(output.subtitlePath, context, 'subtitle'),
       ]);
       let videoPath = output.videoPath;
       if (typeof context.node.config.destination === 'string' && context.node.config.destination.trim()) {
@@ -521,7 +528,7 @@ export function createActivityExecutor(options: { ffmpegPath?: string } = {}) {
         }
         videoPath = destination;
       }
-      return { assets: assets as unknown as JsonValue, videoPath, coverPath: output.coverPath, subtitlePath: output.subtitlePath, timelinePath: output.timelinePath, warnings: output.warnings };
+      return { assets: assets as unknown as JsonValue, videoPath, coverPath: output.coverPath, subtitlePath: output.subtitlePath, warnings: output.warnings };
     }
     const kind = context.node.kind === 'assets' ? 'image' : 'video';
     if (!context.model) {

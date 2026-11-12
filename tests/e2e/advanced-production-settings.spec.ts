@@ -9,7 +9,7 @@ import { fixture, latest, rpc, saved } from './native-video-fixture';
 import { openProjectFromList } from './workspace-navigation';
 
 for (const viewport of [{ width: 1536, height: 960, theme: 'dark' }, { width: 600, height: 900, theme: 'light' }]) test(`saves the built-in model choices with fixed media scheduling at ${viewport.width}px`, async ({ page, request }, info) => {
-  const source = await productionFixture(request), errors: string[] = [], mutations: string[] = [];
+  const source = await productionFixture(request, { configureImage: false }), errors: string[] = [], mutations: string[] = [];
   page.on('pageerror', error => errors.push(error.message));
   page.on('request', request => { if (request.url().endsWith('/__desktop_rpc')) mutations.push(request.postDataJSON()?.method); });
   await page.setViewportSize(viewport); await page.addInitScript(theme => localStorage.setItem('vq-theme', theme), viewport.theme);
@@ -19,7 +19,10 @@ for (const viewport of [{ width: 1536, height: 960, theme: 'dark' }, { width: 60
   await pickProductionModel(dialog, '文本模型', source.text); await pickProductionModel(dialog, '视频模型', source.video);
   await expect(dialog.getByLabel('参考素材', { exact: true })).toHaveCount(0);
   await expect(dialog.getByLabel('首帧生成', { exact: true })).toHaveCount(0);
+  await expect(dialog.getByText('使用已有画面，或按文字描述生成视频。', { exact: true })).toBeVisible();
   await pickProductionModel(dialog, '图片模型', source.image);
+  const groupingHint = dialog.getByText(/角色和参考图相同的相邻镜头可用组图接口/);
+  await expect(groupingHint).toBeVisible();
   await expect(dialog.getByRole('region', { name: '生成并发', exact: true })).toHaveCount(0);
   await expect(dialog.getByLabel(/并发上限/)).toHaveCount(0);
   await page.screenshot({ path: info.outputPath('production-model-settings.png') });
@@ -27,17 +30,22 @@ for (const viewport of [{ width: 1536, height: 960, theme: 'dark' }, { width: 60
   await productionStep(dialog, '创作要求');
   const brief = '系统流程的创作要求';
   await dialog.getByRole('textbox', { name: '简报内容', exact: true }).fill(brief);
-  await saveProduction(dialog); await expect(dialog).toHaveCount(0);
+  await productionStep(dialog, '确认保存');
+  await expect(dialog.getByText('自动分组生成', { exact: true })).toBeVisible();
+  await dialog.getByRole('button', { name: '保存设置', exact: true }).click(); await expect(dialog).toHaveCount(0);
   const current = await source.saved();
   expect(current.brief).toBe(brief);
   expect(current.workflow).not.toHaveProperty('execution');
   expect(current.workflow.production).toMatchObject({ textModelId: source.text.id, videoModelId: source.video.id, imageModelId: source.image.id, referenceMode: 'generate' });
-  expect(current.workflow.nodes.find(node => node.id === 'assets')?.config.useFirstShotReference).toBe(true);
+  const referenceConfig = current.workflow.nodes.find(node => node.id === 'assets')?.config;
+  expect(referenceConfig).toMatchObject({ referenceMode: 'generate', groupReferenceImages: true });
+  expect(referenceConfig).not.toHaveProperty('useFirstShotReference');
   expect(current.workflow.nodes.map(node => node.id)).toEqual(source.project.workflow.nodes.map(node => node.id)); expect(current.workflow.edges).toEqual(source.project.workflow.edges);
   await expect(page.getByLabel('镜头同时处理数', { exact: true })).toHaveCount(0);
   await page.getByRole('button', { name: '制作设置', exact: true }).click(); dialog = page.getByRole('dialog', { name: '制作设置', exact: true }); await productionStep(dialog, '模型与素材');
   await expect(dialog.getByLabel('镜头同时处理数', { exact: true })).toHaveCount(0);
   await expect(dialog.getByLabel('首帧生成', { exact: true })).toHaveCount(0);
+  await expect(groupingHint).toBeVisible();
   await expect(dialog.getByRole('combobox', { name: '视频模型', exact: true })).toHaveValue(source.video.name);
   expect(mutations).not.toContain('run.start'); expect(errors).toEqual([]); await expect(page.locator('vite-error-overlay')).toHaveCount(0);
 });

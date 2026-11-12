@@ -54,11 +54,10 @@ it.skipIf(!mediaAvailable)('ignores legacy citations in video, templates and sam
     expect(metadata).toMatchObject({ width, height, frameRate: '30/1' }); expect(metadata.videoDuration).toBeCloseTo(4, 1);
     const aspect = JSON.parse(await runMedia(ffprobe, ['-v', 'error', '-select_streams', 'v:0', '-show_entries', 'stream=sample_aspect_ratio', '-of', 'json', output.videoPath]));
     expect(aspect.streams[0].sample_aspect_ratio).toBe('1:1');
-    const timeline = JSON.parse(await readFile(output.timelinePath, 'utf8'));
-    expect(timeline).not.toHaveProperty('citations');
-    expect(JSON.stringify(timeline)).not.toContain(quote); expect(JSON.stringify(timeline)).not.toContain(sourceHash);
+    expect(output).not.toHaveProperty('timelinePath');
+    expect(await readdir(outputDirectory)).not.toContain('timeline.json');
     expect(output.warnings.join('\n')).not.toMatch(/待核验|无证据摘录/);
-    const srt = await readFile(output.subtitlePath, 'utf8'); expect(srt).toContain('Voice caption'); expect(srt).not.toContain('资料'); expect(srt).not.toContain(quote);
+    const srt = await readFile(output.subtitlePath, 'utf8'); expect(srt).toContain('Voice caption'); expect(srt).not.toContain('资料'); expect(srt).not.toContain(quote); expect(srt).not.toContain(sourceHash);
     const measure = createCanvas(width, height).getContext('2d'), geometry = captionGeometry(width, height);
     const expected = createTimedSrt(project.shots, text => { measure.font = `500 ${geometry.fontSize}px ${captionFontFamily('sans')}`; return captionPages(text, line => measure.measureText(line).width, width * .78, geometry.lines); });
     expect(srt).toBe(expected);

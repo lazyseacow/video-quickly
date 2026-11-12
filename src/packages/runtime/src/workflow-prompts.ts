@@ -3,6 +3,7 @@ import { createSceneTemplate, creativeCharacterBindings, creativeContextSchema, 
 import { ModelResponseValidationError, parseModelJson, responseIssues } from './model-responses.js';
 import { skillPromptContext } from '@video-quickly/contracts';
 import { legacyStoryboardJsonSchema, legacyStoryboardOutputSchema, productionDocumentContract, storyboardJsonSchema, storyboardOutputSchema, type WorkflowOutputVersion } from './workflow-outputs.js';
+import { omitLegacyExportTimeline } from './legacy-export-timeline.js';
 
 export interface WorkflowUpstreamResult {
   nodeId: string;
@@ -23,15 +24,16 @@ export function withStoryboardTiming(prompt: string, kind: WorkflowNode['kind'])
 }
 
 function promptUpstreamResult(result: WorkflowUpstreamResult): WorkflowUpstreamResult {
-  if (result.kind === 'agent' || result.kind === 'subflow' || !result.output || typeof result.output !== 'object' || Array.isArray(result.output)) return result;
-  const { providerUsage: _usage, source: _source, modelId: _model, ...output } = result.output;
+  const value = result.kind === 'export' ? omitLegacyExportTimeline(result.output) : result.output;
+  if (result.kind === 'agent' || result.kind === 'subflow' || !value || typeof value !== 'object' || Array.isArray(value)) return result;
+  const { providerUsage: _usage, source: _source, modelId: _model, ...output } = value;
   if (result.kind === 'script' && Array.isArray(output.shots)) delete output.text;
   if (Array.isArray(output.assets)) {
     output.assets = output.assets.map(asset => {
       if (!asset || typeof asset !== 'object' || Array.isArray(asset)) return asset;
       return Object.fromEntries(Object.entries(asset).filter(([key]) => ['id', 'shotId', 'kind', 'name', 'mimeType', 'version'].includes(key)));
     });
-    if (result.kind === 'export') for (const key of ['videoPath', 'coverPath', 'subtitlePath', 'timelinePath']) delete output[key];
+    if (result.kind === 'export') for (const key of ['videoPath', 'coverPath', 'subtitlePath']) delete output[key];
   }
   return { ...result, output };
 }

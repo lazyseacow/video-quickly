@@ -1,5 +1,5 @@
 import { fixtureNativeVideo } from './fixtures/native-video';
-import { mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
@@ -100,6 +100,64 @@ it('leaves stages absent for legacy snapshots and runs without a snapshot', asyn
   const db = openDatabase(directory); new DocumentStore(db).delete('run-snapshot', run.id); db.close();
   const unavailable = await inspect(runtime, run.id);
   expect(unavailable.snapshotAvailable).toBe(false); expect(unavailable.stages).toBeUndefined(); expect(unavailable.steps).toEqual([]);
+});
+
+it('reopens an older export without its timeline file and keeps imported JSON available', async () => {
+  let calls = 0, interrupted = false;
+  const executeActivity: NonNullable<RuntimeOptions['executeActivity']> = async ({ dataDirectory, project }) => {
+    calls++;
+    const folder = join(dataDirectory, 'rendered');
+    await mkdir(folder);
+    const assets = await Promise.all(([
+      ['video.mp4', 'video', 'video/mp4'], ['cover.png', 'image', 'image/png'], ['subtitles.srt', 'subtitle', 'application/x-subrip'],
+    ] as const).map(async ([name, kind, mimeType]) => {
+      const path = join(folder, name), contents = Buffer.from(name);
+      await writeFile(path, contents);
+      return assetSchema.parse({ id: `old-${kind}`, projectId: project.id, name, kind, path, mimeType,
+        size: contents.length, sha256: createHash('sha256').update(contents).digest('hex'), version: 1, createdAt: new Date().toISOString(), provenance: '本地渲染' });
+    }));
+    return jsonValueSchema.parse({ videoPath: assets[0].path, coverPath: assets[1].path, subtitlePath: assets[2].path, assets });
+  };
+  const { runtime, project, directory } = await fixture({ executeActivity, failpoint(point, activityId) {
+    if (!interrupted && point === 'after-commit' && activityId === 'export') { interrupted = true; throw new SimulatedProcessExit(); }
+  } });
+  await runtime.dispatch('project.update', { projectId: project.id, patch: { shots: [{ id: 'shot-1', title: '导出的镜头', narration: '', visualPrompt: '', durationUs: 1_000_000 }] } });
+  const { runId } = await runtime.dispatch('render.export', { projectId: project.id }) as { runId: string };
+  await runtime.waitForIdle();
+  expect(interrupted).toBe(true);
+  const current = await runtime.dispatch('node.result', { runId, nodeId: 'export' }) as { assets: AssetRecord[] };
+  await runtime.close(); runtimes.splice(runtimes.indexOf(runtime), 1);
+
+  const database = openDatabase(directory), store = new DocumentStore(database);
+  const timelinePath = join(directory, 'rendered', 'timeline.json');
+  const legacy = { ...current.assets[0], id: 'legacy-timeline', name: 'timeline.json', kind: 'document', path: timelinePath, mimeType: 'application/json', retained: true };
+  const output = { ...current, timelinePath, assets: [...current.assets, legacy] };
+  store.put('asset', legacy.id, legacy);
+  store.put('node-result', `${runId}:export`, output);
+  database.prepare("UPDATE activities SET result = ? WHERE run_id = ? AND activity_id = 'export'").run(JSON.stringify(output), runId);
+  database.close();
+
+  const restored = createRuntime({ dataDirectory: directory, seed: false, executeActivity }); runtimes.push(restored);
+  await restored.dispatch('run.resume', { runId }); await restored.waitForIdle();
+  expect(await restored.dispatch('run.get', { runId })).toMatchObject({ status: 'succeeded' });
+  expect(calls).toBe(1);
+  expect(await restored.dispatch('node.result', { runId, nodeId: 'export' })).toEqual(current);
+  expect((await payload(restored, runId, 'export', 'output')).value).toEqual(current);
+  const importPath = join(directory, 'timeline.json');
+  await writeFile(importPath, '{"source":"user"}');
+  const imported = assetSchema.parse(await restored.dispatch('asset.import', { projectId: project.id, path: importPath, kind: 'document' }));
+  expect(await restored.dispatch('asset.getMany', { assetIds: [legacy.id, imported.id] })).toEqual([imported]);
+  expect(await restored.dispatch('asset.list', { kind: 'document', hideExportOutputs: true })).toMatchObject({ items: [{ id: imported.id, name: 'timeline.json' }], nextCursor: null });
+  expect(await restored.dispatch('asset.read', { assetId: imported.id, format: 'text' })).toMatchObject({ text: '{"source":"user"}' });
+  const recovery = await restored.dispatch('asset.recovery.start', { projectId: project.id }) as { id: string };
+  await restored.waitForIdle();
+  const scanned = await restored.dispatch('asset.recovery.get', { jobId: recovery.id }) as { items: { assetId: string }[] };
+  expect(scanned.items.map(item => item.assetId)).toContain(imported.id);
+  expect(scanned.items.map(item => item.assetId)).not.toContain(legacy.id);
+  const backup = await restored.dispatch('project.backup', { projectId: project.id }) as { path: string };
+  const manifest = JSON.parse(await readFile(join(backup.path, 'project.json'), 'utf8')) as { assets: AssetRecord[] };
+  expect(manifest.assets.map(asset => asset.id)).toContain(imported.id);
+  expect(manifest.assets.map(asset => asset.id)).not.toContain(legacy.id);
 });
 
 it('uses the persisted branch state to distinguish skipped steps from completed and pending ones', async () => {

@@ -1,7 +1,7 @@
 import type { CharacterProfile, JsonValue, ModelProfile, ProjectDocument, Shot, WorkflowNode } from './index.js';
 import { creativeReferenceAssetIds } from './creative-context.js';
 import { imageSequenceMode } from './model-parameters.js';
-import { groupsReferenceImages } from './production.js';
+import { groupsNativeFirstFrames, groupsReferenceImages } from './production.js';
 
 interface ImageSequence {
   batches: Shot[][];
@@ -39,7 +39,7 @@ function supportsAnchor(model: ModelProfile, referenceCount: number): boolean {
   return false;
 }
 
-/** Keep a shared reference order. Locked shots and changes to authored bindings start a new sequence. */
+/** Keep a shared reference order. Locked shots and changes to the reference inputs start a new sequence. */
 export function planReferenceImageSequences({ project, node, model, characters = [] }: { project: ProjectDocument; node: WorkflowNode; model?: ModelProfile; characters?: CharacterProfile[] }): ImageSequence[] {
   const singleShots = (shots: readonly Shot[]): ImageSequence[] => shots.map(shot => ({ batches: [[shot]], seedream: false }));
   if (!model || !groupsReferenceImages(node)) return singleShots(project.shots);
@@ -47,15 +47,22 @@ export function planReferenceImageSequences({ project, node, model, characters =
     const batches = project.shots.filter(shot => !shot.locked).map(shot => [shot]);
     return batches.length ? [{ batches, seedream: false }] : [];
   }
+  const nativeFirstFrames = groupsNativeFirstFrames(project.workflow, node);
+  const seedream = imageSequenceMode(model) === 'seedream' && !seedreamSingleImageV5.test(model.model) && !seedreamTextOnly.test(model.model);
+  const matchImageInputs = nativeFirstFrames && seedream;
+  const characterKeys = new Set(project.creativeContext?.entities.filter(entity => entity.kind === 'character').map(entity => entity.key));
   const groups: Shot[][] = [];
   let previous: string | undefined;
   for (const shot of project.shots) {
-    const bindings = shot.locked ? undefined : JSON.stringify([shot.characterIds ?? [], [...(shot.creativeEntityKeys ?? [])].sort()]);
+    if (nativeFirstFrames && shot.locked) { previous = undefined; continue; }
+    const keys = [...(shot.creativeEntityKeys ?? [])].sort();
+    const bindings = shot.locked ? undefined : JSON.stringify(matchImageInputs
+      ? [shot.characterIds ?? [], keys.filter(key => characterKeys.has(key)), creativeReferenceAssetIds(project, shot)]
+      : [shot.characterIds ?? [], keys]);
     if (bindings !== undefined && bindings === previous) groups.at(-1)!.push(shot);
     else groups.push([shot]);
     previous = bindings;
   }
-  const seedream = imageSequenceMode(model) === 'seedream' && !seedreamSingleImageV5.test(model.model) && !seedreamTextOnly.test(model.model);
   return groups.flatMap(shots => {
     if (shots.length === 1) return singleShots(shots);
     const first = shots[0];

@@ -31,7 +31,7 @@ import { executeMediaGraph } from './media-graph.js';
 import { discoverModels, generateText, shouldRetryWithPromptFormat, testModelConnection, textIncompleteMessage, textModelWithTaskSchema, TextRequestRejectedError, type ModelRequestPhase, type TextProvider } from './providers.js';
 import { seedExampleProject } from './seed.js';
 import { seedBuiltInDramaTemplates } from './builtin-drama-templates.js';
-import { createNativeVideoWorkflow, resolveProductionWorkflow, nativeReferenceStep, groupsReferenceImages, isVideoGenerationNode, DEFAULT_AUDIO_PROCESSING, planReferenceImageSequences, planningDocumentSchemas, productionEditingSkillIds, productionEditingStep, productionPlanningStep, productionSettingsSchema, sameJsonContent, singleImageRequestModel, supportsProductionAgent, usesManualPlanning } from '@video-quickly/contracts';
+import { createNativeVideoWorkflow, resolveProductionWorkflow, nativeReferenceStep, groupsNativeFirstFrames, groupsReferenceImages, isVideoGenerationNode, DEFAULT_AUDIO_PROCESSING, planReferenceImageSequences, planningDocumentSchemas, productionEditingSkillIds, productionEditingStep, productionPlanningStep, productionSettingsSchema, sameJsonContent, singleImageRequestModel, supportsProductionAgent, usesManualPlanning } from '@video-quickly/contracts';
 import { createSkillLibrary } from './skill-library.js';
 import { appendSkillContext, supportsSkillScript } from '@video-quickly/contracts';
 import { connectMcp, mcpServerSchema, type McpServer } from './mcp.js';
@@ -39,6 +39,7 @@ import { createCostLedger, requestCostMetrics } from './costs.js';
 import { createCharacterLibrary } from './characters.js';
 import { createCharacterImageGenerator } from './character-image.js';
 import { createExportBatchManager, verifyBatchRenderResult, type ExportBatchSnapshot } from './export-batches.js';
+import { isLegacyTimelineAsset, omitLegacyExportTimeline } from './legacy-export-timeline.js';
 import { validateResearchProject, researchPrompt, researchModelResponse } from './research.js';
 import { createSeriesTemplateLibrary } from './series-templates.js';
 import { usesFullAudioSource } from '@video-quickly/video/audio';
@@ -461,7 +462,7 @@ export function createRuntime(options: RuntimeOptions) {
   }
 
   function nodeResultAssets(result: JsonValue): AssetRecord[] {
-    return result && typeof result === 'object' && !Array.isArray(result) && Array.isArray(result.assets) ? z.array(assetSchema).parse(result.assets) : [];
+    return result && typeof result === 'object' && !Array.isArray(result) && Array.isArray(result.assets) ? z.array(assetSchema).parse(result.assets.filter(asset => !isLegacyTimelineAsset(asset))) : [];
   }
 
   function upstreamResults(runId: string, node: WorkflowNode, saved: RunSnapshot): WorkflowUpstreamResult[] {
@@ -894,7 +895,7 @@ export function createRuntime(options: RuntimeOptions) {
   });
 
   function snapshot(): WorkspaceSnapshot {
-    return { projects: store.list<ProjectDocument>('project'), models: availableModels(), skills: store.list<SkillPackage>('skill'), skillGroups: skillLibrary.groups(), skillImports: skillLibrary.jobs(), runs: store.list<RunRecord>('run').map(hydrateRun).reverse(), assets: store.list<AssetRecord>('asset'), events: events(), system };
+    return { projects: store.list<ProjectDocument>('project'), models: availableModels(), skills: store.list<SkillPackage>('skill'), skillGroups: skillLibrary.groups(), skillImports: skillLibrary.jobs(), runs: store.list<RunRecord>('run').map(hydrateRun).reverse(), assets: store.list<AssetRecord>('asset').filter(asset => !isLegacyTimelineAsset(asset)), events: events(), system };
   }
 
   function agentBusinessTools(runId: string, parent: WorkflowNode, saved: RunSnapshot, controller: AbortController, skills: SkillPackage[], autonomous: boolean): AgentBusinessTools {
@@ -1050,7 +1051,8 @@ export function createRuntime(options: RuntimeOptions) {
       ].map(asset => [asset.id, asset])).values()];
       const missing = cast.missing.filter(role => !references.has(role.key));
       const configuredModel = castingImageModel(saved.models, input.modelId, allowImplicitModel);
-      const imageModel = configuredModel && node.config.useFirstShotReference === true ? singleImageRequestModel(configuredModel) : configuredModel;
+      const imageModel = configuredModel && (node.config.useFirstShotReference === true || groupsNativeFirstFrames(project.workflow, node))
+        ? singleImageRequestModel(configuredModel) : configuredModel;
       const canGenerate = Boolean(imageModel) || allowImplicitModel;
       const generate = async (kind: 'looks' | 'frames', imageProject: ProjectDocument, imageAssets: AssetRecord[]) => {
         if (!imageModel) throw new Error('生成定妆图或合成镜头首帧需要图片模型。请在「制作设置 → 模型与素材」选择可用的图片模型，再开始制作。');
@@ -1135,10 +1137,13 @@ export function createRuntime(options: RuntimeOptions) {
     const casting = node.id === 'assets' && node.config.automaticCasting === true && !frozenInput
       ? await prepareCasting(runId, node, saved, initialProject, controller.signal) : readCasting(runId);
     const executionProject: FrozenProjectDocument = node.id === 'assets' && !frozenInput ? casting?.project ?? initialProject : initialProject;
+    const nativeFirstFrames = groupsNativeFirstFrames(executionProject.workflow, node);
     const mediaProject = node.config.agentTask && typeof node.config.shotId === 'string'
       ? { ...executionProject, shots: executionProject.shots.filter(shot => shot.id === node.config.shotId) }
-      : node.config.useFirstShotReference === true && groupsReferenceImages(node)
+      : nativeFirstFrames || node.config.useFirstShotReference === true && groupsReferenceImages(node)
         ? { ...executionProject, shots: executionProject.shots.filter(shot => !shot.locked) } : executionProject;
+    // Keep locked shots as group boundaries without expecting newly generated assets for them.
+    const mediaInputProject = nativeFirstFrames ? executionProject : mediaProject;
     store.put('node-project', `${runId}:${node.id}`, executionProject);
     if (saved.trial || saved.sourceGeneration) await validatePromptAssets(saved.assets ?? []);
     if (node.config.imageEdit !== undefined && (!saved.regeneration?.imageEdit || fingerprint(node.config.imageEdit) !== fingerprint(saved.regeneration.imageEdit))) throw new Error('局部改图输入须由镜头候选冻结，请重新选择改图区域。');
@@ -1165,13 +1170,14 @@ export function createRuntime(options: RuntimeOptions) {
       ...casting?.assets ?? [],
       ...casting?.libraryAssets ?? [],
     ].map(asset => [asset.id, asset])).values()] : [];
-    if (media && selectedModel) await options.preflightActivity?.({ project: mediaProject, node, assets: activityAssets, model: selectedModel, characters: executionCharacters, signal: controller.signal, dataDirectory: directory, operationId: `${runId}:${node.id}`, legacyVideoReferences: !saved.useOriginalVideoReferences });
+    if (media && selectedModel) await options.preflightActivity?.({ project: mediaInputProject, node, assets: activityAssets, model: selectedModel, characters: executionCharacters, signal: controller.signal, dataDirectory: directory, operationId: `${runId}:${node.id}`, legacyVideoReferences: !saved.useOriginalVideoReferences });
     if (media && cached?.status === 'completed' && cached.result) {
       const result: unknown = JSON.parse(cached.result);
 
       const cachedAssets = result && typeof result === 'object' && 'assets' in result && Array.isArray(result.assets) ? result.assets : [];
       let invalid = false;
       for (const candidate of cachedAssets) {
+        if (node.kind === 'export' && isLegacyTimelineAsset(candidate)) continue;
         const asset = assetSchema.parse(candidate);
         const bytes = await readFile(asset.path).catch(() => undefined);
         if (!bytes || bytes.length !== asset.size || createHash('sha256').update(bytes).digest('hex') !== asset.sha256) { invalid = true; break; }
@@ -1359,7 +1365,7 @@ export function createRuntime(options: RuntimeOptions) {
           if (!outputKind && (asset.projectId !== project.id || !project.shots.some(shot => shot.id === asset.shotId))) throw new Error('生成进度素材不属于本次镜头。');
           runProgress.asset(context.operationId, asset);
         };
-        const activityContext: ActivityExecutionContext = { project: mediaProject, node, skills: saved.skills.filter(skill => node.skillIds.includes(skill.id)), runId, operationId: context.operationId, signal: controller.signal, remoteTaskId: context.remoteId, persistRemoteTask: context.recordRemoteId, dataDirectory: directory, assets: activityAssets, model: selectedModel, apiKey: secret, characters: executionCharacters, promptUpstream: Object.fromEntries(upstreamResults(runId, node, saved).map(result => [result.nodeId, result.output])),
+        const activityContext: ActivityExecutionContext = { project: mediaInputProject, node, skills: saved.skills.filter(skill => node.skillIds.includes(skill.id)), runId, operationId: context.operationId, signal: controller.signal, remoteTaskId: context.remoteId, persistRemoteTask: context.recordRemoteId, dataDirectory: directory, assets: activityAssets, model: selectedModel, apiKey: secret, characters: executionCharacters, promptUpstream: Object.fromEntries(upstreamResults(runId, node, saved).map(result => [result.nodeId, result.output])),
           unifiedShotProfile: saved.unifiedShotProfile, legacyVideoReferences: !saved.useOriginalVideoReferences,
           onDiagnostic: event => {
             const { event: name, level, ...fields } = event;
@@ -2350,7 +2356,7 @@ export function createRuntime(options: RuntimeOptions) {
           validateEdits(value, value);
           const bundle = characters.profilesFor(value);
           const referenced = new Set([...value.shots.flatMap(shot => [shot.assetId, shot.videoAssetId, shot.audioAssetId, shot.captionTrack?.sourceAssetId]), ...(value.clipEditSources ?? []).flatMap(clipSourceAssetIds), ...(value.musicClips ?? []).map(clip => clip.assetId), ...(value.workflow.production.referenceAudioAssetIds ?? []), ...creativeReferenceAssetIds(value), ...bundle.assets.map(asset => asset.id)]);
-          const availableAssets = store.list<AssetRecord>('asset');
+          const availableAssets = store.list<AssetRecord>('asset').filter(asset => !isLegacyTimelineAsset(asset));
           for (const asset of availableAssets.filter(asset => asset.projectId === projectId)) referenced.add(asset.id);
           let added = true;
           while (added) { added = false; for (const asset of availableAssets) if (referenced.has(asset.id) && asset.derivation && !referenced.has(asset.derivation.sourceAssetId)) { referenced.add(asset.derivation.sourceAssetId); added = true; } }
@@ -2371,7 +2377,7 @@ export function createRuntime(options: RuntimeOptions) {
       }
       case 'node.result': {
         const { runId, nodeId } = z.object({ runId: z.string(), nodeId: z.string() }).parse(rawParams);
-        return store.get('node-result', `${runId}:${nodeId}`) ?? null;
+        return omitLegacyExportTimeline(store.get<JsonValue>('node-result', `${runId}:${nodeId}`) ?? null);
       }
       case 'node.apply': {
         const { runId, nodeId, revision, applicationId } = z.object({ runId: z.string(), nodeId: z.string(), revision: z.number().int().optional(), applicationId: z.string().min(1).max(160).optional() }).parse(rawParams);

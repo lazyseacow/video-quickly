@@ -34,13 +34,16 @@ it.skipIf(!mediaAvailable)('mixes source-tail loops on project time with fades, 
   expect(await readFile(result.subtitlePath, 'utf8')).toContain('00:00:01,000 --> 00:00:03,000\nExplicit caption');
   expect((await probeMedia(result.videoPath, ffprobe)).audioDuration).toBeCloseTo(4, 1);
   const pcmPath = join(directory, 'mixed.pcm');
-  await runMedia(ffmpeg, ['-hide_banner', '-loglevel', 'error', '-y', '-i', result.videoPath, '-ac', '1', '-ar', '8000', '-f', 's16le', pcmPath]);
-  const pcm = await readFile(pcmPath);
-  function amplitude(frequency: number, startSeconds: number, durationSeconds = .1): number {
+  async function decodeMix(videoPath: string) {
+    await runMedia(ffmpeg, ['-hide_banner', '-loglevel', 'error', '-y', '-i', videoPath, '-ac', '1', '-ar', '8000', '-f', 's16le', pcmPath]);
+    return readFile(pcmPath);
+  }
+  const pcm = await decodeMix(result.videoPath);
+  function amplitude(frequency: number, startSeconds: number, durationSeconds = .1, samples = pcm): number {
     const first = Math.round(startSeconds * 8000), count = Math.round(durationSeconds * 8000);
     let real = 0, imaginary = 0;
     for (let index = 0; index < count; index++) {
-      const value = pcm.readInt16LE((first + index) * 2) / 32768;
+      const value = samples.readInt16LE((first + index) * 2) / 32768;
       const angle = 2 * Math.PI * frequency * index / 8000;
       real += value * Math.cos(angle); imaginary += value * Math.sin(angle);
     }
@@ -66,11 +69,12 @@ it.skipIf(!mediaAvailable)('mixes source-tail loops on project time with fades, 
   const segments = (await readdir(outputDirectory)).filter(name => /^segment-.*\.mp4$/.test(name));
   const created = await Promise.all(segments.map(name => stat(join(outputDirectory, name)).then(value => value.mtimeMs)));
   const revised = { ...project, musicClips: project.musicClips?.map(clip => ({ ...clip, gainDb: -18, startUs: 3_500_000 })) };
-  await renderProject({ project: revised, assets: [music, voice], outputDirectory, ffmpegPath: ffmpeg, ffprobePath: ffprobe });
+  const revisedResult = await renderProject({ project: revised, assets: [music, voice], outputDirectory, ffmpegPath: ffmpeg, ffprobePath: ffprobe });
   expect((await readdir(outputDirectory)).filter(name => /^segment-.*\.mp4$/.test(name))).toEqual(segments);
   expect(await Promise.all(segments.map(name => stat(join(outputDirectory, name)).then(value => value.mtimeMs)))).toEqual(created);
-  expect(revised.musicClips?.[0].durationUs).toBe(3_000_000);
-  expect(JSON.parse(await readFile(result.timelinePath, 'utf8'))).toMatchObject({ musicClips: [{ startUs: 3_500_000, durationUs: 3_000_000 }] });
+  const revisedPcm = await decodeMix(revisedResult.videoPath);
+  expect(amplitude(880, 1.5, .1, revisedPcm)).toBeLessThan(plateau * .1);
+  expect(amplitude(880, 3.85, .1, revisedPcm)).toBeGreaterThan(plateau * .08);
   await expect(renderProject({ project, assets: [{ ...music, sha256: 'incorrect' }, voice], outputDirectory, ffmpegPath: ffmpeg, ffprobePath: ffprobe })).rejects.toThrow('校验失败');
   await expect(renderProject({ project, assets: [{ ...music, projectId: 'other-project' }, voice], outputDirectory, ffmpegPath: ffmpeg, ffprobePath: ffprobe })).rejects.toThrow('背景音乐必须引用');
 }, 90_000);

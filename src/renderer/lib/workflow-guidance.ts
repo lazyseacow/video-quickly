@@ -1,4 +1,4 @@
-import { getMediaAdapters, supportsProductionAgent, type ModelCapability, type ModelProfile, type WorkflowNode } from '@video-quickly/contracts';
+import { getMediaAdapters, groupsReferenceImages, supportsProductionAgent, type ModelCapability, type ModelProfile, type WorkflowNode } from '@video-quickly/contracts';
 
 interface StepGuidance {
   purpose: string; result: string; review: string; local: string; capability?: ModelCapability; requiresModel?: boolean;
@@ -19,7 +19,16 @@ const guidance: Record<WorkflowNode['kind'], StepGuidance> = {
 };
 
 export function stepGuidance(node: Pick<WorkflowNode, 'kind' | 'config'>): StepGuidance {
-  if (node.config.operation === 'prepare-references') return { ...guidance.assets, purpose: node.config.useFirstShotReference === true ? '先生成第一镜首帧，再以它和角色参考图生成后续首帧。' : '准备参考素材，或直接使用文字生成视频。', local: '参考素材准备', capability: node.config.referenceMode === 'generate' ? 'image' : undefined, requiresModel: node.config.referenceMode === 'generate' };
+  if (node.config.operation === 'prepare-references') {
+    const generatesImages = node.config.referenceMode === 'generate';
+    let purpose = generatesImages ? '为各镜头生成参考首帧。' : '准备参考素材，或直接使用文字生成视频。';
+    if (groupsReferenceImages(node)) {
+      purpose = node.config.useFirstShotReference === true
+        ? '先生成第一镜首帧，再以它和角色参考图生成后续首帧。'
+        : '根据镜头参考条件与模型能力使用原生组图、组内首镜续图或逐镜生成。';
+    }
+    return { ...guidance.assets, purpose, local: '参考素材准备', capability: generatesImages ? 'image' : undefined, requiresModel: generatesImages };
+  }
   if (node.config.operation === 'prepare-edit') return { ...guidance.animation, capability: undefined, local: '本地剪辑准备' };
   return node.config.requiresModel === true ? { ...guidance[node.kind], requiresModel: true } : guidance[node.kind];
 }

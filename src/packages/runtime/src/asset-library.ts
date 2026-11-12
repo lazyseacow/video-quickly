@@ -7,6 +7,7 @@ import { z } from 'zod';
 import { assetSchema, audioWaveformSchema, isJsonDocument, MAX_REFERENCE_AUDIO_BYTES, pageInputSchema, type AssetRecord, type AudioWaveform, type ProjectDocument } from '@video-quickly/contracts';
 import type { DocumentStore } from './database.js';
 import type { createReadModels } from './read-models.js';
+import { isLegacyTimelineAsset } from './legacy-export-timeline.js';
 
 const assetListInput = pageInputSchema.extend({
   kind: z.union([assetSchema.shape.kind, z.array(assetSchema.shape.kind).min(1).max(assetSchema.shape.kind.options.length)]).optional(),
@@ -40,7 +41,7 @@ export function createAssetLibrary({ directory, database, store, reads, characte
   project, bindImportedAsset, readAudioWaveform, trackWork, changed }: AssetLibraryOptions) {
   function requireAsset(assetId: string) {
     const asset = store.get<AssetRecord>('asset', assetId);
-    if (!asset) throw new Error('素材不存在。');
+    if (!asset || isLegacyTimelineAsset(asset)) throw new Error('素材不存在。');
     return asset;
   }
 
@@ -136,7 +137,7 @@ export function createAssetLibrary({ directory, database, store, reads, characte
         const { assetIds } = z.object({ assetIds: z.array(z.string().min(1)).max(100) }).parse(rawParams);
         return [...new Set(assetIds)].flatMap(assetId => {
           const asset = store.get<AssetRecord>('asset', assetId);
-          return asset ? [asset] : [];
+          return asset && !isLegacyTimelineAsset(asset) ? [asset] : [];
         });
       }
       case 'asset.waveform': return readWaveform(rawParams);

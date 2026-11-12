@@ -1,6 +1,7 @@
 import type Database from 'better-sqlite3';
 import type { ActivityRecord, AssetListItem, AssetRecord, ProjectDetail, ProjectDocument, ProjectSummary, RecordPage, RunEvent, RunRecord, RunSummary } from '@video-quickly/contracts';
 import { DocumentStore } from './database.js';
+import { isLegacyTimelineAsset, legacyTimelineName, localRenderProvenance } from './legacy-export-timeline.js';
 
 type DocumentRow = { cursor: number; body: string };
 type AssetPageRow = DocumentRow & { project_reference: 0 | 1 };
@@ -56,7 +57,7 @@ export function createReadModels(database: Database.Database, store: DocumentSto
       SELECT rowid AS cursor, body FROM documents
         WHERE kind IN ('run', 'asset') AND kind = 'asset' AND json_extract(body, '$.projectId') IS NULL
       ORDER BY cursor
-    `).all(id).map(row => JSON.parse(row.body) as AssetRecord);
+    `).all(id).map(row => JSON.parse(row.body) as AssetRecord).filter(asset => !isLegacyTimelineAsset(asset));
     return { id, revision: summary.revision, assetsVersion: version, project: revision === summary.revision ? undefined : store.get<ProjectDocument>('project', id), assets, latestRun: latest ? runSummary(JSON.parse(latest.body)) : undefined, activeRun: activeRecord?.regenerationSource ? runSummary(activeRecord) : undefined };
   }
   function runs(before: number | undefined, limit: number, projectId?: string, filter: { promptSessionId?: string; purpose?: RunRecord['purpose']; status?: RunRecord['status'] } = {}): RecordPage<RunSummary> {
@@ -117,7 +118,12 @@ export function createReadModels(database: Database.Database, store: DocumentSto
   }): RecordPage<AssetListItem> {
     // Keep active reads on their partial index and use a rowid bound for both views.
     const conditions = ["asset.kind = 'asset'", trashed ? "json_extract(asset.body, '$.active') = 0" : "coalesce(json_extract(asset.body, '$.active'), 1) = 1"];
-    const parameters: Record<string, string | number> = { limit: limit + 1 };
+    const parameters: Record<string, string | number> = { limit: limit + 1, legacyTimelineName, localRenderProvenance };
+    conditions.push(`NOT (
+      json_extract(asset.body, '$.kind') IS 'document'
+      AND json_extract(asset.body, '$.name') IS @legacyTimelineName
+      AND json_extract(asset.body, '$.provenance') IS @localRenderProvenance
+    )`);
     if (before !== undefined) {
       conditions.push('asset.rowid < @before');
       parameters.before = before;
@@ -136,8 +142,8 @@ export function createReadModels(database: Database.Database, store: DocumentSto
     if (hideExportOutputs) {
       // Match existing local render records while keeping imports and explicitly reused outputs.
       conditions.push(`NOT (
-        json_extract(asset.body, '$.provenance') IS '本地渲染'
-        AND json_extract(asset.body, '$.name') IN ('video.mp4', 'cover.png', 'subtitles.srt', 'timeline.json')
+        json_extract(asset.body, '$.provenance') IS @localRenderProvenance
+        AND json_extract(asset.body, '$.name') IN ('video.mp4', 'cover.png', 'subtitles.srt')
         AND coalesce(json_extract(asset.body, '$.retained'), 0) = 0
         AND NOT EXISTS (SELECT 1 FROM project_asset_references WHERE asset_id = asset.id)
       )`);

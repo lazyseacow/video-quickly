@@ -83,6 +83,14 @@ export default function StepResultView({ value, kind, mediaShots, mediaGeneratio
   </div>;
 }
 
+function visualPromptWithColors(text: string) {
+  return text.split(/(?<![\w#])(#[\da-f]{8}|#[\da-f]{6}|#[\da-f]{4}|#[\da-f]{3})(?![\w#])/gi).map((part, index) => index % 2 === 0 ? part : (
+    <span className="step-result__color-value" key={index}>
+      <span className="step-result__color-swatch" aria-hidden="true" style={{ backgroundColor: part }} />{part}
+    </span>
+  ));
+}
+
 function StoryboardResult({ shots, profile, view }: { shots: Record<string, JsonValue>[]; profile?: VideoProfile; view: 'storyboard' | 'animation' | 'edited' }) {
   const [limit, setLimit] = useState(20);
   const seconds = shots.reduce((sum, shot) => sum + duration(shot.durationUs), 0) / 1_000_000;
@@ -91,13 +99,14 @@ function StoryboardResult({ shots, profile, view }: { shots: Record<string, Json
     <div className="step-result__summary"><span><Clapperboard size={16} />{shots.length} 个镜头</span>{seconds > 0 && <span><Clock3 size={15} />{seconds.toFixed(1)} 秒</span>}{profile && <span>分镜全局参数 · {profile.width} × {profile.height} · {formatFrameRate(profile.frameRate)} fps</span>}</div>
     <ol className="step-result__storyboard">{shots.slice(0, limit).map((shot, index) => {
       const durationUs = duration(shot.durationUs);
+      const visualPrompt = copy(shot.visualPrompt);
       return <li key={copy(shot.id) || index}>
         <header>
           <span className="step-result__index">{String(index + 1).padStart(2, '0')}</span>
           <h4>{copy(shot.title) || `镜头 ${index + 1}`}</h4>
           {durationUs > 0 && <span>{view === 'edited' ? formatSeconds(durationUs) : (durationUs / 1_000_000).toFixed(1)} 秒</span>}
         </header>
-        {copy(shot.visualPrompt) && <div className="step-result__copy"><span>画面</span><p>{copy(shot.visualPrompt)}</p></div>}
+        {visualPrompt && <div className="step-result__copy"><span>画面</span><p>{visualPromptWithColors(visualPrompt)}</p></div>}
         {copy(shot.narration) && <div className="step-result__copy"><span>旁白</span><p>{copy(shot.narration)}</p></div>}
         {copy(shot.soundPrompt) && <div className="step-result__copy"><span>声音</span><p>{copy(shot.soundPrompt)}</p></div>}
         {view === 'edited' && <EditedShotDetails shot={shot} />}

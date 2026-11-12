@@ -12,6 +12,7 @@ import {
 import { hashFileSha256 } from './file-hash.js';
 import type { DocumentStore } from './database.js';
 import { projectFilesPurgedKind } from './project-file-cleanup.js';
+import { isLegacyTimelineAsset } from './legacy-export-timeline.js';
 
 export interface AssetRecoveryOptions {
   directory: string;
@@ -92,6 +93,7 @@ export function createAssetRecovery(options: AssetRecoveryOptions) {
     const profiles = options.store.list<unknown>('character').filter(value => !projectId || characterIds.has(String(object(value).id)));
     for (const profile of profiles) for (const id of values(object(profile).referenceAssetIds)) if (typeof id === 'string') needed.add(id);
     function add(raw: unknown, source: AssetRecoverySource) {
+      if (isLegacyTimelineAsset(raw)) return;
       const parsed = assetSchema.safeParse(raw), metadata = object(raw), id = typeof metadata.id === 'string' ? metadata.id : `invalid:${source.kind}:${source.id}`;
       if (parsed.success && purgedProjects.has(parsed.data.projectId) && !currentIds.has(id)) return;
       const value = parsed.success ? expected(parsed.data) : null, key = value ? identity(value) : `invalid:${id}`;
