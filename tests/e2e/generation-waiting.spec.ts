@@ -10,7 +10,7 @@ for (const kind of ['image', 'video'] as const) for (const viewport of [{ width:
     test.setTimeout(60_000);
     const held = gate(), blocked = gate(); let submissions = 0;
     const source = await fixture(request, info, false, 3, { beforeReply: async (_body, path) => {
-      if ((kind === 'image' ? path.endsWith('/images/generations') : path.includes('contents/generations/tasks')) && ++submissions === 2) { blocked.release(); await held.pending; }
+      if ((kind === 'image' ? path.includes('/images/') : path.includes('contents/generations/tasks')) && ++submissions === 2) { blocked.release(); await held.pending; }
     } });
     const errors: string[] = []; page.on('pageerror', error => errors.push(error.message));
     try {
@@ -77,15 +77,21 @@ test('shows an indeterminate text wait and keeps the chosen step during backgrou
     await expect(progress).toContainText('等待模型返回'); await expect(progress.getByRole('progressbar')).not.toHaveAttribute('aria-valuenow');
     await expect(dialog).not.toContainText('这个步骤尚未保存产物');
     const steps = dialog.getByRole('navigation', { name: '本次制作步骤', exact: true });
+    const stepButtons = steps.getByRole('button');
     const styleStep = steps.getByRole('button', { name: /风格与角色生成/ });
     const heading = dialog.getByRole('region', { name: '步骤详情：风格与角色', exact: true }).locator('.run-inspector__step-heading');
+    await expect(steps).not.toContainText('待执行');
+    const rowHeights = await stepButtons.evaluateAll(buttons => buttons.map(button => button.clientHeight));
     await styleStep.click();
     await expect(dialog).toContainText('等待上游步骤完成后执行。');
-    await expect(heading).toContainText('待执行'); await expect(styleStep).not.toContainText('待执行');
+    await expect(heading).toContainText('待执行');
+    expect(await stepButtons.evaluateAll(buttons => buttons.map(button => button.clientHeight))).toEqual(rowHeights);
     await expect(dialog.getByText('制作中', { exact: true })).toHaveCount(0);
     source.release(); await expect.poll(async () => (await latest(request, source.project.id))?.status, { timeout: 30000 }).toBe('succeeded');
     await expect(styleStep).toHaveAttribute('aria-current', 'step');
-    await expect(heading).toContainText('已完成'); await expect(styleStep).not.toContainText('已完成');
+    await expect(heading).toContainText('已完成');
+    await expect(steps).not.toContainText('已完成');
+    await expect(styleStep.getByRole('img', { name: '已保存产物' })).toBeVisible();
   } finally { source.release(); await source.close(); }
 });
 
@@ -106,24 +112,23 @@ test('restores partial previews on reload and stops without submitting a second 
     await dialog.getByRole('button', { name: '停止', exact: true }).click();
     await expect.poll(async () => (await latest(request, source.project.id))?.status).toBe('canceled');
     await expect(dialog.getByRole('region', { name: '步骤进度', exact: true })).toContainText('制作已停止');
-    await expect(dialog.locator('[data-generation-state="completed"]')).toHaveCount(1); expect(submissions).toBe(2); expect(source.requests).toHaveLength(6);
+    await expect(dialog.locator('[data-generation-state="completed"]')).toHaveCount(1); expect(submissions).toBe(2); expect(source.requests).toHaveLength(8);
   } finally { held.release(); await source.close(); }
 });
 
 for (const viewport of [{ width: 1464, height: 895, theme: 'dark' }, { width: 1024, height: 720, theme: 'light' }, { width: 390, height: 844, theme: 'light' }]) {
-  test(`replaces six storyboard skeletons individually as parallel video results arrive at ${viewport.width}px`, async ({ page, request }, info) => {
+  test(`replaces six storyboard skeletons individually as video results arrive at ${viewport.width}px`, async ({ page, request }, info) => {
     const held = Array.from({ length: 6 }, gate), submitted = gate(); let submissions = 0;
     const source = await fixture(request, info, false, 6, { beforeReply: async (_body, path) => {
-      if (path.includes('contents/generations/tasks')) { const index = submissions++; if (submissions === 2) submitted.release(); await held[index].pending; }
+      if (path.includes('contents/generations/tasks')) { const index = submissions++; if (submissions === 1) submitted.release(); await held[index].pending; }
     } });
     try {
       await page.setViewportSize(viewport); await page.emulateMedia({ reducedMotion: 'reduce' });
       await page.addInitScript(theme => localStorage.setItem('vq-theme', theme), viewport.theme);
       await rpc(request, 'project.update', { projectId: source.project.id, patch: { workflow: { ...source.project.workflow,
-        execution: { maxConcurrentShots: 2, modelLimits: { [source.video.id]: 2 } },
         production: { ...source.project.workflow.production, textModelId: source.models[0].id, videoModelId: source.video.id } } } });
       const run = await rpc<RunSummary>(request, 'run.start', { projectId: source.project.id });
-      await submitted.pending; expect(submissions).toBe(2);
+      await submitted.pending; expect(submissions).toBe(1);
       await page.goto('/'); await openProjectFromList(page, source.project.title);
       await page.getByRole('button', { name: '打开阶段：素材与配音', exact: true }).click();
       const dialog = page.getByRole('dialog', { name: '本次制作', exact: true }), gallery = dialog.getByRole('group', { name: '选择预览素材', exact: true });
@@ -131,7 +136,7 @@ for (const viewport of [{ width: 1464, height: 895, theme: 'dark' }, { width: 10
       await expect(cards).toHaveCount(6); await expect(gallery.locator('[data-skeleton]')).toHaveCount(6); await expect(gallery.locator('canvas')).toHaveCount(0);
       const identities = await cards.evaluateAll(elements => elements.map(element => element.getAttribute('data-shot-id')));
       await page.screenshot({ path: info.outputPath(`six-video-skeletons-${viewport.width}.png`) });
-      held[1].release();
+      held[0].release();
       await expect(gallery.locator('[data-skeleton]')).toHaveCount(5);
       await expect(gallery.locator('[data-generation-state="completed"]')).toHaveCount(1);
       const completed = gallery.locator('[data-generation-state="completed"]');
@@ -140,7 +145,7 @@ for (const viewport of [{ width: 1464, height: 895, theme: 'dark' }, { width: 10
       const selectedId = await completed.getAttribute('data-shot-id');
       const player = dialog.locator('.step-result__preview video'); await expect(player).toHaveCount(1);
       await player.evaluate(async (video: HTMLVideoElement) => { video.muted = true; await video.play(); video.pause(); });
-      expect((await latest(request, source.project.id))?.status).toBe('running'); expect(submissions).toBe(2);
+      expect((await latest(request, source.project.id))?.status).toBe('running'); await expect.poll(() => submissions).toBe(2);
       expect(await cards.evaluateAll(elements => elements.map(element => element.getAttribute('data-shot-id')))).toEqual(identities);
       await page.screenshot({ path: info.outputPath(`one-video-ready-${viewport.width}.png`) });
       held.forEach(item => item.release());
@@ -155,7 +160,7 @@ for (const viewport of [{ width: 1464, height: 895, theme: 'dark' }, { width: 10
       expect(await action.evaluate(element => element.scrollWidth <= element.clientWidth + 1)).toBe(true);
       expect(await dialog.evaluate(element => element.scrollWidth <= element.clientWidth)).toBe(true);
       // Brief, style, outline, two storyboard batches and six videos.
-      expect(submissions).toBe(6); expect(source.requests).toHaveLength(11);
+      expect(submissions).toBe(6); expect(source.requests).toHaveLength(17);
       await expect(page.locator('vite-error-overlay')).toHaveCount(0);
       await page.screenshot({ path: info.outputPath(`six-videos-ready-${viewport.width}.png`) });
     } finally { held.forEach(item => item.release()); await source.close(); }

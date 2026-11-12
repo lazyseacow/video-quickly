@@ -5,10 +5,10 @@ import { tmpdir } from 'node:os';
 import { dirname, join, relative } from 'node:path';
 import { afterEach, expect, it } from 'vitest';
 import { assetSchema, createSceneTemplate, DEFAULT_VIDEO_PROFILE, exportBatchSchema, projectSchema, runSchema, type AssetRecord, type ExportBatch, type ProjectDocument, type UsageRecord } from '@video-quickly/contracts';
-import { createActivityExecutor } from '../packages/integrations/src';
-import { createRuntime, type ActivityExecutionContext, type RuntimeOptions } from '../packages/runtime/src';
-import { batchTargetDirectory } from '../packages/runtime/src/export-batches';
-import { probeMedia } from '../packages/video/src/node';
+import { createActivityExecutor } from '../src/packages/integrations/src';
+import { createRuntime, type ActivityExecutionContext, type RuntimeOptions } from '../src/packages/runtime/src';
+import { batchTargetDirectory } from '../src/packages/runtime/src/export-batches';
+import { probeMedia } from '../src/packages/video/src/node';
 
 const ffmpeg = process.env.VIDEO_QUICKLY_FFMPEG ?? 'ffmpeg';
 const ffprobe = process.env.VIDEO_QUICKLY_FFPROBE ?? join(dirname(ffmpeg), process.platform === 'win32' ? 'ffprobe.exe' : 'ffprobe');

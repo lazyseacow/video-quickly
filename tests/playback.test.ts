@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { PlaybackClock } from '../apps/desktop/src/lib/playback';
+import { PlaybackClock } from '../src/renderer/lib/playback';
 
 describe('local preview clock', () => {
   let now = 0;

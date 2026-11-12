@@ -4,16 +4,16 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
-const desktop = join(root, 'apps/desktop');
+const desktop = join(root, 'src');
 const staging = join(root, '.generated/icons');
 const icons = join(desktop, 'build/icons');
 const fromDesktop = createRequire(join(desktop, 'package.json'));
 const fromBuilder = createRequire(fromDesktop.resolve('electron-builder/package.json'));
-const fromVideo = createRequire(join(root, 'packages/video/package.json'));
+const fromVideo = createRequire(join(root, 'src/packages/video/package.json'));
 // Use the converter supplied by the pinned builder instead of the retired CLI.
 const { convertIcon } = fromBuilder('app-builder-lib/out/util/iconConverter.js');
 const { createCanvas, loadImage } = fromVideo('@napi-rs/canvas');
-const logo = await readFile(join(desktop, 'src/assets/logo.svg'), 'utf8');
+const logo = await readFile(join(desktop, 'renderer/assets/logo.svg'), 'utf8');
 const mark = logo.replace(/^<svg[^>]+>\s*|\s*<\/svg>\s*$/g, '');
 const artwork = `
   <rect x="4" y="4" width="120" height="120" rx="36" fill="#ffffff"/>

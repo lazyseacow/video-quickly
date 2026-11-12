@@ -1,9 +1,9 @@
 import { createHash } from 'node:crypto';
 import { expect, it } from 'vitest';
 import { createNativeVideoWorkflow, DEFAULT_VIDEO_PROFILE, projectSchema } from '@video-quickly/contracts';
-import { applyClaimsEdits, claimsEdits } from '../apps/desktop/src/lib/research-edits';
-import { editContent } from '../apps/desktop/src/lib/project-edits';
-import { readRpcRequest } from '../apps/desktop/dev/read-rpc-request';
+import { applyClaimsEdits, claimsEdits } from '../src/renderer/lib/research-edits';
+import { editContent } from '../src/renderer/lib/project-edits';
+import { readRpcRequest } from '../src/dev/read-rpc-request';
 
 function content() { return editContent(projectSchema.parse({ id: 'p', title: '资料', brief: '', revision: 1, profile: DEFAULT_VIDEO_PROFILE, workflow: createNativeVideoWorkflow(), shots: [{ id: 'shot', title: '镜头', narration: '', visualPrompt: '', durationUs: 1_000_000 }], claims: [{ id: 'claim', text: '待核验事实', source: '文献', status: 'pending' }], createdAt: '', updatedAt: '' })); }
 

@@ -6,7 +6,7 @@ import { readFile, writeFile } from 'node:fs/promises';
 import { promisify } from 'node:util';
 import { expect, test, type APIRequestContext, type Locator, type Page, type TestInfo } from '@playwright/test';
 import { createSceneTemplate, DEFAULT_AUDIO_MIX_SETTINGS, DEFAULT_AUDIO_PROCESSING, type AssetRecord, type ProjectDocument } from '@video-quickly/contracts';
-import { deleteShotRanges } from '../../packages/video/src/clip-edits';
+import { deleteShotRanges } from '../../src/packages/video/src/clip-edits';
 
 const execute = promisify(execFile), ffmpeg = process.env.VIDEO_QUICKLY_FFMPEG ?? 'ffmpeg';
 async function rpc<T>(request: APIRequestContext, method: string, params: unknown = {}): Promise<T> {

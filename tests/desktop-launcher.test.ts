@@ -19,7 +19,7 @@ async function fixture() {
   const part = relative(resolve(tmpdir()), directory);
   if (isAbsolute(part) || part.startsWith('..') || !part.startsWith('vq-desktop-launcher-')) throw new Error('Launcher fixture must remain inside its temporary root');
   cleanups.push(() => rm(directory, { recursive: true, force: true }));
-  const desktop = join(directory, 'apps', 'desktop'), modules = join(desktop, 'node_modules');
+  const desktop = join(directory, 'src'), modules = join(desktop, 'node_modules');
   await Promise.all([mkdir(join(directory, 'scripts')), ...['vite/bin', 'electron', 'tsx'].map(name => mkdir(join(modules, name), { recursive: true }))]);
   await copyFile(resolve('scripts/desktop.mjs'), join(directory, 'scripts', 'desktop.mjs'));
   await Promise.all([

@@ -1,0 +1,106 @@
+import { createReadStream, existsSync } from 'node:fs';
+import { realpath, stat } from 'node:fs/promises';
+import { homedir } from 'node:os';
+import { isAbsolute, join, relative, resolve } from 'node:path';
+import { Readable } from 'node:stream';
+import { fileContentType, resolveByteRange } from './file-response.mjs';
+
+export const applicationId = 'net.lazyseacow.video-quickly';
+export const applicationOrigin = 'video-quickly://app';
+export const workspaceName = 'VideoQuickly-Electron';
+
+export function runtimeMediaEnvironment(mediaDirectory, packaged, environment = process.env) {
+  const suffix = process.platform === 'win32' ? '.exe' : '';
+  const ffmpeg = join(mediaDirectory, `ffmpeg${suffix}`), ffprobe = join(mediaDirectory, `ffprobe${suffix}`);
+  return { ...environment, VIDEO_QUICKLY_MODE: 'desktop', ...(packaged || existsSync(ffmpeg) ? { VIDEO_QUICKLY_FFMPEG: ffmpeg, VIDEO_QUICKLY_FFPROBE: ffprobe } : {}) };
+}
+
+export function workspaceDirectory({ platform = process.platform, home = homedir(), environment = process.env } = {}) {
+  if (environment.VIDEO_QUICKLY_DATA_DIR) return resolve(environment.VIDEO_QUICKLY_DATA_DIR);
+  // Use the same workspace layout for the desktop and its runtime tools.
+  if (platform === 'win32') return join(environment.APPDATA ?? join(home, 'AppData', 'Roaming'), workspaceName);
+  if (platform === 'darwin') return join(home, 'Library', 'Application Support', workspaceName);
+  return join(environment.XDG_DATA_HOME ?? join(home, '.local', 'share'), workspaceName);
+}
+
+export function validPath(value) {
+  if (typeof value !== 'string' || !isAbsolute(value) || value.includes('\0') || value.length > 32_768) throw new Error('文件路径无效。');
+  return value;
+}
+
+export async function fileInside(root, requested) {
+  const directory = await realpath(root), path = await realpath(validPath(requested));
+  const difference = relative(directory, path);
+  if (!difference || difference === '..' || difference.startsWith('..' + (process.platform === 'win32' ? '\\' : '/')) || isAbsolute(difference)) throw new Error('文件不在工作区内。');
+  const metadata = await stat(path);
+  if (!metadata.isFile()) throw new Error('文件不存在。');
+  return { path, metadata };
+}
+
+const contentSecurityPolicy = "default-src 'self'; img-src 'self' blob: data:; media-src 'self' blob:; style-src 'self' 'unsafe-inline'; connect-src 'self'; font-src 'self' data:; script-src 'self'; worker-src 'self' blob:; object-src 'none'; frame-src 'none'; base-uri 'none'; form-action 'none'";
+
+export async function serveFile(root, requested, request) {
+  if (!['GET', 'HEAD'].includes(request.method)) return new Response(null, { status: 405, headers: { Allow: 'GET, HEAD' } });
+  let file;
+  try { file = await fileInside(root, requested); } catch { return new Response(null, { status: 404 }); }
+  const { path, metadata: { size } } = file;
+  const headers = new Headers({ 'Content-Type': fileContentType(path, 'application'), 'Content-Security-Policy': contentSecurityPolicy, 'X-Content-Type-Options': 'nosniff', 'Accept-Ranges': 'bytes', 'Cache-Control': 'no-store' });
+  const range = resolveByteRange(size, request.headers.get('Range'));
+  if (!range || (range.contentRange && (!Number.isSafeInteger(range.start) || !Number.isSafeInteger(range.end)))) {
+    headers.set('Content-Range', `bytes */${size}`);
+    return new Response(null, { status: 416, headers });
+  }
+  const { start, end, length, contentRange } = range;
+  const status = contentRange ? 206 : 200;
+  if (contentRange) headers.set('Content-Range', contentRange);
+  headers.set('Content-Length', String(length));
+  if (request.method === 'HEAD' || !size) return new Response(null, { status, headers });
+  const stream = createReadStream(path, { start, end });
+  if (request.signal.aborted) stream.destroy();
+  const abort = () => stream.destroy();
+  request.signal.addEventListener('abort', abort, { once: true });
+  stream.once('close', () => request.signal.removeEventListener('abort', abort));
+  return new Response(Readable.toWeb(stream), { status, headers });
+}
+
+export function rendererIsTrusted(event, contents, developmentUrl) {
+  if (event.sender !== contents || !event.senderFrame || event.senderFrame !== contents.mainFrame) return false;
+  try {
+    const url = new URL(event.senderFrame.url);
+    return developmentUrl ? url.origin === new URL(developmentUrl).origin : url.protocol === 'video-quickly:' && url.hostname === 'app';
+  } catch { return false; }
+}
+
+export function rendererPermissionAllowed(contents, permission, details, owner, developmentUrl) {
+  if (!contents || contents !== owner || permission !== 'fullscreen' || !details?.isMainFrame || details.requestingUrl !== contents.mainFrame.url) return false;
+  return rendererIsTrusted({ sender: contents, senderFrame: contents.mainFrame }, owner, developmentUrl);
+}
+
+export function pathDialogOptions(input) {
+  if (!input || typeof input !== 'object' || !['file', 'directory', 'save'].includes(input.mode)) throw new Error('文件选择参数无效。');
+  if (typeof input.title !== 'string' || input.title.length > 200) throw new Error('文件选择标题无效。');
+  const options = { title: input.title };
+  if (input.defaultPath) {
+    if (typeof input.defaultPath !== 'string' || input.defaultPath.includes('\0') || input.defaultPath.length > 32_768) throw new Error('默认文件路径无效。');
+    options.defaultPath = input.defaultPath;
+  }
+  if (input.extensions !== undefined) {
+    if (!Array.isArray(input.extensions) || input.extensions.length > 30 || input.extensions.some(extension => typeof extension !== 'string' || !/^[a-zA-Z0-9]+$/.test(extension))) throw new Error('文件类型无效。');
+    if (input.extensions.length) options.filters = [{ name: input.mode === 'save' ? '导出文件' : '素材文件', extensions: input.extensions }];
+  }
+  return { mode: input.mode, options };
+}
+
+export function validRuntimeRequest(input) {
+  if (!input || typeof input !== 'object' || typeof input.method !== 'string' || !/^[a-zA-Z][a-zA-Z0-9]*(?:\.[a-zA-Z][a-zA-Z0-9]*)+$/.test(input.method) || input.method.length > 150 || input.method.startsWith('host.')) throw new Error('桌面请求无效。');
+  return { method: input.method, params: input.params ?? {} };
+}
+
+export function externalWebUrl(value) {
+  if (typeof value !== 'string' || value.length > 8192) return undefined;
+  try {
+    const url = new URL(value);
+    if (!['https:', 'http:'].includes(url.protocol) || !url.hostname || url.username || url.password) return undefined;
+    return url.href;
+  } catch { return undefined; }
+}

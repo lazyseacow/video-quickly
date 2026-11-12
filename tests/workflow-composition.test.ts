@@ -3,9 +3,9 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { afterEach, expect, it } from 'vitest';
 import { projectDetailSchema, projectSchema, workflowNodeSchema, workflowSchema, validateWorkflowComposition, type ProjectDocument, type RunRecord, type WorkflowTemplate, type RunInspection } from '@video-quickly/contracts';
-import { createRuntime, SimulatedProcessExit } from '../packages/runtime/src/index';
-import { ProjectEditSession, savedEditsSchema } from '../apps/desktop/src/lib/project-edits';
-import { openDatabase, DocumentStore } from '../packages/runtime/src/database';
+import { createRuntime, SimulatedProcessExit } from '../src/packages/runtime/src/index';
+import { ProjectEditSession, savedEditsSchema } from '../src/renderer/lib/project-edits';
+import { openDatabase, DocumentStore } from '../src/packages/runtime/src/database';
 
 const runtimes: ReturnType<typeof createRuntime>[] = [], directories: string[] = [];
 afterEach(async () => { await Promise.allSettled(runtimes.splice(0).map(runtime => runtime.close())); await Promise.all(directories.splice(0).map(path => rm(path, { recursive: true, force: true }))); });
@@ -71,12 +71,11 @@ it('bounds nested reuse before expanding an exponential snapshot and rejects rec
   workflow.subflows![3].nodes = [node('loop', { kind: 'subflow', subflow: { id: 'depth-0', version: 1, inputs: {} } })];
   expect(() => validateWorkflowComposition(workflow)).toThrow('递归');
 });
-it('preserves composition and parallel settings through incremental undo and recovered drafts', async () => {
+it('preserves composition through incremental undo and recovered drafts', async () => {
   const { project } = await fixture(), session = new ProjectEditSession(project);
-  const execution = { maxConcurrentShots: 3, modelLimits: { fixture: 2 } };
-  session.edit({ ...session.state.present, workflow: { ...project.workflow, execution } }, '设置并行');
+  session.edit({ ...session.state.present, workflow: { ...project.workflow, name: '已编辑流程' } }, '编辑流程名称');
   const restored = new ProjectEditSession(project, savedEditsSchema.parse(JSON.parse(JSON.stringify(session.state))));
-  expect(restored.state.present.workflow.execution).toEqual(execution); restored.undo(); expect(restored.state.present.workflow.execution).toBeUndefined(); restored.redo(); expect(restored.state.present.workflow.execution).toEqual(execution);
+  expect(restored.state.present.workflow.name).toBe('已编辑流程'); restored.undo(); expect(restored.state.present.workflow.name).toBe(project.workflow.name); restored.redo(); expect(restored.state.present.workflow.name).toBe('已编辑流程');
   restored.edit({ ...restored.state.present, workflow: { ...restored.state.present.workflow, nodes: [], edges: [], subflows: undefined } }, '移除子流程'); restored.undo(); expect(restored.state.present.workflow.subflows).toEqual(project.workflow.subflows);
 });
 function animatedBackupShot() {
@@ -101,10 +100,10 @@ it('exports and executes fixed composition and keyframes independently of the te
   expect(inspection.steps.map(step => step.id)).toEqual(['call', 'call/subflow/first', 'call/subflow/last', 'after']);
   expect(await value.dispatch('node.result', { runId: run.id, nodeId: 'call' })).toMatchObject({ version: 1, outputs: { brief: configured.brief } });
 });
-it('exports keyframes in format 4 for workflows without subflows or parallel settings', async () => {
+it('exports keyframes in format 4 for workflows without subflows', async () => {
   const { value } = await runtime({ seed: false }), created = projectSchema.parse(await value.dispatch('project.create', { title: '旧流程的关键帧备份' }));
   const configured = projectSchema.parse(await value.dispatch('project.update', { projectId: created.id, revision: created.revision, patch: { shots: [animatedBackupShot()], workflow: { id: 'legacy', version: 1, name: 'legacy', production: { mode: 'native-video', referenceMode: 'none', soundPrompt: '', subtitleMode: 'off' }, nodes: [node('brief')], edges: [] } } }));
-  expect(configured.workflow.subflows).toBeUndefined(); expect(configured.workflow.execution).toBeUndefined(); expect(configured.workflow.nodes.some(node => node.kind === 'subflow' || node.subflow)).toBe(false);
+  expect(configured.workflow.subflows).toBeUndefined(); expect(configured.workflow.nodes.some(node => node.kind === 'subflow' || node.subflow)).toBe(false);
   const { path } = await value.dispatch('project.backup', { projectId: configured.id }) as { path: string }, manifestPath = join(path, 'project.json'), manifest = JSON.parse(await readFile(manifestPath, 'utf8'));
   expect(manifest.schemaVersion).toBe(4);
   expect(projectSchema.parse(manifest.project).shots[0].animation).toEqual(configured.shots[0].animation);

@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { isAbsolute, join, relative, resolve } from 'node:path';
 import { test as base } from '@playwright/test';
 
-const desktop = resolve(import.meta.dirname, '../../apps/desktop');
+const desktop = resolve(import.meta.dirname, '../../src');
 type Message = Record<string, unknown>;
 function message(child: ChildProcess, type: string, timeout: number): Promise<Message> {
   return new Promise((done, reject) => {

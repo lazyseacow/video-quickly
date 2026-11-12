@@ -1,7 +1,7 @@
 import { expect, it } from 'vitest';
 import { createNativeVideoWorkflow, DEFAULT_VIDEO_PROFILE, projectSchema, type CreativeContext } from '@video-quickly/contracts';
-import { applyPlanningEdit, planningResultValue, readRecordedStoryboardDraft, type PlanningShot } from '../apps/desktop/src/lib/planning-edits';
-import { editContent, ProjectEditSession } from '../apps/desktop/src/lib/project-edits';
+import { applyPlanningEdit, planningResultValue, readRecordedStoryboardDraft, type PlanningShot } from '../src/renderer/lib/planning-edits';
+import { editContent, ProjectEditSession } from '../src/renderer/lib/project-edits';
 
 function project() { return projectSchema.parse({ id: 'planning-project', title: '策划修改', brief: '原简报', style: '原风格', revision: 1, profile: DEFAULT_VIDEO_PROFILE, workflow: createNativeVideoWorkflow(), createdAt: '', updatedAt: '', shots: ['A', 'B'].map(id => ({ id, title: id, narration: `旁白${id}`, visualPrompt: `画面${id}`, durationUs: 2_000_000 })) }); }
 const inputs = (shots: ReturnType<typeof project>['shots']): PlanningShot[] => shots.map(({ id, title, narration, visualPrompt, soundPrompt }) => ({ id, title, narration, visualPrompt, soundPrompt }));
@@ -85,4 +85,21 @@ it('adds authored shots and changes explicit durations without duplicating a ret
   expect(next.shots[2]).toMatchObject(newShot);
   expect(applyPlanningEdit(next, baseline, change)).toEqual(next);
   expect(() => applyPlanningEdit(baseline, baseline, { ...change, newShots: [{ ...newShot, durationUs: 100_000 }] })).toThrow();
+});
+
+it('binds and clears storyboard images without replacing existing video or applying a default scene over a chosen image', () => {
+  const original = project();
+  const baseline = editContent({ ...original, scenePreset: { kind: 'process', palette: 'blue', motion: 'none' },
+    shots: [{ ...original.shots[0], assetId: 'old-image', videoAssetId: 'video', videoInUs: 250_000 }, original.shots[1]] });
+  const [first, second] = inputs(baseline.shots);
+  const newShot: PlanningShot = { id: 'image-shot', title: '附图镜头', narration: '', visualPrompt: '树林', durationUs: 2_000_000, assetId: 'forest' };
+  const change = { kind: 'script' as const, shots: [{ ...first, assetId: undefined }, { ...second, assetId: 'sky' }], newShots: [newShot] };
+  const next = applyPlanningEdit(baseline, baseline, change);
+  expect(next.shots[0]).toMatchObject({ assetId: undefined, videoAssetId: 'video', videoInUs: 250_000 });
+  expect(next.shots[1].assetId).toBe('sky');
+  expect(next.shots[2]).toMatchObject(newShot);
+  expect(next.shots[2].sceneTemplate).toBeUndefined();
+  expect(applyPlanningEdit(next, baseline, change)).toEqual(next);
+  const concurrent = { ...baseline, shots: [baseline.shots[0], { ...baseline.shots[1], assetId: 'newer-image' }] };
+  expect(() => applyPlanningEdit(concurrent, baseline, change)).toThrow('已在其他位置修改');
 });

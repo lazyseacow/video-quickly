@@ -31,9 +31,11 @@
 
 画面动画、裁切与转场已合成；声音为合并后的混音，无法在目标软件按原始音源逐个调整。字幕保留文字与时间，目标软件字体及排版需核对。交接包的相对路径可迁移；实验性草稿中的绝对素材路径搬移后需重新链接。
 
-格式参考采用 [capcut-cli 固定提交](https://github.com/renezander030/capcut-cli/tree/5d4220a8e1845642cebb89d188e63713c1f0ccfc) 的 MIT 字段默认值，未新增运行依赖；完整授权声明见根目录 `THIRD_PARTY_NOTICES.md`，也附在每次导出中。已核对该项目的[版本兼容记录](https://github.com/renezander030/capcut-cli/blob/5d4220a8e1845642cebb89d188e63713c1f0ccfc/docs/version-support.md)，不使用固定旧版本空模板宣称兼容所有编辑器。
+草稿字段默认值参考 capcut-cli，导出包附带该版本的授权声明。[capcut-cli MIT 许可](https://github.com/renezander030/capcut-cli/blob/5d4220a8e1845642cebb89d188e63713c1f0ccfc/LICENSE)
 
-**本批只验收本地文件生成。剪映／CapCut 实际导入，以及 macOS 实际应用包尚未验收。** 是否可被某个软件版本打开，以该版本的真实导入检查为准；导出界面和清单均保留此边界。
+兼容性按目标软件版本记录。模板和导出产物应在实际目标版本中做导入验证。[格式来源的版本兼容记录](https://github.com/renezander030/capcut-cli/blob/5d4220a8e1845642cebb89d188e63713c1f0ccfc/docs/version-support.md)
+
+`render.editor.export` 的请求与结果字段定义在[共享导出契约](../src/packages/contracts/src/editor-export.ts)，由[导出弹窗](../src/renderer/components/EditorProjectExport.tsx)和[执行器导出模块](../src/packages/runtime/src/editor-export.ts)使用。弹窗读取展示所需字段，导出记录同时包含项目 ID。
 
 ## 数据兼容与验证入口
 

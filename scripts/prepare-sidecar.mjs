@@ -1,6 +1,7 @@
 import { execFileSync } from 'node:child_process';
 import { assertDarwinNodeSelfContained, assertDarwinBinarySelfContained } from './node-portability.mjs';
 import { preparePortableNode } from './portable-node.mjs';
+import { editorDraftLicense } from '../src/packages/runtime/src/editor-draft-license.ts';
 import { cp, mkdir, readdir, rename, rm, stat, writeFile, readFile, realpath, symlink } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
@@ -12,12 +13,12 @@ const sidecar=join(generated,'sidecar');
 const stage=join(generated,`sidecar-stage-${Date.now()}`);
 const development=process.argv.includes('--development');
 await mkdir(generated,{recursive:true});
-const runtime=join(root,'packages/runtime/dist/main.mjs');
+const runtime=join(root,'src/packages/runtime/dist/main.mjs');
 await stat(runtime);
 await mkdir(stage,{recursive:true});
-const fromRuntime=createRequire(join(root,'packages/runtime/package.json'));
-const fromVideo=createRequire(join(root,'packages/video/package.json'));
-const fromIntegrations=createRequire(join(root,'packages/integrations/package.json'));
+const fromRuntime=createRequire(join(root,'src/packages/runtime/package.json'));
+const fromVideo=createRequire(join(root,'src/packages/video/package.json'));
+const fromIntegrations=createRequire(join(root,'src/packages/integrations/package.json'));
 async function copyModule(name,from){
   let source;
   try{source=dirname(await realpath(from.resolve(`${name}/package.json`)));}
@@ -44,8 +45,8 @@ const fromPdf=await copyModule('pdf-parse',fromIntegrations);
 await copyModule('pdfjs-dist',fromPdf);
 await writeFile(join(stage,'package.json'),JSON.stringify({name:'video-quickly-runtime',version:'0.1.0',private:true,type:'module'}));
 await cp(runtime,join(stage,'runtime.mjs'));
-await cp(join(root,'packages/runtime/dist/pdf-process.mjs'),join(stage,'pdf-process.mjs'));
-await cp(join(root,'packages/runtime/dist/builtin-drama-media'),join(stage,'builtin-drama-media'),{recursive:true});
+await cp(join(root,'src/packages/runtime/dist/pdf-process.mjs'),join(stage,'pdf-process.mjs'));
+await cp(join(root,'src/packages/runtime/dist/builtin-drama-media'),join(stage,'builtin-drama-media'),{recursive:true});
 const mediaRoot=process.env.VIDEO_QUICKLY_MEDIA_DIR;
 if(mediaRoot){
   const mediaSource=resolve(mediaRoot);
@@ -131,8 +132,8 @@ for(const folder of await readdir(packageStore,{withFileTypes:true})){
  }
 }
 await writeFile(join(notices,'manifest.json'),JSON.stringify(manifest,null,2));
-await cp(join(root,'apps/desktop/src/assets/platforms/LICENSE'),join(notices,'platform-icons-LICENSE.txt'));
-await cp(join(root,'THIRD_PARTY_NOTICES.md'),join(notices,'project-adaptations-LICENSE.md'));
+await cp(join(root,'src/renderer/assets/platforms/LICENSE'),join(notices,'platform-icons-LICENSE.txt'));
+await writeFile(join(notices,'capcut-cli-LICENSE.txt'),editorDraftLicense);
 await writeFile(join(stage,'runtime-info.json'),JSON.stringify({nodeVersion:portableNode?.version??process.version,platform:process.platform,architecture:process.arch,portability:development&&process.platform!=='win32'?'development-link':'bundled',nodeProvenance:portableNode?.provenance},null,2));
 if(resolve(sidecar)!==join(root,'.generated','sidecar'))throw new Error('非法执行组件目录');
 await rm(sidecar,{recursive:true,force:true});

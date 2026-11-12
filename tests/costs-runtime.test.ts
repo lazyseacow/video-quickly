@@ -4,10 +4,10 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, expect, it } from 'vitest';
 import { chargeConfirmationSchema, costTaskDetailSchema, costTaskSchema, projectSchema, recordPageSchema, workflowNodeSchema, type ModelProfile, type RunRecord, type UsageRecord } from '@video-quickly/contracts';
-import { createRuntime, SimulatedProcessExit, type RuntimeOptions } from '../packages/runtime/src';
-import { executeDeepAgent } from '../packages/runtime/src/agent';
-import { createCostLedger } from '../packages/runtime/src/costs';
-import { DocumentStore, openDatabase } from '../packages/runtime/src/database';
+import { createRuntime, SimulatedProcessExit, type RuntimeOptions } from '../src/packages/runtime/src';
+import { executeDeepAgent } from '../src/packages/runtime/src/agent';
+import { createCostLedger } from '../src/packages/runtime/src/costs';
+import { DocumentStore, openDatabase } from '../src/packages/runtime/src/database';
 
 const directories: string[] = [], servers: Server[] = [];
 const runtimes = new Set<ReturnType<typeof createRuntime>>();

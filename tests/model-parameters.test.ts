@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, expect, it } from 'vitest';
 import { assetSchema, createNativeVideoWorkflow, DEFAULT_VIDEO_PROFILE, getModelParameterFields, modelSchema, projectSchema, requestModelParameters, validateModelParameters, withModelParameter, type AssetRecord, type CharacterProfile, type ModelProfile } from '@video-quickly/contracts';
-import { createActivityExecutor, validateMediaActivity, type MediaActivityContext } from '../packages/integrations/src';
+import { createActivityExecutor, validateMediaActivity, type MediaActivityContext } from '../src/packages/integrations/src';
 
 const directories: string[] = [], servers: Server[] = [];
 afterEach(async () => {

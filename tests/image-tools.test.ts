@@ -6,9 +6,9 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { afterEach, expect, it } from 'vitest';
 import { assetSchema, characterProfileSchema, projectSchema, runSchema, shotSchema, type ShotCandidate } from '@video-quickly/contracts';
-import { createRuntime } from '../packages/runtime/src/index';
-import { createActivityExecutor, validateMediaActivity } from '../packages/integrations/src';
-import { createEditMask, validateEditMask } from '../packages/video/src/image-tools';
+import { createRuntime } from '../src/packages/runtime/src/index';
+import { createActivityExecutor, validateMediaActivity } from '../src/packages/integrations/src';
+import { createEditMask, validateEditMask } from '../src/packages/video/src/image-tools';
 import { seedLegacyGridAsset } from './fixtures/legacy-grid-asset';
 
 const ffmpeg = process.env.VIDEO_QUICKLY_FFMPEG ?? 'ffmpeg';

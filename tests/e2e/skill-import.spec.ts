@@ -8,7 +8,7 @@ import { importSkillFixture } from '../fixtures/import-skill';
 import { rpc } from './native-video-fixture';
 import { saveProduction } from './production-settings';
 
-const { strToU8, zipSync } = createRequire(new URL('../../packages/runtime/package.json', import.meta.url))('fflate') as typeof import('../../packages/runtime/node_modules/fflate');
+const { strToU8, zipSync } = createRequire(new URL('../../src/packages/runtime/package.json', import.meta.url))('fflate') as typeof import('../../src/packages/runtime/node_modules/fflate');
 const directories: string[] = [];
 async function sourceDirectory() {
   const path = await mkdtemp(join(tmpdir(), 'video-quickly-skill-ui-'));

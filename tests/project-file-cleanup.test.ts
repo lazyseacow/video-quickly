@@ -4,11 +4,11 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { afterEach, expect, it } from 'vitest';
 import { assetRecoveryJobSchema, assetRecoveryPageSchema, projectSchema, type AssetRecord, type RunRecord } from '@video-quickly/contracts';
-import { createRuntime } from '../packages/runtime/src';
-import { openDatabase, DocumentStore } from '../packages/runtime/src/database';
-import { createLogger } from '../packages/runtime/src/logging';
-import { createProjectFileCleanup } from '../packages/runtime/src/project-file-cleanup';
-import { audioStemCacheKey } from '../packages/video/src/audio-mix';
+import { createRuntime } from '../src/packages/runtime/src';
+import { openDatabase, DocumentStore } from '../src/packages/runtime/src/database';
+import { createLogger } from '../src/packages/runtime/src/logging';
+import { createProjectFileCleanup } from '../src/packages/runtime/src/project-file-cleanup';
+import { audioStemCacheKey } from '../src/packages/video/src/audio-mix';
 
 const directories: string[] = [], runtimes = new Set<ReturnType<typeof createRuntime>>();
 afterEach(async () => { await Promise.all([...runtimes].map(runtime => runtime.close())); runtimes.clear(); await Promise.all(directories.splice(0).map(path => rm(path, { recursive: true, force: true }))); });

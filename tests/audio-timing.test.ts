@@ -1,8 +1,8 @@
 import { expect, it } from 'vitest';
 import { assetSchema, preparedAudioMixSchema, shotSchema } from '@video-quickly/contracts';
-import { buildTimeline } from '../packages/video/src/index';
-import { splitShot } from '../packages/video/src/editing';
-import { measuredAudioShots, rememberAudioDurations, resolvedAudioShots } from '../apps/desktop/src/lib/audio-timing';
+import { buildTimeline } from '../src/packages/video/src/index';
+import { splitShot } from '../src/packages/video/src/editing';
+import { measuredAudioShots, rememberAudioDurations, resolvedAudioShots } from '../src/renderer/lib/audio-timing';
 
 const shot = shotSchema.parse({ id: 'voice', title: '旧旁白', narration: '', visualPrompt: '', durationUs: 2_000_000, audioAssetId: 'audio' });
 const next = shotSchema.parse({ ...shot, id: 'next', audioAssetId: undefined, durationUs: 1_000_000 });

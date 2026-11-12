@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, expect, it } from 'vitest';
 import { projectSchema, runSchema } from '@video-quickly/contracts';
-import { createRuntime, SimulatedProcessExit, type RuntimeOptions } from '../packages/runtime/src/index';
+import { createRuntime, SimulatedProcessExit, type RuntimeOptions } from '../src/packages/runtime/src/index';
 import { committedPhaseRun, resumePhaseRun } from '../scripts/real-service-progress';
 
 const resources: Array<{ directory: string; runtime: ReturnType<typeof createRuntime> }> = [];

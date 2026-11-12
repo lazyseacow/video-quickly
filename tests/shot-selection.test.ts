@@ -1,5 +1,5 @@
 import { expect, it } from 'vitest';
-import { normalizeSelection, selectAllShots, selectShot } from '../apps/desktop/src/lib/shot-selection';
+import { normalizeSelection, selectAllShots, selectShot } from '../src/renderer/lib/shot-selection';
 
 const order = ['A', 'B', 'C', 'D', 'E', 'F'];
 it('normalizes duplicates and removed IDs into current order while retaining valid primary and anchor', () => {

@@ -3,8 +3,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { expect, it } from 'vitest';
 import { costSummarySchema, getMediaAdapters, getModelPlatform, modelPlatforms, modelSchema, providerReportedUsage, sumProviderUsage } from '@video-quickly/contracts';
-import { createCostLedger } from '../packages/runtime/src/costs';
-import { DocumentStore, openDatabase } from '../packages/runtime/src/database';
+import { createCostLedger } from '../src/packages/runtime/src/costs';
+import { DocumentStore, openDatabase } from '../src/packages/runtime/src/database';
 
 it('records explicit input and output cache counters, retains zeroes and does not confuse cache creation with output cache', () => {
   expect(providerReportedUsage({ usage: { prompt_tokens: 100, completion_tokens: 20, prompt_tokens_details: { cached_tokens: 0 }, completion_tokens_details: { cached_tokens: 5 } } })).toEqual({ source: 'provider', inputTokens: 100, outputTokens: 20, cachedInputTokens: 0, cachedOutputTokens: 5 });
@@ -62,6 +62,8 @@ it('separates new platform defaults from stored protocols and filters adapters b
   const legacy = modelSchema.parse({ id: 'legacy', name: '旧连接', platform: 'anthropic', provider: 'openai-compatible', baseUrl: 'http://localhost/v1', model: 'fixture', connectionType: 'text', capabilities: ['text'], createdAt: '', updatedAt: '' });
   expect(legacy.textProtocol).toBeUndefined(); expect(modelPlatforms.find(platform => platform.id === 'anthropic')?.textProtocol).toBe('messages');
   expect(modelSchema.safeParse({ ...legacy, textProtocol: 'unknown' }).success).toBe(false);
-  expect(getMediaAdapters(['text', 'image', 'video']).map(adapter => adapter.id)).toEqual(['openai-compatible', 'comfyui', 'custom-http']);
+  expect(getMediaAdapters(['text', 'image', 'video']).map(adapter => adapter.id)).toEqual(['openai-compatible', 'custom-http']);
+  expect(getMediaAdapters(['image']).map(adapter => adapter.id)).toEqual(['openai-compatible', 'seedream', 'custom-http']);
+  expect(getMediaAdapters(['video']).map(adapter => adapter.id)).toContain('comfyui');
   expect(getMediaAdapters([])).toEqual([]); expect(getMediaAdapters(['text'])).toEqual([]);
 });

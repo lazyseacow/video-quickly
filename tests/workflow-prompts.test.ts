@@ -1,7 +1,7 @@
 import { expect, it } from 'vitest';
 import { createNativeVideoWorkflow, DEFAULT_VIDEO_PROFILE, projectSchema, shotSchema, skillSchema } from '@video-quickly/contracts';
-import { buildWorkflowPrompt, parseWorkflowShots } from '../packages/runtime/src/workflow-prompts';
-import { parseProductionDocument, productionDocumentContract } from '../packages/runtime/src/workflow-outputs';
+import { buildWorkflowPrompt, parseWorkflowShots } from '../src/packages/runtime/src/workflow-prompts';
+import { parseProductionDocument, productionDocumentContract } from '../src/packages/runtime/src/workflow-outputs';
 import { planningFixtureFields } from './fixtures/planning-response';
 
 const project = () => projectSchema.parse({ id: 'prompt-project', title: '自动制作主题', brief: '上一步已生成的创意简报', style: '上一步已生成的视觉风格', revision: 1, profile: DEFAULT_VIDEO_PROFILE, workflow: createNativeVideoWorkflow(), shots: [], createdAt: '', updatedAt: '' });

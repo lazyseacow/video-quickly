@@ -132,7 +132,9 @@ for (const count of [50, 200]) test(`bounds real 1080p video resources and measu
   const session = await page.context().newCDPSession(page);
   session.on('Media.playerCreated', ({ player }) => { if (!players.has(player.playerId)) players.set(player.playerId, {}); });
   session.on('Media.playerPropertiesChanged', ({ playerId, properties }) => { const current = players.get(playerId) ?? {}; for (const property of properties) current[property.name] = property.value; players.set(playerId, current); });
-  session.on('Media.playerErrorsRaised', event => mediaErrors.push(event));
+  session.on('Media.playerErrorsRaised', event => {
+    if (event.errors.length) mediaErrors.push(event);
+  });
   await session.send('Media.enable');
   const project = await fixture(request, info, count);
   const timing: Record<string, unknown> = {};

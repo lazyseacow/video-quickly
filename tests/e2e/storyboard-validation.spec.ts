@@ -93,6 +93,7 @@ test('shows the saved first batch and resumes the failed batch from the workbenc
     const dialog = page.getByRole('dialog', { name: '本次制作', exact: true });
     const draft = dialog.getByRole('region', { name: '已保存分镜', exact: true });
     await expect(draft.getByRole('heading', { name: '全片大纲', exact: true })).toBeVisible();
+    await expect(draft.getByText('查看完整原文', { exact: true })).toHaveCount(0);
     await expect(draft.getByRole('region', { name: '分镜预览', exact: true }).getByRole('listitem')).toHaveCount(5);
     await expect(dialog.getByRole('region', { name: '步骤进度', exact: true })).toContainText('第 2/3 批分镜尚未完成');
     await expect(dialog.getByRole('region', { name: '步骤进度', exact: true })).toContainText('5 / 12 个镜头已完成');
@@ -135,8 +136,9 @@ test('distinguishes a failed Responses request from a token limit and retries on
     await retry.click(); await confirmAction(page, '确认重试');
     await expect(record).toContainText('已达到 Token 上限');
     await expect(record).toContainText('请重试此批');
-    await record.getByText('查看模型原始返回', { exact: true }).click();
-    await expect(record.locator('pre')).toHaveText(partial);
+    await expect(record.getByText('查看模型原始返回', { exact: true })).toHaveCount(0);
+    const truncated = await rpc<RunStepPayload>(request, 'run.step.payload', { runId: source.run.id, nodeId: 'script', kind: 'output' });
+    expect(truncated.modelResponse?.text).toBe(partial);
     await page.screenshot({ path: info.outputPath('storyboard-token-limit.png') });
     await retry.click(); await confirmAction(page, '确认重试');
     await expect.poll(async () => (await source.inspect()).run.stepRetry?.status).toBe('completed');
@@ -180,8 +182,9 @@ test('shows a brief schema error and retries only the brief before allowing late
     const record = dialog.getByRole('region', { name: '模型返回记录', exact: true });
     await expect(record).toContainText('模型已返回，创意简报校验未通过');
     await expect(record).toContainText('topic：应为字符串');
-    await record.getByText('查看模型原始返回', { exact: true }).click();
-    await expect(record.locator('pre')).toContainText('"topic":42');
+    await expect(record.getByText('查看模型原始返回', { exact: true })).toHaveCount(0);
+    const invalid = await rpc<RunStepPayload>(request, 'run.step.payload', { runId: source.run.id, nodeId: 'brief', kind: 'output' });
+    expect(invalid.modelResponse?.text).toContain('"topic":42');
     expect(source.calls.map(call => call.step)).toEqual(['brief']);
     expect(source.calls[0].body.text).toMatchObject({ format: { name: 'video_brief', schema: { required: expect.arrayContaining(['topic', 'audience']), additionalProperties: false } } });
     await page.screenshot({ path: info.outputPath('brief-schema-error.png') });
@@ -209,7 +212,10 @@ for (const width of [1536, 390]) {
       expect((await source.inspect()).steps.find(step => step.id === 'script')).toMatchObject({ retry: { allowed: true }, unknownSubmission: false });
       const record = dialog.getByRole('region', { name: '模型返回记录', exact: true });
       await record.getByRole('combobox', { name: '模型返回版本' }).selectOption('1');
-      await record.getByText('查看模型原始返回', { exact: true }).click(); await expect(record.locator('pre')).toContainText('原始旁白内容');
+      await expect(record).toContainText('模型已返回，分镜校验未通过');
+      await expect(record.getByText('查看模型原始返回', { exact: true })).toHaveCount(0);
+      const prior = await rpc<RunStepPayload>(request, 'run.step.payload', { runId: source.run.id, nodeId: 'script', kind: 'output', responseAttempt: 1 });
+      expect(prior.modelResponse?.text).toContain('原始旁白内容');
       await record.getByRole('combobox', { name: '模型返回版本' }).selectOption('');
       await page.screenshot({ path: info.outputPath('confirmed-http-400-retry-available.png') });
       await retry.click(); await confirmAction(page, '确认重试'); await expect.poll(async () => (await source.inspect()).run.stepRetry?.status).toBe('completed');
@@ -247,7 +253,7 @@ for (const width of [1536, 390]) {
 }
 
 for (const protocol of ['chat-completions', 'responses'] as const) for (const viewport of [{ width: 1536, height: 960, theme: 'dark' }, { width: 390, height: 844, theme: 'light' }]) {
-  test(`shows field errors and raw response, then retries only script via ${protocol} at ${viewport.width}px`, async ({ page, request }, info) => {
+  test(`shows field errors and retries only script via ${protocol} at ${viewport.width}px`, async ({ page, request }, info) => {
     await page.setViewportSize(viewport); await page.emulateMedia({ reducedMotion: 'reduce' });
     await page.addInitScript(theme => localStorage.setItem('vq-theme', theme), viewport.theme);
     const errors: string[] = []; page.on('pageerror', error => errors.push(error.message)); page.on('console', message => { if (message.type() === 'error') errors.push(message.text()); });
@@ -260,14 +266,19 @@ for (const protocol of ['chat-completions', 'responses'] as const) for (const vi
       const record = dialog.getByRole('region', { name: '模型返回记录', exact: true });
       await expect(record).toContainText('模型已返回，分镜校验未通过'); await expect(record).toContainText(field); await expect(record).toContainText(protocol === 'responses' ? '应为数组' : '应为字符串');
       await expect(dialog.getByRole('button', { name: '重试此批', exact: true })).toBeEnabled(); await expect(dialog).not.toContainText('存在结果未确认的外部提交');
-      await record.getByText('查看模型原始返回', { exact: true }).click();
-      await expect(record.locator('pre')).toContainText('原始旁白内容'); await expect(record.locator('pre')).not.toContainText('fixture-hidden-key'); await expect(record.locator('pre')).toContainText('[已隐藏]');
-      await page.screenshot({ path: info.outputPath('field-error-and-raw-response.png') });
+      await expect(record.getByText('查看模型原始返回', { exact: true })).toHaveCount(0);
+      await expect(record).not.toContainText('原始旁白内容');
+      await page.screenshot({ path: info.outputPath('storyboard-field-error.png') });
       await dialog.getByRole('button', { name: '重试此批', exact: true }).click(); await confirmAction(page, '确认重试');
       await expect.poll(async () => (await source.inspect()).run.stepRetry?.status).toBe('completed');
       await expect(dialog).toContainText('后续步骤尚未执行'); await expect(record.getByRole('alert')).toHaveCount(0);
       await record.getByRole('combobox', { name: '模型返回版本', exact: true }).selectOption('1');
-      await expect(record).toContainText(field); await expect(record.locator('pre')).toContainText('原始旁白内容');
+      await expect(record).toContainText(field);
+      await expect(record.getByText('查看模型原始返回', { exact: true })).toHaveCount(0);
+      const prior = await rpc<RunStepPayload>(request, 'run.step.payload', { runId: source.run.id, nodeId: 'script', kind: 'output', responseAttempt: 1 });
+      expect(prior.modelResponse?.text).toContain('原始旁白内容');
+      expect(prior.modelResponse?.text).not.toContain('fixture-hidden-key');
+      expect(prior.modelResponse?.text).toContain('[已隐藏]');
       await record.getByRole('combobox', { name: '模型返回版本', exact: true }).selectOption('');
       await expect(record.getByRole('alert')).toHaveCount(0);
       expect(source.calls.map(call => call.step)).toEqual(['brief', 'style', 'outline', 'script', 'script']);

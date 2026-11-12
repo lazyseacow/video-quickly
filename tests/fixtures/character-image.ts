@@ -1,6 +1,6 @@
 import { createRequire } from 'node:module';
 
-const { createCanvas, loadImage } = createRequire(new URL('../../packages/video/package.json', import.meta.url))('@napi-rs/canvas') as typeof import('../../packages/video/node_modules/@napi-rs/canvas');
+const { createCanvas, loadImage } = createRequire(new URL('../../src/packages/video/package.json', import.meta.url))('@napi-rs/canvas') as typeof import('../../src/packages/video/node_modules/@napi-rs/canvas');
 
 export async function fixtureCharacterImage(profile = false, format: 'png' | 'jpeg' | 'webp' = 'png') {
   const headX = profile ? 175 : 160, headWidth = profile ? 26 : 38, eyes = profile ? [185] : [148, 172];

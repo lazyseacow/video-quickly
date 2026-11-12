@@ -4,8 +4,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, expect, it, vi } from 'vitest';
 import { modelSchema, projectReadinessSchema, workflowNodeSchema, type AssetRecord, type ProjectDocument, type WorkflowNode } from '@video-quickly/contracts';
-import { createRuntime, type RuntimeOptions } from '../packages/runtime/src';
-import { DocumentStore, openDatabase } from '../packages/runtime/src/database';
+import { createRuntime, type RuntimeOptions } from '../src/packages/runtime/src';
+import { DocumentStore, openDatabase } from '../src/packages/runtime/src/database';
 
 const fixtures: Array<{ directory: string; runtime: ReturnType<typeof createRuntime>; database: ReturnType<typeof openDatabase> }> = [];
 afterEach(async () => { for (const fixture of fixtures.splice(0)) { await fixture.runtime.close(); fixture.database.close(); await rm(fixture.directory, { recursive: true, force: true }); } });
@@ -84,6 +84,20 @@ it('points invalid parameters to model settings and incompatible roles to the ac
   expect(result.issues).toEqual(expect.arrayContaining([expect.objectContaining({ nodeId: 'image', fix: 'step', severity: 'error' })]));
   putModel(f, { provider: 'ollama', connectionType: 'image', capabilities: ['image'] }); result = await f.check();
   expect(result.issues).toEqual(expect.arrayContaining([expect.objectContaining({ nodeId: 'image', fix: 'step', message: expect.stringContaining('协议') })]));
+});
+
+it('loads a project with a saved ComfyUI image connection and accepts a replacement for its image step', async () => {
+  const f = await fixture([{ id: 'image', kind: 'assets', modelId: 'model' }]);
+  const previous = putModel(f, { platform: 'comfyui', provider: 'comfyui' });
+  await expect(f.runtime.dispatch('project.get', { projectId: f.project.id })).resolves.toMatchObject({ project: { id: f.project.id } });
+  const result = await f.check();
+  expect(result.ready).toBe(false);
+  expect(result.issues).toContainEqual(expect.objectContaining({ nodeId: 'image', modelId: previous.id, fix: 'step', message: expect.stringContaining('协议') }));
+  await expect(f.runtime.dispatch('shot.regenerate', { projectId: f.project.id, revision: f.project.revision, shotId: 'shot', kind: 'image', modelId: previous.id })).rejects.toThrow('选择可用的对应模型');
+  expect(f.store.get('model', previous.id)).toEqual(previous);
+  await f.runtime.dispatch('model.save', { model: { ...previous, platform: 'custom', provider: 'openai-compatible' } });
+  expect((await f.check()).ready).toBe(true);
+  expect(f.execute).not.toHaveBeenCalled();
 });
 
 it('reuses the local media preflight with its data directory and no submission identity or database writes', async () => {

@@ -4,8 +4,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, expect, it } from 'vitest';
 import { modelSchema, projectSchema, runSchema, workflowNodeSchema } from '@video-quickly/contracts';
-import { createRuntime } from '../packages/runtime/src/index';
-import { createLogger } from '../packages/runtime/src/logging';
+import { createRuntime } from '../src/packages/runtime/src/index';
+import { createLogger } from '../src/packages/runtime/src/logging';
 
 const directories: string[] = [], servers: Server[] = [], runtimes: ReturnType<typeof createRuntime>[] = [];
 afterEach(async () => {

@@ -3,8 +3,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, expect, it, vi } from 'vitest';
 import { modelSchema, projectSchema, runInspectionSchema, runSchema, workflowNodeSchema, type ProjectDocument, type WorkflowTemplate } from '@video-quickly/contracts';
-import { createRuntime, SimulatedProcessExit, type RuntimeOptions } from '../packages/runtime/src';
-import { DocumentStore, openDatabase } from '../packages/runtime/src/database';
+import { createRuntime, SimulatedProcessExit, type RuntimeOptions } from '../src/packages/runtime/src';
+import { DocumentStore, openDatabase } from '../src/packages/runtime/src/database';
 
 const directories: string[] = [], runtimes: ReturnType<typeof createRuntime>[] = [];
 afterEach(async () => {

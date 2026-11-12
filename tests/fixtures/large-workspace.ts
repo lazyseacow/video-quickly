@@ -1,5 +1,5 @@
 import { createNativeVideoWorkflow, DEFAULT_VIDEO_PROFILE, projectSchema, type AssetRecord, type RunRecord } from '@video-quickly/contracts';
-import { DocumentStore } from '../../packages/runtime/src/database';
+import { DocumentStore } from '../../src/packages/runtime/src/database';
 
 export function seedLargeWorkspace(store: DocumentStore, shotCount: number, options = { assets: 1000, runs: 200, eventsPerRun: 100 }) {
   const timestamp = '2026-10-29T00:00:00.000Z';

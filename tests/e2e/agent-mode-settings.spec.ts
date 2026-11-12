@@ -8,7 +8,7 @@ import { openProduction, pickProductionModel, productionFixture, productionStep,
 import { rpc } from './native-video-fixture';
 import { openProjectFromList } from './workspace-navigation';
 
-const { strToU8, zipSync } = createRequire(new URL('../../packages/runtime/package.json', import.meta.url))('fflate') as typeof import('../../packages/runtime/node_modules/fflate');
+const { strToU8, zipSync } = createRequire(new URL('../../src/packages/runtime/package.json', import.meta.url))('fflate') as typeof import('../../src/packages/runtime/node_modules/fflate');
 
 for (const viewport of [{ width: 1536, height: 960, theme: 'dark' }, { width: 1024, height: 720, theme: 'light' }, { width: 390, height: 844, theme: 'light' }]) test(`keeps Agent overrides separate from model selection at ${viewport.width}px`, async ({ page, request }, info) => {
   const source = await productionFixture(request), errors: string[] = [], methods: string[] = [];

@@ -1,129 +1,82 @@
 # Video Quickly
 
-## 项目介绍
+Video Quickly 是本地视频创作工作台，用于策划分镜、整理素材与声音、剪辑和导出。可以导入已有素材完成制作，也可以接入文本、图片和视频模型辅助创作。
 
-Video Quickly 是面向通用视频制作的本地创作工作台，覆盖策划分镜、素材配音、剪辑动画、审阅和导出。支持连接 AI 模型辅助创作，也可导入已有素材编辑。
+## 开始制作
 
-默认视频制作采用四个阶段：**策划与分镜 → 素材与配音 → 剪辑与动画 → 审阅与导出**。配置统一从顶部“制作设置”进入，按 **创作要求 → 模型与素材 → 声音与成片 → 确认保存** 逐步填写，最后保存，再点击工作台“开始制作”。策划任务共用文本模型，视频模型同步生成画面、人声与环境音；参考图可选用已有素材或图片模型。“模型与素材”可添加本地 WAV / MP3 作为 Seedance 2.0／2.5 的参考音频，随制作配置保存。字幕默认关闭，可按需显示分镜文本并核对预估时间。
+1. 在「我的项目」新建项目。填写名称和创意简报，可选用系列模板或创作 Skill。
+2. 需要 AI 生成时，在「模型连接」配置服务。连接支持读取服务目录或手动填写模型 ID／推理接入点 ID。文本协议、鉴权和请求地址可按服务配置。
+3. 从工作台打开「制作设置」，依次填写「创作要求」「模型与素材」「声音与成片」，在「确认保存」提交。画幅和帧率在「创作要求」设置，也可粘贴小说或剧本正文，直接填写简报、风格和分镜。需要生成时在「模型与素材」选择本次制作的模型。打开配乐或字幕样式前先保存设置。
+4. 点击「开始制作」。内置流程包含「策划与分镜」「素材与配音」「剪辑与动画」「审阅与导出」。点击阶段卡片打开「本次制作」，查看进度、产物和失败后的重试入口。依赖公开资料的分镜会保留来源，简报可写「无需联网」关闭资料查询。
 
-新建项目时填写名称和创意简报，可按需选择系列模板和创作 Skill。在“制作设置 → 创作要求 → 分镜全局参数”设置画面比例、分辨率、帧率和素材适配。分镜构图、参考图和镜头视频共用本次制作的目标画幅。生成的镜头视频入库前会按全片分辨率与帧率核验，必要时在本地转换并保留音轨。手动导出 MP4 时可为本次输出单独选择画面规格。
+工作台支持编辑镜头、时间轴、字幕、背景音乐和运镜，提供撤销、重做和草稿恢复。点击「导出」可选择本次 MP4 的画面规格，也可导出字幕、分镜及多比例成片。剪映／CapCut 交接包和实验性工程草稿的使用条件见[素材扩展与剪辑交付](docs/media-extensions.md)。
 
-系列模板内置竖屏真人短剧、动态条漫和国风水墨漫剧。选用后带入 9:16 画幅、视觉风格、字幕样式与配套创作 Skill。分镜制作卡可在 Skill 工作室查看，场景参考图可在素材库选用。
+「素材库」管理媒体和角色参考，「系列模板」复用画幅、视觉风格和配套 Skill。「Skill 工作室」支持导入本地目录、ZIP（最大 50 MB）或 GitHub 仓库／Skill 目录链接，可在提示词实验中离线查看编译结果后显式试运行。制作设置、首帧与参考素材、提示词实验及后台导入的细节见[工作区契约](docs/workspace-editing.md)。
 
-“模型与素材”可直接设置镜头并发和模型并发上限。系统依次执行简报、风格、分镜、参考素材准备、镜头视频生成、剪辑准备与导出，运行快照固定本次制作参数。生成视频验证真实音轨与时长，原声贯通预览和成片。
+## 从源码运行
 
-“开始制作”会执行完整的四阶段流程。具备工具调用能力的文本模型可在剪辑阶段自动使用 Video Agent，按需调用 Skill 和 MCP 工具，补充镜头素材或调整剪辑，再由流程导出成片。剪辑 Agent 默认沿用创建项目时所选的创作 Skill，并按需使用已启用的工具连接。旧项目使用默认剪辑配置时，简报、风格和分镜保存的同一组 Skill 也会自动沿用。在“制作设置 → 创作要求 → 剪辑 Agent 设置”可单独调整 Skill 和工具连接。手动清空剪辑 Skill 后改为自动发现。未选择能力时，已启用的 MCP 连接或 Skill 脚本可触发协作。原生 Ollama 和缺少可用能力的项目沿用常规剪辑步骤。运行期间使用启动时保存的模型与能力配置。
+支持 Windows 10／11 x64 和 macOS 13.5 及以上的 Apple Silicon／Intel。准备 Node.js 24 和 pnpm 10，固定版本见 [.node-version](.node-version) 和 [package.json](package.json)。macOS 需安装 Xcode Command Line Tools，并使用与本机 CPU 架构一致的 Node.js。以下命令均在仓库根目录执行。
 
-分镜生成会按简报主题搜索公开网页，也会读取简报给出的公开链接。传给文本模型的是网页正文摘录、来源和采集时间。已读取的资料随本次制作保存，重试分镜时复用。明确要求查资料或依赖实时信息的项目在读不到网页正文时停在分镜，其他项目可按简报继续。简报写明「无需联网」时跳过查询。
+**Windows PowerShell**
 
-内置 AI 分镜先保存全片大纲，再按播放顺序每批生成最多 5 个镜头。通过校验的镜头即时保存到「本次制作」。某批返回失败时可点击「重试此批」，沿用已保存的大纲和镜头，从失败批次接续。完整分镜校验通过后才进入后续制作。
+```powershell
+pnpm install --frozen-lockfile
+pnpm prepare:media
+$env:VIDEO_QUICKLY_DATA_DIR = Join-Path $PWD.Path '.data/electron-development'
+pnpm dev:desktop
+```
 
-GitHub Trending 榜单题材优先读取指定周期的官方排名，默认从日榜开始。数量不足时按其他官方榜单的顺序去重补齐，并注明补充项目的来源和名次。所有可用榜单仍凑不齐时，按已核实的数量继续。简介缺失时尝试读取仓库 README。完全读不到榜单项目时保留分镜断点，来源恢复后可继续。分镜旁白须覆盖本次实际选取的仓库。
-
-步骤切换和返回修改均保留输入，高级任务设置默认折叠，确认页汇总配置并支持返回修改。“下一步”按当前选择检查带红色星号的必填项。模型尚未配齐时，可直接切到“确认保存”先保存配置，开始制作时会校验模型。预览质量在播放器右下角的“清晰度”菜单调整，本机记住选择。打开模板、配乐和字幕样式等附属工具前，先在最后一步确认保存。保存失败保留输入，运行中保存的配置用于下次制作。
-
-点击“开始制作”会依次执行四个制作阶段。工作台高亮当前阶段，点击阶段卡片打开“本次制作”，查看步骤状态和产物。若某一步失败，可在这里点击“重试此步骤”，成功后通过“继续原制作”完成余下步骤。镜头视频生成后自动应用，后续剪辑与导出接着处理。项目内容在制作期间发生变化时，人工编辑与生成产物均保留，供后续核对。运行中保存的待用配置用于下次制作。
-
-从“Skill 工作室 → 提示词实验与模板”选择项目和任务，可离线查看最终提示词和引用，保存独立实验草稿后显式试运行。单镜头图片和视频可在镜头候选中对比。模板与快捷片段保留固定版本，保存模板、应用提示词和应用产物分别操作。试运行可在实验内查看，费用按实际用量记录。
-
-在“制作设置 → 创作要求”可粘贴小说或剧本正文。「AI 填写分镜」和正式制作使用项目原文，改编目标与时长可另填在创作要求。
-
-## 核心功能
-
-- **分镜与剪辑**：编辑画面、旁白、时长和运镜，支持关键帧、时间轴、分割、裁剪、批量调整，以及与成片对齐的叠化和擦除预览。
-- **声音与字幕**：支持视频原声、参考音频、字幕编辑和背景音乐。
-- **模型与制作流程**：配置文本、图片和视频模型，查看 Token 消耗。内置流程支持自动接续、并行生成和失败步骤重试。
-- **素材与模板**：管理素材、角色参考、系列模板和 Skill，复用创作资源。
-- **角色一致性** 一键制作识别反复出镜的人物，复用角色参考图，缺图时自动生成项目定妆图。分镜按出镜人物使用对应参考图，也可在制作设置中选择项目角色池。在「素材库 → 角色」可手动上传、从媒体列表选图或按提示词生成一张参考图，单镜头视频重做可复用已保存的首帧。
-- **项目管理** 启动后进入“我的项目”，可批量移入回收站和下载完整 MP4。编辑支持草稿恢复和撤销重做。
-- **素材扩展**：场景／道具图片参考、素材回收站和局部改图候选。
-- **视频导出**：导出 MP4、字幕和分镜，支持横屏、竖屏、方形等多比例批量导出。
-- **剪辑交付**：导出剪映／CapCut 交接包；可使用本机明文空模板生成实验性草稿，实际软件导入需核对。详见[使用说明](docs/media-extensions.md)。
-- **应用设置**：从侧栏左下角的“设置”打开紧凑浮层，使用胶囊按钮切换浅色／深色外观，并进入 Token 消耗或使用指南。
-
-Skill 工作室支持导入本地目录、ZIP 文件、GitHub 仓库或具体 Skill 目录链接，默认将来源中的全部 Skill 保存为一个分组。导入在后台执行，关闭弹窗、切换页面或刷新界面后可继续查看进度；失败与应用退出后的中断记录支持重试。创建项目时可整组选用，简报、风格和分镜任务继承选择；任务设置与提示词实验支持分组搜索和单项调整。指令及已展开的引用资源进入任务快照，图片和视频请求同样采用所选 Skill。单个 Skill 最多 500 个文件、50 MB，压缩包最多 50 MB；脚本工具需单独启用。 工作室显示明确的启用开关，支持整组启停，以及确认后卸载单项或整组。卸载保留运行和历史快照，已有任务中的对应绑定会提示不可用，可重新选择或从原来源导入。
-
-## 安装运行
-
-准备 Node.js 24 和 pnpm 10，具体版本以 [.node-version](.node-version) 和 [package.json](package.json) 为准。桌面客户端使用 Electron 和随附 Chromium，通过独立 Node 执行器管理项目、生成与媒体处理。以下命令均在项目根目录执行。
+**macOS**
 
 ```sh
 pnpm install --frozen-lockfile
-```
-
-### Windows 10／11 x64
-
-安装锁定的项目依赖后准备媒体组件：
-
-```powershell
 pnpm prepare:media
-pnpm dev:desktop
+VIDEO_QUICKLY_DATA_DIR="$PWD/.data/electron-development" pnpm dev:desktop
 ```
 
-首次运行时执行 `pnpm prepare:media`，准备 FFmpeg 和 FFprobe。
+`prepare:media` 准备经过固定摘要校验的 FFmpeg 和 FFprobe。macOS 开发模式也支持使用 PATH 上带字幕渲染支持的 FFmpeg／FFprobe。上述数据目录用于将开发项目和 Chromium 草稿与日常使用隔离。
 
-### macOS 13.5 及以上（Apple Silicon／Intel）
+浏览器预览运行 `pnpm dev`，访问 <http://127.0.0.1:1420>。该模式使用本地 HTTP 桥接，适合调试界面和业务交互。原生文件选择、系统凭据和窗口行为通过 Electron 验证。[Electron 开发与打包](docs/electron-desktop.md#开发与打包)
 
-安装 Xcode Command Line Tools，使用与本机 CPU 架构一致的 Node.js。分别支持 arm64 和 x64，依赖与执行器按当前 CPU 原生构建。准备媒体组件后运行：
+## 验证与打包
 
-```sh
-pnpm prepare:media
-pnpm dev:desktop
-```
+| 命令 | 用途 |
+| --- | --- |
+| `pnpm typecheck` | 检查工作区各包、沙箱预加载和验证脚本。 |
+| `pnpm test` | 运行单元与集成测试。可附加测试文件路径缩小范围。 |
+| `pnpm test tests/design-token-contract.test.ts` | 单独运行 CI 的界面令牌静态契约检查。 |
+| `pnpm build` | 构建 Node 执行器与生产前端。 |
+| `pnpm check` | 依次执行类型检查、测试和构建。 |
+| `pnpm test:e2e` | 运行浏览器回归。首次运行前执行 `pnpm exec playwright install chromium`。 |
+| `pnpm test:media` | 验证实际媒体编码。 |
+| `pnpm test:desktop` | 用独立临时工作区启动真实 Electron，检查生产协议、预加载与执行器。运行前先按[桌面验收说明](docs/electron-desktop.md#验收门槛)构建前端和执行器。 |
+| `pnpm build:desktop` | 在当前原生平台生成桌面包。 |
+| `pnpm test:desktop --packaged` | 对实际构建的桌面应用执行原生回归。 |
 
-`prepare:media` 下载经过固定 SHA-256 校验的独立 FFmpeg／FFprobe，包含字幕渲染与 H.264 编码，不依赖 Homebrew。生产打包自动准备官方独立 Node.js 24；开发模式也可使用 Homebrew Node。
+桌面包位于 `.generated/electron-release/`，Windows 输出 NSIS 安装器，macOS 按架构输出包含独立 `.app` 的 ZIP。构建命令使用 `--publish never`。实包验证、安装覆盖和数据保留分别见 [Windows 验收](docs/windows-verification.md)和 [macOS 验收](docs/macos-verification.md)。
 
-仅启动和编辑项目时，可跳过媒体准备；开发模式也支持通过 PATH 使用带字幕渲染支持的 FFmpeg（例如 Homebrew 的 `ffmpeg-full`）。
+## 代码入口
 
-### 更新应用图标
+桌面应用包位于 `src/`，React 源码在 `src/renderer/`，独立执行器和共享包位于 `src/packages/`。
 
-应用内标志的源文件为 `apps/desktop/src/assets/logo.svg`。修改后在项目根目录执行 `pnpm prepare:icons`，复用现有 Canvas 和 Electron Builder 工具同步生成桌面图标（PNG、ICO、ICNS）、macOS 托盘模板和浏览器图标。桌面资源保存在 `apps/desktop/build/icons/`；macOS 图标在 1024px 画布中保留 100px 透明边距，开发模式的 Dock 使用 `dock.png`，正式包的 ICNS 使用同一构图。应用内标志随明暗主题调整颜色，系统托盘提供显示主窗口和退出入口。
+| 模块 | 从这里开始 |
+| --- | --- |
+| Electron 主进程 | [main.mjs](src/electron/main.mjs) 管理窗口、应用生命周期和 Node 执行器，[desktop-ipc.mjs](src/electron/desktop-ipc.mjs) 接入渲染端 IPC。 |
+| 预加载 | [preload.cjs](src/electron/preload.cjs) 通过 `contextBridge` 暴露 `window.videoQuickly`，[desktop-bridge.ts](src/packages/contracts/src/desktop-bridge.ts) 定义桥接类型。 |
+| React 工作台 | [main.tsx](src/renderer/main.tsx) 挂载应用外壳 [App.tsx](src/renderer/App.tsx)。项目编辑和制作从 [Workbench.tsx](src/renderer/features/Workbench.tsx) 进入，[client.ts](src/renderer/lib/client.ts) 提供 RPC 与事件订阅。 |
+| Node 执行器 | [main.ts](src/packages/runtime/src/main.ts) 处理进程通信，[index.ts](src/packages/runtime/src/index.ts) 组装工作区服务和业务请求入口。 |
+| 共享契约与媒体 | [contracts](src/packages/contracts/src/index.ts) 定义跨进程数据和校验，[video](src/packages/video/package.json) 提供媒体计算及 Node 专用入口，[integrations](src/packages/integrations/src/index.ts) 实现外部集成。 |
 
-### 浏览器预览
+## 数据与专题文档
 
-运行 `pnpm dev`，访问 <http://127.0.0.1:1420>。模型生成功能需在应用的“模型连接”中配置服务。
-
-添加连接时可读取服务目录，也可手动填写模型 ID 或火山方舟推理接入点 ID。文本连接可独立选择 API 协议、鉴权方式和完整请求地址，并按所选型号确认工具调用等能力。更换服务来源时填写该服务的 API Key。
-
-## 打包说明
-
-Windows x64、macOS arm64／x64 均可在对应原生机器完成环境准备后执行：
-
-```powershell
-pnpm build:desktop
-```
-
-产物在 `.generated/electron-release/`：Windows 为 NSIS 安装器，macOS 为可独立解压的 `.app` ZIP。每个 Mac 架构分别构建、验收，不将一个架构的本地结果代替另一个架构。打包命令固定 `--publish never`，不会自动发布。
-
-macOS ZIP 未签名，最低系统版本为 13.5；可运行 `node scripts/verify-macos-bundle.mjs` 检查架构、最低系统版本和动态库依赖。
-
-桌面专项验收：`pnpm test:desktop`；打包后使用 `pnpm test:desktop --packaged` 验证真实打包应用。验收使用独立临时工作区，不读取日常模型密钥或提交付费任务。
-
-浏览器回归使用 `pnpm test:e2e`，默认端口为 1421。多个工作目录同时验证时，可通过 `VIDEO_QUICKLY_PORT` 指定不同端口；各次运行的数据目录独立。
-
-浏览器测试本机默认用例预算为 30 秒、状态断言等待为 5 秒；CI 曾出现约 16 秒的运行时事件循环停顿，因此 CI 默认预算为 90 秒和 30 秒。测试不自动重试，单独声明的用例预算、计时窗口与画面、音频和资源数值门槛按各场景执行。
-
-开发检查使用 `pnpm typecheck`、`pnpm test` 和 `pnpm build`；`pnpm check` 顺序执行这三项。浏览器、媒体与真实桌面验收分别使用 `pnpm test:e2e`、`pnpm test:media` 和 `pnpm test:desktop`，具体覆盖与平台边界见下列文档。
-
-编辑器通过 `.editorconfig` 统一 UTF-8、LF 和两空格缩进。TypeScript 检查覆盖工作区各包、验证脚本和桌面开发入口，并检查未使用的变量与参数、遗漏的返回值和类型导入。CI 在启动 Windows 与 macOS 浏览器分片前先执行源码检查。
-
-修改性能热点时，用同一机器和隔离夹具对比 `pnpm benchmark:workspace` 的原始样本。CI 回归检查分页范围、查询次数和索引使用，耗时按对应设备实测。
-
-## 数据与文档
-
-Windows 默认工作区为 `%APPDATA%\VideoQuickly-Electron`，macOS 为 `~/Library/Application Support/VideoQuickly-Electron`。Chromium 配置与编辑草稿位于工作区的 `electron-session`；系统凭据保存在操作系统凭据库。
+Windows 默认工作区为 `%APPDATA%\VideoQuickly-Electron`，macOS 为 `~/Library/Application Support/VideoQuickly-Electron`。Chromium 偏好与编辑草稿位于工作区的 `electron-session`，模型密钥保存在系统凭据库。运行日志在工作区的 `logs/`，桌面进程写入 `desktop.log`，执行器和浏览器预览写入 `runtime.log`。
 
 | 文档 | 内容 |
 | --- | --- |
-| [功能现状与开发边界](docs/development-plan.md) | 当前已实现能力、代码与验证入口 |
-| [界面设计规范](DESIGN.md) | 四阶段工作台、主题令牌、公共控件与交互约定 |
-| [读取、编辑与恢复契约](docs/workspace-editing.md) | 阶段进度、项目读取、草稿、剪辑、素材与产物应用 |
-| [持久化执行契约](docs/durable-execution.md) | 冻结快照、执行范围、审阅、回执与任务恢复 |
-| [Electron 架构与验收](docs/electron-desktop.md) | 桌面进程、IPC、安全、工作区和构建流程 |
-| [日志规范](docs/logging.md) | 日志位置、级别、轮转、脱敏与排查 |
-| [Windows 验收](docs/windows-verification.md)／[macOS 验收](docs/macos-verification.md) | 对应平台的实际包、安装与数据保留验收 |
-| [外部服务与性能验收](docs/release-validation.md) | 真实供应商、长时播放和人工桌面验证 |
-
-## 日志与排查
-
-运行日志自动保存在工作区的 `logs/` 目录，桌面外壳记录在 `desktop.log`，执行器与浏览器预览记录在 `runtime.log`。默认记录请求、节点和模型调用起止、每个镜头的排队／提交／轮询／下载／校验环节、导出渲染耗时、HTTP 状态和安全错误原因链，可按项目、运行和镜头编号关联排查。日志按大小轮转，敏感正文不写入，逐次轮询等细节可临时开启 debug。具体路径、字段、脱敏范围和排查步骤见 [日志规范](docs/logging.md)。
+| [Electron 架构与验收](docs/electron-desktop.md) | 桌面进程、导出调用链、IPC、工作区与构建流程。 |
+| [功能现状与开发边界](docs/development-plan.md) | 功能索引和对应回归入口。 |
+| [工作区读取、编辑与恢复](docs/workspace-editing.md) | 制作设置、草稿、素材、剪辑、提示词实验与性能基准。 |
+| [持久化执行](docs/durable-execution.md) | 运行快照、外部操作、回执与任务恢复。 |
+| [界面设计规范](DESIGN.md) | 四阶段工作台、主题令牌、公共控件与交互。 |
+| [运行日志与排查](docs/logging.md) | 位置、字段、日志轮转与排查方法。 |
+| [外部服务与性能验收](docs/release-validation.md) | 真实供应商、长时播放和人工桌面验证。 |

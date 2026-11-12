@@ -2,7 +2,7 @@ import { readdirSync, readFileSync } from 'node:fs';
 import { join, relative } from 'node:path';
 import { expect, it } from 'vitest';
 
-const root = join(import.meta.dirname, '../apps/desktop/src');
+const root = join(import.meta.dirname, '../src/renderer');
 const styles = readdirSync(root, { recursive: true }).filter((file): file is string => typeof file === 'string' && file.endsWith('.css'));
 
 it('keeps all owned interface styles on shared color, typography, spacing and radius roles', () => {

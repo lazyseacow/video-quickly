@@ -116,9 +116,9 @@ test('lists built-in templates by name and creates a portrait project with the m
   await page.getByRole('button', { name: '素材库', exact: true }).click();
   await page.getByRole('button', { name: '图片', exact: true }).click();
   for (const name of ['巴黎石板巷', '大桥骤雨', '云山隐居图']) {
-    const image = page.getByRole('img', { name: `内置参考 · ${name}`, exact: true });
-    await image.scrollIntoViewIfNeeded();
-    await expect.poll(() => image.evaluate(element => (element as HTMLImageElement).naturalWidth)).toBeGreaterThan(0);
+    const preview = page.getByRole('button', { name: `预览“内置参考 · ${name}”`, exact: true });
+    await preview.scrollIntoViewIfNeeded();
+    await expect.poll(() => preview.locator('img').evaluate((image: HTMLImageElement) => image.naturalWidth)).toBeGreaterThan(0);
   }
   expect(observed.writes).toEqual(['project.create']);
   expect(observed.errors).toEqual([]);
@@ -166,13 +166,15 @@ test('starts project creation with a selected template from a later library page
   expect(observed.errors).toEqual([]);
 });
 
-test('preserves existing 30fps data and keeps complete frame-rate and dimension controls in editing and export', async ({ page, request }, info) => {
+test('preserves an existing nonstandard production size and keeps complete dimension controls in export', async ({ page, request }, info) => {
   const source = await rpc<ProjectDocument>(request, 'project.create', { title: '已有4比5三十帧项目', profile: { width: 800, height: 1000, frameRate: { numerator: 30, denominator: 1 }, fitMode: 'contain', previewScale: 1 } });
   const project = await rpc<ProjectDocument>(request, 'project.update', { projectId: source.id, revision: source.revision, patch: { shots: [{ id: 'existing-profile-shot', title: '保持现有素材与时长', narration: '', visualPrompt: '', durationUs: 1_000_000, sceneTemplate: createSceneTemplate('process') }] } });
   const observed = observe(page); await page.emulateMedia({ reducedMotion: 'reduce' }); await page.goto('/'); await openProjectFromList(page, project.title);
   expect(await saved(request, project.id)).toEqual(project); await page.locator('.project-heading-actions').getByRole('button', { name: '制作设置', exact: true }).click();
   const panel = page.getByRole('dialog', { name: '制作设置', exact: true }); await productionStep(panel, '创作要求');
-  await expect(panel.getByLabel('视频宽度', { exact: true })).toHaveValue('800'); await expect(panel.getByLabel('视频高度', { exact: true })).toHaveValue('1000');
+  await expect(panel.getByLabel('分辨率', { exact: true }).locator('option:checked')).toHaveText('800 × 1000 · 当前');
+  await expect(panel.getByLabel('视频宽度', { exact: true })).toHaveCount(0);
+  await expect(panel.getByLabel('视频高度', { exact: true })).toHaveCount(0);
   const rate = await settingField(panel, '视频帧率'); await expect(rate).toHaveValue('30');
   for (const value of ['4:5', '21:9']) await expect(panel.getByLabel('画面比例', { exact: true }).locator(`option[value="${value}"]`)).toHaveCount(1);
   for (const value of ['60', '30']) {

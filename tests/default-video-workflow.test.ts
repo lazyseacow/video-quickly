@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, expect, it } from 'vitest';
 import { createNativeVideoWorkflow, projectSchema, resolveWorkflowStages, runSchema, validateWorkflowComposition, workflowSchema, type ActivityRecord, type ProjectDocument, type RecordPage } from '@video-quickly/contracts';
-import { createRuntime } from '../packages/runtime/src';
+import { createRuntime } from '../src/packages/runtime/src';
 
 const directories: string[] = [], runtimes = new Set<ReturnType<typeof createRuntime>>();
 afterEach(async () => { await Promise.all([...runtimes].map(runtime => runtime.close())); runtimes.clear(); await Promise.all(directories.splice(0).map(directory => rm(directory, { recursive: true, force: true }))); });

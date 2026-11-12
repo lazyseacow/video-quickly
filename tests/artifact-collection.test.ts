@@ -18,8 +18,8 @@ async function fixture(platform: 'win32' | 'darwin') {
   await mkdir(join(directory, 'scripts'));
   for (const name of [collector, 'verified-download.mjs']) await copyFile(resolve('scripts', name), join(directory, 'scripts', name));
   await file('package.json', JSON.stringify({ version: '0.0.0-fixture', packageManager: 'pnpm@10.33.0' }));
-  await file('apps/desktop/package.json', JSON.stringify({ devDependencies: { electron: 'fixture-electron' } }));
-  await file('apps/desktop/dist/assets/app.js', 'fixture frontend');
+  await file('src/package.json', JSON.stringify({ devDependencies: { electron: 'fixture-electron' } }));
+  await file('src/dist/assets/app.js', 'fixture frontend');
   await file('.generated/sidecar/runtime.mjs', 'fixture runtime');
   await report('sidecar/media/provenance.json', { verified: true });
   await report('sidecar/third-party-licenses/manifest.json', []);

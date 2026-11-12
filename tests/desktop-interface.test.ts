@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { interfacePlatform, pathExample, primaryModifier, shortcutLabel } from '../apps/desktop/src/lib/desktop';
+import { interfacePlatform, pathExample, primaryModifier, shortcutLabel } from '../src/renderer/lib/desktop';
 
 describe('desktop interface platform roles', () => {
   it('prefers the actual native host and falls back to the browser only for preview', () => {

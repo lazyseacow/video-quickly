@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { mkdir, readFile, stat, writeFile } from 'node:fs/promises';
 import { expect, test, type APIRequestContext } from '@playwright/test';
 import type { AssetRecord, ProjectDocument, RecordPage, RunSummary } from '@video-quickly/contracts';
-import { probeMedia } from '../../packages/video/src/media-process';
+import { probeMedia } from '../../src/packages/video/src/media-process';
 import { openProjectFromList } from './workspace-navigation';
 
 async function rpc<T>(request: APIRequestContext, method: string, params: unknown): Promise<T> {
@@ -128,8 +128,10 @@ test('starts on the project list and moves only checked projects into and out of
   const projects = [];
   for (const suffix of ['甲', '乙', '丙', '丁']) projects.push(await rpc<ProjectDocument>(request, 'project.create', { title: `${group} ${suffix}` }));
   const [first, second, third, fourth] = projects;
+  await rpc(request, 'project.update', { projectId: second.id, revision: second.revision, patch: { brief: '较晚保存的旧项目' } });
   await rpc(request, 'project.archive', { projectId: fourth.id });
   const card = (project: ProjectDocument) => page.locator('.project-card').filter({ has: page.getByRole('heading', { name: project.title, exact: true }) });
+  const titles = page.getByRole('region', { name: '项目列表', exact: true }).getByRole('heading', { level: 3 });
   const calls: string[] = [];
   page.on('request', request => { if (request.url().endsWith('/__desktop_rpc')) calls.push(request.postDataJSON().method); });
   await page.setViewportSize({ width: 1024, height: 720 });
@@ -145,6 +147,8 @@ test('starts on the project list and moves only checked projects into and out of
   expect((await rpc<{ project: ProjectDocument }>(request, 'project.get', { projectId: first.id })).project).toEqual(first);
 
   await page.getByLabel('搜索项目', { exact: true }).fill(group);
+  await expect(titles).toHaveText([third.title, second.title, first.title]);
+  await expect(card(second).locator('time')).toHaveAttribute('datetime', second.createdAt);
   await page.getByRole('button', { name: '多选', exact: true }).click();
   const selectAll = page.getByRole('checkbox', { name: '全选', exact: true });
   await selectAll.check();
@@ -162,7 +166,7 @@ test('starts on the project list and moves only checked projects into and out of
   await expect(card(first)).toHaveCount(0); await expect(card(second)).toHaveCount(0); await expect(card(third)).toBeVisible();
   expect(calls.filter(method => method === 'project.archiveMany')).toHaveLength(1);
   await page.getByRole('button', { name: '回收站', exact: true }).click();
-  await expect(card(first)).toBeVisible(); await expect(card(second)).toBeVisible(); await expect(card(third)).toHaveCount(0);
+  await expect(titles).toHaveText([fourth.title, second.title, first.title]);
 
   const invalidRestore = await request.post('/__desktop_rpc', { data: { method: 'project.restoreMany', params: { projectIds: [first.id, 'missing-project'] } } });
   expect((await invalidRestore.json()).error).toContain('项目不存在');
@@ -195,7 +199,7 @@ test('starts on the project list and moves only checked projects into and out of
   await card(fourth).getByRole('button', { name: '恢复项目', exact: true }).click();
   await expect(card(fourth)).toHaveCount(0);
   await allProjects.click();
-  await expect(card(fourth)).toBeVisible();
+  await expect(titles).toHaveText([fourth.title, third.title, second.title, first.title]);
 });
 
 for (const { width, height, theme } of [{ width: 1024, height: 720, theme: 'dark' }, { width: 390, height: 844, theme: 'light' }]) {
@@ -255,7 +259,7 @@ for (const { width, height, theme } of [{ width: 1024, height: 720, theme: 'dark
     await expect(card(second)).toHaveCount(0);
     await expect(card(keep)).toBeVisible();
     await expect(purge).toBeDisabled();
-    expect(calls).toEqual([[first.id, second.id]]);
+    expect(calls).toEqual([[second.id, first.id]]);
     await expect(stat(asset.path)).rejects.toMatchObject({ code: 'ENOENT' });
     expect(await readFile(source, 'utf8')).toBe('项目素材夹具');
     await page.reload();
@@ -272,6 +276,6 @@ for (const { width, height, theme } of [{ width: 1024, height: 720, theme: 'dark
     await expect(singleDialog).toHaveAccessibleDescription(`将彻底删除“${keep.title}”，并清理项目独占的本地素材和缓存。此操作无法撤销。`);
     await singleDialog.getByRole('button', { name: '彻底删除', exact: true }).click();
     await expect(card(keep)).toHaveCount(0);
-    expect(calls).toEqual([[first.id, second.id], [keep.id]]);
+    expect(calls).toEqual([[second.id, first.id], [keep.id]]);
   });
 }

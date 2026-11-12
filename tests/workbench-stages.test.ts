@@ -1,6 +1,6 @@
 import { expect, it } from 'vitest';
 import { createNativeVideoWorkflow, isModelGenerationNode, resolveWorkflowStages } from '@video-quickly/contracts';
-import { resolveWorkbenchStages } from '../apps/desktop/src/lib/workbench-stages';
+import { resolveWorkbenchStages } from '../src/renderer/lib/workbench-stages';
 
 it('retains explicit stage definitions and leaves ungrouped custom workflows alone', () => {
   const workflow = { ...createNativeVideoWorkflow(), id: 'custom-workflow' };

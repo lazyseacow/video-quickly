@@ -16,7 +16,7 @@ import { createElement } from 'react';
 import { createRoot } from 'react-dom/client';
 import { flushSync } from 'react-dom';
 import { DEFAULT_CAPTION_STYLE, shotSchema } from '@video-quickly/contracts';
-import { ScenePreview } from './src/components/ScenePreview';
+import { ScenePreview } from './renderer/components/ScenePreview';
 
 let reads = 0, paints = 0;
 const repairs = [0, 0];
@@ -69,7 +69,7 @@ render();
 let bundle: string;
 test.beforeAll(async () => {
   const result = await build({
-    absWorkingDir: resolve('apps/desktop'), stdin: { contents: fixtureSource, resolveDir: resolve('apps/desktop'), sourcefile: 'scene-preview-fixture.ts' },
+    absWorkingDir: resolve('src'), stdin: { contents: fixtureSource, resolveDir: resolve('src'), sourcefile: 'scene-preview-fixture.ts' },
     bundle: true, write: false, platform: 'browser', format: 'esm', target: 'es2022', loader: { '.css': 'empty' },
     define: { 'process.env.NODE_ENV': '"production"', 'import.meta.env': '{"MODE":"browser-test","DEV":false}' },
   });

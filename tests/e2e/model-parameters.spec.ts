@@ -96,16 +96,39 @@ test('round-trips image sizes and quality while retaining advanced JSON', async 
   await dialog.locator('summary').filter({ hasText: '费用估算' }).click();
   await dialog.getByLabel('每张图片单价', { exact: true }).fill('0.25');
   await (await settingField(dialog, '图片质量')).selectOption('high');
+  await (await settingField(dialog, '首帧组图接口')).selectOption('continuous');
   await expect(dialog.getByRole('tab')).toHaveText(['基本连接', '图片参数', '高级设置']);
   await dialog.getByRole('button', { name: '保存连接', exact: true }).click(); await expect(dialog).toHaveCount(0);
-  expect((await savedModel(request, name)).parameters).toEqual({ vendor_extension: { mode: 'keep-me' }, size: '1280x720', quality: 'high' });
+  expect((await savedModel(request, name)).parameters).toEqual({ vendor_extension: { mode: 'keep-me' }, size: '1280x720', quality: 'high', imageSequenceMode: 'continuous' });
   expect((await savedModel(request, name)).pricing).toEqual({ currency: 'CNY', perImage: 0.25 });
   await page.reload(); await page.getByRole('button', { name: '模型连接', exact: true }).click(); dialog = await reopen(page, name);
   await (await settingField(dialog, '图片尺寸')).selectOption('custom'); await (await settingField(dialog, '自定义图片尺寸')).fill('1920x1080');
   await dialog.getByRole('button', { name: '保存连接', exact: true }).click(); await expect(dialog).toHaveCount(0);
-  expect((await savedModel(request, name)).parameters).toEqual({ vendor_extension: { mode: 'keep-me' }, size: '1920x1080', quality: 'high' });
+  expect((await savedModel(request, name)).parameters).toEqual({ vendor_extension: { mode: 'keep-me' }, size: '1920x1080', quality: 'high', imageSequenceMode: 'continuous' });
   dialog = await reopen(page, name); await expect(await settingField(dialog, '自定义图片尺寸')).toHaveValue('1920x1080');
+  await expect(await settingField(dialog, '首帧组图接口')).toHaveValue('continuous');
   await page.screenshot({ path: info.outputPath('image-parameters.png') }); expect(errors).toEqual([]);
+});
+
+test('offers ComfyUI only in video model connections', async ({ page, request }, info) => {
+  await openModels(page);
+  const image = await addModelConnection(page, '图片模型');
+  const imagePlatform = await settingField(image, '模型平台');
+  await expect(imagePlatform.locator('option[value="comfyui"]')).toHaveCount(0);
+  await imagePlatform.selectOption('custom');
+  await expect((await settingField(image, 'API 协议')).locator('option[value="comfyui"]')).toHaveCount(0);
+  await image.screenshot({ path: info.outputPath('image-connections.png') });
+  await image.getByRole('button', { name: '取消', exact: true }).click();
+  const video = await addModelConnection(page, '视频模型');
+  await (await settingField(video, '模型平台')).selectOption('comfyui');
+  await expect(await settingField(video, 'API 协议')).toHaveValue('comfyui');
+  const name = 'ComfyUI 视频连接验收';
+  await (await settingField(video, '连接名称')).fill(name);
+  await video.getByRole('button', { name: '获取模型列表', exact: true }).click();
+  await (await advanced(video)).fill(JSON.stringify({ workflow: {}, inputMapping: {} }));
+  await video.getByRole('button', { name: '保存连接', exact: true }).click();
+  await expect(video).toHaveCount(0);
+  expect(await savedModel(request, name)).toMatchObject({ provider: 'comfyui', platform: 'comfyui', model: 'workflow', capabilities: ['video'] });
 });
 
 test('shows protocol-specific controls and rejects malformed values in both UI and model.save', async ({ page, request }, info) => {

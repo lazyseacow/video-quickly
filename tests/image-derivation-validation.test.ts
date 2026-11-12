@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { afterEach, expect, it } from 'vitest';
 import { assetSchema, imageDerivationSchema, projectSchema, shotSchema } from '@video-quickly/contracts';
-import { createRuntime } from '../packages/runtime/src/index';
+import { createRuntime } from '../src/packages/runtime/src/index';
 import { seedLegacyGridAsset } from './fixtures/legacy-grid-asset';
 
 const directories: string[] = [], runtimes: ReturnType<typeof createRuntime>[] = [];

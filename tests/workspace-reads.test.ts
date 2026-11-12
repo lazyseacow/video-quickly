@@ -3,9 +3,9 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { assetListItemSchema, projectDetailSchema, projectSchema, recordPageSchema, runEventSchema, runSummarySchema, workspaceSummarySchema, type AssetRecord, type ProjectDetail, type ProjectDocument, type RunRecord } from '@video-quickly/contracts';
-import { createRuntime } from '../packages/runtime/src';
-import { DocumentStore, openDatabase } from '../packages/runtime/src/database';
-import { editContent } from '../apps/desktop/src/lib/project-edits';
+import { createRuntime } from '../src/packages/runtime/src';
+import { DocumentStore, openDatabase } from '../src/packages/runtime/src/database';
+import { editContent } from '../src/renderer/lib/project-edits';
 import { seedLargeWorkspace } from './fixtures/large-workspace';
 
 const directories: string[] = [];

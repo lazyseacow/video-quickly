@@ -1,0 +1,181 @@
+import type Database from 'better-sqlite3';
+import type { ActivityRecord, AssetListItem, AssetRecord, ProjectDetail, ProjectDocument, ProjectSummary, RecordPage, RunEvent, RunRecord, RunSummary } from '@video-quickly/contracts';
+import { DocumentStore } from './database.js';
+
+type DocumentRow = { cursor: number; body: string };
+type AssetPageRow = DocumentRow & { project_reference: 0 | 1 };
+type EventRow = { sequence: number; type: string; body: string; created_at: string };
+type ActivityRow = { cursor: number; activity_id: string; status: string; input_hash: string; remote_id: string | null; error: string | null; started_at: string; completed_at: string | null };
+
+export function activityNodeId(activityId: string, nodeIds: readonly string[]) {
+  return nodeIds.filter(id => activityId === id || activityId.startsWith(`${id}:`)).sort((left, right) => right.length - left.length)[0] ?? activityId.split(':')[0];
+}
+
+function summarizeRun(value: RunRecord, completed: readonly string[], nodeIds: readonly string[]): RunSummary {
+  const { events: _events, activities: _activities, ...record } = value;
+  const completedNodeIds = new Set<string>();
+  for (const activityId of completed) {
+    const nodeId = activityNodeId(activityId, nodeIds);
+    if (!activityId.startsWith(`${nodeId}:storyboard:`) && !/^:casting(?::|$)/.test(activityId.slice(nodeId.length))) completedNodeIds.add(nodeId);
+  }
+  return { ...record, completedNodeIds: [...completedNodeIds] };
+}
+
+// Exact namespace matching keeps IDs containing ':' or SQL wildcard characters
+// distinct from another step's nested model/tool activities.
+const stepFilter = (column: string) => `(@nodeId IS NULL OR ((${column} = @nodeId OR substr(${column}, 1, length(@nodeId) + 1) = @nodeId || ':') AND NOT EXISTS (SELECT 1 FROM json_each(@nodes) other WHERE length(other.value) > length(@nodeId) AND (${column} = other.value OR substr(${column}, 1, length(other.value) + 1) = other.value || ':'))))`;
+
+export function createReadModels(database: Database.Database, store: DocumentStore) {
+  function assetsVersion() {
+    return Number((database.prepare("SELECT value FROM runtime_metadata WHERE key = 'assets-version'").get() as { value: string }).value);
+  }
+  function projects(): ProjectSummary[] {
+    return store.list<ProjectSummary>('project-summary').map(value => {
+      const id = value.thumbnailShot?.videoAssetId ?? value.thumbnailShot?.assetId;
+      return id ? { ...value, thumbnailAsset: store.get<AssetRecord>('asset', id) } : value;
+    });
+  }
+  function runSummary(value: RunRecord): RunSummary {
+    const completed = database.prepare("SELECT activity_id FROM activities WHERE run_id = ? AND status = 'completed' ORDER BY activity_id").pluck().all(value.id) as string[];
+    return summarizeRun(value, completed, completed.some(id => id.includes(':')) ? nodeIds(value.id) : []);
+  }
+  function projectDetail(id: string, revision?: number, knownAssetsVersion?: number): ProjectDetail {
+    const summary = store.get<ProjectSummary>('project-summary', id);
+    if (!summary) throw new Error('项目不存在或已被移除。');
+    const version = assetsVersion();
+    // Resuming an older run preserves its rowid. Prefer active work through the
+    // small partial index, then retain creation order for completed history.
+    const active = database.prepare("SELECT body FROM documents WHERE kind = 'run' AND json_extract(body, '$.projectId') = ? AND coalesce(json_extract(body, '$.purpose'), 'production') = 'production' AND json_extract(body, '$.status') IN ('queued','running','waiting_review','waiting_external','retry_scheduled') ORDER BY rowid DESC LIMIT 1").get(id) as { body: string } | undefined;
+    const activeRecord: RunRecord | undefined = active ? JSON.parse(active.body) : undefined;
+    const latest = activeRecord && !activeRecord.regenerationSource ? active : database.prepare("SELECT body FROM documents WHERE kind IN ('run', 'asset') AND kind = 'run' AND json_extract(body, '$.projectId') = ? AND coalesce(json_extract(body, '$.purpose'), 'production') = 'production' AND json_type(body, '$.regenerationSource') IS NULL ORDER BY rowid DESC LIMIT 1").get(id) as { body: string } | undefined;
+    // Match both branches to documents_project and keep the original creation order.
+    const assets = knownAssetsVersion === version ? undefined : database.prepare<[string], DocumentRow>(`
+      SELECT rowid AS cursor, body FROM documents
+        WHERE kind IN ('run', 'asset') AND kind = 'asset' AND json_extract(body, '$.projectId') = ?
+      UNION ALL
+      SELECT rowid AS cursor, body FROM documents
+        WHERE kind IN ('run', 'asset') AND kind = 'asset' AND json_extract(body, '$.projectId') IS NULL
+      ORDER BY cursor
+    `).all(id).map(row => JSON.parse(row.body) as AssetRecord);
+    return { id, revision: summary.revision, assetsVersion: version, project: revision === summary.revision ? undefined : store.get<ProjectDocument>('project', id), assets, latestRun: latest ? runSummary(JSON.parse(latest.body)) : undefined, activeRun: activeRecord?.regenerationSource ? runSummary(activeRecord) : undefined };
+  }
+  function runs(before: number | undefined, limit: number, projectId?: string, filter: { promptSessionId?: string; purpose?: RunRecord['purpose']; status?: RunRecord['status'] } = {}): RecordPage<RunSummary> {
+    // Earlier versions hid runs from listings without discarding their execution data.
+    const conditions = ["kind = 'run'", "NOT EXISTS (SELECT 1 FROM documents removed WHERE removed.kind = 'run-history-deletion' AND removed.id = documents.id)"], parameters: Record<string, string | number> = { limit: limit + 1 };
+    if (before !== undefined) { conditions.push('rowid < @before'); parameters.before = before; }
+    if (projectId !== undefined) {
+      conditions.push("kind IN ('run', 'asset')", "json_extract(body, '$.projectId') = @projectId");
+      parameters.projectId = projectId;
+    }
+    if (filter.status !== undefined) { conditions.push("json_extract(body, '$.status') = @status"); parameters.status = filter.status; }
+    if (filter.promptSessionId !== undefined) { conditions.push("json_extract(body, '$.promptSessionId') = @promptSessionId"); parameters.promptSessionId = filter.promptSessionId; }
+    if (filter.purpose !== undefined) { conditions.push("coalesce(json_extract(body, '$.purpose'), 'production') = @purpose"); parameters.purpose = filter.purpose; }
+    const rows = database.prepare(`SELECT rowid AS cursor, body FROM documents WHERE ${conditions.join(' AND ')} ORDER BY rowid DESC LIMIT @limit`).all(parameters) as DocumentRow[];
+    const { items, nextCursor } = page(rows, limit, row => JSON.parse(row.body) as RunRecord);
+    if (!items.length) return { items: [], nextCursor };
+    const activityRows = database.prepare<[string], { run_id: string; ids: string }>(`
+      SELECT run_id, json_group_array(activity_id ORDER BY activity_id) AS ids
+      FROM activities WHERE run_id IN (SELECT value FROM json_each(?)) AND status = 'completed'
+      GROUP BY run_id
+    `).all(JSON.stringify(items.map(run => run.id)));
+    const completed = new Map(activityRows.map(row => [row.run_id, JSON.parse(row.ids) as string[]]));
+    // Only namespaced activities need the frozen node IDs to resolve the owning step.
+    const nestedRuns = [...completed].filter(([, ids]) => ids.some(id => id.includes(':'))).map(([runId]) => runId);
+    const nodes = nodeIdGroups(nestedRuns);
+    return { items: items.map(run => summarizeRun(run, completed.get(run.id) ?? [], nodes.get(run.id) ?? [])), nextCursor };
+  }
+  function nodeIdGroups(runIds: readonly string[]): Map<string, string[]> {
+    if (!runIds.length) return new Map();
+    const rows = database.prepare<[string], { run_id: string; nodes: string }>(`
+      SELECT snapshot.id AS run_id, json_group_array(json_extract(node.value, '$.id') ORDER BY CAST(node.key AS INTEGER)) AS nodes
+      FROM documents snapshot, json_each(coalesce(json_extract(snapshot.body, '$.inspectionNodes'), json_extract(snapshot.body, '$.nodes'))) node
+      WHERE snapshot.kind = 'run-snapshot' AND snapshot.id IN (SELECT value FROM json_each(?))
+      GROUP BY snapshot.id
+    `).all(JSON.stringify(runIds));
+    return new Map(rows.map(row => [row.run_id, JSON.parse(row.nodes) as string[]]));
+  }
+  function nodeIds(runId: string) {
+    return nodeIdGroups([runId]).get(runId) ?? [];
+  }
+  function events(run: RunRecord, before: number | undefined, limit: number, nodeId?: string): RecordPage<RunEvent> {
+    const ids = nodeIds(run.id);
+    const rows = database.prepare(`WITH entries AS (SELECT sequence, type, body, created_at, coalesce(json_extract(body, '$.nodeId'), json_extract(body, '$.activityId')) AS step_id FROM execution_events WHERE run_id = @runId AND (@before IS NULL OR sequence < @before)) SELECT sequence, type, body, created_at FROM entries WHERE ${stepFilter('step_id')} ORDER BY sequence DESC LIMIT @limit`).all({ runId: run.id, before: before ?? null, nodeId: nodeId ?? null, nodes: JSON.stringify(ids), limit: limit + 1 }) as EventRow[];
+    return page(rows.map(row => ({ ...row, cursor: row.sequence })), limit, row => {
+      const body = JSON.parse(row.body) as { message?: string; nodeId?: string; activityId?: string };
+      const sourceId = body.nodeId ?? body.activityId;
+      return { id: `event-${row.sequence}`, runId: run.id, projectId: run.projectId, sequence: row.sequence, type: row.type, message: body.message ?? '步骤结果已保存', nodeId: sourceId ? activityNodeId(sourceId, ids) : undefined, createdAt: row.created_at };
+    });
+  }
+  function activities(runId: string, before: number | undefined, limit: number, nodeId?: string): RecordPage<ActivityRecord> {
+    // Results are fetched through node.result; opening a log never transfers generated media payloads.
+    const ids = nodeIds(runId);
+    const rows = database.prepare(`SELECT rowid AS cursor, activity_id, status, input_hash, remote_id, error, started_at, completed_at FROM activities WHERE run_id = @runId AND (@before IS NULL OR rowid < @before) AND ${stepFilter('activity_id')} ORDER BY rowid DESC LIMIT @limit`).all({ runId, before: before ?? null, nodeId: nodeId ?? null, nodes: JSON.stringify(ids), limit: limit + 1 }) as ActivityRow[];
+    return page(rows, limit, row => ({ id: row.activity_id, runId, nodeId: activityNodeId(row.activity_id, ids), status: (row.status === 'dispatched' ? 'submitted' : row.status) as ActivityRecord['status'], inputHash: row.input_hash, remoteTaskId: row.remote_id ?? undefined, attempt: 1, createdAt: row.started_at, updatedAt: row.completed_at ?? row.started_at, error: row.error ?? undefined }));
+  }
+  function assets({ before, limit, kind, projectId, trashed = false, hideExportOutputs = false }: {
+    before?: number; limit: number; kind?: AssetRecord['kind'] | AssetRecord['kind'][]; projectId?: string; trashed?: boolean; hideExportOutputs?: boolean;
+  }): RecordPage<AssetListItem> {
+    // Keep active reads on their partial index and use a rowid bound for both views.
+    const conditions = ["asset.kind = 'asset'", trashed ? "json_extract(asset.body, '$.active') = 0" : "coalesce(json_extract(asset.body, '$.active'), 1) = 1"];
+    const parameters: Record<string, string | number> = { limit: limit + 1 };
+    if (before !== undefined) {
+      conditions.push('asset.rowid < @before');
+      parameters.before = before;
+    }
+    if (Array.isArray(kind)) {
+      conditions.push("json_extract(asset.body, '$.kind') IN (SELECT value FROM json_each(@kinds))");
+      parameters.kinds = JSON.stringify(kind);
+    } else if (kind !== undefined) {
+      conditions.push("json_extract(asset.body, '$.kind') = @kind");
+      parameters.kind = kind;
+    }
+    if (projectId !== undefined) {
+      conditions.push("(json_extract(asset.body, '$.projectId') IS NULL OR json_extract(asset.body, '$.projectId') = @projectId)");
+      parameters.projectId = projectId;
+    }
+    if (hideExportOutputs) {
+      // Match existing local render records while keeping imports and explicitly reused outputs.
+      conditions.push(`NOT (
+        json_extract(asset.body, '$.provenance') IS '本地渲染'
+        AND json_extract(asset.body, '$.name') IN ('video.mp4', 'cover.png', 'subtitles.srt', 'timeline.json')
+        AND coalesce(json_extract(asset.body, '$.retained'), 0) = 0
+        AND NOT EXISTS (SELECT 1 FROM project_asset_references WHERE asset_id = asset.id)
+      )`);
+    }
+    const rows = database.prepare<typeof parameters, AssetPageRow>(`
+      SELECT asset.rowid AS cursor, asset.body, EXISTS (
+        SELECT 1 FROM project_asset_references WHERE asset_id = asset.id
+      ) AS project_reference
+      FROM documents AS asset
+      WHERE ${conditions.join(' AND ')}
+      ORDER BY asset.rowid DESC LIMIT @limit
+    `).all(parameters);
+    if (rows.length === 0) return { items: [], nextCursor: null };
+    const generating = generationAssets();
+    return page(rows, limit, row => {
+      const asset = JSON.parse(row.body) as AssetRecord;
+      return { ...asset, inUse: row.project_reference === 1 || generating.has(asset.id) };
+    });
+  }
+  function assetsInUse(ids: readonly string[]): Set<string> {
+    const rows = database.prepare<[string], { id: string }>(`
+      SELECT requested.value AS id FROM json_each(?) AS requested
+      WHERE EXISTS (SELECT 1 FROM project_asset_references WHERE asset_id = requested.value)
+    `).all(JSON.stringify(ids));
+    const referenced = new Set(rows.map(row => row.id));
+    const generating = generationAssets();
+    for (const id of ids) if (generating.has(id)) referenced.add(id);
+    return referenced;
+  }
+  function generationAssets(): Set<string> {
+    const rows = database.prepare(`SELECT json_extract(shot.value, '$.assetId') AS assetId, json_extract(shot.value, '$.referenceAssetId') AS referenceAssetId
+      FROM documents r JOIN documents p ON p.kind = 'run-step-progress' AND substr(p.id, 1, length(r.id) + 1) = r.id || ':', json_each(p.body, '$.shots') shot
+      WHERE r.kind = 'run' AND json_extract(r.body, '$.status') IN ('queued','running','waiting_review','waiting_external','retry_scheduled')`).all() as { assetId: string | null; referenceAssetId: string | null }[];
+    return new Set(rows.flatMap(row => [row.assetId, row.referenceAssetId]).filter((id): id is string => id !== null));
+  }
+  return { assetsVersion, projects, projectDetail, runSummary, runs, events, activities, assets, assetsInUse, nodeIds };
+}
+
+function page<T extends { cursor: number }, R>(rows: T[], limit: number, map: (row: T) => R): RecordPage<R> {
+  return { items: rows.slice(0, limit).map(map), nextCursor: rows.length > limit ? rows[limit - 1].cursor : null };
+}

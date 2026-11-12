@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { applyShotCandidate, createNativeVideoWorkflow, createSceneTemplate, DEFAULT_AUDIO_MIX_SETTINGS, DEFAULT_AUDIO_PROCESSING, DEFAULT_VIDEO_PROFILE, projectSchema, shotCandidateSchema } from '@video-quickly/contracts';
-import { editContent, mergeEdits, ProjectEditSession, savedEditsSchema, sameContent } from '../apps/desktop/src/lib/project-edits';
-import { deleteShotRanges } from '../packages/video/src/clip-edits';
+import { editContent, mergeEdits, ProjectEditSession, savedEditsSchema, sameContent } from '../src/renderer/lib/project-edits';
+import { deleteShotRanges } from '../src/packages/video/src/clip-edits';
 
 const project = () => projectSchema.parse({ id: 'p', title: '项目', brief: '', revision: 1, profile: DEFAULT_VIDEO_PROFILE, workflow: createNativeVideoWorkflow(), createdAt: '2026-10-29', updatedAt: '2026-10-29', shots: [1, 2].map(id => ({ id: `shot-${id}`, title: `镜头 ${id}`, narration: '', visualPrompt: '', durationUs: 1_000_000 })) });
 

@@ -3,8 +3,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, expect, it } from 'vitest';
 import { captionsEnabled, modelCapabilitySchema, modelConnectionTypes, modelSchema, projectSchema, validateModelConnection, workflowNodeSchema } from '@video-quickly/contracts';
-import { createRuntime } from '../packages/runtime/src';
-import { validateExecutionModel } from '../packages/runtime/src/execution-model';
+import { createRuntime } from '../src/packages/runtime/src';
+import { validateExecutionModel } from '../src/packages/runtime/src/execution-model';
 
 const directories: string[] = [], runtimes: ReturnType<typeof createRuntime>[] = [];
 afterEach(async () => { await Promise.all(runtimes.splice(0).map(runtime => runtime.close())); await Promise.all(directories.splice(0).map(directory => rm(directory, { recursive: true, force: true }))); });
@@ -38,6 +38,15 @@ it('rejects new OpenAI official video connections and accepts a compatible video
   await expect(runtime.dispatch('model.save', { model: { ...video, platform: 'openai' } })).rejects.toThrow('OpenAI 官方视频接口已停止服务');
   await expect(runtime.dispatch('model.save', { model: { ...video, platform: 'custom', baseUrl: 'https://api.openai.com/v1' } })).rejects.toThrow('OpenAI 官方视频接口已停止服务');
   await expect(runtime.dispatch('model.save', { model: { ...video, platform: 'custom' } })).resolves.toMatchObject({ connectionType: 'video', platform: 'custom' });
+});
+
+it('accepts ComfyUI video connections and rejects ComfyUI as an image platform or protocol', async () => {
+  const runtime = await fixture();
+  const workflow = { ...base, provider: 'comfyui', model: 'workflow' };
+  const image = { ...workflow, connectionType: 'image', capabilities: ['image'] };
+  await expect(runtime.dispatch('model.save', { model: { ...image, platform: 'comfyui' } })).rejects.toThrow('所选平台不支持图片模型连接');
+  await expect(runtime.dispatch('model.save', { model: { ...image, platform: 'custom' } })).rejects.toThrow('API 协议不支持所选能力');
+  await expect(runtime.dispatch('model.save', { model: { ...workflow, platform: 'comfyui', connectionType: 'video', capabilities: ['video'] } })).resolves.toMatchObject({ provider: 'comfyui', connectionType: 'video' });
 });
 
 it('rejects missing types and audio requests before creating a model or run', async () => {

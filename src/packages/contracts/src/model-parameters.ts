@@ -1,0 +1,120 @@
+import type { JsonValue, ModelCapability, ModelProfile } from './index.js';
+
+export type ModelParameterOperation = 'text' | 'image' | 'video';
+export interface ModelParameterField {
+  key: string; label: string; operation: ModelParameterOperation; type: 'text' | 'number' | 'select';
+  min?: number; max?: number; integer?: boolean; options?: readonly string[]; optionLabels?: Readonly<Record<string, string>>; hint?: string; customSize?: boolean; required?: boolean;
+}
+type Context = Pick<ModelProfile, 'provider' | 'capabilities' | 'textProtocol'>;
+type WithParameters = Context & { parameters: Record<string, JsonValue> };
+
+export function imageSequenceMode(model: Pick<ModelProfile, 'provider' | 'model' | 'parameters'>): 'seedream' | 'continuous' {
+  if (model.provider !== 'seedream' && model.provider !== 'openai-compatible') return 'continuous';
+  const configured = model.parameters.imageSequenceMode;
+  if (configured === 'continuous' || configured === 'seedream') return configured;
+  return /^(?:doubao-)?seedream[-_.](?:4[-_.][05]|5[-_.]0[-_.]lite)(?:[-_.]\d{6})?$/i.test(model.model) ? 'seedream' : 'continuous';
+}
+
+export function singleImageRequestModel(model: ModelProfile): ModelProfile {
+  // Seedream relays use the same endpoint for text and reference images.
+  const provider = model.provider === 'openai-compatible' && /^(?:doubao[-_.])?seedream(?:[-_.]|$)/i.test(model.model) ? 'seedream' : model.provider;
+  if (provider !== 'seedream' && provider !== 'openai-compatible') return model;
+  const { stream: _stream, sequential_image_generation: _grouping, sequential_image_generation_options: _options, ...parameters } = model.parameters;
+  return { ...model, provider, parameters };
+}
+
+export function defaultVideoRequestSeconds(modelId: string, durationUs: number): number {
+  const minimum = /^doubao-seedance-2-0(?:-(?:fast|mini))?(?:-\d+)?$/i.test(modelId) ? 4 : 1;
+  return Math.max(minimum, Math.ceil(durationUs / 1_000_000));
+}
+
+export function getModelParameterFields(model: Context): ModelParameterField[] {
+  const fields: ModelParameterField[] = [];
+  const has = (capability: ModelCapability) => model.capabilities.includes(capability);
+  if (has('text')) {
+    const ollama = model.provider === 'ollama';
+    fields.push({ key: ollama ? 'options.temperature' : 'temperature', label: '文本温度', operation: 'text', type: 'number', min: 0, ...(ollama ? {} : { max: model.textProtocol === 'messages' ? 1 : 2 }) },
+      { key: ollama ? 'options.num_predict' : model.textProtocol === 'responses' ? 'max_output_tokens' : 'max_tokens', label: '最大输出 Token', operation: 'text', type: 'number', min: !ollama && model.textProtocol === 'responses' ? 16 : 1, integer: true });
+  }
+  if (has('image') && ['openai-compatible', 'seedream'].includes(model.provider)) {
+    const sharedSize = model.provider === 'openai-compatible' && has('video');
+    fields.push({ key: 'size', label: sharedSize ? '图片与视频尺寸' : '图片尺寸', operation: 'image', type: 'select', customSize: true,
+      options: [...(!sharedSize && model.provider === 'openai-compatible' ? ['auto'] : []), '1024x1024', '1536x1024', '1024x1536', '2048x2048', '2560x1440', '1440x2560', ...(sharedSize ? ['1280x720', '720x1280'] : [])],
+      hint: sharedSize ? '图片与视频共用尺寸，须确认两种模型均支持。' : '选择常用尺寸，或自定义；支持范围以所选模型为准。' });
+    if (model.provider === 'openai-compatible') fields.push({ key: 'quality', label: '图片质量', operation: 'image', type: 'select', options: ['auto', 'low', 'medium', 'high', 'standard', 'hd'] });
+    fields.push({ key: 'imageSequenceMode', label: '首帧组图接口', operation: 'image', type: 'select', options: ['seedream', 'continuous'],
+      optionLabels: { seedream: 'Seedream 原生组图', continuous: '使用首镜续图' },
+      hint: '默认识别支持组图的 Seedream 型号。代理须转发方舟组图参数，其他支持参考图的接口可用首镜续图。' });
+  }
+  if (has('video') && model.provider === 'openai-compatible') {
+    if (!has('image')) fields.push({ key: 'size', label: '视频尺寸', operation: 'video', type: 'text', hint: '填写宽x高；所接兼容视频服务须支持该尺寸。' });
+    fields.push({ key: 'seconds', label: '视频时长（秒）', operation: 'video', type: 'number', min: 1, max: 600, integer: true });
+  }
+  if (has('video') && model.provider === 'seedance') fields.push(
+    { key: 'resolution', label: '视频分辨率', operation: 'video', type: 'select', options: ['480p', '720p', '1080p', '4k'] },
+    { key: 'duration', label: '视频时长（秒）', operation: 'video', type: 'number', min: 1, max: 600, integer: true },
+    { key: 'ratio', label: '视频比例', operation: 'video', type: 'select', options: ['16:9', '4:3', '1:1', '3:4', '9:16', '21:9', 'adaptive'] },
+    { key: 'characterReferenceMode', label: '角色参考方式', operation: 'video', type: 'select', options: ['first_frame', 'reference_image'], hint: 'first_frame 仅支持一张首帧；reference_image 须使用支持多模态参考图的 Seedance 2.x 模型。' });
+  return fields;
+}
+
+export function modelParameterValue(parameters: Record<string, JsonValue>, key: string): JsonValue | undefined {
+  let value: JsonValue | undefined = parameters;
+  for (const part of key.split('.')) value = value && typeof value === 'object' && !Array.isArray(value) ? value[part] : undefined;
+  return value;
+}
+export function withModelParameter(parameters: Record<string, JsonValue>, key: string, value: JsonValue | undefined): Record<string, JsonValue> {
+  const parts = key.split('.');
+  if (parts.some(part => ['__proto__', 'constructor', 'prototype'].includes(part))) throw new Error('模型参数路径无效。');
+  const result = structuredClone(parameters); let target = result;
+  for (const part of parts.slice(0, -1)) {
+    const existing = target[part];
+    target[part] = existing && typeof existing === 'object' && !Array.isArray(existing) ? existing : {};
+    target = target[part] as Record<string, JsonValue>;
+  }
+  const last = parts.at(-1)!;
+  if (value === undefined) delete target[last]; else target[last] = value;
+  return result;
+}
+
+/** Validate only supported structured fields; unknown advanced parameters are retained. */
+export function validateModelParameters(model: WithParameters): void {
+  if (model.provider === 'ollama' && model.capabilities.includes('text')) {
+    const options = model.parameters.options;
+    if (options !== undefined && (!options || typeof options !== 'object' || Array.isArray(options))) throw new Error('Ollama options 须为 JSON 对象。');
+    for (const key of ['temperature', 'max_tokens', 'num_predict']) if (model.parameters[key] !== undefined) throw new Error(`Ollama 的 ${key} 须放入 options，最大输出使用 options.num_predict。`);
+  }
+  for (const field of getModelParameterFields(model)) {
+    const value = modelParameterValue(model.parameters, field.key);
+    if (field.required && (value === undefined || typeof value === 'string' && !value.trim())) throw new Error(`请填写${field.label}。`);
+    if (value === undefined) continue;
+    if (field.type === 'number') {
+      if (typeof value !== 'number' || !Number.isFinite(value) || field.integer && !Number.isSafeInteger(value) || field.min !== undefined && value < field.min || field.max !== undefined && value > field.max) throw new Error(`${field.label}须为${field.integer ? '整数' : '有限数值'}${field.min !== undefined ? `，不小于 ${field.min}` : ''}${field.max !== undefined ? `，不大于 ${field.max}` : ''}。`);
+    } else if (typeof value !== 'string' || !value.trim()) throw new Error(`${field.label}须为非空文字，留空时请移除该参数。`);
+    else if (field.options && !field.customSize && !field.options.includes(value)) throw new Error(`${field.label}须为 ${field.options.join(' / ')}。`);
+    else if (field.key === 'size' && !(/^\d{2,5}x\d{2,5}$/.test(value) && value.split('x').every(part => Number(part) > 0) || field.operation === 'image' && (model.provider === 'seedream' ? /^(?:1|1\.5|2|3|4)K$/.test(value) : value === 'auto'))) throw new Error(`${field.label}须使用宽x高${field.operation === 'image' ? model.provider === 'seedream' ? '或模型支持的 K 档位' : '或 auto' : ''}。`);
+  }
+  if (model.provider !== 'ollama' && model.capabilities.includes('text')) {
+    const keys = ['max_tokens', 'max_completion_tokens', 'max_output_tokens'].filter(key => model.parameters[key] !== undefined);
+    for (const key of keys) {
+      const value = model.parameters[key];
+      if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < (model.textProtocol === 'responses' ? 16 : 1)) throw new Error(`${key} 须为不小于 ${model.textProtocol === 'responses' ? 16 : 1} 的整数。`);
+    }
+    if (keys.length > 1) throw new Error(`${keys.join(' 与 ')} 不能同时配置。`);
+  }
+  if (model.provider === 'openai-compatible' && model.capabilities.includes('image') && model.capabilities.includes('video') && model.parameters.size === 'auto') throw new Error('图片与视频共用 size 时须使用宽x高；auto 仅适用于单独的图片连接。');
+}
+
+const known = ['temperature', 'max_tokens', 'max_completion_tokens', 'max_output_tokens', 'size', 'quality', 'seconds', 'duration', 'resolution', 'ratio', 'num_predict'];
+const configuration = ['workflow', 'inputMapping', 'requestPath', 'requestTemplate', 'resultUrlPath', 'resultBase64Path', 'taskIdPath', 'pollPath', 'statusPath', 'characterReferenceMode', 'imageSequenceMode', 'pollTimeoutSeconds'];
+
+/** Shared profiles can expose several capabilities without leaking their known controls across API calls. */
+export function requestModelParameters(model: WithParameters, operation: ModelParameterOperation): Record<string, JsonValue> {
+  validateModelParameters(model);
+  if ((model.provider === 'custom-http' && operation !== 'text') || (model.provider === 'comfyui' && operation === 'video')) return structuredClone(model.parameters);
+  const allowed = new Set(getModelParameterFields(model).filter(field => field.operation === operation).map(field => field.key.split('.')[0]));
+  if (operation === 'text' && model.provider !== 'ollama') for (const key of ['max_tokens', 'max_completion_tokens', 'max_output_tokens']) allowed.add(key);
+  if (operation === 'text' && model.provider === 'ollama') allowed.add('options');
+  if (operation === 'video' && model.provider === 'openai-compatible' && model.capabilities.includes('video')) allowed.add('size');
+  return Object.fromEntries(Object.entries(model.parameters).filter(([key]) => !configuration.includes(key) && (!known.includes(key) || allowed.has(key)) && (key !== 'options' || operation === 'text' && model.provider === 'ollama')));
+}

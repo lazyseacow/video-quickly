@@ -61,7 +61,7 @@ for (const viewport of [{ width: 1536, height: 960, theme: 'dark' }, { width: 39
       const selectedDetails = page.waitForResponse(response => {
         if (!response.url().endsWith('/__desktop_rpc')) return false;
         const input = response.request().postDataJSON();
-        return input.method === 'character.get' && input.params.characterId === source.profiles[0].id;
+        return input.method === 'character.getMany' && input.params.characterIds.includes(source.profiles[0].id);
       });
       await role.focus(); await page.keyboard.press('Space'); await expect(role).toBeChecked();
       await (await selectedDetails).finished();

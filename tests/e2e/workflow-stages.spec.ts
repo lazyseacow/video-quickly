@@ -7,7 +7,7 @@ for (const width of [1536, 390]) test('saves four native stages once at ' + widt
   const dialog = await openProduction(page, source.project);
   await pickProductionModel(dialog, '文本模型', source.text); await pickProductionModel(dialog, '视频模型', source.video);
   await productionStep(dialog, '模型与素材');
-  await dialog.getByLabel('参考素材', { exact: true }).selectOption('generate'); await pickProductionModel(dialog, '图片模型', source.image);
+  await pickProductionModel(dialog, '图片模型', source.image);
   await productionStep(dialog, '声音与成片'); await dialog.getByLabel('声音要求', { exact: true }).fill('自然中文旁白，轻微环境音。');
   await productionStep(dialog, '声音与成片'); await expect(dialog.getByLabel('字幕', { exact: true })).toHaveValue('off');
   let writes = 0; page.on('request', outgoing => { if (outgoing.url().endsWith('/__desktop_rpc') && outgoing.postDataJSON()?.method === 'project.update') writes++; });

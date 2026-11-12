@@ -4,7 +4,7 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
-const require = createRequire(join(root, 'packages/runtime/package.json'));
+const require = createRequire(join(root, 'src/packages/runtime/package.json'));
 const Database = require('better-sqlite3');
 const args = process.argv.slice(2);
 const argument = name => { const index = args.indexOf(name); return index >= 0 ? args[index + 1] : undefined; };

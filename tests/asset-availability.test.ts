@@ -1,9 +1,9 @@
 import { randomUUID } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
 import type { AssetRecord } from '@video-quickly/contracts';
-import { assetAvailabilityUrl, assetAvailabilityVersion, refreshAssetAvailability } from '../apps/desktop/src/lib/asset-availability';
-import { previewAssetKey } from '../apps/desktop/src/components/preview-media';
-import { ThumbnailCache } from '../apps/desktop/src/components/preview-thumbnails';
+import { assetAvailabilityUrl, assetAvailabilityVersion, refreshAssetAvailability } from '../src/renderer/lib/asset-availability';
+import { previewAssetKey } from '../src/renderer/components/preview-media';
+import { ThumbnailCache } from '../src/renderer/components/preview-thumbnails';
 
 describe('transient asset availability', () => {
   it('invalidates only repaired content requests without changing the frozen asset identity', async () => {

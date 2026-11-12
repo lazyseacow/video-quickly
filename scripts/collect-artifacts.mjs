@@ -38,16 +38,16 @@ async function fileInfo(path) {
 }
 const installerInfo = await fileInfo(installer);
 assert.equal(installerInfo.sha256, installation.installerSha256, '归档安装包与实际验收安装包不一致');
-const frontend = await readdir(join(root, 'apps/desktop/dist/assets'));
+const frontend = await readdir(join(root, 'src/dist/assets'));
 const manifest = {
   version, platform: 'windows-x64',
   commit: process.env.GITHUB_SHA ?? execFileSync('git', ['rev-parse', 'HEAD'], { cwd: root, encoding: 'utf8' }).trim(),
   builtAtUtc: new Date().toISOString(),
   installer: installerInfo,
   runtime: await fileInfo(join(root, '.generated/sidecar/runtime.mjs')),
-  frontend: await Promise.all(frontend.map(name => fileInfo(join(root, 'apps/desktop/dist/assets', name)))),
+  frontend: await Promise.all(frontend.map(name => fileInfo(join(root, 'src/dist/assets', name)))),
   media: JSON.parse(await readFile(join(root, '.generated/sidecar/media/provenance.json'), 'utf8')),
-  desktop: { framework: 'electron', version: JSON.parse(await readFile(join(root, 'apps/desktop/package.json'), 'utf8')).devDependencies.electron },
+  desktop: { framework: 'electron', version: JSON.parse(await readFile(join(root, 'src/package.json'), 'utf8')).devDependencies.electron },
   tools: { node: process.version, pnpm: JSON.parse(await readFile(join(root, 'package.json'), 'utf8')).packageManager },
   verification: { automatedTests: unit.numPassedTests, packagedPdfTests: packaged.numPassedTests, browserFlows: browser.stats.expected, electronDesktop: electron, mediaScenarios: media.length, installation, signature: 'not-signed' },
 };

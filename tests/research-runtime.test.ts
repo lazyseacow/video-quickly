@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, expect, it } from 'vitest';
 import { applyResearchClaims, createNativeVideoWorkflow, projectSchema, researchResultSchema, runSchema, type ModelProfile, type ProjectDocument, type ResearchSource, type UsageRecord } from '@video-quickly/contracts';
-import { createRuntime, SimulatedProcessExit, type RuntimeOptions } from '../packages/runtime/src';
+import { createRuntime, SimulatedProcessExit, type RuntimeOptions } from '../src/packages/runtime/src';
 
 const directories: string[] = [], servers: Server[] = [];
 const runtimes = new Set<ReturnType<typeof createRuntime>>();

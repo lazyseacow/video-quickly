@@ -14,7 +14,7 @@ it('serves persisted run history while a cold PDF is being parsed and drains tha
     // A separate process keeps PDF.js and its native font initialization cold.
     // Assert completion order rather than a maximum elapsed-time threshold.
     const probe = `
-      import { createRuntime } from ${JSON.stringify(pathToFileURL(resolve('packages/runtime/src/index.ts')).href)};
+      import { createRuntime } from ${JSON.stringify(pathToFileURL(resolve('src/packages/runtime/src/index.ts')).href)};
       import { setTimeout as delay } from 'node:timers/promises';
       const runtime = createRuntime({ dataDirectory: ${JSON.stringify(join(directory, 'data'))}, seed: false, ffmpegPath: '/unused-by-research' });
       let interval;

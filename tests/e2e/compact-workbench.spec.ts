@@ -36,14 +36,14 @@ for (const viewport of [{ width: 1536, height: 960, theme: 'light' }, { width: 1
     await expect(dialog.getByRole('checkbox', { name: /人工审核|人工审阅/ })).toHaveCount(0); expect((await dialog.locator('.dialog__surface').boundingBox())!.height).toBeLessThanOrEqual(viewport.height);
     await expect(dialog.getByText('高级设置', { exact: true })).toHaveCount(0);
     await expect(dialog.getByText('剪辑 Agent 设置', { exact: true })).toBeVisible();
-    await dialog.getByLabel('创作要求', { exact: true }).fill('精简弹窗也保留可编辑的配置');
+    await dialog.getByLabel('简报内容', { exact: true }).fill('精简弹窗也保留可编辑的配置');
     const agent = dialog.getByText('剪辑 Agent 设置', { exact: true });
     await agent.scrollIntoViewIfNeeded();
     await page.screenshot({ path: info.outputPath(`planning-settings-${viewport.theme}-${viewport.width}.png`) });
     await productionStep(dialog, '模型与素材');
     await expect(dialog.getByText('高级设置', { exact: true })).toHaveCount(0);
     await expect(dialog.getByRole('combobox', { name: '文本模型', exact: true })).toHaveValue(source.text.name);
-    await expect(dialog.getByRole('region', { name: '生成并发', exact: true })).toBeVisible();
+    await expect(dialog.getByRole('region', { name: '生成并发', exact: true })).toHaveCount(0);
     await dialog.getByRole('button', { name: '确认保存', exact: true }).click(); const save = dialog.getByRole('button', { name: '保存设置', exact: true }); await expect(save).toBeInViewport({ ratio: 1 });
     await page.screenshot({ path: info.outputPath(`compact-planning-${viewport.theme}-${viewport.width}.png`) }); await save.click(); await expect(dialog).toHaveCount(0);
     const saved = (await rpc<{ project: ProjectDocument }>(request, 'project.get', { projectId: project.id })).project;

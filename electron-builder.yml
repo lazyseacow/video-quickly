@@ -6,9 +6,9 @@ npmRebuild: false
 nodeGypRebuild: false
 # The execution component keeps its own Node ABI. Electron only loads N-API keyring.
 directories:
-  app: apps/desktop
+  app: src
   output: .generated/electron-release
-  buildResources: apps/desktop/build
+  buildResources: src/build
 files:
   - dist/**/*
   - electron/**/*
@@ -35,7 +35,7 @@ win:
     - target: nsis
       arch: x64
   executableName: video-quickly
-  icon: apps/desktop/build/icons/icon.ico
+  icon: src/build/icons/icon.ico
   artifactName: Video-Quickly-${version}-windows-${arch}-setup.${ext}
   signAndEditExecutable: true
 nsis:
@@ -50,13 +50,13 @@ nsis:
   installerLanguages:
     - zh_CN
     - en_US
-  include: apps/desktop/build/installer.nsh
+  include: src/build/installer.nsh
 mac:
   target: zip
   artifactName: Video-Quickly-${version}-macos-${arch}.${ext}
   minimumSystemVersion: 13.5.0
   category: public.app-category.video
-  icon: apps/desktop/build/icons/icon.icns
+  icon: src/build/icons/icon.icns
   identity: null
 linux:
   target: dir

@@ -8,7 +8,7 @@ import { basename, dirname, join, resolve } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { afterEach, describe, expect, it } from 'vitest';
 import { chargeConfirmationSchema, type ProjectDocument, type RunInspection, type RunPlan, type RunRecord, type WorkspaceSnapshot } from '@video-quickly/contracts';
-import { openDatabase, DocumentStore } from '../packages/runtime/src/database';
+import { openDatabase, DocumentStore } from '../src/packages/runtime/src/database';
 
 const directories: string[] = [];
 const children: RpcProcess[] = [];
@@ -22,7 +22,7 @@ class RpcProcess {
   private counter = 0;
   private readonly waiting = new Map<number, { resolve(value: unknown): void; reject(error: Error): void }>();
   constructor(dataDirectory: string) {
-    this.child = spawn(process.execPath, ['--import', 'tsx', resolve('packages/runtime/src/main.ts'), '--data-dir', dataDirectory], { cwd: resolve('.'), windowsHide: true });
+    this.child = spawn(process.execPath, ['--import', 'tsx', resolve('src/packages/runtime/src/main.ts'), '--data-dir', dataDirectory], { cwd: resolve('.'), windowsHide: true });
     createInterface({ input: this.child.stdout }).on('line', line => {
       let message: unknown;
       try { message = JSON.parse(line); } catch { return; }
@@ -171,7 +171,7 @@ it('resumes a version-three subflow after a hard exit and automatically complete
 });
 
 afterEach(async () => { for (const release of compositionReleases.splice(0)) release(); await Promise.all(compositionServers.splice(0).map(server => new Promise<void>(resolve => { server.closeAllConnections(); server.close(() => resolve()); }))); });
-it('recovers parallel media receipts after SIGKILL while preserving completed siblings and original remote task IDs', async () => {
+it('recovers media receipts after SIGKILL while preserving completed shots and original remote task IDs', async () => {
   const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=', 'base64');
   let posts = 0, released = false, sawPending!: () => void; const pending = new Promise<void>(resolve => { sawPending = resolve; });
   const queries: string[] = [], downloads: string[] = [];
@@ -192,25 +192,18 @@ it('recovers parallel media receipts after SIGKILL while preserving completed si
     downloads.push(request.url ?? ''); response.end(png);
   });
   compositionServers.push(server); await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve)); const address = server.address(); if (!address || typeof address === 'string') throw new Error('Missing address'); base = `http://127.0.0.1:${address.port}`;
-  const directory = await mkdtemp(join(tmpdir(), 'video-quickly-process-parallel-')); directories.push(directory);
-  const first = new RpcProcess(directory), project = await first.request<ProjectDocument>('project.create', { title: '真实并发进程恢复' });
+  const directory = await mkdtemp(join(tmpdir(), 'video-quickly-process-media-')); directories.push(directory);
+  const first = new RpcProcess(directory), project = await first.request<ProjectDocument>('project.create', { title: '真实媒体进程恢复' });
   const model = await first.request<{ id: string }>('model.save', { model: { name: '本地真实HTTP夹具', provider: 'custom-http', baseUrl: base, model: 'fixture', connectionType: 'image', capabilities: ['image'], parameters: { requestPath: 'generate', requestTemplate: { name: '{{narration}}' }, taskIdPath: 'id', pollPath: 'tasks/{{taskId}}', statusPath: 'status', resultUrlPath: 'url', pollTimeoutSeconds: 30 } } });
-  await first.request('project.update', { projectId: project.id, revision: project.revision, patch: { shots: [0, 1].map(index => ({ id: `shot-${index}`, title: `镜头${index}`, narration: `shot-${index}`, visualPrompt: '', durationUs: 1_000_000 })), workflow: { id: 'parallel', version: 1, name: 'parallel', production: { mode: 'native-video', referenceMode: 'none', soundPrompt: '', subtitleMode: 'off' }, nodes: [{ id: 'images', kind: 'assets', label: '图片', modelId: model.id }], edges: [], execution: { maxConcurrentShots: 2, modelLimits: { [model.id]: 2 } } } } });
-  const run = await first.requestConfirmed<RunRecord>('run.start', { projectId: project.id }); await pending; await completedQuery;
+  await first.request('project.update', { projectId: project.id, revision: project.revision, patch: { shots: [0, 1].map(index => ({ id: `shot-${index}`, title: `镜头${index}`, narration: `shot-${index}`, visualPrompt: '', durationUs: 1_000_000 })), workflow: { id: 'media', version: 1, name: 'media', production: { mode: 'native-video', referenceMode: 'none', soundPrompt: '', subtitleMode: 'off' }, nodes: [{ id: 'images', kind: 'assets', label: '图片', modelId: model.id }], edges: [] } } });
+  const run = await first.requestConfirmed<RunRecord>('run.start', { projectId: project.id }); await completedQuery;
   const receipt = join(directory, 'projects', project.id, 'activities', createHash('sha256').update(`${run.id}:images`).digest('hex').slice(0, 24), `${createHash('sha256').update('shot-0').digest('hex').slice(0, 24)}.receipt.json`);
-  // The other shot beginning a poll does not complete this shot. Hold its
-  // query at that legal submitted boundary, then explicitly let it finish.
   expect(JSON.parse(await readFile(receipt, 'utf8'))).toMatchObject({ state: 'submitted', taskId: 'shot-0' });
-  allowCompletedQuery();
-  await expect.poll(async () => { try { return JSON.parse(await readFile(receipt, 'utf8')).state; } catch { return ''; } }, { timeout: processTimeout }).toBe('completed');
-  // A receipt proves the HTTP boundary; a native pending write separately
-  // proves that LangGraph retained this successful sibling before SIGKILL.
+  expect(posts).toBe(1);
+  allowCompletedQuery(); await pending;
+  expect(JSON.parse(await readFile(receipt, 'utf8')).state).toBe('completed');
   const observer = openDatabase(directory);
   try {
-    expect(new DocumentStore(observer).get('run-snapshot', run.id)).toMatchObject({ handlerVersion: 3 });
-    await expect.poll(() => (observer.prepare("SELECT count(*) AS n FROM writes WHERE thread_id = ? AND channel = 'outputs' AND checkpoint_id = (SELECT max(checkpoint_id) FROM checkpoints WHERE thread_id = ?)").get(`${run.id}:media:images`, `${run.id}:media:images`) as { n: number }).n, { timeout: processTimeout }).toBe(1);
-    // The parent activity cannot commit while shot-1 is still unfinished,
-    // even though shot-0's receipt and native output are already durable.
     expect(observer.prepare('SELECT status FROM activities WHERE run_id = ? AND activity_id = ?').get(run.id, 'images')).toEqual({ status: 'dispatched' });
     expect(new DocumentStore(observer).get('node-result', `${run.id}:images`)).toBeUndefined();
   } finally { observer.close(); }
@@ -224,49 +217,32 @@ it('recovers parallel media receipts after SIGKILL while preserving completed si
   const output = await second.request<{ assets: { shotId: string }[] }>('node.result', { runId: run.id, nodeId: 'images' }); expect(output.assets.map(asset => asset.shotId)).toEqual(['shot-0', 'shot-1']);
 });
 
-it('never repeats an unknown parallel submission after SIGKILL and reopening the same journal', async () => {
+it('never repeats an unknown media submission after SIGKILL and reopening the same journal', async () => {
   const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=', 'base64');
   let posts = 0, received!: () => void; const ambiguous = new Promise<void>(resolve => { received = resolve; }); let base = '';
-  const submissions: { name: string; operationId: string | string[] | undefined }[] = [];
-  const httpEvents: string[] = [];
   const server = createServer(async (request, response) => {
     if (request.method === 'POST') {
       posts++; let text = ''; for await (const chunk of request) text += chunk; const name = JSON.parse(text).name;
-      submissions.push({ name, operationId: request.headers['idempotency-key'] });
-      response.on('finish', () => httpEvents.push(`${name}:finish`));
-      response.on('close', () => httpEvents.push(`${name}:close:${response.writableFinished}`));
       if (name === 'shot-1') { received(); return; }
       response.setHeader('Content-Type', 'application/json'); response.end(JSON.stringify({ url: `${base}/asset/${name}` })); return;
     }
     response.end(png);
   });
   compositionServers.push(server); await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve)); const address = server.address(); if (!address || typeof address === 'string') throw new Error('Missing address'); base = `http://127.0.0.1:${address.port}`;
-  const directory = await mkdtemp(join(tmpdir(), 'video-quickly-process-unknown-parallel-')); directories.push(directory);
-  const first = new RpcProcess(directory), project = await first.request<ProjectDocument>('project.create', { title: '未知并行提交保护' });
+  const directory = await mkdtemp(join(tmpdir(), 'video-quickly-process-unknown-media-')); directories.push(directory);
+  const first = new RpcProcess(directory), project = await first.request<ProjectDocument>('project.create', { title: '未知媒体提交保护' });
   const model = await first.request<{ id: string }>('model.save', { model: { name: '未知提交夹具', provider: 'custom-http', baseUrl: base, model: 'fixture', connectionType: 'image', capabilities: ['image'], parameters: { requestPath: 'generate', requestTemplate: { name: '{{narration}}' }, resultUrlPath: 'url' } } });
-  await first.request('project.update', { projectId: project.id, revision: project.revision, patch: { shots: [0, 1].map(index => ({ id: `shot-${index}`, title: `镜头${index}`, narration: `shot-${index}`, visualPrompt: '', durationUs: 1_000_000 })), workflow: { id: 'parallel', version: 1, name: 'parallel', production: { mode: 'native-video', referenceMode: 'none', soundPrompt: '', subtitleMode: 'off' }, nodes: [{ id: 'images', kind: 'assets', label: '图片', modelId: model.id }], edges: [], execution: { maxConcurrentShots: 2, modelLimits: { [model.id]: 2 } } } } });
+  await first.request('project.update', { projectId: project.id, revision: project.revision, patch: { shots: [0, 1].map(index => ({ id: `shot-${index}`, title: `镜头${index}`, narration: `shot-${index}`, visualPrompt: '', durationUs: 1_000_000 })), workflow: { id: 'media', version: 1, name: 'media', production: { mode: 'native-video', referenceMode: 'none', soundPrompt: '', subtitleMode: 'off' }, nodes: [{ id: 'images', kind: 'assets', label: '图片', modelId: model.id }], edges: [] } } });
   const run = await first.requestConfirmed<RunRecord>('run.start', { projectId: project.id }); await ambiguous;
   const receipt = join(directory, 'projects', project.id, 'activities', createHash('sha256').update(`${run.id}:images`).digest('hex').slice(0, 24), `${createHash('sha256').update('shot-0').digest('hex').slice(0, 24)}.receipt.json`);
-  try {
-    await expect.poll(async () => { try { return JSON.parse(await readFile(receipt, 'utf8')).state; } catch { return ''; } }, { timeout: processTimeout }).toBe('completed');
-  } catch (error) {
-    const value = JSON.parse(await readFile(receipt, 'utf8'));
-    const observer = openDatabase(directory);
-    try {
-      const nativeErrors = observer.prepare("SELECT task_id, type, value FROM writes WHERE thread_id = ? AND channel = '__error__'").all(`${run.id}:media:images`).map(row => {
-        const entry = row as { task_id: string; type: string; value: Buffer };
-        return { taskId: entry.task_id, type: entry.type, error: entry.value.toString('utf8') };
-      });
-      throw new Error(`Completed sibling receipt failed: ${JSON.stringify({ submissions, httpEvents, receipt: { state: value.state, taskId: value.taskId, hasDownloadUrl: Boolean(value.downloadUrl), hasBase64: Boolean(value.base64), error: value.error }, nativeErrors })}`, { cause: error });
-    } finally { observer.close(); }
-  }
+  expect(JSON.parse(await readFile(receipt, 'utf8')).state).toBe('completed');
   await first.kill(); expect(posts).toBe(2);
   const second = new RpcProcess(directory); await second.requestConfirmed('run.resume', { runId: run.id });
   await expect.poll(async () => (await second.request<WorkspaceSnapshot>('workspace.snapshot')).runs.find(value => value.id === run.id)?.status, { timeout: processTimeout }).toBe('failed'); expect(posts).toBe(2);
   const inspection = await second.request<RunInspection>('run.inspect', { runId: run.id }); expect(inspection.steps[0].reason).toContain('核对');
 });
 
-it('keeps cancellation terminal across a hard exit with a pending parallel download', async () => {
+it('keeps cancellation terminal across a hard exit with a pending download', async () => {
   const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=', 'base64');
   let posts = 0, pending!: () => void; const downloading = new Promise<void>(resolve => { pending = resolve; }); let base = '';
   const server = createServer(async (request, response) => {
@@ -274,10 +250,10 @@ it('keeps cancellation terminal across a hard exit with a pending parallel downl
     if (request.url === '/shot-1') { pending(); return; } response.end(png);
   });
   compositionServers.push(server); await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve)); const address = server.address(); if (!address || typeof address === 'string') throw new Error('Missing address'); base = `http://127.0.0.1:${address.port}`;
-  const directory = await mkdtemp(join(tmpdir(), 'video-quickly-process-canceled-parallel-')); directories.push(directory);
-  const first = new RpcProcess(directory), project = await first.request<ProjectDocument>('project.create', { title: '并行下载取消' });
+  const directory = await mkdtemp(join(tmpdir(), 'video-quickly-process-canceled-media-')); directories.push(directory);
+  const first = new RpcProcess(directory), project = await first.request<ProjectDocument>('project.create', { title: '媒体下载取消' });
   const model = await first.request<{ id: string }>('model.save', { model: { name: '取消夹具', provider: 'custom-http', baseUrl: base, model: 'fixture', connectionType: 'image', capabilities: ['image'], parameters: { requestPath: 'generate', requestTemplate: { name: '{{narration}}' }, resultUrlPath: 'url' } } });
-  await first.request('project.update', { projectId: project.id, revision: project.revision, patch: { shots: [0, 1].map(index => ({ id: `shot-${index}`, title: `镜头${index}`, narration: `shot-${index}`, visualPrompt: '', durationUs: 1_000_000 })), workflow: { id: 'parallel', version: 1, name: 'parallel', production: { mode: 'native-video', referenceMode: 'none', soundPrompt: '', subtitleMode: 'off' }, nodes: [{ id: 'images', kind: 'assets', label: '图片', modelId: model.id }], edges: [], execution: { maxConcurrentShots: 2, modelLimits: { [model.id]: 2 } } } } });
+  await first.request('project.update', { projectId: project.id, revision: project.revision, patch: { shots: [0, 1].map(index => ({ id: `shot-${index}`, title: `镜头${index}`, narration: `shot-${index}`, visualPrompt: '', durationUs: 1_000_000 })), workflow: { id: 'media', version: 1, name: 'media', production: { mode: 'native-video', referenceMode: 'none', soundPrompt: '', subtitleMode: 'off' }, nodes: [{ id: 'images', kind: 'assets', label: '图片', modelId: model.id }], edges: [] } } });
   const run = await first.requestConfirmed<RunRecord>('run.start', { projectId: project.id }); await downloading; await first.request('run.cancel', { runId: run.id });
   await expect.poll(async () => (await first.request<WorkspaceSnapshot>('workspace.snapshot')).runs.find(value => value.id === run.id)?.activities[0]?.status, { timeout: processTimeout }).toBe('unknown'); await first.kill();
   const second = new RpcProcess(directory); await expect(second.requestConfirmed('run.resume', { runId: run.id })).rejects.toThrow('已经结束'); expect((await second.request<WorkspaceSnapshot>('workspace.snapshot')).runs.find(value => value.id === run.id)?.status).toBe('canceled'); expect(posts).toBe(2);

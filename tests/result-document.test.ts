@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { resultBlocks, resultSections } from '../apps/desktop/src/lib/result-document';
+import { resultBlocks, resultSections } from '../src/renderer/lib/result-document';
 
 describe('result document presentation', () => {
   it('keeps unfamiliar prose, URLs and repeated fields without inventing a summary', () => {

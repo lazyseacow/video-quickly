@@ -1,13 +1,13 @@
 import { expect, it } from 'vitest';
 import { assetSchema, createNativeVideoWorkflow, createSceneTemplate, DEFAULT_AUDIO_PROCESSING, DEFAULT_VIDEO_PROFILE, projectSchema, type AudioWaveform, type ShotCandidate } from '@video-quickly/contracts';
-import { deleteShotRanges, resolveShotSpans } from '../packages/video/src/clip-edits';
-import { trimShot } from '../packages/video/src/editing';
-import { captionAtTime } from '../packages/video/src/captions';
-import { candidatePreviewProject, shotWaveformSpans } from '../apps/desktop/src/lib/clip-preview';
-import { waveformSpanColumns } from '../apps/desktop/src/lib/waveform-peaks';
-import { captionTrackForEditor, commitCaptionEditorTrack, localCaptionTrack } from '../apps/desktop/src/lib/caption-editor-track';
-import { applyBulkShotEdit } from '../apps/desktop/src/lib/bulk-shot-edits';
-import { editContent } from '../apps/desktop/src/lib/project-edits';
+import { deleteShotRanges, resolveShotSpans } from '../src/packages/video/src/clip-edits';
+import { trimShot } from '../src/packages/video/src/editing';
+import { captionAtTime } from '../src/packages/video/src/captions';
+import { candidatePreviewProject, shotWaveformSpans } from '../src/renderer/lib/clip-preview';
+import { waveformSpanColumns } from '../src/renderer/lib/waveform-peaks';
+import { captionTrackForEditor, commitCaptionEditorTrack, localCaptionTrack } from '../src/renderer/lib/caption-editor-track';
+import { applyBulkShotEdit } from '../src/renderer/lib/bulk-shot-edits';
+import { editContent } from '../src/renderer/lib/project-edits';
 
 function fixture() {
   const assets = [['voice', 'audio'], ['video', 'video'], ['new-voice', 'audio'], ['new-video', 'video']].map(([id, kind]) => assetSchema.parse({ id, kind, projectId: 'p', shotId: 'shot', name: id, path: `/fixture/${id}`, sha256: 'a'.repeat(64), version: 1, size: 1, mimeType: 'application/octet-stream', createdAt: '', provenance: '', active: true, retained: false }));

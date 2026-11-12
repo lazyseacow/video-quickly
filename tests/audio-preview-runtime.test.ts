@@ -4,9 +4,9 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, expect, it } from 'vitest';
 import { audioMixPrepareResultSchema, DEFAULT_AUDIO_PROCESSING, projectSchema, type AssetRecord, type AudioMixJob, type PreparedAudioMix, type ProjectDocument } from '@video-quickly/contracts';
-import { audioMixProjection } from '../packages/video/src/audio-projection';
-import { createRuntime, type RuntimeOptions } from '../packages/runtime/src';
-import { DocumentStore, openDatabase } from '../packages/runtime/src/database';
+import { audioMixProjection } from '../src/packages/video/src/audio-projection';
+import { createRuntime, type RuntimeOptions } from '../src/packages/runtime/src';
+import { DocumentStore, openDatabase } from '../src/packages/runtime/src/database';
 
 const directories: string[] = [], runtimes = new Set<ReturnType<typeof createRuntime>>();
 afterEach(async () => { await Promise.all([...runtimes].map(runtime => runtime.close())); runtimes.clear(); await Promise.all(directories.splice(0).map(path => rm(path, { recursive: true, force: true }))); });

@@ -15,7 +15,17 @@ for (const viewport of [{ width: 1536, height: 960, theme: 'dark' }, { width: 10
     const navigation = dialog.getByRole('navigation', { name: '制作设置步骤', exact: true });
     await expect(navigation.getByRole('button')).toHaveText(['1创作要求', '2模型与素材', '3声音与成片', '4确认保存']);
     for (const label of configurationSteps) await expect(navigation.getByRole('button', { name: label, exact: true })).toBeInViewport();
-    await expect(dialog.getByLabel('创作要求', { exact: true })).toBeVisible();
+    for (const label of ['简报内容', '风格内容']) {
+      const input = dialog.getByRole('textbox', { name: label, exact: true });
+      await expect(input).toBeVisible();
+      await expect(input).toHaveAttribute('placeholder', '未填写时由 AI 生成');
+    }
+    await expect(dialog.getByRole('textbox', { name: '分镜内容', exact: true })).toHaveCount(0);
+    const storyboardEntry = dialog.getByRole('button', { name: '添加分镜', exact: true });
+    await expect(storyboardEntry).toBeVisible();
+    await expect(storyboardEntry).toHaveAttribute('aria-haspopup', 'dialog');
+    await expect(storyboardEntry).toHaveAccessibleDescription('未填写时由 AI 生成');
+    await expect(dialog.getByRole('button', { name: /^AI 填写(?:简报|风格|分镜)$/ })).toHaveCount(0);
     await expect(dialog.getByRole('button', { name: '保存设置', exact: true })).toHaveCount(0);
     await expect(dialog.getByRole('button', { name: '保存并开始制作', exact: true })).toHaveCount(0);
     await expect(dialog.getByRole('button', { name: '本次制作', exact: true })).toHaveCount(0);
@@ -23,23 +33,27 @@ for (const viewport of [{ width: 1536, height: 960, theme: 'dark' }, { width: 10
     await expect(footer.getByRole('button')).toHaveText(['下一步']);
     await expect(dialog.locator('.dialog__surface')).toHaveCSS('opacity', '1');
     const content = dialog.locator('.production-settings__content');
-    const profileSummary = dialog.locator('.production-settings__storyboard > summary');
-    await expect(profileSummary).toContainText('1920 × 1080 · 30 fps');
-    if (viewport.width >= 1024) {
-      await expect(dialog.getByLabel('创作要求', { exact: true })).toBeInViewport({ ratio: 1 });
-      await expect(dialog.getByLabel('视觉风格', { exact: true })).toBeInViewport({ ratio: 1 });
-    }
+    await expect(dialog.getByText('分镜全局参数', { exact: true })).toHaveCount(0);
+    await expect(dialog.getByRole('textbox', { name: '项目原文', exact: true })).toBeVisible();
+    await expect(dialog.getByText('项目原文（可选）', { exact: true })).toHaveCount(0);
     await expect(footer.getByRole('button', { name: '下一步', exact: true })).toBeInViewport({ ratio: 1 });
     await page.screenshot({ path: info.outputPath('configuration-first-' + viewport.width + '.png') });
     const storyboard = await openStoryboardProfile(dialog);
     for (const label of ['画面比例', '分辨率', '视频帧率', '素材适配']) await expect(storyboard.getByLabel(label, { exact: true })).toBeInViewport();
     await page.screenshot({ path: info.outputPath('storyboard-global-profile-' + viewport.width + '.png') });
-    await profileSummary.click();
     await dialog.getByRole('button', { name: '下一步', exact: true }).click();
     await expect(dialog.getByRole('combobox', { name: '文本模型', exact: true })).toBeVisible();
     await expect(dialog.getByRole('listbox')).toHaveCount(0);
     await pickProductionModel(dialog, '文本模型', source.text); await pickProductionModel(dialog, '视频模型', source.video);
-    await dialog.getByLabel('参考素材', { exact: true }).selectOption('generate'); await pickProductionModel(dialog, '图片模型', source.image);
+    await pickProductionModel(dialog, '图片模型', source.image);
+    const modelBounds = await Promise.all(['文本模型', '视频模型', '图片模型'].map(label => dialog.getByRole('combobox', { name: label, exact: true }).boundingBox()));
+    for (const [index, bounds] of modelBounds.entries()) {
+      expect(bounds!.x).toBeCloseTo(modelBounds[0]!.x);
+      expect(bounds!.width).toBeCloseTo(modelBounds[0]!.width);
+      if (index > 0) expect(bounds!.y).toBeGreaterThanOrEqual(modelBounds[index - 1]!.y + modelBounds[index - 1]!.height);
+    }
+    await expect(dialog.getByRole('button', { name: '添加参考音频', exact: true })).toHaveText('');
+    await expect(dialog.getByText('生成并发', { exact: true })).toHaveCount(0);
     if (viewport.width >= 1024) {
       expect(await content.evaluate(element => element.scrollHeight - element.clientHeight)).toBeLessThanOrEqual(1);
     }
@@ -98,12 +112,12 @@ for (const viewport of [{ width: 1536, height: 960, theme: 'dark' }, { width: 10
   });
 }
 
-test('checks required fields before advancing and commits configuration once from the final review', async ({ page, request }, info) => {
-  const source = await productionFixture(request), dialog = await openProduction(page, source.project);
+test('checks required models and saves once from review with the image model left blank', async ({ page, request }, info) => {
+  const source = await productionFixture(request, { configureImage: false }), dialog = await openProduction(page, source.project);
   let writes = 0, starts = 0;
   page.on('request', request => { if (!request.url().endsWith('/__desktop_rpc') || request.method() !== 'POST') return; const method = request.postDataJSON().method; if (method === 'project.update') writes++; if (method === 'run.start') starts++; });
-  await dialog.getByLabel('创作要求', { exact: true }).fill('给初学者解释潮汐，控制在一分钟以内。');
-  await dialog.getByLabel('视觉风格', { exact: true }).fill('清爽的水彩插画');
+  await dialog.getByLabel('简报内容', { exact: true }).fill('给初学者解释潮汐，控制在一分钟以内。');
+  await dialog.getByLabel('风格内容', { exact: true }).fill('清爽的水彩插画');
   const next = dialog.getByRole('button', { name: '下一步', exact: true });
   await next.click();
   const text = dialog.getByRole('combobox', { name: '文本模型', exact: true });
@@ -123,22 +137,15 @@ test('checks required fields before advancing and commits configuration once fro
   await expect(dialog.getByRole('alert')).toContainText('请选择可用的视频模型');
   await expect(video).toBeFocused();
   await pickProductionModel(dialog, '视频模型', source.video);
-  const referenceMode = dialog.getByLabel('参考素材', { exact: true });
-  await referenceMode.selectOption('generate');
+  await expect(dialog.getByLabel('参考素材', { exact: true })).toHaveCount(0);
   const image = dialog.getByRole('combobox', { name: '图片模型', exact: true });
-  await expect(image).toHaveAttribute('aria-required', 'true');
-  await expect(image.locator('xpath=ancestor::label[1]').locator('.field__required')).toHaveText('*');
-  await next.click();
-  await expect(dialog.getByRole('alert')).toContainText('请选择可用的图片模型');
-  await expect(image).toBeFocused();
-  await dialog.screenshot({ path: info.outputPath('production-required-models.png') });
-  await referenceMode.selectOption('existing');
-  await expect(image).toHaveCount(0);
-  await next.click();
-  await expect(dialog.getByLabel('声音要求', { exact: true })).toBeVisible();
-  await dialog.getByRole('button', { name: '上一步', exact: true }).click();
-  await referenceMode.selectOption('generate');
+  await expect(image).not.toHaveAttribute('aria-required', 'true');
+  await expect(image).toHaveValue('不生成首帧');
   await pickProductionModel(dialog, '图片模型', source.image);
+  await image.fill('不生成首帧');
+  await dialog.getByRole('option', { name: '不生成首帧', exact: true }).click();
+  await expect(image).toHaveValue('不生成首帧');
+  await dialog.screenshot({ path: info.outputPath('production-optional-image-model.png') });
   await next.click();
   await dialog.getByLabel('声音要求', { exact: true }).fill('自然中文解说，轻柔海浪声');
   await dialog.getByLabel('字幕', { exact: true }).selectOption('script');
@@ -151,9 +158,12 @@ test('checks required fields before advancing and commits configuration once fro
   await expect(dialog.getByRole('region', { name: '确认保存', exact: true })).toContainText('9:16 · 720 × 1280');
   await expect(dialog.getByRole('region', { name: '确认保存', exact: true })).toContainText('裁剪填满');
   expect(writes).toBe(0); expect(starts).toBe(0); expect((await source.saved()).revision).toBe(source.project.revision);
-  await dialog.getByRole('button', { name: '修改创作要求', exact: true }).click();
-  await expect(dialog.getByLabel('视觉风格', { exact: true })).toHaveValue('清爽的水彩插画');
-  await dialog.getByLabel('创作要求', { exact: true }).fill('给初学者解释潮汐，三十秒以内。');
+  const edit = dialog.getByRole('button', { name: '修改创作要求', exact: true });
+  await expect(edit).toHaveText('');
+  await expect(edit.locator('svg')).toHaveCount(1);
+  await edit.click();
+  await expect(dialog.getByLabel('风格内容', { exact: true })).toHaveValue('清爽的水彩插画');
+  await dialog.getByLabel('简报内容', { exact: true }).fill('给初学者解释潮汐，三十秒以内。');
   await productionStep(dialog, '模型与素材'); await expect(dialog.getByRole('combobox', { name: '文本模型', exact: true })).toHaveValue(source.text.name);
   await productionStep(dialog, '声音与成片'); await expect(dialog.getByLabel('声音要求', { exact: true })).toHaveValue('自然中文解说，轻柔海浪声');
   await saveProduction(dialog); await expect(dialog).toHaveCount(0);
@@ -161,7 +171,8 @@ test('checks required fields before advancing and commits configuration once fro
   const saved = await source.saved();
   expect(saved.brief).toBe('给初学者解释潮汐，三十秒以内。'); expect(saved.style).toBe('清爽的水彩插画');
   expect(saved.profile).toMatchObject({ width: 720, height: 1280, fitMode: 'cover' });
-  expect(saved.workflow.production).toMatchObject({ textModelId: source.text.id, videoModelId: source.video.id, imageModelId: source.image.id, referenceMode: 'generate', subtitleMode: 'script', soundPrompt: '自然中文解说，轻柔海浪声' });
+  expect(saved.workflow.production).toMatchObject({ textModelId: source.text.id, videoModelId: source.video.id, referenceMode: 'existing', subtitleMode: 'script', soundPrompt: '自然中文解说，轻柔海浪声', manualPlanningSteps: ['brief', 'style'] });
+  expect(saved.workflow.production.imageModelId).toBeUndefined();
   expect(saved.workflow.nodes.filter(node => ['brief', 'style', 'script'].includes(node.id)).map(node => node.modelId)).toEqual([source.text.id, source.text.id, source.text.id]);
   await page.getByRole('button', { name: '制作设置', exact: true }).click();
   await expect(dialog.getByRole('button', { name: '确认保存', exact: true })).toHaveAttribute('aria-current', 'step');
@@ -170,7 +181,7 @@ test('checks required fields before advancing and commits configuration once fro
 test('keeps model search focused across the first frame after changing configuration steps', async ({ page, request }) => {
   await page.emulateMedia({ reducedMotion: 'reduce' });
   const source = await productionFixture(request), dialog = await openProduction(page, source.project);
-  const brief = dialog.getByLabel('创作要求', { exact: true }), model = dialog.getByRole('combobox', { name: '文本模型', exact: true });
+  const brief = dialog.getByLabel('简报内容', { exact: true }), model = dialog.getByRole('combobox', { name: '文本模型', exact: true });
   const next = dialog.getByRole('button', { name: '下一步', exact: true });
   await expect(brief).toBeFocused();
   await page.clock.install({ time: new Date('2026-06-15T12:00:00Z') }); await page.clock.pauseAt(new Date('2026-06-15T12:00:01Z'));
@@ -190,7 +201,7 @@ test('keeps model search focused across the first frame after changing configura
 
 test('retains every step after a failed save and retries only through the final review', async ({ page, request }) => {
   const source = await productionFixture(request), dialog = await openProduction(page, source.project);
-  await dialog.getByLabel('创作要求', { exact: true }).fill('保存失败也要保留的创作要求');
+  await dialog.getByLabel('简报内容', { exact: true }).fill('保存失败也要保留的创作要求');
   await productionStep(dialog, '声音与成片'); await dialog.getByLabel('声音要求', { exact: true }).fill('保留声音要求');
   let failed = false;
   await page.route('**/__desktop_rpc', route => {
@@ -198,33 +209,36 @@ test('retains every step after a failed save and retries only through the final 
     return route.continue();
   });
   await saveProduction(dialog); await expect(dialog).toContainText('当前输入已保留');
-  await productionStep(dialog, '创作要求'); await expect(dialog.getByLabel('创作要求', { exact: true })).toHaveValue('保存失败也要保留的创作要求');
+  await productionStep(dialog, '创作要求'); await expect(dialog.getByLabel('简报内容', { exact: true })).toHaveValue('保存失败也要保留的创作要求');
   await productionStep(dialog, '声音与成片'); await expect(dialog.getByLabel('声音要求', { exact: true })).toHaveValue('保留声音要求');
   expect((await source.saved()).brief).toBe(source.project.brief);
   await saveProduction(dialog); await expect(dialog).toHaveCount(0); expect((await source.saved()).brief).toBe('保存失败也要保留的创作要求');
 });
 
-test('returns final validation errors to the relevant step and reveals the invalid field', async ({ page, request }) => {
+test('saves the selected storyboard profile using presets', async ({ page, request }) => {
   const source = await productionFixture(request), dialog = await openProduction(page, source.project);
-  await productionStep(dialog, '创作要求');
-  await openStoryboardProfile(dialog);
-  await dialog.locator('.video-settings__advanced > summary').click();
-  await dialog.getByLabel('视频宽度', { exact: true }).fill('63');
-  await dialog.locator('.production-settings__storyboard > summary').click();
-  await productionStep(dialog, '确认保存'); await dialog.getByRole('button', { name: '保存设置', exact: true }).click();
-  await expect(dialog.getByRole('button', { name: '创作要求', exact: true })).toHaveAttribute('aria-current', 'step');
-  await expect(dialog.getByLabel('视频宽度', { exact: true })).toBeVisible(); await expect(dialog.getByLabel('视频宽度', { exact: true })).toBeFocused();
-  expect((await source.saved()).revision).toBe(source.project.revision);
-  await dialog.getByLabel('视频宽度', { exact: true }).fill('1280'); await saveProduction(dialog); await expect(dialog).toHaveCount(0);
+  const profile = await openStoryboardProfile(dialog);
+  await expect(profile.getByText('自定义分镜尺寸', { exact: true })).toHaveCount(0);
+  await expect(profile.getByLabel('视频宽度', { exact: true })).toHaveCount(0);
+  await expect(profile.locator('option[value="custom"]')).toHaveCount(0);
+  await profile.getByLabel('画面比例', { exact: true }).selectOption('9:16');
+  await profile.getByLabel('分辨率', { exact: true }).selectOption('1080');
+  await profile.getByLabel('视频帧率', { exact: true }).selectOption('60');
+  await saveProduction(dialog);
+  await expect(dialog).toHaveCount(0);
+  expect((await source.saved()).profile).toMatchObject({ width: 1080, height: 1920, frameRate: { numerator: 60, denominator: 1 } });
 });
 
 test('confirms saving before opening an auxiliary editor', async ({ page, request }) => {
   const source = await productionFixture(request), dialog = await openProduction(page, source.project);
-  await dialog.getByLabel('创作要求', { exact: true }).fill('在最后一步确认之前不保存');
-  await dialog.getByRole('button', { name: '应用系列模板', exact: true }).click();
+  await dialog.getByLabel('简报内容', { exact: true }).fill('在最后一步确认之前不保存');
+  await expect(dialog.getByRole('button', { name: '应用系列模板', exact: true })).toHaveCount(0);
+  await expect(dialog.getByRole('button', { name: '保存当前系列为模板', exact: true })).toHaveCount(0);
+  await productionStep(dialog, '声音与成片');
+  await dialog.getByRole('button', { name: '项目字幕样式', exact: true }).click();
   await expect(dialog.getByRole('button', { name: '确认保存', exact: true })).toHaveAttribute('aria-current', 'step');
-  await expect(dialog).toContainText('保存设置后将打开系列模板'); expect((await source.saved()).revision).toBe(source.project.revision);
+  await expect(dialog).toContainText('保存设置后将打开字幕样式'); expect((await source.saved()).revision).toBe(source.project.revision);
   await dialog.getByRole('button', { name: '保存并打开', exact: true }).click(); await expect(dialog).toHaveCount(0);
-  await expect(page.getByRole('dialog', { name: '应用系列模板', exact: true })).toBeVisible();
+  await expect(page.getByRole('dialog', { name: '项目字幕样式', exact: true })).toBeVisible();
   expect((await source.saved()).brief).toBe('在最后一步确认之前不保存');
 });

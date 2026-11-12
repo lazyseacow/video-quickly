@@ -8,7 +8,7 @@ import { productionFixture, productionStep, openProduction, pickProductionModel,
 import { fixture, latest, rpc, saved } from './native-video-fixture';
 import { openProjectFromList } from './workspace-navigation';
 
-for (const viewport of [{ width: 1536, height: 960, theme: 'dark' }, { width: 600, height: 900, theme: 'light' }]) test(`configures concurrency in normal settings with the built-in workflow at ${viewport.width}px`, async ({ page, request }, info) => {
+for (const viewport of [{ width: 1536, height: 960, theme: 'dark' }, { width: 600, height: 900, theme: 'light' }]) test(`saves the built-in model choices with fixed media scheduling at ${viewport.width}px`, async ({ page, request }, info) => {
   const source = await productionFixture(request), errors: string[] = [], mutations: string[] = [];
   page.on('pageerror', error => errors.push(error.message));
   page.on('request', request => { if (request.url().endsWith('/__desktop_rpc')) mutations.push(request.postDataJSON()?.method); });
@@ -17,63 +17,56 @@ for (const viewport of [{ width: 1536, height: 960, theme: 'dark' }, { width: 60
   await expect(page.locator('.project-heading-actions').getByRole('button', { name: '流程', exact: true })).toHaveCount(0);
   await productionStep(dialog, '模型与素材');
   await pickProductionModel(dialog, '文本模型', source.text); await pickProductionModel(dialog, '视频模型', source.video);
-  await dialog.getByLabel('参考素材', { exact: true }).selectOption('generate'); await pickProductionModel(dialog, '图片模型', source.image);
-  await dialog.getByLabel('镜头同时处理数', { exact: true }).selectOption('3');
-  await dialog.getByLabel(`${source.video.name} 并发上限`, { exact: true }).selectOption('2');
-  await dialog.getByLabel(`${source.image.name} 并发上限`, { exact: true }).selectOption('1');
-  await productionStep(dialog, '创作要求'); await dialog.getByLabel('创作要求', { exact: true }).fill('系统流程的创作要求');
-  await productionStep(dialog, '模型与素材');
-  await dialog.getByRole('region', { name: '生成并发', exact: true }).scrollIntoViewIfNeeded();
-  await page.screenshot({ path: info.outputPath('normal-concurrency-settings.png') });
+  await expect(dialog.getByLabel('参考素材', { exact: true })).toHaveCount(0);
+  await expect(dialog.getByLabel('首帧生成', { exact: true })).toHaveCount(0);
+  await pickProductionModel(dialog, '图片模型', source.image);
+  await expect(dialog.getByRole('region', { name: '生成并发', exact: true })).toHaveCount(0);
+  await expect(dialog.getByLabel(/并发上限/)).toHaveCount(0);
+  await page.screenshot({ path: info.outputPath('production-model-settings.png') });
   await expect(dialog.getByRole('button', { name: /高级编排/ })).toHaveCount(0);
-  expect((await source.saved()).workflow.execution).toBeUndefined();
+  await productionStep(dialog, '创作要求');
+  const brief = '系统流程的创作要求';
+  await dialog.getByRole('textbox', { name: '简报内容', exact: true }).fill(brief);
   await saveProduction(dialog); await expect(dialog).toHaveCount(0);
   const current = await source.saved();
-  expect(current.brief).toBe('系统流程的创作要求');
-  expect(current.workflow.execution).toEqual({ maxConcurrentShots: 3, modelLimits: { [source.video.id]: 2, [source.image.id]: 1 } });
+  expect(current.brief).toBe(brief);
+  expect(current.workflow).not.toHaveProperty('execution');
+  expect(current.workflow.production).toMatchObject({ textModelId: source.text.id, videoModelId: source.video.id, imageModelId: source.image.id, referenceMode: 'generate' });
+  expect(current.workflow.nodes.find(node => node.id === 'assets')?.config.useFirstShotReference).toBe(true);
   expect(current.workflow.nodes.map(node => node.id)).toEqual(source.project.workflow.nodes.map(node => node.id)); expect(current.workflow.edges).toEqual(source.project.workflow.edges);
   await expect(page.getByLabel('镜头同时处理数', { exact: true })).toHaveCount(0);
   await page.getByRole('button', { name: '制作设置', exact: true }).click(); dialog = page.getByRole('dialog', { name: '制作设置', exact: true }); await productionStep(dialog, '模型与素材');
-  await expect(dialog.getByLabel('镜头同时处理数', { exact: true })).toHaveValue('3');
-  await expect(dialog.getByLabel(`${source.video.name} 并发上限`, { exact: true })).toHaveValue('2');
-  await dialog.getByLabel(`${source.video.name} 并发上限`, { exact: true }).selectOption(''); await saveProduction(dialog); await expect(dialog).toHaveCount(0);
-  expect((await source.saved()).workflow.execution?.modelLimits).toEqual({ [source.image.id]: 1 });
+  await expect(dialog.getByLabel('镜头同时处理数', { exact: true })).toHaveCount(0);
+  await expect(dialog.getByLabel('首帧生成', { exact: true })).toHaveCount(0);
+  await expect(dialog.getByRole('combobox', { name: '视频模型', exact: true })).toHaveValue(source.video.name);
   expect(mutations).not.toContain('run.start'); expect(errors).toEqual([]); await expect(page.locator('vite-error-overlay')).toHaveCount(0);
 });
 
-test('persists pending concurrency across reload while the active production keeps its frozen configuration', async ({ page, request }, info) => {
+test('persists a pending sound prompt across reload while the active production keeps its frozen configuration', async ({ page, request }, info) => {
   // Both the active snapshot and the reloaded settings complete a real video export.
   test.setTimeout(60_000);
   const source = await fixture(request, info, true);
   try {
     let project = await rpc<ProjectDocument>(request, 'project.update', { projectId: source.project.id, patch: { workflow: { ...source.project.workflow, production: { ...source.project.workflow.production, textModelId: source.models[0].id, videoModelId: source.video.id } } } });
+    const originalSoundPrompt = project.workflow.production.soundPrompt;
     const run = await rpc<{ id: string; snapshotDigest: string }>(request, 'run.start', { projectId: project.id }); await source.pending;
-    let dialog = await openProduction(page, project); await productionStep(dialog, '模型与素材');
-    await dialog.getByLabel('镜头同时处理数', { exact: true }).selectOption('3'); await dialog.getByLabel(`${source.video.name} 并发上限`, { exact: true }).selectOption('2');
+    const soundPrompt = '清晰的普通话解说';
+    let dialog = await openProduction(page, project); await productionStep(dialog, '声音与成片');
+    await dialog.getByLabel('声音要求', { exact: true }).fill(soundPrompt);
     await saveProduction(dialog); await expect(dialog).toHaveCount(0);
-    expect((await saved(request, project.id)).workflow.execution).toBeUndefined();
+    expect((await saved(request, project.id)).workflow.production.soundPrompt).toBe(originalSoundPrompt);
     expect(await rpc(request, 'run.get', { runId: run.id })).toMatchObject({ snapshotDigest: run.snapshotDigest });
     await page.reload(); await openProjectFromList(page, project.title); await page.getByRole('button', { name: '制作设置', exact: true }).click();
-    dialog = page.getByRole('dialog', { name: '制作设置', exact: true }); await expect(dialog).toContainText('已保存待用配置'); await productionStep(dialog, '模型与素材');
-    await expect(dialog.getByLabel('镜头同时处理数', { exact: true })).toHaveValue('3'); await expect(dialog.getByLabel(`${source.video.name} 并发上限`, { exact: true })).toHaveValue('2');
+    dialog = page.getByRole('dialog', { name: '制作设置', exact: true }); await expect(dialog).toContainText('已保存待用配置'); await productionStep(dialog, '声音与成片');
+    await expect(dialog.getByLabel('声音要求', { exact: true })).toHaveValue(soundPrompt);
     await dialog.getByRole('button', { name: '关闭对话框', exact: true }).click();
     source.release(); await expect.poll(async () => (await latest(request, project.id))?.status, { timeout: 30000 }).toBe('succeeded');
-    expect((await saved(request, project.id)).workflow.execution).toBeUndefined();
+    expect((await saved(request, project.id)).workflow.production.soundPrompt).toBe(originalSoundPrompt);
     await page.getByRole('button', { name: '开始制作', exact: true }).click(); await confirmAction(page, '确认开始制作');
     await expect.poll(async () => (await latest(request, project.id))?.id).not.toBe(run.id);
     await expect.poll(async () => (await latest(request, project.id))?.status, { timeout: 30000 }).toBe('succeeded');
-    project = await saved(request, project.id); expect(project.workflow.execution).toEqual({ maxConcurrentShots: 3, modelLimits: { [source.video.id]: 2 } });
+    project = await saved(request, project.id); expect(project.workflow.production.soundPrompt).toBe(soundPrompt);
   } finally { await source.close(); }
-});
-
-test('retains concurrency input when another view saves a conflicting concurrency setting', async ({ page, request }) => {
-  const source = await productionFixture(request), dialog = await openProduction(page, source.project);
-  await productionStep(dialog, '模型与素材'); await dialog.getByLabel('镜头同时处理数', { exact: true }).selectOption('2');
-  const remote = await rpc<ProjectDocument>(request, 'project.update', { projectId: source.project.id, revision: source.project.revision, patch: { workflow: { ...source.project.workflow, execution: { maxConcurrentShots: 4, modelLimits: {} } } } });
-  await expect(page.locator('.project-heading-copy')).toHaveAttribute('data-revision', String(remote.revision));
-  await saveProduction(dialog); await expect(page.getByRole('alert').filter({ hasText: '生成并发已在其他视图修改' })).toBeVisible();
-  await productionStep(dialog, '模型与素材'); await expect(dialog.getByLabel('镜头同时处理数', { exact: true })).toHaveValue('2');
-  expect((await source.saved()).workflow.execution?.maxConcurrentShots).toBe(4);
 });
 
 for (const viewport of [{ width: 1536, height: 960, theme: 'dark' }, { width: 1024, height: 720, theme: 'light' }, { width: 390, height: 844, theme: 'light' }]) test(`edits existing custom workflow tasks without losing input or selector focus at ${viewport.width}px`, async ({ page, request }, info) => {

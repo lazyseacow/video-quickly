@@ -5,10 +5,10 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { afterEach, expect, it } from 'vitest';
 import { assetRecoveryJobSchema, assetRecoveryPageSchema, assetSchema, buildMediaPrompt, characterProfileSchema, creativeContextSchema, creativeReferenceAssetIds, createNativeVideoWorkflow, DEFAULT_VIDEO_PROFILE, modelSchema, projectReadinessSchema, projectSchema, promptPreviewSchema, promptSessionSchema, runSchema, shotSchema, workflowNodeSchema, type AssetRecord, type JsonValue, type ShotCandidate } from '@video-quickly/contracts';
-import { resolveCharacterReferences } from '../packages/integrations/src/character-references';
-import { createActivityExecutor, validateMediaActivity } from '../packages/integrations/src';
-import { createRuntime, type RuntimeOptions } from '../packages/runtime/src/index';
-import { buildWorkflowPrompt, parseWorkflowScript } from '../packages/runtime/src/workflow-prompts';
+import { resolveCharacterReferences } from '../src/packages/integrations/src/character-references';
+import { createActivityExecutor, validateMediaActivity } from '../src/packages/integrations/src';
+import { createRuntime, type RuntimeOptions } from '../src/packages/runtime/src/index';
+import { buildWorkflowPrompt, parseWorkflowScript } from '../src/packages/runtime/src/workflow-prompts';
 
 const directories: string[] = [], runtimes: ReturnType<typeof createRuntime>[] = [], servers: Server[] = [];
 const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScLbtAAAAABJRU5ErkJggg==', 'base64');

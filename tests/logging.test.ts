@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { afterEach, expect, it } from 'vitest';
-import { createLogger, logError } from '../packages/runtime/src/logging.js';
+import { createLogger, logError } from '../src/packages/runtime/src/logging.js';
 
 const directories: string[] = [];
 afterEach(async () => { for (const directory of directories.splice(0)) await rm(directory, { recursive: true, force: true }); });
@@ -135,7 +135,7 @@ it('degrades to one safe stderr notice when file writing fails and never contami
   const directory = await fixture();
   await writeFile(join(directory, 'logs'), 'not a directory');
   const script = join(directory, 'fixture.mjs');
-  await writeFile(script, `import {createLogger} from ${JSON.stringify(pathToFileURL(resolve('packages/runtime/src/logging.ts')).href)};
+  await writeFile(script, `import {createLogger} from ${JSON.stringify(pathToFileURL(resolve('src/packages/runtime/src/logging.ts')).href)};
 const logger=createLogger({dataDirectory:process.argv[2],component:'runtime'});
 logger.info('runtime.ready');logger.error('rpc.failed',{error:new Error('fixture-secret-never-forward')});
 console.log(JSON.stringify({jsonrpc:'2.0',method:'runtime.ready'}));`);
@@ -150,7 +150,7 @@ console.log(JSON.stringify({jsonrpc:'2.0',method:'runtime.ready'}));`);
 
 it('keeps complete JSON lines and bounded files when the old archive cannot be replaced', async () => {
   const directory = await fixture(), script = join(directory, 'fixture.mjs');
-  await writeFile(script, `import {createLogger} from ${JSON.stringify(pathToFileURL(resolve('packages/runtime/src/logging.ts')).href)};
+  await writeFile(script, `import {createLogger} from ${JSON.stringify(pathToFileURL(resolve('src/packages/runtime/src/logging.ts')).href)};
 import {mkdirSync,readFileSync,statSync} from 'node:fs';import {join} from 'node:path';
 const root=process.argv[2],logger=createLogger({dataDirectory:root,component:'runtime',maxSize:256});
 logger.info('runtime.ready',{sequence:0});logger.info('runtime.ready',{sequence:1});

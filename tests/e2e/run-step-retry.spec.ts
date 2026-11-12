@@ -41,7 +41,7 @@ async function fixture(request: APIRequestContext, flat = false, failure: 'downl
       shots: [1, 2].map(index => ({ id: `shot-${index}`, title: `镜头 ${index}`, narration: `shot-${index}`, visualPrompt: '水彩画面', durationUs: 1_000_000 })),
       workflow: { id: flat ? 'native-video' : 'manual-retry', name: '重试验收', version: 1, production: { mode: 'native-video', referenceMode: 'none', soundPrompt: '', subtitleMode: 'off' },
         nodes: [{ id: 'style', kind: 'style', label: '生成风格', modelId: text.id }, { id: 'images', kind: 'assets', label: '镜头图片生成', modelId: image.id }, { id: 'finish', kind: 'brief', label: '后续收尾' }],
-        edges: [{ id: 'a', source: 'style', target: 'images' }, { id: 'b', source: 'images', target: 'finish' }], execution: { maxConcurrentShots: 1, modelLimits: {} },
+        edges: [{ id: 'a', source: 'style', target: 'images' }, { id: 'b', source: 'images', target: 'finish' }],
         stages: [{ id: 'planning', label: '策划与分镜', nodeIds: ['style'] }, { id: 'media', label: '素材与配音', nodeIds: ['images'] }, { id: 'finish', label: '审阅与导出', nodeIds: ['finish'] }],
       },
     } });

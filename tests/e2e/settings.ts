@@ -59,7 +59,7 @@ export async function projectSettingField(page: Page, name: string, options?: Pa
 }
 
 export async function projectSettingAction(page: Page, name: string, options?: Parameters<Locator['getByRole']>[1]) {
-  const projectActions = ['背景音乐', '项目字幕样式', '应用系列模板', '保存当前系列为模板'];
+  const projectActions = ['背景音乐', '项目字幕样式'];
   if (!projectActions.includes(name)) return page.getByRole('button', { ...options, name });
   const dialog = await openProjectSettings(page);
   return revealSetting(dialog, dialog.getByRole('button', { ...options, name, includeHidden: true }));

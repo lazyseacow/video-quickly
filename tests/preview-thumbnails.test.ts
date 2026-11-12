@@ -1,6 +1,6 @@
 import { expect, it, vi } from 'vitest';
 import { assetSchema } from '@video-quickly/contracts';
-import { ThumbnailCache, type ThumbnailRequest } from '../apps/desktop/src/components/preview-thumbnails';
+import { ThumbnailCache, type ThumbnailRequest } from '../src/renderer/components/preview-thumbnails';
 
 const asset = assetSchema.parse({ id: 'video', name: '视频', kind: 'video', path: 'D:/fixture/video.mp4', mimeType: 'video/mp4', sha256: 'a'.repeat(64), size: 100, version: 1, createdAt: '', provenance: 'fixture', active: true });
 const input = (timeUs = 0): ThumbnailRequest => ({ asset, timeUs, width: 420, height: 236 });

@@ -4,8 +4,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, expect, it } from 'vitest';
 import { MAX_REFERENCE_AUDIO_BYTES, assetSchema, productionSettingsSchema, projectSchema } from '@video-quickly/contracts';
-import { createRuntime } from '../packages/runtime/src';
-import { resolveReferenceAudio } from '../packages/integrations/src/audio-references';
+import { createRuntime } from '../src/packages/runtime/src';
+import { resolveReferenceAudio } from '../src/packages/integrations/src/audio-references';
 
 const directories: string[] = [], runtimes: ReturnType<typeof createRuntime>[] = [];
 afterEach(async () => {

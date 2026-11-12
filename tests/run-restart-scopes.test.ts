@@ -6,9 +6,9 @@ import { tmpdir } from 'node:os';
 import { basename, dirname, join, resolve } from 'node:path';
 import { afterEach, expect, it, vi } from 'vitest';
 import { assetSchema, DEFAULT_VIDEO_PROFILE, exportBatchSchema, projectSchema, runInspectionSchema, runSchema, type AssetRecord, type ModelProfile, type ProjectDocument, type ShotCandidate, type UsageRecord, type WorkflowNode } from '@video-quickly/contracts';
-import { createActivityExecutor } from '../packages/integrations/src';
-import { createRuntime, SimulatedProcessExit, type ActivityExecutionContext, type RuntimeOptions } from '../packages/runtime/src';
-import { openDatabase } from '../packages/runtime/src/database';
+import { createActivityExecutor } from '../src/packages/integrations/src';
+import { createRuntime, SimulatedProcessExit, type ActivityExecutionContext, type RuntimeOptions } from '../src/packages/runtime/src';
+import { openDatabase } from '../src/packages/runtime/src/database';
 
 const directories: string[] = [], servers: Server[] = [];
 const runtimes = new Set<ReturnType<typeof createRuntime>>();

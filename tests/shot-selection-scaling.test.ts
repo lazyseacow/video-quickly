@@ -1,5 +1,5 @@
 import { expect, it, vi } from 'vitest';
-import { selectShot, type ShotSelection } from '../apps/desktop/src/lib/shot-selection';
+import { selectShot, type ShotSelection } from '../src/renderer/lib/shot-selection';
 
 it.each([
   { order: ['A', 'B', 'C', 'D', 'E'], selected: ['E', 'C', 'A'], removed: 'C', expected: ['A', 'E'], primary: 'A' },

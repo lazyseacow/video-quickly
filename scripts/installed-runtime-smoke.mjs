@@ -18,7 +18,7 @@ if (!['prepare', 'verify', 'inspect'].includes(mode) || !installDirectory || !da
 const sidecar = process.platform === 'darwin' ? resolve(installDirectory, 'Contents/Resources/sidecar') : resolve(installDirectory, 'resources', 'sidecar');
 const extension = process.platform === 'win32' ? '.exe' : '';
 if (mode === 'inspect') {
-  const { WORKSPACE_MIGRATIONS } = await import('../packages/runtime/src/database.ts');
+  const { WORKSPACE_MIGRATIONS } = await import('../src/packages/runtime/src/database.ts');
   const expectedVersion = WORKSPACE_MIGRATIONS.at(-1)?.version;
   const require = createRequire(join(sidecar, 'package.json'));
   const Database = require('better-sqlite3');

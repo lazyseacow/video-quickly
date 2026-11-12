@@ -3,11 +3,11 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, expect, it, vi } from 'vitest';
 import { modelSchema, projectSchema, runInspectionSchema, runSchema, runStepPayloadSchema, workflowNodeSchema } from '@video-quickly/contracts';
-import { createRuntime, SimulatedProcessExit, type RuntimeOptions } from '../packages/runtime/src';
-import { DocumentStore, openDatabase } from '../packages/runtime/src/database';
-import { ModelResponseValidationError } from '../packages/runtime/src/model-responses';
-import { parseWorkflowScript } from '../packages/runtime/src/workflow-prompts';
-import { TextRequestRejectedError, type TextGenerationRequest } from '../packages/runtime/src/providers';
+import { createRuntime, SimulatedProcessExit, type RuntimeOptions } from '../src/packages/runtime/src';
+import { DocumentStore, openDatabase } from '../src/packages/runtime/src/database';
+import { ModelResponseValidationError } from '../src/packages/runtime/src/model-responses';
+import { parseWorkflowScript } from '../src/packages/runtime/src/workflow-prompts';
+import { TextRequestRejectedError, type TextGenerationRequest } from '../src/packages/runtime/src/providers';
 
 const directories: string[] = [], runtimes: ReturnType<typeof createRuntime>[] = [];
 afterEach(async () => {

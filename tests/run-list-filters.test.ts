@@ -3,8 +3,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { recordPageSchema, runSummarySchema, type RunRecord } from '@video-quickly/contracts';
-import { createRuntime } from '../packages/runtime/src';
-import { DocumentStore, openDatabase } from '../packages/runtime/src/database';
+import { createRuntime } from '../src/packages/runtime/src';
+import { DocumentStore, openDatabase } from '../src/packages/runtime/src/database';
 import { seedLargeWorkspace } from './fixtures/large-workspace';
 
 const fixtures: Array<{ directory: string; database: ReturnType<typeof openDatabase>; runtime: ReturnType<typeof createRuntime> }> = [];

@@ -1,6 +1,6 @@
 import { expect, it } from 'vitest';
 import { applyPromptLibraryItem, createNativeVideoWorkflow, DEFAULT_VIDEO_PROFILE, projectSchema, promptBindingsSchema, promptLibraryItemSchema, resolvePromptBindings, shotSchema, workflowNodeSchema } from '@video-quickly/contracts';
-import { buildWorkflowPrompt } from '../packages/runtime/src/workflow-prompts';
+import { buildWorkflowPrompt } from '../src/packages/runtime/src/workflow-prompts';
 
 const project = projectSchema.parse({ id: 'binding-project', revision: 1, title: '花园故事', brief: '小青找到木盒', style: '水彩', workflow: createNativeVideoWorkflow(), profile: DEFAULT_VIDEO_PROFILE, shots: [], createdAt: '', updatedAt: '' });
 const shot = shotSchema.parse({ id: 'first', title: '木盒', narration: '盒子在这里。', visualPrompt: '木盒特写', durationUs: 2000000 });

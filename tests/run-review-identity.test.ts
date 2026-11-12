@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { expect, it, vi } from 'vitest';
 import { modelSchema, projectSchema, runSchema, workflowNodeSchema } from '@video-quickly/contracts';
-import { createRuntime } from '../packages/runtime/src';
+import { createRuntime } from '../src/packages/runtime/src';
 
 it('automatically chains tasks and rejects the removed review endpoint without scheduling more work', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'vq-review-identity-'));

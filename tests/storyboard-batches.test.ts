@@ -3,9 +3,9 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, expect, it, vi } from 'vitest';
 import { modelSchema, projectSchema, runInspectionSchema, runSchema, runStepPayloadSchema, workflowNodeSchema } from '@video-quickly/contracts';
-import { createRuntime, SimulatedProcessExit, type RuntimeOptions } from '../packages/runtime/src';
-import { DocumentStore, openDatabase } from '../packages/runtime/src/database';
-import { TextRequestRejectedError } from '../packages/runtime/src/providers';
+import { createRuntime, SimulatedProcessExit, type RuntimeOptions } from '../src/packages/runtime/src';
+import { DocumentStore, openDatabase } from '../src/packages/runtime/src/database';
+import { TextRequestRejectedError } from '../src/packages/runtime/src/providers';
 import { storyboardFixtureResponse } from './fixtures/planning-response';
 
 const directories: string[] = [], runtimes = new Set<ReturnType<typeof createRuntime>>();

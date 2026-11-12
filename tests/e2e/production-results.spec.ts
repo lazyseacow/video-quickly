@@ -1,5 +1,5 @@
 import { expect, test, type Page, type APIRequestContext, type TestInfo } from '@playwright/test';
-import { formatPlanningDocument, type RunSummary } from '@video-quickly/contracts';
+import type { RunSummary } from '@video-quickly/contracts';
 import { fixture, open, rpc, saved } from './native-video-fixture';
 
 const brief = {
@@ -75,8 +75,8 @@ for (const { width, theme } of [{ width: 1536, theme: 'dark' }, { width: 1024, t
       const specs = document.getByRole('definition').filter({ hasText: '1920 × 1080' });
       await expect(specs).toBeVisible(); await expect(document).toContainText('59.94 fps');
       await expect(document).toContainText('完整显示');
-      await document.locator('summary').filter({ hasText: '查看完整原文' }).click();
-      await expect(document.locator('.result-document__original pre')).toHaveText(formatPlanningDocument('brief', brief));
+      await expect(document).toContainText('保留最后一条表达要求。');
+      await expect(dialog.getByText(/^(查看完整原文|查看模型原始返回)$/)).toHaveCount(0);
       await panel.hover(); await page.mouse.wheel(0, 5000);
       await expect.poll(() => panel.evaluate(element => element.scrollTop)).toBeGreaterThan(0);
       const after = await navigation.boundingBox();
@@ -94,8 +94,9 @@ for (const { width, theme } of [{ width: 1536, theme: 'dark' }, { width: 1024, t
       await expect(visual.locator('pre').first()).toContainText('<img src=');
       await expect(visual.locator('img, script, iframe')).toHaveCount(0);
       await expect(visual).toContainText('最后一段仍然可读。');
+      await expect(dialog.getByText(/^(查看完整原文|查看模型原始返回)$/)).toHaveCount(0);
       await page.screenshot({ path: info.outputPath(`production-style-${width}-${theme}.png`) });
-      await expect(navigation.getByRole('button').locator('strong')).toHaveText(['简报生成', '风格与角色生成', '分镜生成', '参考素材准备', '镜头视频生成', '剪辑与运镜准备', '导出成片']);
+      await expect(navigation.getByRole('button').locator('strong')).toHaveText(['简报生成', '风格与角色生成', '分镜生成', '参考图生成', '镜头视频生成', '剪辑与运镜准备', '导出成片']);
       await expect(dialog.getByRole('button', { name: '编辑风格与角色', exact: true })).toBeInViewport();
       expect(detailReads).toEqual([]);
       expect(await saved(request, source.project.id)).toEqual(baseline); expect(source.requests.length).toBe(requests);

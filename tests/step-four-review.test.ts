@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, expect, it } from 'vitest';
 import { projectSchema, workflowNodeSchema, type AssetRecord, type CharacterProfile, type ModelProfile, type RunRecord, type UsageRecord } from '@video-quickly/contracts';
-import { createRuntime, SimulatedProcessExit } from '../packages/runtime/src';
+import { createRuntime, SimulatedProcessExit } from '../src/packages/runtime/src';
 
 const directories: string[] = [];
 const servers: Server[] = [];

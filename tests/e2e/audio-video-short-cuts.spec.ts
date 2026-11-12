@@ -5,7 +5,7 @@ import { writeFile } from 'node:fs/promises';
 import { promisify } from 'node:util';
 import { expect, test, type APIRequestContext, type Page, type TestInfo } from '@playwright/test';
 import { DEFAULT_AUDIO_MIX_SETTINGS, timeAtFrame, type AssetRecord, type ProjectDocument } from '@video-quickly/contracts';
-import { deleteShotRanges } from '../../packages/video/src/clip-edits';
+import { deleteShotRanges } from '../../src/packages/video/src/clip-edits';
 
 const execute = promisify(execFile);
 type Color = 'green' | 'red' | 'blue' | 'other';

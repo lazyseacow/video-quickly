@@ -1,6 +1,6 @@
 import { expect, it } from 'vitest';
 import { modelSchema, workflowNodeSchema, type ModelProfile } from '@video-quickly/contracts';
-import { matchingStepModels, stepGuidance, stepModelLabel, stepModelPlaceholder } from '../apps/desktop/src/lib/workflow-guidance';
+import { matchingStepModels, stepGuidance, stepModelLabel, stepModelPlaceholder } from '../src/renderer/lib/workflow-guidance';
 
 function model(id: string, capabilities: ModelProfile['capabilities'], provider: ModelProfile['provider'] = 'openai-compatible') {
   return modelSchema.parse({ id, name: id, provider, parameters: {  }, model: id, connectionType: ((capabilities) as readonly string[]).includes('text') ? 'text' : ((capabilities) as readonly string[]).includes('video') ? 'video' : 'image', capabilities, baseUrl: 'http://localhost/v1', createdAt: '', updatedAt: '' });

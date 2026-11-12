@@ -4,10 +4,10 @@ import { tmpdir } from 'node:os';
 import { basename, dirname, join, resolve } from 'node:path';
 import { afterEach, expect, it, vi } from 'vitest';
 import { modelSchema, projectDetailSchema, projectSchema, runInspectionSchema, runSchema, runStepPayloadSchema } from '@video-quickly/contracts';
-import { createActivityExecutor, validateMediaActivity } from '../packages/integrations/src';
-import { createRuntime } from '../packages/runtime/src';
-import { DocumentStore, openDatabase } from '../packages/runtime/src/database';
-import { createRunProgress } from '../packages/runtime/src/run-progress';
+import { createActivityExecutor, validateMediaActivity } from '../src/packages/integrations/src';
+import { createRuntime } from '../src/packages/runtime/src';
+import { DocumentStore, openDatabase } from '../src/packages/runtime/src/database';
+import { createRunProgress } from '../src/packages/runtime/src/run-progress';
 
 const directories: string[] = [], servers: Server[] = [], runtimes: ReturnType<typeof createRuntime>[] = [], releases: (() => void)[] = [];
 const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=', 'base64');
@@ -31,7 +31,7 @@ function open(directory: string) {
   const runtime = createRuntime({ dataDirectory: directory, seed: false, executeActivity: createActivityExecutor(), preflightActivity: validateMediaActivity });
   runtimes.push(runtime); return runtime;
 }
-async function fixture(url: string, text = false, polling = false, count = 2, concurrency = 1) {
+async function fixture(url: string, text = false, polling = false, count = 2) {
   const directory = await mkdtemp(join(tmpdir(), 'vq-step-progress-')); directories.push(directory);
   const runtime = open(directory), created = projectSchema.parse(await runtime.dispatch('project.create', { title: '真实步骤进度' }));
   const model = modelSchema.parse(await runtime.dispatch('model.save', { model: {
@@ -40,7 +40,7 @@ async function fixture(url: string, text = false, polling = false, count = 2, co
   } }));
   const project = projectSchema.parse(await runtime.dispatch('project.update', { projectId: created.id, revision: created.revision, patch: {
     shots: Array.from({ length: count }, (_, index) => ({ id: `shot-${index + 1}`, title: `镜头 ${index + 1}`, narration: `镜头 ${index + 1}`, visualPrompt: '', durationUs: 1_000_000 })),
-    workflow: { id: 'progress-fixture', name: '进度验证', version: 1, production: created.workflow.production, nodes: [{ id: 'generate', kind: text ? 'style' : 'assets', label: text ? '风格生成' : '参考图生成', modelId: model.id }], edges: [], ...(concurrency > 1 ? { execution: { maxConcurrentShots: concurrency, modelLimits: { [model.id]: concurrency } } } : {}) },
+    workflow: { id: 'progress-fixture', name: '进度验证', version: 1, production: created.workflow.production, nodes: [{ id: 'generate', kind: text ? 'style' : 'assets', label: text ? '风格生成' : '参考图生成', modelId: model.id }], edges: [] },
   } }));
   const run = runSchema.parse(await runtime.dispatch('run.start', { projectId: project.id }));
   return { runtime, project, run, directory };
@@ -108,20 +108,21 @@ it('restores partial progress after reopening and reuses completed receipts on a
   expect(final.progress?.shots[0].assetId).toBe(partial.progress?.shots[0].assetId); expect(requests).toBe(3);
 });
 
-it('retains each parallel shot status when results finish out of order', async () => {
-  const waiting = gate(); let requests = 0, base = '';
+it('leaves future shots unsubmitted until the current shot completes', async () => {
+  const waiting = gate(), entered = gate(); let requests = 0, base = '';
   base = await serve(async (request, response) => {
     if (request.method === 'GET') { response.end(png); return; }
     let body = ''; for await (const bytes of request) body += bytes;
     requests++;
-    if (!body.includes('镜头 2')) await waiting.pending;
+    if (body.includes('镜头 2')) { entered.release(); await waiting.pending; }
     response.setHeader('content-type', 'application/json'); response.end(JSON.stringify({ url: `${base}/image.png` }));
   });
-  const f = await fixture(base, false, false, 3, 2);
-  await vi.waitFor(async () => expect((await inspect(f.runtime, f.run.id)).steps[0].progress?.completed).toBe(1));
+  const f = await fixture(base, false, false, 3);
+  await entered.pending;
   const partial = await output(f.runtime, f.run.id);
-  expect(partial.progress?.shots[1]).toMatchObject({ id: 'shot-2', status: 'completed', assetId: expect.any(String) });
-  expect(partial.progress?.shots[0].status).not.toBe('completed'); expect(partial.progress?.shots[2].status).not.toBe('completed');
+  expect(partial.progress?.shots[0]).toMatchObject({ id: 'shot-1', status: 'completed', assetId: expect.any(String) });
+  expect(partial.progress?.shots[1].status).toBe('submitting');
+  expect(requests).toBe(2);
   waiting.release(); await f.runtime.waitForIdle();
   const final = await output(f.runtime, f.run.id);
   expect(final.progress?.shots.map(shot => shot.id)).toEqual(['shot-1', 'shot-2', 'shot-3']);

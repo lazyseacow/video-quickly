@@ -4,8 +4,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, expect, it, vi } from 'vitest';
 import { createNativeVideoWorkflow, assetSchema, projectSchema, promptPreviewSchema, runInspectionSchema, runSchema, runStepPayloadSchema, shotSchema, type ProjectDocument } from '@video-quickly/contracts';
-import { createRuntime, SimulatedProcessExit, type ActivityExecutionContext, type RuntimeOptions } from '../packages/runtime/src';
-import { DocumentStore, openDatabase } from '../packages/runtime/src/database';
+import { createRuntime, SimulatedProcessExit, type ActivityExecutionContext, type RuntimeOptions } from '../src/packages/runtime/src';
+import { DocumentStore, openDatabase } from '../src/packages/runtime/src/database';
 import { planningFixtureFields, planningFixtureResponse, storyboardFixtureResponse } from './fixtures/planning-response';
 
 const directories: string[] = [], runtimes = new Set<ReturnType<typeof createRuntime>>();
@@ -259,10 +259,7 @@ it('rejects storyboard fields outside the advertised production schema', async (
 });
 
 it.each(['assets', 'video'] as const)('rejects incompatible %s assets before committing the step', async nodeId => {
-  const { runtime, project: original, media } = await fixture();
-  const project = nodeId === 'video' ? projectSchema.parse(await runtime.dispatch('project.update', { projectId: original.id, revision: original.revision, patch: {
-    workflow: { ...original.workflow, execution: { maxConcurrentShots: 1, modelLimits: {} } },
-  } })) : original;
+  const { runtime, project, media } = await fixture();
   const produce = media.getMockImplementation()!;
   media.mockImplementation(async context => {
     const output = await produce(context);
@@ -329,7 +326,7 @@ it('restores the missing storyboard after workflow configuration changes while p
   const edited = await current(runtime, project.id);
   expect(edited).toMatchObject({ title: '制作期间修改的标题', shots: [] });
   await expect(runtime.dispatch('node.apply', { runId: run.id, nodeId: 'video', revision: edited.revision })).rejects.toThrow('生成素材对应的镜头已移除');
-  const workflow = { ...project.workflow, execution: { maxConcurrentShots: 2, modelLimits: {} },
+  const workflow = { ...project.workflow,
     production: { ...project.workflow.production, textModelId: undefined, videoModelId: undefined } };
   const planningEdited = projectSchema.parse(await runtime.dispatch('project.update', { projectId: project.id, revision: edited.revision, patch: {
     title: project.title, workflow: { ...workflow, production: { ...workflow.production, manualPlanningFields: { brief: planningFixtureFields('brief', '人工修改的策划主题') } } },
@@ -345,7 +342,6 @@ it('restores the missing storyboard after workflow configuration changes while p
   await writeFile(reference, bytes);
   const applied = projectSchema.parse(await runtime.dispatch('node.apply', request));
   expect(applied).toMatchObject({ revision: restored.revision + 1, shots: [{ title: '水滴的旅程', assetId: 'generated-image', videoAssetId: 'generated-video' }] });
-  expect(applied.workflow.execution).toEqual(restored.workflow.execution);
   expect(applied.workflow.nodes).toEqual(restored.workflow.nodes);
   expect(applied.workflow.production.videoModelId).toBeUndefined();
   expect(media.mock.calls.filter(([context]) => context.node.id === 'video')).toHaveLength(1);

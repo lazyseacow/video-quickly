@@ -14,7 +14,7 @@ function alive(pid: number) {
 it.skipIf(process.platform !== 'win32')('Windows kills the actual runtime and encoder process tree when their owning main process is forcibly terminated', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'vq-electron-job-'));
   const script = join(directory, 'owner.mjs');
-  const containerUrl = pathToFileURL(resolve('apps/desktop/electron/windows-job.mjs')).href;
+  const containerUrl = pathToFileURL(resolve('src/electron/windows-job.mjs')).href;
   // Wait for the owner to assign its job before starting a descendant encoder.
   const childCode = `const {spawn}=require('node:child_process');process.stdin.once('data',()=>{const encoder=spawn(process.execPath,['-e','setInterval(()=>{},1000)'],{stdio:'ignore',windowsHide:true});console.log(JSON.stringify({runtime:process.pid,encoder:encoder.pid}));});`;
   await writeFile(script, `import {spawn} from 'node:child_process';

@@ -5,8 +5,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, expect, it } from 'vitest';
 import { assetSchema, characterProfileSchema, modelSchema, projectSchema, promptPreviewSchema, promptSessionSchema, runSchema, shotSchema, type JsonValue, type PromptDraft, type ShotCandidate } from '@video-quickly/contracts';
-import { createRuntime } from '../packages/runtime/src/index';
-import { createActivityExecutor, validateMediaActivity } from '../packages/integrations/src';
+import { createRuntime } from '../src/packages/runtime/src/index';
+import { createActivityExecutor, validateMediaActivity } from '../src/packages/integrations/src';
 import { fixtureNativeVideo } from './fixtures/native-video';
 
 const directories: string[] = [], servers: Server[] = [], runtimes: ReturnType<typeof createRuntime>[] = [];

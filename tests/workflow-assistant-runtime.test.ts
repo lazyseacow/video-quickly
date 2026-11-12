@@ -4,8 +4,8 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { afterEach, expect, it } from 'vitest';
 import { costSummarySchema, modelSchema, projectSchema, runInspectionSchema, runSummarySchema, workflowProposalSchema, type ProjectDocument } from '@video-quickly/contracts';
-import { createRuntime, SimulatedProcessExit, type RuntimeOptions } from '../packages/runtime/src/index';
-import { DocumentStore, openDatabase } from '../packages/runtime/src/database';
+import { createRuntime, SimulatedProcessExit, type RuntimeOptions } from '../src/packages/runtime/src/index';
+import { DocumentStore, openDatabase } from '../src/packages/runtime/src/database';
 
 const runtimes: ReturnType<typeof createRuntime>[] = [], directories: string[] = [], releases: Array<() => void> = [];
 afterEach(async () => { releases.splice(0).forEach(release => release()); await Promise.all(runtimes.splice(0).map(runtime => runtime.close())); await Promise.all(directories.splice(0).map(path => rm(path, { force: true, recursive: true }))); });

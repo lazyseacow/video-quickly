@@ -19,9 +19,9 @@
 | 创作一致性 | 项目角色池、连续性及人物／场景／道具文字设定；从空分镜自动建立白名单角色绑定，实际发送逐镜头参考图；冻结恢复、候选保护和格式 5 备份 | [角色与创作设定](workspace-editing.md#角色模型参数与费用)、`creative-context.test.ts`、`creative-context-runtime.test.ts`、`creative-context.spec.ts` |
 | 角色与费用 | 角色参考图、镜头绑定、价格快照、服务用量与实付登记、任务归档；旧资料数据仅保留兼容，已移除编辑与引用展示 | [工作区功能契约](workspace-editing.md)、`cost-task-archive.spec.ts` |
 | 画面与导出 | 流程讲解／对比／数据图模板、字幕样式、系列模板、位置与缩放关键帧曲线；MP4／SRT／分镜导出，多比例冻结批次、部分失败恢复和取消 | [模板与批量导出](workspace-editing.md#科普模板与批量导出)、`template-batch-export.spec.ts`、`keyframe-editing.spec.ts` |
-| 自动工作流 | 内置四阶段、受控镜头并行、自动接续、失败步骤重试和恢复、策划结果编辑与脱敏诊断。在工作台查看当前进度，从提示词实验查看步骤详情 | [持久化执行契约](durable-execution.md)、`native-video-settings.spec.ts`、`run-step-retry.spec.ts` |
+| 自动工作流 | 内置四阶段、按镜头顺序生成、自动接续、失败步骤重试和恢复、策划结果编辑与脱敏诊断。在工作台查看当前进度，从提示词实验查看步骤详情 | [持久化执行契约](durable-execution.md)、`native-video-settings.spec.ts`、`run-step-retry.spec.ts` |
 | 提示词实验 | 离线共用编译、独立冻结会话与试运行、单镜头候选、显式应用、模板与片段固定版本、受限变量、实验来源及费用核对 | `prompt-bindings.test.ts`、`prompt-workbench.test.ts`、`prompt-media.test.ts`、`prompt-workbench.spec.ts` |
-| 项目原文 | 小说或剧本文字随项目保存，支持 AI 填写与正式制作，重试沿用原任务输入 | `automatic-workflow.test.ts`、`native-video-settings.spec.ts` |
+| 项目原文 | 小说或剧本文字随项目保存，供正式制作使用，重试沿用原任务输入 | `automatic-workflow.test.ts`、`native-video-settings.spec.ts` |
 | 项目备份 | 导出项目文档、素材、角色与参考图，格式按项目能力选择 | [持久化执行契约](durable-execution.md)、Runtime 备份回归 |
 | 运行日志 | 桌面与执行器分别保存 JSON 行日志，按大小轮转；请求和任务可关联，字段白名单与错误分类控制内容 | [日志规范](logging.md)、`logging.test.ts`、`runtime-logging.test.ts`、`browser-rpc-diagnostics.test.ts` |
 
@@ -29,7 +29,7 @@
 
 ## 界面规范
 
-界面遵循 [DESIGN.md](../DESIGN.md) 的 Mobbin 规范。基础色板、主题语义、排版、间距、圆角与动效统一来自 `apps/desktop/src/design-tokens.css`；公共控件复用 `Primitives.tsx`。素材、字幕和用户场景颜色属于内容数据，媒体坐标与时间轴几何保留业务语义。
+界面遵循 [DESIGN.md](../DESIGN.md) 的 Mobbin 规范。基础色板、主题语义、排版、间距、圆角与动效统一来自 `src/renderer/design-tokens.css`；公共控件复用 `Primitives.tsx`。素材、字幕和用户场景颜色属于内容数据，媒体坐标与时间轴几何保留业务语义。
 
 Windows 和 macOS 共享同一套组件，通过 `lib/desktop.ts` 适配快捷键及路径提示。表单保留原生文字选择与撤销，工作台命令历史管理项目编辑。CSS 与 GSAP 共用时长角色，覆盖减少动效、焦点恢复、快速切换及卸载清理；页面和费用表格采用平面层次，避免依赖装饰性玻璃效果表达信息。
 

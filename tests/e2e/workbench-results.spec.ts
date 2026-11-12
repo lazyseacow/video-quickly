@@ -14,6 +14,8 @@ for (const { width, theme } of [{ width: 1536, theme: 'dark' }, { width: 600, th
     const settings = await open(page, source.project);
     await pick(settings, '文本模型', source.models[0]); await pick(settings, '视频模型', source.video);
     await productionStep(settings, '模型与素材');
+    await settings.getByRole('combobox', { name: '图片模型', exact: true }).click();
+    await settings.getByRole('option', { name: '不生成首帧', exact: true }).click();
     await expect(settings.getByRole('button', { name: '项目混音设置', exact: true })).toHaveCount(0);
     await expect(settings.getByText('参考音频', { exact: true })).toBeVisible();
     await productionStep(settings, '声音与成片'); await expect(settings.getByRole('button', { name: '背景音乐', exact: true })).toBeVisible();

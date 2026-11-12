@@ -1,8 +1,8 @@
 import { expect, it } from 'vitest';
 import { characterProfileSchema, creativeContextSchema, createNativeVideoWorkflow, DEFAULT_VIDEO_PROFILE, projectCharacterIds, projectSchema, shotCreativePrompt, shotSchema, validateCreativeReferences, type ProjectDocument } from '@video-quickly/contracts';
-import { buildWorkflowPrompt, parseWorkflowScript } from '../packages/runtime/src/workflow-prompts';
-import { ProjectEditSession, savedEditsSchema } from '../apps/desktop/src/lib/project-edits';
-import { applyProductionProjectDraft, stageConfigurationDraftSchema, updateProductionConfigurationDraft } from '../apps/desktop/src/lib/stage-configuration-draft';
+import { buildWorkflowPrompt, parseWorkflowScript } from '../src/packages/runtime/src/workflow-prompts';
+import { ProjectEditSession, savedEditsSchema } from '../src/renderer/lib/project-edits';
+import { applyProductionProjectDraft, stageConfigurationDraftSchema, updateProductionConfigurationDraft } from '../src/renderer/lib/stage-configuration-draft';
 
 const character = (id: string) => characterProfileSchema.parse({ id, name: `角色${id}`, description: `${id}固定外形`, referenceAssetIds: [], revision: 1, createdAt: '', updatedAt: '' });
 const context = () => creativeContextSchema.parse({ characterIds: ['a', 'b'], continuity: '傍晚，服装保持一致', entities: [{ key: 'garden', kind: 'scene', name: '花园', description: '木门在左，喷泉在右' }] });

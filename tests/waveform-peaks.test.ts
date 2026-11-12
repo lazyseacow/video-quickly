@@ -1,6 +1,6 @@
 import { expect, it } from 'vitest';
 import type { AudioWaveform } from '@video-quickly/contracts';
-import { waveformColumns } from '../apps/desktop/src/lib/waveform-peaks';
+import { waveformColumns } from '../src/renderer/lib/waveform-peaks';
 
 const waveform: AudioWaveform = { version: 1, assetId: 'voice', sha256: 'hash', durationUs: 40_000, peaksPerSecond: 100, peaks: [.1, .5, .9, .3] };
 

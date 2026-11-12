@@ -82,11 +82,11 @@ for (const { width, theme } of [{ width: 1536, theme: 'dark' }, { width: 1024, t
       await expect(sound).toBeVisible();
       const disclosureGaps = await first.locator('.planning-result-editor__shot-content').evaluate(group => {
         const [narration, prompts, references] = group.children;
-        const [visual, sound] = prompts.querySelectorAll('.field');
+        const [summary, storyboardImage, visualPrompt, soundPrompt] = prompts.children;
         const gap = (before: Element, after: Element) => Math.round(after.getBoundingClientRect().top - before.getBoundingClientRect().bottom);
-        return [gap(narration, prompts), gap(prompts.firstElementChild!, visual), gap(visual, sound), gap(prompts, references)];
+        return [gap(narration, prompts), gap(summary, storyboardImage), gap(storyboardImage, visualPrompt), gap(visualPrompt, soundPrompt), gap(prompts, references)];
       });
-      expect(disclosureGaps).toEqual([8, 8, 8, 8]);
+      expect(disclosureGaps).toEqual([8, 8, 8, 8, 8]);
       const rows = await Promise.all(characters.map(async ({ name }) => {
         const option = roles.getByRole('checkbox', { name, exact: true });
         await expect(option).toBeVisible();

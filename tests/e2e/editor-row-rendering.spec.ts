@@ -16,9 +16,9 @@ import { createRoot } from 'react-dom/client';
 import { flushSync } from 'react-dom';
 import { projectSchema, DEFAULT_CAPTION_STYLE } from '@video-quickly/contracts';
 import { buildTimeline } from '@video-quickly/video';
-import ProjectOutline from './src/components/ProjectOutline';
-import Timeline from './src/components/Timeline';
-import { PlaybackClock } from './src/lib/playback';
+import ProjectOutline from './renderer/components/ProjectOutline';
+import Timeline from './renderer/components/Timeline';
+import { PlaybackClock } from './renderer/lib/playback';
 
 const reads = {}, calls = [];
 let tag = 1;
@@ -62,9 +62,9 @@ render();
 
 let bundle: string, styles: string[];
 test.beforeAll(async () => {
-  const result = await build({ absWorkingDir: resolve('apps/desktop'), stdin: { contents: fixtureSource, resolveDir: resolve('apps/desktop'), sourcefile: 'editor-row-fixture.ts' }, bundle: true, write: false, platform: 'browser', format: 'esm', target: 'es2022', loader: { '.css': 'empty' }, define: { 'process.env.NODE_ENV': '"production"', 'import.meta.env': '{"MODE":"browser-test","DEV":false}' } });
+  const result = await build({ absWorkingDir: resolve('src'), stdin: { contents: fixtureSource, resolveDir: resolve('src'), sourcefile: 'editor-row-fixture.ts' }, bundle: true, write: false, platform: 'browser', format: 'esm', target: 'es2022', loader: { '.css': 'empty' }, define: { 'process.env.NODE_ENV': '"production"', 'import.meta.env': '{"MODE":"browser-test","DEV":false}' } });
   bundle = result.outputFiles[0].text;
-  const html = await readFile(resolve('apps/desktop/.generated/browser-preview/index.html'), 'utf8');
+  const html = await readFile(resolve('src/.generated/browser-preview/index.html'), 'utf8');
   styles = [...html.matchAll(/<link\b[^>]*\bhref="([^"]+\.css)"[^>]*>/g)].map(match => match[1].replace(/^\//, ''));
   expect(styles.length, 'The built browser entry must declare its production styles.').toBeGreaterThan(0);
 });

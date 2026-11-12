@@ -1,9 +1,9 @@
 import { expect, it } from 'vitest';
 import { createNativeVideoWorkflow, DEFAULT_VIDEO_PROFILE, modelSchema, projectSchema, workflowNodeSchema } from '@video-quickly/contracts';
-import { applyWorkflowProposal, workflowNodePatchSchema, workflowProposalChanges } from '../packages/contracts/src/workflow-patches';
-import { classifyModelFailure, modelAlternatives, modelPriceDescription } from '../packages/contracts/src/model-alternatives';
-import { parseWorkflowAssistantResult, prepareWorkflowAssistant } from '../packages/runtime/src/workflow-assistant';
-import { ProjectEditSession, editContent } from '../apps/desktop/src/lib/project-edits';
+import { applyWorkflowProposal, workflowNodePatchSchema, workflowProposalChanges } from '../src/packages/contracts/src/workflow-patches';
+import { classifyModelFailure, modelAlternatives, modelPriceDescription } from '../src/packages/contracts/src/model-alternatives';
+import { parseWorkflowAssistantResult, prepareWorkflowAssistant } from '../src/packages/runtime/src/workflow-assistant';
+import { ProjectEditSession, editContent } from '../src/renderer/lib/project-edits';
 
 const node = workflowNodeSchema.parse({ id: 'script', kind: 'script', label: '分镜任务', prompt: '主题：{{theme}}', promptBindings: { theme: { projectPath: ['title'] } }, config: { requiresModel: true }, modelId: 'first', skillIds: ['existing-skill'] });
 const project = projectSchema.parse({ id: 'p', revision: 3, title: '花园故事', brief: '寻找木盒', workflow: { ...createNativeVideoWorkflow(), nodes: [node], edges: [] }, profile: DEFAULT_VIDEO_PROFILE, shots: [], createdAt: '', updatedAt: '' });

@@ -1,6 +1,6 @@
 import { expect, it } from 'vitest';
 import { DEFAULT_VIDEO_PROFILE, projectSchema, workflowSchema, type WorkflowDefinition } from '@video-quickly/contracts';
-import { editContent, mergeEdits, ProjectEditSession, savedEditsSchema } from '../apps/desktop/src/lib/project-edits';
+import { editContent, mergeEdits, ProjectEditSession, savedEditsSchema } from '../src/renderer/lib/project-edits';
 
 const project = () => projectSchema.parse({ id: 'flow', title: '流程项目', brief: '', revision: 1, profile: DEFAULT_VIDEO_PROFILE, createdAt: '', updatedAt: '', shots: [], workflow: { id: 'graph', version: 1, name: '制作', production: { mode: 'native-video', referenceMode: 'none', soundPrompt: '', subtitleMode: 'off' }, nodes: [{ id: 'a', kind: 'brief', label: '简报', position: { x: 0, y: 0 } }, { id: 'b', kind: 'agent', label: '文稿', prompt: 'unrelated-prompt-marker'.repeat(1000), position: { x: 300, y: 0 } }], edges: [{ id: 'ab', source: 'a', target: 'b' }] } });
 function edit(session: ProjectEditSession, patch: Partial<WorkflowDefinition>, label = '调整流程', group?: string) {

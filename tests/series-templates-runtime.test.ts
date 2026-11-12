@@ -7,8 +7,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, expect, it } from 'vitest';
 import { createSceneTemplate, DEFAULT_CAPTION_STYLE, projectSchema, promptPreviewSchema, runSchema, seriesTemplateSchema, type AssetRecord, type CaptionStyle, type ModelProfile, type ProjectDocument, type RecordPage, type SeriesSettings, type SeriesTemplate, type ShotCandidate, type ShotCandidateKind } from '@video-quickly/contracts';
-import { createActivityExecutor } from '../packages/integrations/src';
-import { createRuntime } from '../packages/runtime/src';
+import { createActivityExecutor } from '../src/packages/integrations/src';
+import { createRuntime } from '../src/packages/runtime/src';
 
 const directories: string[] = [], servers: Server[] = [];
 const runtimes = new Set<ReturnType<typeof createRuntime>>();

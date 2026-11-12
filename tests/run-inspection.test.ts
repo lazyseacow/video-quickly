@@ -7,10 +7,10 @@ import { join } from 'node:path';
 import { gunzipSync } from 'node:zlib';
 import { afterEach, expect, it } from 'vitest';
 import { activitySchema, assetSchema, jsonValueSchema, modelSchema, projectDetailSchema, projectSchema, recordPageSchema, runDiagnosticBundleSchema, runDiagnosticsSchema, runEventSchema, runInspectionSchema, runStepPayloadSchema, runSchema, stepOutputVersionSchema, workflowNodeSchema, DEFAULT_AUDIO_PROCESSING, type AssetRecord, type WorkflowNode, type WorkflowStage } from '@video-quickly/contracts';
-import { createRuntime, SimulatedProcessExit, type RuntimeOptions } from '../packages/runtime/src';
-import { ActivityJournal } from '../packages/runtime/src/activities';
-import { DocumentStore, openDatabase } from '../packages/runtime/src/database';
-import { createActivityExecutor } from '../packages/integrations/src';
+import { createRuntime, SimulatedProcessExit, type RunSnapshot, type RuntimeOptions } from '../src/packages/runtime/src';
+import { ActivityJournal } from '../src/packages/runtime/src/activities';
+import { DocumentStore, openDatabase } from '../src/packages/runtime/src/database';
+import { createActivityExecutor } from '../src/packages/integrations/src';
 
 const directories: string[] = [], runtimes: ReturnType<typeof createRuntime>[] = [];
 afterEach(async () => {
@@ -194,20 +194,35 @@ it('removes only its incomplete diagnostic file when a stored result cannot be d
   expect(await readdir(join(directory, 'diagnostics'))).toEqual([]);
 });
 
-async function mediaVersions() {
+async function mediaVersions(withImageModel = false) {
   const assets: AssetRecord[] = [];
-  const { runtime, project } = await fixture({ executeActivity: async ({ project, node, dataDirectory }) => {
+  const { runtime, project, directory } = await fixture({ executeActivity: async ({ project, node, dataDirectory }) => {
     const bytes = Buffer.from(`<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64"><text x="0" y="32">${node.id}</text></svg>`);
     const path = join(dataDirectory, `${node.id}.svg`); await writeFile(path, bytes);
     const asset = assetSchema.parse({ id: node.id, projectId: project.id, shotId: project.shots[0].id, name: node.label, kind: 'image', path, mimeType: 'image/svg+xml', size: bytes.length, sha256: createHash('sha256').update(bytes).digest('hex'), version: 1, createdAt: new Date().toISOString(), provenance: 'test provider' }); assets.push(asset);
     return { assets: [asset] };
   } });
+  const model = withImageModel ? modelSchema.parse(await runtime.dispatch('model.save', { model: { name: '历史图片连接', provider: 'openai-compatible', baseUrl: 'http://127.0.0.1:1/v1', model: 'fixture', connectionType: 'image', capabilities: ['image'] } })) : undefined;
   const saved = projectSchema.parse(await runtime.dispatch('project.update', { projectId: project.id, revision: project.revision, patch: { shots: [{ id: 'target', title: '保留的人工标题', narration: '', visualPrompt: '', durationUs: 1_000_000 }] } }));
-  const baseline = await workflow(runtime, saved.id, ['image-a', 'image-b'].map(id => workflowNodeSchema.parse({ id, kind: 'assets', label: id })), [{ id: 'a-b', source: 'image-a', target: 'image-b' }]);
+  const baseline = await workflow(runtime, saved.id, ['image-a', 'image-b'].map(id => workflowNodeSchema.parse({ id, kind: 'assets', label: id, modelId: model?.id })), [{ id: 'a-b', source: 'image-a', target: 'image-b' }]);
   const preview = await runtime.dispatch('run.plan', { projectId: saved.id, selection: { nodeId: 'image-a', mode: 'downstream' } }) as { digest: string };
   const run = runSchema.parse(await runtime.dispatch('run.start', { projectId: saved.id, selection: { nodeId: 'image-a', mode: 'downstream', previewDigest: preview.digest } }));
-  await runtime.waitForIdle(); return { runtime, baseline, run, assets };
+  await runtime.waitForIdle(); return { runtime, baseline, run, assets, directory };
 }
+
+it('keeps historical ComfyUI image outputs available without offering regeneration from the saved workflow', async () => {
+  const { runtime, run, directory } = await mediaVersions(true);
+  const original = await payload(runtime, run.id, 'image-a', 'output');
+  expect(original.mediaGeneration).toMatchObject({ kind: 'image' });
+  const database = openDatabase(directory), store = new DocumentStore(database);
+  try {
+    const snapshot = store.get<RunSnapshot>('run-snapshot', run.id)!;
+    store.put('run-snapshot', run.id, { ...snapshot, models: snapshot.models.map(model => ({ ...model, provider: 'comfyui', platform: 'comfyui' })) });
+  } finally { database.close(); }
+  const legacy = await payload(runtime, run.id, 'image-a', 'output');
+  expect(legacy.value).toEqual(original.value);
+  expect(legacy.mediaGeneration).toBeUndefined();
+});
 
 it('applies the selected media step instead of the final downstream project and preserves the selected output through inspection', async () => {
   const { runtime, baseline, run, assets } = await mediaVersions();

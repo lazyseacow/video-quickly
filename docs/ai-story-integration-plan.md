@@ -33,7 +33,7 @@ AI Story 围绕故事视频组织创作，源码中有剧本与分集、作品�
 
 外部证据：[资产抽取](https://github.com/xhongc/ai_story/blob/e859bf39eb1e9669153888cc78c3f57a81c771cd/backend/apps/content/processors/asset_extraction_stage.py)、[项目资产上下文](https://github.com/xhongc/ai_story/blob/e859bf39eb1e9669153888cc78c3f57a81c771cd/backend/apps/projects/asset_context.py)、[提示词模型](https://github.com/xhongc/ai_story/blob/e859bf39eb1e9669153888cc78c3f57a81c771cd/backend/apps/prompts/models.py)、[提示词调试服务](https://github.com/xhongc/ai_story/blob/e859bf39eb1e9669153888cc78c3f57a81c771cd/backend/apps/prompts/debug_services.py)、[作品与队列模型](https://github.com/xhongc/ai_story/blob/e859bf39eb1e9669153888cc78c3f57a81c771cd/backend/apps/projects/models.py)、[剧本与分集模型](https://github.com/xhongc/ai_story/blob/e859bf39eb1e9669153888cc78c3f57a81c771cd/backend/apps/scripts/models.py)。
 
-当前证据：[分镜契约](../packages/contracts/src/index.ts)、[分镜提示与解析](../packages/runtime/src/workflow-prompts.ts)、[角色库](../packages/runtime/src/characters.ts)、[角色参考图解析](../packages/integrations/src/character-references.ts)、[系列模板](../packages/runtime/src/series-templates.ts)、[持久化执行契约](durable-execution.md)。
+当前证据：[分镜契约](../src/packages/contracts/src/index.ts)、[分镜提示与解析](../src/packages/runtime/src/workflow-prompts.ts)、[角色库](../src/packages/runtime/src/characters.ts)、[角色参考图解析](../src/packages/integrations/src/character-references.ts)、[系列模板](../src/packages/runtime/src/series-templates.ts)、[持久化执行契约](durable-execution.md)。
 
 ## 复用边界与实现判断
 
@@ -93,7 +93,7 @@ AI Story 的配置使用 Python、Django、Celery、Redis 与 Vue 2。当前项�
 
 项目角色池和连续性设定放入“制作设置 → 创作要求”。镜头属性继续展示实际绑定；自动建议的更改通过现有编辑历史应用，支持撤销。四个顶层阶段及其顺序保持现有约定。
 
-主要改动入口：`packages/contracts/src`、`packages/runtime/src/workflow-prompts.ts`、运行快照与产物应用、`characters.ts`、`project-readiness.ts`、制作设置、分镜编辑与项目编辑会话。
+主要改动入口：`src/packages/contracts/src`、`src/packages/runtime/src/workflow-prompts.ts`、运行快照与产物应用、`characters.ts`、`project-readiness.ts`、制作设置、分镜编辑与项目编辑会话。
 
 验收条件：
 
@@ -180,7 +180,7 @@ AI Story 的配置使用 Python、Django、Celery、Redis 与 Vue 2。当前项�
 | 分镜与角色 | 白名单映射、新镜头绑定、锁定保护、实际参考图片请求及冻结修订 | `tests/workflow-prompts.test.ts`、`tests/characters-runtime.test.ts`、`tests/native-video-production.test.ts` |
 | 候选与编辑 | 不自动覆盖项目、字段应用、撤销、草稿恢复和修订冲突 | `tests/shot-candidates.test.ts`、`tests/shot-regeneration.test.ts`、编辑相关 E2E |
 | 执行与队列 | 自动接续、失败恢复、进程退出、未知提交、取消和重放零调用 | `tests/automatic-workflow.test.ts`、`tests/receipt-persistence.test.ts`、`tests/process-recovery.test.ts` |
-| 数据兼容 | 新旧备份往返、素材与角色重新映射、迁移事务及读取模型 | Runtime 备份回归、`packages/runtime/tests/migrations.test.ts` |
+| 数据兼容 | 新旧备份往返、素材与角色重新映射、迁移事务及读取模型 | Runtime 备份回归、`src/packages/runtime/tests/migrations.test.ts` |
 | 界面 | 四阶段、键盘操作、焦点恢复、明暗主题、窄窗口和保存失败保留输入 | `tests/e2e/workbench-production.spec.ts`、`tests/e2e/characters-costs.spec.ts`、`tests/e2e/design-system.spec.ts` |
 | 内容效果 | 对同一组文案人工比较角色、服装、场景、动作、声音和分镜可编辑性 | 固定样例及后续获准的真实供应商小规模验收 |
 

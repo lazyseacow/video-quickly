@@ -7,7 +7,7 @@ import { expect, type APIRequestContext, type Page } from '@playwright/test';
 import { test } from './isolated-workspace';
 import { modelCatalog } from './model-catalog';
 import { exportBatchSchema, modelSchema, workflowNodeSchema, type CharacterProfile, type ProjectDocument, type WorkflowNode } from '@video-quickly/contracts';
-import { DocumentStore, openDatabase } from '../../packages/runtime/src/database';
+import { DocumentStore, openDatabase } from '../../src/packages/runtime/src/database';
 import { importSkillFixture } from '../fixtures/import-skill';
 
 async function rpc<T>(request: APIRequestContext, method: string, params: unknown = {}): Promise<T> {

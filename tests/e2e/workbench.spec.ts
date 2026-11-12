@@ -308,16 +308,19 @@ test('edits real project state, output profiles and theme', async ({ page }) => 
   await expect(page.getByLabel('镜头标题', { exact: true })).toHaveValue('一纸登科 · 已编辑');
 
   await (await projectSettingField(page, '画面比例', { exact: true })).selectOption('9:16');
+  await (await projectSettingField(page, '分辨率', { exact: true })).selectOption('1080');
   await (await projectSettingField(page, '视频帧率')).selectOption('60');
-  await expect((await projectSettingField(page, '视频宽度'))).toHaveValue('1080');
-  await expect((await projectSettingField(page, '视频高度'))).toHaveValue('1920');
+  const production = page.getByRole('dialog', { name: '制作设置', exact: true });
+  await expect(production.getByLabel('视频宽度', { exact: true })).toHaveCount(0);
+  await expect(production.getByLabel('视频高度', { exact: true })).toHaveCount(0);
   const profileSaved = page.waitForResponse(response => response.url().endsWith('/__desktop_rpc') && response.status() === 200 && response.request().postDataJSON()?.method === 'project.update' && response.request().postDataJSON()?.params.projectId === 'example-history');
-  await saveProduction(page.getByRole('dialog', { name: '制作设置', exact: true }));
-  expect((await (await profileSaved).json()).error).toBeUndefined();
+  await saveProduction(production);
+  expect((await (await profileSaved).json()).result.profile).toMatchObject({ width: 1080, height: 1920, frameRate: { numerator: 60, denominator: 1 } });
   await page.reload();
   await openProjectFromList(page, sampleProjectTitle);
   await expect((await projectSettingField(page, '视频帧率'))).toHaveValue('60');
-  await expect((await projectSettingField(page, '视频高度'))).toHaveValue('1920');
+  await expect((await projectSettingField(page, '画面比例', { exact: true }))).toHaveValue('9:16');
+  await expect((await projectSettingField(page, '分辨率', { exact: true }))).toHaveValue('1080');
 
   await closeProjectSettings(page);
   await setWorkspaceTheme(page, 'light');

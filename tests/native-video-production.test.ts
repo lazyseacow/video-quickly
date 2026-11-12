@@ -1,17 +1,18 @@
 import { planningFixtureResponse, storyboardFixtureResponse } from './fixtures/planning-response';
+import { fixtureCharacterImage } from './fixtures/character-image';
 import { createServer, type Server } from 'node:http';
 import { spawnSync } from 'node:child_process';
-import { mkdtemp, readFile, rm, unlink } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, unlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { afterEach, expect, it } from 'vitest';
-import { captionsEnabled, createNativeVideoWorkflow, getModelParameterFields, modelSchema, projectSchema, resolveProductionWorkflow, runInspectionSchema, runSchema, type AssetRecord, type ProjectDocument, type ShotCandidate } from '@video-quickly/contracts';
-import { validateExecutionModel } from '../packages/runtime/src/execution-model';
-import { matchingStepModels } from '../apps/desktop/src/lib/workflow-guidance';
-import { createRuntime, SimulatedProcessExit, type RuntimeOptions } from '../packages/runtime/src';
-import { createActivityExecutor, validateMediaActivity } from '../packages/integrations/src';
-import { probeMedia, runMedia } from '../packages/video/src/node';
-import { applyProductionProjectDraft, applyStageConfigurationDraft, stageConfigurationDraftSchema, updateProductionConfigurationDraft } from '../apps/desktop/src/lib/stage-configuration-draft';
+import { captionsEnabled, createNativeVideoWorkflow, DEFAULT_VIDEO_PROFILE, getModelParameterFields, modelSchema, projectSchema, resolveProductionWorkflow, runInspectionSchema, runSchema, videoReferenceImages, type AssetRecord, type ProjectDocument, type ShotCandidate } from '@video-quickly/contracts';
+import { validateExecutionModel } from '../src/packages/runtime/src/execution-model';
+import { matchingStepModels } from '../src/renderer/lib/workflow-guidance';
+import { createRuntime, SimulatedProcessExit, type RuntimeOptions } from '../src/packages/runtime/src';
+import { createActivityExecutor, validateMediaActivity } from '../src/packages/integrations/src';
+import { probeMedia, runMedia } from '../src/packages/video/src/node';
+import { applyProductionProjectDraft, applyStageConfigurationDraft, stageConfigurationDraftSchema, updateProductionConfigurationDraft } from '../src/renderer/lib/stage-configuration-draft';
 
 const ffmpeg = process.env.VIDEO_QUICKLY_FFMPEG ?? 'ffmpeg';
 const ffprobe = process.env.VIDEO_QUICKLY_FFPROBE ?? join(dirname(ffmpeg), process.platform === 'win32' ? 'ffprobe.exe' : 'ffprobe');
@@ -33,6 +34,33 @@ it('shares text and video choices while preserving explicit task overrides and k
   expect(workflow.stages?.map(stage => stage.label)).toEqual(['策划与分镜', '素材与配音', '剪辑与动画', '审阅与导出']);
   expect(captionsEnabled({ workflow })).toBe(false);
   expect(resolveProductionWorkflow({ ...workflow, production: { ...workflow.production!, textModelId: undefined } }).nodes.find(node => node.id === 'brief')?.modelId).toBeUndefined();
+});
+
+it('requires generated first frames only while the built-in image model is selected', () => {
+  const initial = createNativeVideoWorkflow();
+  const withImage = resolveProductionWorkflow({ ...initial, production: { ...initial.production, imageModelId: 'image' } });
+  expect(withImage.production.referenceMode).toBe('generate');
+  expect(withImage.nodes.find(node => node.id === 'assets')).toMatchObject({ modelId: 'image', config: { useFirstShotReference: true } });
+  expect(withImage.nodes.find(node => node.id === 'video')?.config.requiresShotFirstFrame).toBe(true);
+  const cleared = resolveProductionWorkflow({ ...withImage, production: { ...withImage.production, imageModelId: undefined } });
+  expect(cleared.production.referenceMode).toBe('existing');
+  const assets = cleared.nodes.find(node => node.id === 'assets')!;
+  expect(assets.modelId).toBeUndefined();
+  expect(assets.config.useFirstShotReference).toBeUndefined();
+  expect(cleared.nodes.find(node => node.id === 'video')?.config.requiresShotFirstFrame).toBeUndefined();
+  expect(() => validateExecutionModel(assets, undefined)).not.toThrow();
+});
+
+it('validates known Seedance audio-only combinations when no shot image is available', () => {
+  const workflow = createNativeVideoWorkflow();
+  const project = projectSchema.parse({ id: 'reference-audio', title: '声音参考', brief: '', profile: DEFAULT_VIDEO_PROFILE, revision: 1, createdAt: '', updatedAt: '',
+    shots: [{ id: 'text-only', title: '一段旁白', narration: '', visualPrompt: '夜景', durationUs: 2_000_000 }],
+    workflow: { ...workflow, production: { ...workflow.production, referenceAudioAssetIds: ['reference'] } },
+  });
+  const node = project.workflow.nodes.find(node => node.id === 'video')!, [shot] = project.shots;
+  const model = modelSchema.parse({ id: 'video', name: 'Seedance', provider: 'seedance', model: 'doubao-seedance-2-0-260128', baseUrl: 'http://127.0.0.1:1', connectionType: 'video', capabilities: ['video'], createdAt: '', updatedAt: '' });
+  expect(() => videoReferenceImages(project, node, model, shot, [], [])).toThrow('Seedance 2.0 参考音频时需要一张参考图');
+  expect(videoReferenceImages(project, node, { ...model, model: 'doubao-seedance-2-5-260905' }, shot, [], [])).toEqual({ mode: 'text', referenceIds: [] });
 });
 
 it.each(['seedance', 'openai-compatible', 'custom-http', 'comfyui'] as const)('accepts any configured %s video model without an extra capability flag', provider => {
@@ -76,13 +104,14 @@ async function fixture(audio = true, failpoint?: RuntimeOptions['failpoint'], sh
   const directory = await mkdtemp(join(tmpdir(), 'vq-native-video-')); directories.push(directory);
   const source = join(directory, 'source.mp4');
   await runMedia(ffmpeg, ['-hide_banner', '-loglevel', 'error', '-y', '-f', 'lavfi', '-i', 'color=c=blue:s=160x90:r=30:d=1', ...(audio ? ['-f', 'lavfi', '-i', 'sine=frequency=440:sample_rate=48000:duration=1'] : []), '-c:v', 'libx264', '-pix_fmt', 'yuv420p', ...(audio ? ['-c:a', 'aac', '-shortest'] : ['-an']), source]);
-  const bytes = await readFile(source); let submissions = 0, textCalls = 0;
+  const bytes = await readFile(source), frame = (await fixtureCharacterImage()).toString('base64'); let submissions = 0, textCalls = 0, imageCalls = 0;
   const received: Record<string, unknown>[] = [];
   let baseUrl = '';
   const server = createServer(async (request, response) => {
     response.setHeader('content-type', 'application/json');
     if (request.method === 'POST') {
       let body = ''; for await (const chunk of request) body += chunk;
+      if (/\/images\/(generations|edits)$/.test(request.url ?? '')) { imageCalls++; response.end(JSON.stringify({ data: [{ b64_json: frame }] })); return; }
       received.push(JSON.parse(body)); submissions++; response.end(JSON.stringify({ id: `native-task-${submissions}` }));
     } else if (request.url === '/video.mp4') { response.setHeader('content-type', 'video/mp4'); response.end(bytes); }
     else response.end(JSON.stringify({ status: 'succeeded', content: { video_url: `${baseUrl}/video.mp4` } }));
@@ -96,9 +125,34 @@ async function fixture(audio = true, failpoint?: RuntimeOptions['failpoint'], sh
   const project = projectSchema.parse(await runtime.dispatch('project.create', { title: '视频制作', brief: '讲述雨水', profile: { width: 160, height: 90, frameRate: { numerator: 30, denominator: 1 } } }));
   const text = modelSchema.parse(await runtime.dispatch('model.save', { model: { name: '文本夹具', provider: 'ollama', model: 'text', connectionType: 'text', capabilities: ['text'], baseUrl } }));
   const video = modelSchema.parse(await runtime.dispatch('model.save', { model: { name: '视频夹具', provider: 'seedance', model: 'custom-video-endpoint', connectionType: 'video', capabilities: ['video'], baseUrl } }));
-  const configured = projectSchema.parse(await runtime.dispatch('project.update', { projectId: project.id, revision: project.revision, patch: { workflow: resolveProductionWorkflow({ ...project.workflow, production: { ...project.workflow.production!, textModelId: text.id, videoModelId: video.id } }) } }));
-  return { runtime, options, configured, received, counts: () => ({ submissions, textCalls }), current: async (target = runtime) => (await target.dispatch('project.get', { projectId: project.id }) as { project: ProjectDocument }).project };
+  const image = modelSchema.parse(await runtime.dispatch('model.save', { model: { name: '图片夹具', provider: 'openai-compatible', model: 'fixture-image', connectionType: 'image', capabilities: ['image'], baseUrl } }));
+  const configured = projectSchema.parse(await runtime.dispatch('project.update', { projectId: project.id, revision: project.revision, patch: { workflow: resolveProductionWorkflow({ ...project.workflow, production: { ...project.workflow.production!, textModelId: text.id, videoModelId: video.id, imageModelId: image.id } }) } }));
+  return { runtime, options, configured, received, counts: () => ({ submissions, textCalls }), imageCalls: () => imageCalls, current: async (target = runtime) => (await target.dispatch('project.get', { projectId: project.id }) as { project: ProjectDocument }).project };
 }
+
+it.skipIf(!mediaAvailable)('produces videos from existing storyboard frames or text without selecting an image model', async () => {
+  const source = await fixture();
+  const frame = await fixtureCharacterImage(), path = join(source.options.dataDirectory, 'manual-frame.png');
+  await writeFile(path, frame);
+  const asset = await source.runtime.dispatch('asset.import', { projectId: source.configured.id, path, kind: 'image' }) as AssetRecord;
+  const project = projectSchema.parse(await source.runtime.dispatch('project.update', { projectId: source.configured.id, revision: source.configured.revision, patch: {
+    creativeContext: { entities: [{ key: 'person', kind: 'character', name: '雨中人', description: '蓝色雨衣' }] },
+    shots: ['有画面的镜头', '只有描述的镜头'].map((title, index) => ({ id: `manual-${index}`, title, visualPrompt: '雨中人望向蓝色天空', narration: '雨落下了。', durationUs: 2_000_000,
+      creativeEntityKeys: ['person'], ...(index === 0 ? { assetId: asset.id } : {}) })),
+    workflow: { ...source.configured.workflow, production: { ...source.configured.workflow.production, imageModelId: undefined, manualPlanningSteps: ['script'] } },
+  } }));
+  expect(await source.runtime.dispatch('project.readiness', { projectId: project.id })).toMatchObject({ ready: true });
+  const billing = await source.runtime.dispatch('billing.prepare', { method: 'run.start', params: { projectId: project.id } }) as { estimate: { items: Array<{ kind: string }> } };
+  expect(billing.estimate.items.map(item => item.kind)).toEqual(['text', 'video']);
+  const started = runSchema.parse(await source.runtime.dispatch('run.start', { projectId: project.id }));
+  await source.runtime.waitForIdle();
+  const finished = runSchema.parse(await source.runtime.dispatch('run.get', { runId: started.id }));
+  expect(finished.status, finished.error).toBe('succeeded');
+  expect(source.imageCalls()).toBe(0);
+  expect(source.received).toHaveLength(2);
+  expect(source.received[0].content).toEqual(expect.arrayContaining([{ type: 'image_url', image_url: { url: `data:image/png;base64,${frame.toString('base64')}` }, role: 'first_frame' }]));
+  expect(source.received[1].content).toEqual([{ type: 'text', text: expect.stringContaining('蓝色雨衣') }]);
+});
 
 it.skipIf(!mediaAvailable)('uses one storyboard profile for every generated clip and exports their native sound', async () => {
   const source = await fixture(true, undefined, 2);

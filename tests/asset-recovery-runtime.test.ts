@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { assetRecoveryJobSchema, assetRecoveryPageSchema, type AssetRecord, type ProjectDocument, type RuntimeEvent } from '@video-quickly/contracts';
-import { createRuntime } from '../packages/runtime/src/index';
+import { createRuntime } from '../src/packages/runtime/src/index';
 
 describe('asset recovery runtime integration', () => {
   it('restores through public RPCs, publishes one availability event and preserves saved content identities', async () => {

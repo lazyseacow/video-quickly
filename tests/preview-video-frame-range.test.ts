@@ -1,6 +1,6 @@
 import { afterEach, expect, it, vi } from 'vitest';
 import { timeAtFrame } from '@video-quickly/contracts';
-import { createPreviewVideoController, previewFrameInRange } from '../apps/desktop/src/components/preview-media';
+import { createPreviewVideoController, previewFrameInRange } from '../src/renderer/components/preview-media';
 
 afterEach(() => vi.unstubAllGlobals());
 

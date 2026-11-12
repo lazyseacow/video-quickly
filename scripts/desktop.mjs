@@ -6,7 +6,7 @@ import { stripVTControlCharacters } from 'node:util';
 import { setTimeout as delay } from 'node:timers/promises';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
-const desktop = join(root, 'apps', 'desktop');
+const desktop = join(root, 'src');
 const fromDesktop = createRequire(join(desktop, 'package.json'));
 const [command, ...options] = process.argv.slice(2);
 if (!['dev', 'build'].includes(command)) throw new Error('桌面命令须为 dev 或 build');

@@ -13,4 +13,4 @@ playwright-report/
 .env.*
 !.env.example
 # Shared logger compiled by scripts/build-runtime.mjs.
-apps/desktop/electron/logging.mjs
+src/electron/logging.mjs

@@ -7,7 +7,7 @@ import { mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { expect, test, type APIRequestContext, type Locator, type Page } from '@playwright/test';
 import { createSceneTemplate, type AssetRecord, type ExportBatch, type ProjectDocument } from '@video-quickly/contracts';
-import { batchTargetDirectory } from '../../packages/runtime/src/export-batches';
+import { batchTargetDirectory } from '../../src/packages/runtime/src/export-batches';
 
 async function rpc<T>(request: APIRequestContext, method: string, params: unknown = {}): Promise<T> {
   const response = await request.post('/__desktop_rpc', { data: { method, params } }); const payload = await response.json();

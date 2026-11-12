@@ -2,8 +2,8 @@ import { mkdtemp, mkdir, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { applicationId, externalWebUrl, fileInside, pathDialogOptions, rendererIsTrusted, rendererPermissionAllowed, runtimeMediaEnvironment, serveFile, validRuntimeRequest, workspaceDirectory, workspaceName } from '../apps/desktop/electron/platform.mjs';
-import { createCredentialHost, credentialEntry } from '../apps/desktop/electron/credentials.mjs';
+import { applicationId, externalWebUrl, fileInside, pathDialogOptions, rendererIsTrusted, rendererPermissionAllowed, runtimeMediaEnvironment, serveFile, validRuntimeRequest, workspaceDirectory, workspaceName } from '../src/electron/platform.mjs';
+import { createCredentialHost, credentialEntry } from '../src/electron/credentials.mjs';
 
 const directories: string[] = [];
 afterEach(async () => { for (const directory of directories.splice(0)) await rm(directory, { recursive: true, force: true }); });

@@ -2,9 +2,27 @@
 
 Video Quickly 使用 Electron 加载 React 工作台，通过沙箱预加载桥接独立 Node 执行组件。正式支持 Windows 10／11 x64 和 macOS 13.5 及以上的 arm64／x64；两个 Mac 架构分别构建与验收。
 
+## 代码入口
+
+| 层 | 入口与职责 |
+| --- | --- |
+| Electron 主进程 | [桌面包清单](../src/package.json) 的 `main` 指向 [main.mjs](../src/electron/main.mjs)，管理窗口、应用生命周期和执行器。[desktop-ipc.mjs](../src/electron/desktop-ipc.mjs) 的 `registerDesktopIpc` 注册 IPC 并校验调用来源，同一模块转发执行器事件。 |
+| 沙箱预加载 | `BrowserWindow` 加载 [preload.cjs](../src/electron/preload.cjs)，用 `contextBridge` 暴露 `window.videoQuickly`。`pnpm typecheck` 按 [desktop-bridge.ts](../src/packages/contracts/src/desktop-bridge.ts) 中的共享类型检查预加载接口。 |
+| React 渲染进程 | [App.tsx](../src/renderer/App.tsx) 管理应用导航和工作区连接，[Workbench.tsx](../src/renderer/features/Workbench.tsx) 管理当前项目的编辑。[use-workbench-production.ts](../src/renderer/features/use-workbench-production.ts) 协调制作前检查、启动、取消和按钮焦点。[client.ts](../src/renderer/lib/client.ts) 提供 RPC 与事件订阅。 |
+| Node 执行器 | [runtime-controller.mjs](../src/electron/runtime-controller.mjs) 管理子进程并分派标准输入输出上的 JSON-RPC 消息。[main.ts](../src/packages/runtime/src/main.ts) 接收请求，[index.ts](../src/packages/runtime/src/index.ts) 将请求分发到工作区服务。素材的导入、查询、预览和回收站状态由 [asset-library.ts](../src/packages/runtime/src/asset-library.ts) 处理。 |
+| 浏览器开发与回归 | [vite.config.ts](../src/vite.config.ts) 配置前端构建和开发服务。[runtime-preview-bridge.ts](../src/dev/runtime-preview-bridge.ts) 在服务端提供本地 HTTP RPC、事件和媒体。预览服务与独立执行器复用 [Runtime 的 Node 入口](../src/packages/runtime/src/node.ts) 中的媒体回调。桌面开发由 Vite 提供页面资源，业务请求通过预加载。 |
+
+### 工作台导出 MP4
+
+1. 工作台先保存当前编辑，再打开 [ProjectExportDialog.tsx](../src/renderer/components/ProjectExportDialog.tsx)。用户在弹窗中可选本次成片规格。选择输出位置时，路径控件调用 `window.videoQuickly.pickPath`，经 `vq:pick-path` 进入系统保存对话框。
+2. 点击「导出 MP4」后，弹窗通过渲染端 RPC 客户端提交 `render.export`。预加载将 `{ method, params }` 送到 `vq:runtime`。主进程校验窗口、主框架、来源和请求，再由执行器控制器通过标准输入输出转发。
+3. 执行器将 `render.export` 交给 [run-start.ts](../src/packages/runtime/src/run-start.ts)，读取已保存项目、冻结导出快照并安排本地渲染。工作台跟随 `vq:runtime-event` 刷新运行状态。完成后弹窗通过 `node.result` 读取导出路径。
+
+`pnpm test:desktop --compact` 在真实窗口中操作导出弹窗，核对保存结果与 MP4 画面规格。[原生用例](../scripts/native-compact-dialogs.mjs)
+
 ## 进程与安全边界
 
-- `BrowserWindow` 加载工作台，画面预览复用 `<video>` 与 Canvas。Electron 45.2.1、electron-builder 26.18.0 的实际锁定版本以包清单和 `pnpm-lock.yaml` 为准。
+- `BrowserWindow` 加载工作台，画面预览复用 `<video>` 与 Canvas。Electron 与 electron-builder 的锁定版本见[桌面包清单](../src/package.json)和 [pnpm-lock.yaml](../pnpm-lock.yaml)。
 - 主进程开启 `contextIsolation`、渲染沙箱及 `webSecurity`，关闭页面 Node 集成及 Electron 的 `webviewTag`。权限请求默认拒绝，仅允许当前可信主窗口文档通过用户操作进入播放器全屏；子帧、其他窗口、外部页面及自动全屏继续拒绝。
 - 预加载暴露 Runtime RPC、事件订阅、路径选择、素材地址和文件定位。macOS 还提供等待原生窗口进入全屏的接口，播放器会在窗口切换完成后执行动画期间收到的退出请求。主进程校验当前主窗口、主框架与来源地址，并拒绝页面直接调用 `host.*` 系统接口。
 - 生产页面与工作区媒体通过 `video-quickly://app` 加载。协议支持 GET、HEAD 与单段 Range；真实路径及符号链接边界检查阻止读取工作区外文件。外部 HTTP(S) 链接由系统浏览器打开。
@@ -20,13 +38,11 @@ Video Quickly 使用 Electron 加载 React 工作台，通过沙箱预加载桥�
 | 默认工作区 | `%APPDATA%\VideoQuickly-Electron` | `~/Library/Application Support/VideoQuickly-Electron` |
 | Chromium 配置、偏好与草稿 | 工作区中的 `electron-session` | 工作区中的 `electron-session` |
 
-`VIDEO_QUICKLY_DATA_DIR` 可指定工作区，`VIDEO_QUICKLY_ELECTRON_USER_DATA` 可独立指定 Chromium 配置目录。开发、自动测试和日常使用应采用各自的数据目录。
+`VIDEO_QUICKLY_DATA_DIR` 可指定工作区，`VIDEO_QUICKLY_ELECTRON_USER_DATA` 可独立指定 Chromium 配置目录。桌面开发使用同一套默认目录规则，可按[启动命令](../README.md#从源码运行)指定单独工作区。原生验收会创建独立的临时工作区和 Chromium 配置。
 
-新工作区从空项目列表开始。首次打开时会显示使用指南，逐步高亮实际的新建项目、模型连接、镜头、预览、时间轴、属性、制作检查与导出区域。可直接操作高亮区域，成功创建、保存、播放、定位或提交制作后自动进入下一步；导出步骤等待实际导出成功。打开表单时导览暂时让出操作空间，成功并关闭表单后继续，失败或取消则保留当前步骤。说明浮层跟随目标滚动和窗口尺寸变化，收起的面板会指向其展开按钮；也可手动切换步骤或跳过。完成、跳过或关闭后，会在当前 Chromium 配置中记住状态；侧栏左下角“设置 → 使用指南”可随时重新打开。导览只响应用户的操作，不主动创建、保存或提交制作任务。
+新工作区从空项目列表开始。从「我的项目」卡片点击「继续创作」进入工作台，首次使用可按指南操作。指南按用户实际操作的结果推进，导出步骤等待成片完成。指南状态和外观偏好（`vq-theme`）保存在当前 Chromium 配置中，从左下角「设置」可重新打开指南或切换外观。导航、焦点与控件约定见[界面设计规范](../DESIGN.md)。
 
-侧栏仅保留 52px 图标栏，我的项目、素材库、系列模板、模型连接和 Skill 工作室仅显示图标，悬停或键盘聚焦时显示名称。素材库内通过「媒体」和「角色」页签切换。不再显示最近项目、项目标题或独立创作工作台入口；从“我的项目”卡片点击“继续创作”进入工作台。导航可滚动，创建入口和底部设置始终可达。底部媒体引擎与快捷键说明栏已移除，主内容区保留四角圆角与外侧留白；媒体连接异常仍通过实际错误通知反馈。设置为按钮上方的紧凑浮层，包含浅色／深色胶囊切换、Token 消耗和使用指南，支持外部点击、重复点击及 Escape 关闭并恢复焦点。外观继续保存在当前 Chromium 配置的 `vq-theme`；进入 Token 消耗前复用项目保存流程，查看设置和启动指南本身不提交项目修改。
-
-项目制作配置统一从顶部“制作设置”进入，按“创作要求、模型与素材、声音与成片、确认保存”逐步填写，最后保存后再由工具栏启动制作。内置工作台顶部显示四个阶段。点击阶段卡片打开「本次制作」，查看冻结的执行步骤及产物。阶段元数据随项目、草稿、备份和运行快照保存，供配置与自定义流程使用。配置步骤、冻结详情和进度状态的边界见[生成进度契约](workspace-editing.md#制作指引与生成进度)。
+工作台阶段元数据随项目、草稿、备份和运行快照保存，供制作配置与自定义流程使用。配置步骤、冻结详情和进度状态见[生成进度契约](workspace-editing.md#制作指引与生成进度)。
 
 项目、运行、检查点和素材元数据由 Runtime 的 SQLite 工作区保存；编辑草稿、选择镜头及增量撤销历史写入 IndexedDB，按工作区和项目隔离。正常存储条件下，项目保存先等待当前草稿意图的事务完成，再提交带修订号的更新。草稿存储故障会显示错误，仍允许手动保存项目。详见[读取与编辑契约](workspace-editing.md)及[持久化执行契约](durable-execution.md)。
 
@@ -47,17 +63,31 @@ Windows 关闭最后一个窗口会退出应用。macOS 关闭最后一个窗口
 | `pnpm build` | 构建执行器与生产前端。 |
 | `pnpm build:desktop` | 准备独立 Node、媒体组件和许可，按 `electron-builder.yml` 生成当前原生平台的正式包。 |
 
+打包配置的 `electron/**/*` 收录主进程与预加载模块，`dist/**/*` 收录 Vite 产物。[electron-builder.yml](../electron-builder.yml)
+
+应用图标源文件为 [logo.svg](../src/renderer/assets/logo.svg)。修改后运行 `pnpm prepare:icons`，同步桌面图标、macOS 托盘模板和浏览器图标。桌面资源位于 [src/build/icons](../src/build/icons)，浏览器图标位于 [public/favicon.svg](../src/public/favicon.svg)。macOS 开发 Dock 的 `dock.png` 与正式包的 ICNS 共用构图，1024px 画布保留 100px 透明边距。
+
 正式包只加载随附资源。执行组件位于 `resources/sidecar`，Mac 对应 `.app/Contents/Resources/sidecar`，不回退宿主媒体工具。Windows 输出 NSIS x64 安装器，Mac 两架构分别输出独立 `.app` ZIP；Linux 不属于正式交付矩阵。所有打包命令固定 `--publish never`。
 
 Mac 正式组件使用固定摘要验证的官方独立 Node.js 和静态 FFmpeg／FFprobe；不复制 Homebrew 动态依赖。正式报告须为 `bundled-runtime-and-media`，开发目录包不能进入正式交付清单。Node、媒体、SQLite 和 Canvas 在仅保留系统 PATH 的环境验证；媒体源码、许可和固定构建配方随包保存。
 
 ## 验收门槛
 
+从源码执行原生回归前，按平台准备媒体组件，在仓库根目录运行以下命令。
+
+```sh
+pnpm build
+node scripts/prepare-sidecar.mjs --development
+pnpm test:desktop
+```
+
+浏览器回归 `pnpm test:e2e` 默认使用端口 1421。多个工作目录并行执行时，通过 `VIDEO_QUICKLY_PORT` 分配不同端口。测试数据按本次运行隔离。用例和状态断言在本地分别默认 30 秒和 5 秒，在 CI 分别默认 90 秒和 30 秒。单个用例可以设置自己的预算，自动重试次数为 0。[Playwright 配置](../playwright.config.ts)
+
 1. 类型检查、Runtime／SQLite／契约测试和完整浏览器流程通过。
 2. `pnpm test:desktop` 在临时工作区启动真实 Electron，验证生产协议、沙箱预加载、IPC／Node、系统凭据、编辑历史、只读制作检查、同身份素材恢复与媒体自动重读、媒体 Range／路径边界、实际 MP4、转场关键帧与播放器像素对照、断连重连及重启草稿。正式包清单必须包含制作检查和素材恢复的原生通过记录。
 3. `pnpm test:desktop --packaged` 对本次实际打包应用执行同样的原生检查。macOS 验收记录退出点击与原生进入事件的时差，确认动画期间点击后，播放器和窗口均能退出全屏。
 4. 包外执行独立 PDF 解析，本地 HTTP CLI 验证恢复和三比例成片，FFmpeg 实际编码覆盖横屏、竖屏、方形及 4K。
-5. Windows 在中文和空格路径验证安装、覆盖、待审任务继续、默认卸载保留以及明确删除范围；Mac 实际解压 ZIP 后验证覆盖、任务继续和移除应用后的数据保留。
+5. Windows 在含中文和空格的路径验证安装与覆盖，并检查既有运行、默认卸载保留及明确删除的范围。macOS 实际解压 ZIP 后验证应用覆盖、既有运行和移除应用后的数据保留。
 6. 明暗主题、自定义主题、代表性窗口、减少动效和焦点行为由生产组件测试；CSS 静态检查核对统一令牌。
 
 [Desktop verification](https://github.com/lazyseacow/video-quickly/actions/workflows/ci.yml) 在 Windows 和两个 Mac 架构执行完整矩阵。每次交付核对对应提交、实际包、清单和安装记录的 SHA-256，失败或缺少报告时不生成成功清单。平台专项及证据见 [Windows 验收](windows-verification.md)和 [Mac 验收](macos-verification.md)。

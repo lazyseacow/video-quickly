@@ -72,7 +72,7 @@ VIDEO_QUICKLY_LOG_LEVEL=debug pnpm dev:desktop
 
 UUID 和内建节点编号可直接关联；用户自定义标识符使用稳定的 `sha256:` 短哈希，因此同一编号仍可在不同记录中检索。RPC 名称只允许有限的内部词汇组合，未知名称记作 `unknown`。这些日志减少自动收集的内容，分享前仍应检查项目关联信息。
 
-新增接入时复用 `packages/runtime/src/logging.ts`，事件名采用固定的 `组件.动作` 字符串，使用 `logger.child()` 添加上下文，不拼接用户输入。错误通过 `logError()` 处理。集成层通过有类型的 `onDiagnostic` 回调提供技术元数据，执行器统一补齐关联上下文并落盘，不从集成层反向依赖执行器。新增元数据字段或操作词时同步更新白名单和隐私回归测试。前端不能导入 Node 日志依赖；Electron 的 `logging.mjs` 由 `scripts/build-runtime.mjs` 从相同源模块生成并打包，不能手工修改。
+新增接入时复用 `src/packages/runtime/src/logging.ts`，事件名采用固定的 `组件.动作` 字符串，使用 `logger.child()` 添加上下文，不拼接用户输入。错误通过 `logError()` 处理。集成层通过有类型的 `onDiagnostic` 回调提供技术元数据，执行器统一补齐关联上下文并落盘，不从集成层反向依赖执行器。新增元数据字段或操作词时同步更新白名单和隐私回归测试。前端不能导入 Node 日志依赖；Electron 的 `logging.mjs` 由 `scripts/build-runtime.mjs` 从相同源模块生成并打包，不能手工修改。
 
 ## 排查顺序
 
@@ -86,6 +86,6 @@ UUID 和内建节点编号可直接关联；用户自定义标识符使用稳定
 
 ## 实现与验证
 
-文件写入与大小轮转由 `packages/runtime/src/logging.ts` 统一封装 electron-log 的独立 Node 入口，固定版本见 [Runtime 包清单](../packages/runtime/package.json)。封装关闭默认控制台输出，并替换库内部文件错误通知中的原始异常转发。
+文件写入与大小轮转由 `src/packages/runtime/src/logging.ts` 统一封装 electron-log 的独立 Node 入口，固定版本见 [Runtime 包清单](../src/packages/runtime/package.json)。封装关闭默认控制台输出，并替换库内部文件错误通知中的原始异常转发。
 
 回归覆盖 JSON 行格式、级别过滤、大小轮转、受限文件权限、写入失败、嵌套异常脱敏及深度限制、真实 HTTP 429/503、镜头分阶段日志、恢复下载不重提、任务恢复/复用、请求关联、协议隔离和真实执行器退出。`pnpm test:desktop --packaged` 同时检查实际应用包生成的两类日志及夹具凭据排除；Windows 和 macOS 的原生包验收分别执行，不能互相替代。

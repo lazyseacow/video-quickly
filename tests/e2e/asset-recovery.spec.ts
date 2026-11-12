@@ -9,8 +9,8 @@ import { promisify } from 'node:util';
 import { expect, type APIRequestContext, type Page } from '@playwright/test';
 import { test } from './isolated-workspace';
 import { DEFAULT_AUDIO_MIX_SETTINGS, type AssetRecord, type ProjectDocument, type RunSummary } from '@video-quickly/contracts';
-import { DocumentStore, openDatabase } from '../../packages/runtime/src/database';
-import { createAssetRecovery, type AssetRecoveryOptions } from '../../packages/runtime/src/asset-recovery';
+import { DocumentStore, openDatabase } from '../../src/packages/runtime/src/database';
+import { createAssetRecovery, type AssetRecoveryOptions } from '../../src/packages/runtime/src/asset-recovery';
 
 const execute = promisify(execFile);
 async function rpc<T>(request: APIRequestContext, method: string, params: unknown = {}): Promise<T> {

@@ -1,6 +1,6 @@
 import { expect, it } from 'vitest';
 import { createNativeVideoWorkflow, DEFAULT_VIDEO_PROFILE, productionEditingSkillIds, productionSettingsSchema, workflowSchema } from '@video-quickly/contracts';
-import { applyStageConfigurationDraft, updateProductionConfigurationDraft } from '../apps/desktop/src/lib/stage-configuration-draft';
+import { applyStageConfigurationDraft, updateProductionConfigurationDraft } from '../src/renderer/lib/stage-configuration-draft';
 
 it('reads historical project settings without retaining a production mode', () => {
   const historical = { mode: 'native-video', referenceMode: 'none', soundPrompt: '', subtitleMode: 'off' };

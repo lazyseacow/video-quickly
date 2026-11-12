@@ -200,6 +200,28 @@ test('can remove an archived character from an unsaved draft without losing othe
   expect((await savedProject(request, project.id)).shots[0].characterIds ?? []).toEqual([]);
 });
 
+test('removes a deleted character from a draft without discarding other edits or selected characters', async ({ page, request }) => {
+  const project = await createProject(request, '已删除草稿角色验收');
+  const save = (name: string) => rpc<CharacterProfile>(request, 'character.save', { character: { name, description: '', referenceAssetIds: [] } });
+  const removed = await save('将从草稿中移除的角色');
+  const kept = await save('仍保留的草稿角色');
+  await openProject(page, project.title);
+  await page.getByLabel('旁白', { exact: true }).fill('保留草稿旁白');
+  await page.getByRole('checkbox', { name: removed.name, exact: true }).check();
+  const keptChoice = page.getByRole('checkbox', { name: kept.name, exact: true });
+  await keptChoice.check();
+  const archived = await rpc<CharacterProfile>(request, 'character.archive', { characterId: removed.id, revision: removed.revision });
+  await rpc(request, 'character.delete', { characterId: removed.id, revision: archived.revision });
+
+  const removeMissing = page.getByRole('button', { name: '移除缺失角色', exact: true });
+  await expect(removeMissing).toBeVisible();
+  await removeMissing.click();
+  await expect(removeMissing).toHaveCount(0);
+  await expect(keptChoice).toBeChecked();
+  await page.getByRole('button', { name: '保存镜头', exact: true }).click();
+  await expect.poll(async () => (await savedProject(request, project.id)).shots[0]).toMatchObject({ characterIds: [kept.id], narration: '保留草稿旁白' });
+});
+
 test('uploads a role reference without AI, binds a shot with durable undo, and protects references through backup', async ({ page, request }, info) => {
   const errors = observeErrors(page);
   const generationCalls: string[] = [];

@@ -5,8 +5,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, expect, it } from 'vitest';
 import { assetSchema, projectSchema, type AssetRecord, type ModelProfile, type ProjectDocument, type RunRecord, type RunSummary, type ShotCandidate, type ShotCandidateKind, type WorkspaceSnapshot } from '@video-quickly/contracts';
-import { createActivityExecutor } from '../packages/integrations/src';
-import { createRuntime, SimulatedProcessExit, type RuntimeOptions } from '../packages/runtime/src';
+import { createActivityExecutor } from '../src/packages/integrations/src';
+import { createRuntime, SimulatedProcessExit, type RuntimeOptions } from '../src/packages/runtime/src';
 
 const directories: string[] = [], servers: Server[] = [];
 const runtimes = new Set<ReturnType<typeof createRuntime>>();

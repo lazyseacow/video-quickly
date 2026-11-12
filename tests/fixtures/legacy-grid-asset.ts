@@ -2,8 +2,8 @@ import { createHash, randomUUID } from 'node:crypto';
 import { readFile, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { assetSchema, imageGridRectangles, type AssetRecord } from '@video-quickly/contracts';
-import { DocumentStore, openDatabase } from '../../packages/runtime/src/database';
-import { cropToolImage, imageDimensions } from '../../packages/video/src/image-tools';
+import { DocumentStore, openDatabase } from '../../src/packages/runtime/src/database';
+import { cropToolImage, imageDimensions } from '../../src/packages/video/src/image-tools';
 
 export async function seedLegacyGridAsset(directory: string, source: AssetRecord, columns = 2) {
   const bytes = await readFile(source.path);

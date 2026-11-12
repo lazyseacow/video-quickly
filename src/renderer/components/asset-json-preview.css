@@ -1,0 +1,16 @@
+.asset-json-preview .dialog__header h2 { overflow-wrap: anywhere; }
+.asset-json-preview .dialog__body > .asset-json-preview__owner {
+  margin-block-end: var(--space-3);
+  color: var(--text-secondary);
+  font-size: var(--text-size-caption);
+  overflow-wrap: anywhere;
+}
+.asset-json-preview__content {
+  margin: 0;
+  padding: var(--space-4);
+  border-radius: var(--radius-small);
+  background: var(--field);
+  font: var(--text-size-caption)/var(--line-height-body) var(--font-family-code);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}

@@ -1,9 +1,9 @@
 import { expect, it } from 'vitest';
 import { assetSchema, createNativeVideoWorkflow, DEFAULT_CAPTION_STYLE, DEFAULT_VIDEO_PROFILE, projectSchema, type ProjectDocument, type SilenceDetection } from '@video-quickly/contracts';
-import { deleteShotRanges, resolveShotTime, type ClipEditIdFactory } from '../packages/video/src/clip-edits';
-import { splitShot, trimShot } from '../packages/video/src/editing';
-import { editContent, ProjectEditSession } from '../apps/desktop/src/lib/project-edits';
-import { applyTranscriptEdit, previewTranscriptEdit, projectSilenceRanges, transcriptMixOffset, transcriptPreviewTime, transcriptRows, type TranscriptEditAction } from '../apps/desktop/src/lib/transcript-edits';
+import { deleteShotRanges, resolveShotTime, type ClipEditIdFactory } from '../src/packages/video/src/clip-edits';
+import { splitShot, trimShot } from '../src/packages/video/src/editing';
+import { editContent, ProjectEditSession } from '../src/renderer/lib/project-edits';
+import { applyTranscriptEdit, previewTranscriptEdit, projectSilenceRanges, transcriptMixOffset, transcriptPreviewTime, transcriptRows, type TranscriptEditAction } from '../src/renderer/lib/transcript-edits';
 
 const second = 1_000_000, rate = { numerator: 30, denominator: 1 }, hash = 'a'.repeat(64);
 const assets = ['audio', 'video', 'image', 'new-audio'].map((id, index) => assetSchema.parse({ id, projectId: 'project', name: id, kind: id.includes('audio') ? 'audio' : id, path: `/media/${id}`, mimeType: 'application/octet-stream', size: 100, sha256: hash, version: index + 1, createdAt: '', provenance: 'fixture' }));

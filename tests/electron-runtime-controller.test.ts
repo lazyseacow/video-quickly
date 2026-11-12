@@ -2,8 +2,8 @@ import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { afterEach, expect, it } from 'vitest';
-import { RuntimeController } from '../apps/desktop/electron/runtime-controller.mjs';
-import { createLogger } from '../packages/runtime/src/logging.js';
+import { RuntimeController } from '../src/electron/runtime-controller.mjs';
+import { createLogger } from '../src/packages/runtime/src/logging.js';
 
 const cleanups: Array<() => Promise<unknown>> = [];
 afterEach(async () => { for (const cleanup of cleanups.splice(0).reverse()) await cleanup(); });
@@ -17,7 +17,7 @@ function own(options: ConstructorParameters<typeof RuntimeController>[0]) {
 
 it('reconnects the actual Node runtime once and preserves project data and the automatically completed result', async () => {
   const path = await directory(), events: unknown[] = [];
-  const controller = own({ command: process.execPath, args: ['--import', 'tsx', resolve('packages/runtime/src/main.ts'), '--data-dir', path], cwd: resolve('.'), onEvent: (event: unknown) => events.push(event) });
+  const controller = own({ command: process.execPath, args: ['--import', 'tsx', resolve('src/packages/runtime/src/main.ts'), '--data-dir', path], cwd: resolve('.'), onEvent: (event: unknown) => events.push(event) });
   expect(await controller.start()).toMatchObject({ state: 'ready', generation: 1 });
   const project = await controller.request('project.create', { title: 'Electron工作区重启恢复', templateId: 'history-handdrawn' });
   await controller.request('project.update', { projectId: project.id, revision: project.revision, patch: { workflow: { ...project.workflow, id: 'controller-custom-review', nodes: project.workflow.nodes.map((node: { id: string }) => node.id === 'style' ? { ...node, requiresReview: true, config: {} } : node) } } });
@@ -27,7 +27,7 @@ it('reconnects the actual Node runtime once and preserves project data and the a
   expect(before.items).toMatchObject([{ nodeId: 'style', status: 'completed' }]);
   expect((await controller.request('run.events', { runId: run.id })).items.some((event: { type: string }) => event.type === 'review.waiting')).toBe(false);
   await controller.close();
-  const reopened = own({ command: process.execPath, args: ['--import', 'tsx', resolve('packages/runtime/src/main.ts'), '--data-dir', path], cwd: resolve('.') });
+  const reopened = own({ command: process.execPath, args: ['--import', 'tsx', resolve('src/packages/runtime/src/main.ts'), '--data-dir', path], cwd: resolve('.') });
   const [first, second] = await Promise.all([reopened.reconnect(), reopened.reconnect()]);
   expect(first.generation).toBe(1); expect(second.generation).toBe(1);
   expect((await reopened.request('project.get', { projectId: project.id })).project.title).toBe(project.title);

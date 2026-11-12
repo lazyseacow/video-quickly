@@ -29,32 +29,23 @@ for (const { width, height, theme } of [
     const content = dialog.locator('.production-settings__content');
     const steps = dialog.getByRole('navigation', { name: '制作设置步骤' }).locator('ol');
     const next = dialog.getByRole('button', { name: '下一步', exact: true });
-    const storyboard = dialog.locator('.production-settings__storyboard');
-    const globalSummary = storyboard.locator(':scope > summary');
-    const sources = dialog.getByRole('group', { name: '策划内容来源' });
-
-    await expectGap(globalSummary, sources, 12);
+    const original = dialog.getByRole('textbox', { name: '项目原文', exact: true });
+    const planning = dialog.getByRole('group', { name: '策划内容', exact: true });
     const profile = await openStoryboardProfile(dialog);
     const presets = profile.locator('.field-row');
-    const custom = profile.getByText('自定义分镜尺寸', { exact: true });
-    await expectGap(globalSummary, presets, 8);
-    await expectGap(presets, custom, 8);
-    const customHeight = (await bounds(custom)).height;
-    expect(customHeight).toBeGreaterThanOrEqual(40);
-    await custom.press('Enter');
-    await expect(custom).toBeFocused();
-    await expect(custom).toHaveCSS('outline-style', 'solid');
-    const dimensions = profile.locator('.dimension-row');
-    await expect(dimensions).toBeVisible();
-    await expectGap(custom, dimensions, 8);
-    await expectGap(dimensions, sources, 12);
-    expect((await bounds(custom)).height).toBe(customHeight);
-    const [widthInput, lock, heightInput, swap] = await Promise.all([
-      profile.getByLabel('视频宽度', { exact: true }), profile.getByRole('button', { name: '解锁宽高比例' }),
-      profile.getByLabel('视频高度', { exact: true }), profile.getByRole('button', { name: '交换宽高' }),
-    ].map(bounds));
-    expect.soft(lock.y + lock.height / 2, 'lock centered on the width control').toBeCloseTo(widthInput.y + widthInput.height / 2, 0);
-    expect.soft(swap.y + swap.height / 2, 'swap centered on the height control').toBeCloseTo(heightInput.y + heightInput.height / 2, 0);
+    await expect(dialog.locator('summary').filter({ hasText: /分镜全局参数|自定义分镜尺寸|项目原文/ })).toHaveCount(0);
+    await expect(profile.getByRole('spinbutton')).toHaveCount(0);
+    await expectGap(presets, original, 12);
+    await expectGap(original, planning, 12);
+    const brief = planning.getByRole('textbox', { name: '简报内容', exact: true });
+    const style = planning.getByRole('textbox', { name: '风格内容', exact: true });
+    const storyboard = planning.getByRole('button', { name: '添加分镜', exact: true });
+    for (const input of [brief, style]) await expect(input).toHaveAttribute('placeholder', '未填写时由 AI 生成');
+    await expect(storyboard).toContainText('未填写时由 AI 生成');
+    const [briefBox, styleBox, storyboardBox] = await Promise.all([brief, style, storyboard].map(bounds));
+    expect(storyboardBox.height).toBeCloseTo(briefBox.height, 0);
+    expect(storyboardBox.width).toBeCloseTo(styleBox.width, 0);
+    if (width > 640) expect(storyboardBox.y).toBeCloseTo(styleBox.y, 0);
 
     const [frame, navigation, title, body, action] = await Promise.all([
       bounds(surface), bounds(steps), bounds(dialog.getByRole('heading', { name: '制作设置' })),
@@ -67,20 +58,22 @@ for (const { width, height, theme } of [
     expect.soft(action.right, 'primary action and form end').toBeCloseTo(body.right, 0);
     expect(await content.evaluate(element => element.scrollWidth - element.clientWidth)).toBeLessThanOrEqual(1);
     await expect(next).toBeInViewport({ ratio: 1 });
-    expect(await content.evaluate(element => {
+    const scroll = await content.evaluate(element => {
       element.scrollTop = element.scrollHeight;
       return element.scrollTop;
-    })).toBeGreaterThan(0);
+    });
+    if (width === 390) expect(scroll).toBeGreaterThan(0);
     expect((await bounds(next)).y).toBeCloseTo(action.y, 0);
 
     await content.evaluate(element => { element.scrollTop = 0; });
-    await custom.blur();
-    await custom.hover();
     await dialog.screenshot({ path: info.outputPath(`production-spacing-${width}-${theme}.png`) });
-    await custom.press('Enter');
-    await expect(dimensions).not.toBeVisible();
-    await expectGap(presets, custom, 8);
-    await expectGap(custom, sources, 12);
+
+    await productionStep(dialog, '模型与素材');
+    const models = await Promise.all(['文本模型', '视频模型', '图片模型'].map(name => bounds(dialog.getByRole('combobox', { name, exact: true }))));
+    for (const model of models) expect(model.width).toBeCloseTo(body.width, 0);
+    expect(models[1].y).toBeGreaterThan(models[0].bottom);
+    expect(models[2].y).toBeGreaterThan(models[1].bottom);
+    await dialog.screenshot({ path: info.outputPath(`production-models-${width}-${theme}.png`) });
 
     await productionStep(dialog, '声音与成片');
     const delivery = await bounds(dialog.getByLabel('声音要求', { exact: true }));

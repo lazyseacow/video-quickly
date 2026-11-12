@@ -4,8 +4,8 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { afterEach, expect, it } from 'vitest';
 import { assetSchema, projectSchema, runSchema, shotSchema } from '@video-quickly/contracts';
-import { createRuntime } from '../packages/runtime/src/index';
-import { createActivityExecutor, validateMediaActivity } from '../packages/integrations/src';
+import { createRuntime } from '../src/packages/runtime/src/index';
+import { createActivityExecutor, validateMediaActivity } from '../src/packages/integrations/src';
 
 const directories: string[] = [], servers: Server[] = [], runtimes: ReturnType<typeof createRuntime>[] = [];
 const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScLbtAAAAABJRU5ErkJggg==', 'base64');

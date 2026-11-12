@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, expect, it, vi } from 'vitest';
 import { assetSchema, projectDetailSchema, projectSchema, type AssetRecord } from '@video-quickly/contracts';
-import { createRuntime } from '../packages/runtime/src';
+import { createRuntime } from '../src/packages/runtime/src';
 
 const directories: string[] = [];
 const runtimes: ReturnType<typeof createRuntime>[] = [];

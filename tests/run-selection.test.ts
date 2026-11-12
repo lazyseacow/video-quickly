@@ -7,7 +7,7 @@ import {
   assetSchema, characterProfileSchema, modelSchema, projectDetailSchema, projectSchema, recordPageSchema, runInspectionSchema, runPlanSchema, runSchema, workflowNodeSchema,
   type AssetRecord, type ProjectDocument, type RunPlan, type WorkflowNode, type WorkspaceSummary,
 } from '@video-quickly/contracts';
-import { createRuntime, SimulatedProcessExit, type RuntimeOptions } from '../packages/runtime/src';
+import { createRuntime, SimulatedProcessExit, type RuntimeOptions } from '../src/packages/runtime/src';
 import { importSkillFixture } from './fixtures/import-skill';
 
 const runtimes: ReturnType<typeof createRuntime>[] = [], directories: string[] = [];

@@ -5,8 +5,8 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { afterEach, expect, it } from 'vitest';
 import { createNativeVideoWorkflow, projectSchema, type AssetRecord } from '@video-quickly/contracts';
-import { probeMedia, runMedia } from '../packages/video/src/node';
-import { exportEditorProject } from '../packages/runtime/src/editor-export';
+import { probeMedia, runMedia } from '../src/packages/video/src/node';
+import { exportEditorProject } from '../src/packages/runtime/src/editor-export';
 import { fixtureNativeVideo } from './fixtures/native-video';
 
 const ffmpeg = process.env.VIDEO_QUICKLY_FFMPEG ?? 'ffmpeg';

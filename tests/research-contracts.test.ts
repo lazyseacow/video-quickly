@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { expect, it } from 'vitest';
 import { applyResearchClaims, createNativeVideoWorkflow, DEFAULT_VIDEO_PROFILE, projectSchema, researchResultSchema, validateResearchContent, type Claim, type ResearchSource } from '@video-quickly/contracts';
-import { ProjectEditSession, savedEditsSchema } from '../apps/desktop/src/lib/project-edits';
+import { ProjectEditSession, savedEditsSchema } from '../src/renderer/lib/project-edits';
 
 const content = '第一行：文献记载。\n第二行：这一结论仍有争议。';
 const source: ResearchSource = { id: 'source', title: '实际摘录', kind: 'text', content, sha256: createHash('sha256').update(content).digest('hex'), capturedAt: '2026-10-30T00:00:00.000Z' };

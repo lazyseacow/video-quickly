@@ -5,10 +5,10 @@ import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { setTimeout as delay } from 'node:timers/promises';
 import { createNativeVideoWorkflow, exportBatchSchema, modelSchema, projectDetailSchema, projectSchema, recordPageSchema, assetSchema, runInspectionSchema, runStepPayloadSchema, runSummarySchema, runSchema, workspaceSummarySchema, type ModelProfile } from '@video-quickly/contracts';
-import { createRuntime } from '../packages/runtime/src/index';
-import { createActivityExecutor, createWaveformReader, validateMediaActivity } from '../packages/integrations/src/index';
-import { audioMixProjectionKey, prepareAudioMix, readAudioLevelWindow, detectAudioSilence } from '../packages/video/src/audio-mix';
-import { probeMedia } from '../packages/video/src/media-process';
+import { createRuntime } from '../src/packages/runtime/src/index';
+import { createActivityExecutor, createWaveformReader, validateMediaActivity } from '../src/packages/integrations/src/index';
+import { audioMixProjectionKey, prepareAudioMix, readAudioLevelWindow, detectAudioSilence } from '../src/packages/video/src/audio-mix';
+import { probeMedia } from '../src/packages/video/src/media-process';
 import { configDigest, parseRealServiceConfig, redactServiceFailure, servicePreflight, serviceRoles, type ServiceRole } from './real-service-config';
 import { committedPhaseRun, resumePhaseRun } from './real-service-progress';
 

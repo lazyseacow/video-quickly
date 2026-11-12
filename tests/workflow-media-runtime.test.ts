@@ -5,9 +5,9 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { afterEach, expect, it } from 'vitest';
 import { projectSchema, workflowSchema, workflowNodeSchema, type AssetRecord, type ModelProfile, type ProjectDocument, type RunRecord, type RunInspection, type WorkspaceSnapshot } from '@video-quickly/contracts';
-import { createRuntime, SimulatedProcessExit } from '../packages/runtime/src/index';
-import { createActivityExecutor, validateMediaActivity, type MediaActivityContext } from '../packages/integrations/src/index';
-import { openDatabase, DocumentStore } from '../packages/runtime/src/database';
+import { createRuntime, SimulatedProcessExit } from '../src/packages/runtime/src/index';
+import { createActivityExecutor, validateMediaActivity, type MediaActivityContext } from '../src/packages/integrations/src/index';
+import { openDatabase, DocumentStore } from '../src/packages/runtime/src/database';
 import { fixtureNativeVideo } from './fixtures/native-video';
 
 const directories: string[] = [], servers: Server[] = [], runtimes: ReturnType<typeof createRuntime>[] = [];
@@ -16,9 +16,9 @@ const png = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQU
 async function service(handler: RequestListener) { const server = createServer(handler); servers.push(server); await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve)); const address = server.address(); if (!address || typeof address === 'string') throw new Error('Missing address'); return `http://127.0.0.1:${address.port}`; }
 async function fixture(baseUrl: string, options: Partial<Parameters<typeof createRuntime>[0]> = {}) {
   const directory = await mkdtemp(join(tmpdir(), 'vq-media-runtime-')); directories.push(directory); const runtime = createRuntime({ dataDirectory: directory, seed: false, preflightActivity: validateMediaActivity, executeActivity: createActivityExecutor(), ...options }); runtimes.push(runtime);
-  const project = projectSchema.parse(await runtime.dispatch('project.create', { title: '并发任务', brief: '' }));
+  const project = projectSchema.parse(await runtime.dispatch('project.create', { title: '媒体生成任务', brief: '' }));
   const model = await runtime.dispatch('model.save', { model: { name: 'HTTP夹具', provider: 'custom-http', model: 'fixture', baseUrl, connectionType: 'image', capabilities: ['image'], parameters: { requestPath: 'generate', requestTemplate: { name: '{{narration}}' }, resultUrlPath: 'url' } } }) as ModelProfile;
-  const saved = projectSchema.parse(await runtime.dispatch('project.update', { projectId: project.id, revision: project.revision, patch: { shots: [0, 1].map(index => ({ id: `shot-${index}`, title: `镜头${index}`, narration: `shot-${index}`, visualPrompt: '', durationUs: 1_000_000 })), workflow: workflowSchema.parse({ id: 'parallel', version: 1, name: 'parallel', production: { mode: 'native-video', referenceMode: 'none', soundPrompt: '', subtitleMode: 'off' }, nodes: [workflowNodeSchema.parse({ id: 'images', kind: 'assets', label: '画面', modelId: model.id })], edges: [], execution: { maxConcurrentShots: 2, modelLimits: { [model.id]: 2 } } }) } }));
+  const saved = projectSchema.parse(await runtime.dispatch('project.update', { projectId: project.id, revision: project.revision, patch: { shots: [0, 1].map(index => ({ id: `shot-${index}`, title: `镜头${index}`, narration: `shot-${index}`, visualPrompt: '', durationUs: 1_000_000 })), workflow: workflowSchema.parse({ id: 'media', version: 1, name: 'media', production: { mode: 'native-video', referenceMode: 'none', soundPrompt: '', subtitleMode: 'off' }, nodes: [workflowNodeSchema.parse({ id: 'images', kind: 'assets', label: '画面', modelId: model.id })], edges: [] }) } }));
   return { runtime, directory, project: saved, model };
 }
 async function body(request: Parameters<RequestListener>[0]) { let text = ''; for await (const chunk of request) text += chunk; return JSON.parse(text); }
@@ -33,8 +33,7 @@ it('recovers a rejected image in the same run and retains the completed sibling 
     }
     response.end(Buffer.from(png, 'base64'));
   });
-  const { runtime, directory, project } = await fixture(base), modelId = project.workflow.nodes[0].modelId!;
-  await runtime.dispatch('project.update', { projectId: project.id, revision: project.revision, patch: { workflow: { ...project.workflow, execution: { maxConcurrentShots: 1, modelLimits: { [modelId]: 1 } } } } });
+  const { runtime, directory, project } = await fixture(base);
   const run = await runtime.dispatch('run.start', { projectId: project.id }) as RunRecord; await runtime.waitForIdle();
   const failed = await runtime.dispatch('run.inspect', { runId: run.id }) as RunInspection;
   expect(failed.run.error).toContain('HTTP 400'); expect(failed.steps[0]).toMatchObject({ status: 'needs_attention', unknownSubmission: false, retry: { allowed: true } });
@@ -64,8 +63,8 @@ it('retries only the rejected short Seedance video with the corrected request du
   const execute = createActivityExecutor();
   const runtime = createRuntime({ dataDirectory: directory, seed: false, preflightActivity: validateMediaActivity,
     executeActivity: context => {
-      // Reproduce the previous adapter's 3s request without editing the frozen model configuration.
-      if (context.model && context.project.shots[0]?.id === 'shot-7') return execute({ ...context, model: { ...context.model, parameters: { seconds: 3 } } });
+      // Use the generic duration rule to reproduce the previous adapter's requests.
+      if (context.model) return execute({ ...context, model: { ...context.model, model: 'seedance-fixture' } });
       return execute(context);
     },
   });
@@ -78,7 +77,7 @@ it('retries only the rejected short Seedance video with the corrected request du
       { id: 'shot-1', title: '已生成镜头', narration: '', visualPrompt: '主角缓步走近', durationUs: 4_000_000 },
       { id: 'shot-7', title: '主角错愕反应', narration: '', visualPrompt: '主角错愕地抬头', durationUs: 3_000_000 },
     ],
-    workflow: { ...project.workflow, id: 'video-retry', production: { ...project.workflow.production, videoModelId: model.id }, stages: undefined, nodes: [video], edges: [], execution: { maxConcurrentShots: 1, modelLimits: { [model.id]: 1 } } },
+    workflow: { ...project.workflow, id: 'video-retry', production: { ...project.workflow.production, videoModelId: model.id }, stages: undefined, nodes: [video], edges: [] },
   } });
   const run = await runtime.dispatch('run.start', { projectId: project.id }) as RunRecord;
   await runtime.waitForIdle();
@@ -109,9 +108,8 @@ it('checks the whole batch before any fresh sibling POST when another shot has a
   const gate = new Promise<void>(resolve => { release = resolve; }), received = new Promise<void>(resolve => { submitted = resolve; });
   const base = await service(async (request, response) => { if (request.method === 'POST') { posts.push((await body(request)).name); submitted(); await gate; } response.writeHead(503).end(); });
   const { directory, project, model } = await fixture(base);
-  const serial = { ...project, workflow: { ...project.workflow, execution: { maxConcurrentShots: 1, modelLimits: { [model.id]: 1 } } } };
-  const context: MediaActivityContext = { project: serial, node: project.workflow.nodes[0], model, runId: 'receipt-preflight', operationId: 'receipt-preflight:images', dataDirectory: directory, assets: [], signal: new AbortController().signal, persistRemoteTask() {} };
-  const first = expect(createActivityExecutor()({ ...context, project: { ...serial, shots: [serial.shots[1]] } })).rejects.toThrow('HTTP 503');
+  const context: MediaActivityContext = { project, node: project.workflow.nodes[0], model, runId: 'receipt-preflight', operationId: 'receipt-preflight:images', dataDirectory: directory, assets: [], signal: new AbortController().signal, persistRemoteTask() {} };
+  const first = expect(createActivityExecutor()({ ...context, project: { ...project, shots: [project.shots[1]] } })).rejects.toThrow('HTTP 503');
   try {
     await received;
     await expect(validateMediaActivity({ ...context, operationId: undefined, dataDirectory: undefined })).resolves.toBeUndefined();
@@ -128,8 +126,7 @@ it.each([408, 409, 503])('stops native sibling requests on HTTP %i and preserves
     if (request.method === 'POST') posts.push((await body(request)).name);
     response.writeHead(status, { 'Retry-After': '1' }).end();
   });
-  const { runtime, directory, project } = await fixture(base); const modelId = project.workflow.nodes[0].modelId!;
-  await runtime.dispatch('project.update', { projectId: project.id, revision: project.revision, patch: { workflow: { ...project.workflow, execution: { maxConcurrentShots: 2, modelLimits: { [modelId]: 1 } } } } });
+  const { runtime, directory, project } = await fixture(base);
   const run = await runtime.dispatch('run.start', { projectId: project.id }) as RunRecord; await runtime.waitForIdle();
   expect(posts).toHaveLength(1); const unknownShot = posts[0]; expect(project.shots.map(shot => shot.id)).toContain(unknownShot);
   const failed = (await runtime.dispatch('run.inspect', { runId: run.id }) as RunInspection).run;

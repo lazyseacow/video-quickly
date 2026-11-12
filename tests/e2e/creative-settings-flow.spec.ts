@@ -19,14 +19,14 @@ for (const viewport of [{ width: 1536, height: 960, theme: 'dark' }, { width: 10
       if (['project.update', 'run.start'].includes(method)) writes.push(method);
     });
     await expect(page).toHaveTitle(/Video Quickly/); expect(new URL(page.url()).pathname).toBe('/');
-    const brief = dialog.getByLabel('创作要求', { exact: true }), style = dialog.getByLabel('视觉风格', { exact: true });
+    const brief = dialog.getByLabel('简报内容', { exact: true }), style = dialog.getByLabel('风格内容', { exact: true });
     await expect(brief).toBeFocused();
     const roles = dialog.getByRole('button', { name: /^角色与连续性/ }), entities = dialog.getByRole('button', { name: /^人物、场景与道具/ });
     const rolePanel = dialog.getByRole('region', { name: '角色与连续性', exact: true }), entityPanel = dialog.getByRole('region', { name: '人物、场景与道具', exact: true });
     const next = dialog.getByRole('button', { name: '下一步', exact: true });
-    const template = dialog.getByRole('button', { name: '应用系列模板', exact: true });
+    await expect(dialog.getByRole('button', { name: '应用系列模板', exact: true })).toHaveCount(0);
     const agent = dialog.getByText('剪辑 Agent 设置', { exact: true });
-    const positions = () => Promise.all([roles, entities, template, agent, next].map(control => control.evaluate(element => {
+    const positions = () => Promise.all([roles, entities, agent, next].map(control => control.evaluate(element => {
       const { x, y, width, height } = element.getBoundingClientRect();
       const scrollTop = element.closest('.production-settings__content')?.scrollTop ?? 0;
       return { x, y: y + scrollTop, width, height };
@@ -35,13 +35,15 @@ for (const viewport of [{ width: 1536, height: 960, theme: 'dark' }, { width: 10
     await expect(next).toBeInViewport({ ratio: 1 });
     await expect(dialog.locator('.dialog__surface')).toHaveCSS('opacity', '1');
     await page.screenshot({ path: info.outputPath(`creative-flow-start-${viewport.width}.png`) });
-    const emptyPositions = await positions();
+    await brief.fill('面向第一次使用 AI 工具的职场新人。');
+    await style.fill('柔和的蓝灰色调和简洁线条。');
+    const compactPositions = await positions();
     for (const [field, paragraph] of [
       [brief, '面向第一次使用 AI 工具的职场新人。用两个办公场景演示如何整理会议纪要、生成待办清单，再对照原文核验结论。'],
       [style, '使用柔和的蓝灰色调和简洁线条。人物在连续镜头里保持同一套服装，光线从左侧窗户进入，重点操作用局部特写呈现。'],
     ] as const) {
       await field.fill(`${paragraph}\n\n`.repeat(8));
-      await expect(field).toHaveCSS('height', viewport.width <= 640 ? '168px' : '224px');
+      await expect(field).toHaveAttribute('rows', '3');
       await expect(field).toHaveCSS('resize', 'none');
       const scroll = await field.evaluate(element => {
         element.scrollTop = element.scrollHeight;
@@ -52,7 +54,7 @@ for (const viewport of [{ width: 1536, height: 960, theme: 'dark' }, { width: 10
       expect(scroll.offset).toBeGreaterThan(0);
       expect(scroll.inset).toBeGreaterThanOrEqual(scroll.radius);
     }
-    expect(await positions()).toEqual(emptyPositions);
+    expect(await positions()).toEqual(compactPositions);
     await page.screenshot({ path: info.outputPath(`creative-flow-long-text-${viewport.width}.png`) });
     await brief.fill('用两个场景介绍 AI 如何帮助职场新人，时长 45 秒。');
     await style.fill('简洁插画，蓝灰色调');
@@ -119,7 +121,7 @@ for (const viewport of [{ width: 1536, height: 960, theme: 'dark' }, { width: 10
     await next.press('Enter');
     await expect(dialog.getByRole('combobox', { name: '文本模型', exact: true })).toBeFocused();
     await dialog.getByRole('button', { name: '上一步', exact: true }).click();
-    await expect(dialog.getByLabel('创作要求', { exact: true })).toBeFocused();
+    await expect(dialog.getByLabel('简报内容', { exact: true })).toBeFocused();
     await expect(entityPanel).not.toBeVisible(); await entities.click();
     await expect(prop.getByLabel('固定特征', { exact: true })).toHaveValue('银色外壳，屏幕朝向主角');
     await sceneTab.click();
@@ -133,8 +135,8 @@ for (const viewport of [{ width: 1536, height: 960, theme: 'dark' }, { width: 10
     await productionStep(dialog, '确认保存');
     await expect(dialog.getByRole('region', { name: '确认保存', exact: true })).toContainText('靠窗的办公室、银色笔记本电脑');
     await dialog.getByRole('button', { name: '修改创作要求', exact: true }).click();
-    await expect(dialog.getByLabel('创作要求', { exact: true })).toBeFocused();
-    await expect(dialog.getByLabel('创作要求', { exact: true })).toHaveValue('用两个场景介绍 AI 如何帮助职场新人，时长 45 秒。');
+    await expect(dialog.getByLabel('简报内容', { exact: true })).toBeFocused();
+    await expect(dialog.getByLabel('简报内容', { exact: true })).toHaveValue('用两个场景介绍 AI 如何帮助职场新人，时长 45 秒。');
     await saveProduction(dialog); await expect(dialog).toHaveCount(0);
     const saved = await source.saved();
     expect(saved.creativeContext).toMatchObject({ continuity: '同一间办公室，保持傍晚光线', entities: [{ kind: 'scene', name: '靠窗的办公室', description: '左侧落地窗，桌上有绿植' }, { kind: 'prop', name: '银色笔记本电脑', description: '银色外壳，屏幕朝向主角' }] });

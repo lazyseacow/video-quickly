@@ -1,5 +1,5 @@
 {
   "extends": "../tsconfig.base.json",
-  "compilerOptions": { "types": ["node"], "allowImportingTsExtensions": true },
-  "include": ["*.ts", "../apps/desktop/dev/*.ts", "../apps/desktop/src/vite-env.d.ts", "../apps/desktop/vite.config.ts", "../tests/e2e/isolated-workspace.ts"]
+  "compilerOptions": { "types": ["node"], "allowImportingTsExtensions": true, "allowJs": true },
+  "include": ["*.ts", "../src/dev/*.ts", "../src/electron/preload.cjs", "../src/renderer/vite-env.d.ts", "../src/vite.config.ts", "../tests/e2e/isolated-workspace.ts"]
 }

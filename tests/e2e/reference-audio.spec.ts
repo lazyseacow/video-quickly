@@ -37,7 +37,6 @@ for (const scenario of [
     let dialog = await open(page, project);
     await pick(dialog, '文本模型', source.models[0]); await pick(dialog, '视频模型', video);
     await productionStep(dialog, '模型与素材');
-    await dialog.getByLabel('参考素材', { exact: true }).selectOption(scenario.image ? 'existing' : 'none');
     const path = dialog.getByRole('textbox', { name: '参考音频文件路径', exact: true });
     await path.fill(info.outputPath('不支持.m4a')); await dialog.getByRole('button', { name: '添加参考音频', exact: true }).click();
     await expect(dialog.getByRole('alert')).toContainText('WAV 或 MP3');
@@ -60,8 +59,8 @@ for (const scenario of [
     await expect.poll(async () => (await latest(request, project.id))?.status, { timeout: 30_000 }).toBe('succeeded');
     const videoRequest = source.requests.find(value => value.generate_audio === true);
     expect(videoRequest).toMatchObject({ model: scenario.model, content: expect.arrayContaining([{ type: 'audio_url', audio_url: { url: audio.dataUrl }, role: 'reference_audio' }]) });
-    if (scenario.image) expect(videoRequest?.content).toEqual(expect.arrayContaining([expect.objectContaining({ type: 'image_url', role: 'reference_image' })]));
-    else expect(videoRequest?.content).not.toEqual(expect.arrayContaining([expect.objectContaining({ type: 'image_url' })]));
+    expect(videoRequest?.content).toEqual(expect.arrayContaining([expect.objectContaining({ type: 'image_url', role: 'reference_image' })]));
+    expect(JSON.stringify(videoRequest?.content)).toContain('为本镜头的首帧');
     expect(source.requests.filter(value => value.generate_audio === true)).toHaveLength(1);
     dialog = await open(page, await saved(request, project.id)); await productionStep(dialog, '模型与素材');
     await dialog.getByRole('button', { name: `移除参考音频：${scenario.file}`, exact: true }).click(); await saveProduction(dialog); await expect(dialog).toHaveCount(0);

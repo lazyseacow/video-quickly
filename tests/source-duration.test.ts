@@ -1,6 +1,6 @@
 import { expect, it } from 'vitest';
 import { assetSchema, createSceneTemplate, DEFAULT_AUDIO_PROCESSING, shotSchema } from '@video-quickly/contracts';
-import { sourceDurationsKey } from '../apps/desktop/src/lib/source-duration';
+import { sourceDurationsKey } from '../src/renderer/lib/source-duration';
 
 it('probes template video only while its original sound is enabled and invalidates changed source metadata', () => {
   const shot = shotSchema.parse({ id: 'diagram', title: '图解原声', narration: '', visualPrompt: '', durationUs: 1_000_000, sceneTemplate: createSceneTemplate('process'), videoAssetId: 'video' });

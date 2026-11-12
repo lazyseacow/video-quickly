@@ -4,7 +4,7 @@ import { expect, type APIRequestContext, type Locator, type Page } from '@playwr
 import type { ModelProfile, ProjectDocument } from '@video-quickly/contracts';
 import { openProjectFromList } from './workspace-navigation';
 
-export async function productionFixture(request: APIRequestContext) {
+export async function productionFixture(request: APIRequestContext, { configureImage = true } = {}) {
   async function rpc<T>(method: string, params: unknown): Promise<T> {
     const response = await request.post('/__desktop_rpc', { data: { method, params } }), payload = await response.json();
     expect(response.ok(), JSON.stringify(payload.error)).toBe(true); return payload.result;
@@ -13,13 +13,17 @@ export async function productionFixture(request: APIRequestContext) {
   for (const [role, name] of [['text', '统一文本'], ['text', '独立文本'], ['image', '参考图片'], ['video', '视频']] as const) models.push(await rpc<ModelProfile>('model.save', { model: {
     name: `${name} ${suffix}`, provider: 'openai-compatible', connectionType: role, capabilities: [role], model: `fixture-${role}`, baseUrl: 'http://127.0.0.1:1/v1', parameters: {},
   } }));
-  const project = await rpc<ProjectDocument>('project.create', { title: `统一制作 ${suffix}` });
+  const created = await rpc<ProjectDocument>('project.create', { title: `统一制作 ${suffix}` });
+  const project = configureImage ? await rpc<ProjectDocument>('project.update', { projectId: created.id, patch: {
+    workflow: { ...created.workflow, production: { ...created.workflow.production, imageModelId: models[2].id } },
+  } }) : created;
   return { project, text: models[0], override: models[1], image: models[2], video: models[3], async saved() { return (await rpc<{ project: ProjectDocument }>('project.get', { projectId: project.id })).project; } };
 }
 
 export async function pickProductionModel(dialog: Locator, label: string, model: ModelProfile) {
   const control = dialog.getByRole('combobox', { name: label, exact: true });
   if (!await control.isVisible() && ['文本模型', '视频模型', '图片模型'].includes(label)) await productionStep(dialog, '模型与素材');
+  if (await control.inputValue() === model.name) return;
   await control.fill(model.name);
   await dialog.getByRole('option', { name: model.name, exact: true }).click();
   await expect(control).toHaveValue(model.name);
@@ -28,9 +32,9 @@ export async function productionStep(dialog: Locator, label: '创作要求' | '�
   await dialog.getByRole('navigation', { name: '制作设置步骤', exact: true }).getByRole('button', { name: label, exact: true }).click();
 }
 export async function openStoryboardProfile(dialog: Locator) {
-  const disclosure = dialog.locator('.production-settings__storyboard');
-  if (await disclosure.getAttribute('open') === null) await disclosure.locator(':scope > summary').click();
-  return dialog.getByRole('group', { name: '分镜全局参数', exact: true });
+  const profile = dialog.getByRole('group', { name: '分镜全局参数', exact: true });
+  await expect(profile).toBeVisible();
+  return profile;
 }
 export async function saveProduction(dialog: Locator) {
   await productionStep(dialog, '确认保存');

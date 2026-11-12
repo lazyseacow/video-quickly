@@ -3,9 +3,9 @@ import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { expect, test, vi } from 'vitest';
-import { createRpcDiagnostics } from '../apps/desktop/dev/rpc-diagnostics';
-import { readRpcRequest } from '../apps/desktop/dev/read-rpc-request';
-import { generateText } from '../packages/runtime/src/providers';
+import { createRpcDiagnostics } from '../src/dev/rpc-diagnostics';
+import { readRpcRequest } from '../src/dev/read-rpc-request';
+import { generateText } from '../src/packages/runtime/src/providers';
 import type { ModelProfile } from '@video-quickly/contracts';
 
 type Entry = { event: string; requestId?: number; method?: string; phase?: string; status?: number; active?: number; providerId?: number; providersActive?: number; runId?: string; code?: string; elapsedMs: number; wallTimeMs: number };

@@ -4,8 +4,8 @@ import { tmpdir } from 'node:os';
 import { basename, dirname, join, resolve } from 'node:path';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { modelSchema, projectDetailSchema, projectSchema, runInspectionSchema, runSchema } from '@video-quickly/contracts';
-import { createActivityExecutor, validateMediaActivity } from '../packages/integrations/src/index';
-import { createRuntime } from '../packages/runtime/src/index';
+import { createActivityExecutor, validateMediaActivity } from '../src/packages/integrations/src/index';
+import { createRuntime } from '../src/packages/runtime/src/index';
 
 // Only the filesystem boundary is substituted: requests, journal/checkpoints,
 // temporary files, successful renames and reopening all use the real runtime.
@@ -46,7 +46,7 @@ async function fixture(executeActivity = createActivityExecutor()) {
   const directory = await mkdtemp(join(tmpdir(), 'vq-receipt-persistence-')); directories.push(directory);
   const runtime = open(directory, executeActivity), created = projectSchema.parse(await runtime.dispatch('project.create', { title: '回执替换验收' }));
   const model = modelSchema.parse(await runtime.dispatch('model.save', { model: { name: '本地回执接口', provider: 'custom-http', baseUrl: base, model: 'fixture', connectionType: 'image', capabilities: ['image'], parameters: { requestPath: 'generate', requestTemplate: { name: '{{narration}}' }, resultUrlPath: 'url' } } }));
-  const project = projectSchema.parse(await runtime.dispatch('project.update', { projectId: created.id, revision: created.revision, patch: { shots: [{ id: 'shot-0', title: '回执镜头', narration: 'shot-0', visualPrompt: '', durationUs: 1_000_000 }], workflow: { id: 'receipt', version: 1, name: '回执提交', production: { mode: 'native-video', referenceMode: 'none', soundPrompt: '', subtitleMode: 'off' }, nodes: [{ id: 'images', kind: 'assets', label: '画面', modelId: model.id, requiresReview: true }], edges: [], execution: { maxConcurrentShots: 2, modelLimits: { [model.id]: 2 } } } } }));
+  const project = projectSchema.parse(await runtime.dispatch('project.update', { projectId: created.id, revision: created.revision, patch: { shots: [{ id: 'shot-0', title: '回执镜头', narration: 'shot-0', visualPrompt: '', durationUs: 1_000_000 }], workflow: { id: 'receipt', version: 1, name: '回执提交', production: { mode: 'native-video', referenceMode: 'none', soundPrompt: '', subtitleMode: 'off' }, nodes: [{ id: 'images', kind: 'assets', label: '画面', modelId: model.id, requiresReview: true }], edges: [] } } }));
   return { directory, runtime, project, calls: () => ({ posts, downloads }) };
 }
 async function receipt(directory: string, projectId: string) {

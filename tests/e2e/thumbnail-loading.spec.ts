@@ -20,7 +20,7 @@ async function fixture(request: APIRequestContext, info: TestInfo, count = 3) {
   return { project: updated, asset };
 }
 async function open(page: Page, title: string) {
-  await page.goto('/'); await expect(page.getByLabel('项目名称', { exact: true })).toBeVisible();
+  await page.goto('/');
   await openProjectFromList(page, title);
   await expect(page.getByLabel('镜头标题', { exact: true })).toHaveValue('彩色镜头 1');
 }

@@ -10,7 +10,7 @@ import type { ProjectDocument } from '@video-quickly/contracts';
 // Trace recording changes the timing under observation. Functional editor
 // regressions retain their normal failure traces in project-editing.spec.ts.
 test.use({ trace: 'off' });
-const sourceFiles = ['apps/desktop/src/App.tsx', 'apps/desktop/src/lib/project-edits.ts', 'apps/desktop/src/lib/use-project-edits.ts', 'apps/desktop/src/components/ScenePreview.tsx'];
+const sourceFiles = ['src/renderer/App.tsx', 'src/renderer/features/Workbench.tsx', 'src/renderer/features/use-workbench-production.ts', 'src/renderer/lib/project-edits.ts', 'src/renderer/lib/use-project-edits.ts', 'src/renderer/components/ScenePreview.tsx'];
 const source = {
   head: execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim(),
   dirty: Boolean(execFileSync('git', ['status', '--porcelain'], { encoding: 'utf8' }).trim()),

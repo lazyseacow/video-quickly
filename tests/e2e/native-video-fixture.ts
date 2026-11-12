@@ -38,7 +38,7 @@ async function fixture(request: APIRequestContext, info: TestInfo, hold = false,
     if (incoming.method === 'GET') { response.end(JSON.stringify({ status: 'succeeded', content: { video_url: `${baseUrl}/source.mp4` } })); return; }
     let body = ''; for await (const chunk of incoming) body += chunk; const value = JSON.parse(body); requests.push(value); const requestNumber = requests.length;
     await documents.beforeReply?.(value, incoming.url ?? '');
-    if (incoming.url?.endsWith('/images/generations')) { response.end(JSON.stringify({ data: [{ b64_json: 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScLbtAAAAABJRU5ErkJggg==' }] })); return; }
+    if (/\/images\/(generations|edits)$/.test(incoming.url ?? '')) { response.end(JSON.stringify({ data: [{ b64_json: 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScLbtAAAAABJRU5ErkJggg==' }] })); return; }
     if (incoming.url?.includes('contents/generations/tasks')) { response.end(JSON.stringify({ id: `video-${requestNumber}` })); return; }
     if (hold && !held) { held = true; entered(); await gate; }
     const prompt = JSON.stringify(value);
@@ -54,8 +54,10 @@ async function fixture(request: APIRequestContext, info: TestInfo, hold = false,
   const suffix = randomUUID().slice(0, 8), models: ModelProfile[] = [];
   for (const name of ['文本一', '文本二']) models.push(await rpc<ModelProfile>(request, 'model.save', { model: { name: `${name} ${suffix}`, provider: 'openai-compatible', connectionType: 'text', capabilities: ['text'], model: name, baseUrl } }));
   const video = await rpc<ModelProfile>(request, 'model.save', { model: { name: `视频 ${suffix}`, provider: 'seedance', connectionType: 'video', capabilities: ['video'], model: 'custom-video-endpoint', baseUrl } });
-  const project = await rpc<ProjectDocument>(request, 'project.create', { title: `统一制作 ${suffix}`, brief: '用一个镜头介绍蓝色天空', profile: { width: 160, height: 90, frameRate: { numerator: 30, denominator: 1 } } });
-  return { project, models, video, requests, pending, release, async close() { release(); server.closeAllConnections(); await new Promise<void>(resolve => server.close(() => resolve())); } };
+  const image = await rpc<ModelProfile>(request, 'model.save', { model: { name: `图片 ${suffix}`, provider: 'openai-compatible', connectionType: 'image', capabilities: ['image'], model: 'fixture-image', baseUrl } });
+  const created = await rpc<ProjectDocument>(request, 'project.create', { title: `统一制作 ${suffix}`, brief: '用一个镜头介绍蓝色天空', profile: { width: 160, height: 90, frameRate: { numerator: 30, denominator: 1 } } });
+  const project = await rpc<ProjectDocument>(request, 'project.update', { projectId: created.id, patch: { workflow: { ...created.workflow, production: { ...created.workflow.production, imageModelId: image.id } } } });
+  return { project, models, video, image, requests, pending, release, async close() { release(); server.closeAllConnections(); await new Promise<void>(resolve => server.close(() => resolve())); } };
 }
 
 

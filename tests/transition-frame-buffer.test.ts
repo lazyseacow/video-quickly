@@ -1,9 +1,9 @@
 import { createRequire } from 'node:module';
 import { expect, it } from 'vitest';
-import { TransitionFrameBuffer } from '../apps/desktop/src/components/transition-frame-buffer';
+import { TransitionFrameBuffer } from '../src/renderer/components/transition-frame-buffer';
 
 // Use the project's real Canvas implementation at the browser drawing boundary.
-const { createCanvas } = createRequire(new URL('../packages/video/package.json', import.meta.url))('@napi-rs/canvas') as { createCanvas: (width: number, height: number) => HTMLCanvasElement };
+const { createCanvas } = createRequire(new URL('../src/packages/video/package.json', import.meta.url))('@napi-rs/canvas') as { createCanvas: (width: number, height: number) => HTMLCanvasElement };
 const factory = () => createCanvas(1, 1);
 const samples = [{ frame: 60, timeUs: 0 }, { frame: 61, timeUs: 16_667 }];
 

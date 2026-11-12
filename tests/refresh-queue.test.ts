@@ -1,5 +1,5 @@
 import { expect, it } from 'vitest';
-import { createRefreshQueue } from '../apps/desktop/src/lib/refresh-queue';
+import { createRefreshQueue } from '../src/renderer/lib/refresh-queue';
 
 function deferred<T>() { let resolve!: (value: T) => void, reject!: (error: unknown) => void; const promise = new Promise<T>((done, fail) => { resolve = done; reject = fail; }); return { promise, resolve, reject }; }
 

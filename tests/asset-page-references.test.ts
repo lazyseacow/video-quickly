@@ -1,10 +1,10 @@
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { assetListItemSchema, characterProfileSchema, recordPageSchema, type AssetRecord, type CharacterProfile } from '@video-quickly/contracts';
-import { createRuntime } from '../packages/runtime/src';
-import { DocumentStore, openDatabase } from '../packages/runtime/src/database';
+import { assetListItemSchema, assetSchema, characterProfileSchema, jsonAssetPreviewSchema, recordPageSchema, type AssetRecord, type CharacterProfile } from '@video-quickly/contracts';
+import { createRuntime } from '../src/packages/runtime/src';
+import { DocumentStore, openDatabase } from '../src/packages/runtime/src/database';
 import { seedLargeWorkspace } from './fixtures/large-workspace';
 
 const fixtures: Array<{ directory: string; database: ReturnType<typeof openDatabase>; runtime: ReturnType<typeof createRuntime> }> = [];
@@ -23,8 +23,30 @@ async function fixture(count: number) {
   const runtime = createRuntime({ dataDirectory: directory, seed: false });
   fixtures.push({ directory, database, runtime });
   const save = async (name: string, referenceAssetIds: string[]) => characterProfileSchema.parse(await runtime.dispatch('character.save', { character: { name, description: `${name}的固定设定`, referenceAssetIds } }));
-  return { database, store, project, assets, runtime, save };
+  return { directory, database, store, project, assets, runtime, save };
 }
+
+it('imports and previews JSON text without rewriting values and bounds reads by actual file length', async () => {
+  const { directory, runtime, store } = await fixture(0);
+  const path = join(directory, '场景.JSON');
+  const original = '{"角色":"阿青","identifier":9007199254740993}';
+  await writeFile(path, Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from(original, 'utf16le')]));
+  const asset = assetSchema.parse(await runtime.dispatch('asset.import', { path }));
+  expect(asset).toMatchObject({ name: '场景.JSON', kind: 'document', mimeType: 'application/json' });
+  const preview = async (assetId = asset.id) => jsonAssetPreviewSchema.parse(await runtime.dispatch('asset.read', { assetId, format: 'text' }));
+  expect(await preview()).toEqual({ text: original, truncated: false });
+
+  const legacy = { ...asset, id: 'legacy-json', mimeType: 'application/octet-stream' };
+  store.put('asset', legacy.id, legacy);
+  expect(await preview(legacy.id)).toEqual({ text: original, truncated: false });
+
+  const prefix = '{"场景":"';
+  const content = prefix + 'a'.repeat(1024 * 1024 - Buffer.byteLength(prefix) - 1);
+  await writeFile(asset.path, `${content}雨"}`);
+  expect(await preview()).toEqual({ text: content, truncated: true });
+  await writeFile(asset.path, '');
+  expect(await preview()).toEqual({ text: '', truncated: false });
+});
 
 describe('asset-page character references', () => {
   it('checks project and character references for a full page with one query per source', async () => {

@@ -1,9 +1,9 @@
 import { afterEach, expect, it, vi } from 'vitest';
 import { createNativeVideoWorkflow, DEFAULT_VIDEO_PROFILE, projectSchema, type AudioMixJob, type PreparedAudioMix } from '@video-quickly/contracts';
-import { rpc } from '../apps/desktop/src/lib/client';
-import { prepareAudioMixPreview, prepareLatestAudioMixPreview } from '../apps/desktop/src/lib/audio-mix';
+import { rpc } from '../src/renderer/lib/client';
+import { prepareAudioMixPreview, prepareLatestAudioMixPreview } from '../src/renderer/lib/audio-mix';
 
-vi.mock('../apps/desktop/src/lib/client', () => ({ rpc: vi.fn() }));
+vi.mock('../src/renderer/lib/client', () => ({ rpc: vi.fn() }));
 const request = vi.mocked(rpc), key = 'd'.repeat(64);
 const project = () => projectSchema.parse({ id: 'revision-preview', title: '版本同步试听', revision: 3, brief: '', profile: DEFAULT_VIDEO_PROFILE, workflow: createNativeVideoWorkflow(), createdAt: '', updatedAt: '', shots: [{ id: 'voice-shot', title: '旁白', narration: '', visualPrompt: '', durationUs: 1_000_000, sourceInUs: 0, audioAssetId: 'voice' }] });
 const mix = (): PreparedAudioMix => ({ version: 1, key, path: '/derived/revision.wav', sha256: 'e'.repeat(64), durationUs: 1_000_000, shotDurations: [{ shotId: 'voice-shot', durationUs: 1_000_000 }], analysis: { sampleRate: 48000, channels: 2 }, warnings: [] });

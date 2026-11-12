@@ -4,8 +4,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, expect, it } from 'vitest';
 import { assetSchema, characterProfileSchema, projectSchema, workflowNodeSchema, type AssetRecord, type CharacterProfile, type ModelProfile, type ProjectDocument, type RunRecord, type ShotCandidate, type UsageRecord, type WorkspaceSnapshot } from '@video-quickly/contracts';
-import { createActivityExecutor, validateMediaActivity } from '../packages/integrations/src';
-import { createRuntime, SimulatedProcessExit, type RuntimeOptions } from '../packages/runtime/src';
+import { createActivityExecutor, validateMediaActivity } from '../src/packages/integrations/src';
+import { createRuntime, SimulatedProcessExit, type RuntimeOptions } from '../src/packages/runtime/src';
 
 const directories: string[] = [], servers: Server[] = [];
 const runtimes = new Set<ReturnType<typeof createRuntime>>();

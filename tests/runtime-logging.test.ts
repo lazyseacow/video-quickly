@@ -4,11 +4,11 @@ import { join } from 'node:path';
 import { createServer, type RequestListener, type Server } from 'node:http';
 import { afterEach, expect, it } from 'vitest';
 import { modelSchema, projectSchema, runSchema, workflowNodeSchema } from '@video-quickly/contracts';
-import { createRuntime, SimulatedProcessExit, type RuntimeOptions } from '../packages/runtime/src/index';
-import { ActivityJournal, AmbiguousActivityError } from '../packages/runtime/src/activities';
-import { openDatabase } from '../packages/runtime/src/database';
-import { createLogger } from '../packages/runtime/src/logging';
-import { createActivityExecutor, validateMediaActivity } from '../packages/integrations/src/index';
+import { createRuntime, SimulatedProcessExit, type RuntimeOptions } from '../src/packages/runtime/src/index';
+import { ActivityJournal, AmbiguousActivityError } from '../src/packages/runtime/src/activities';
+import { openDatabase } from '../src/packages/runtime/src/database';
+import { createLogger } from '../src/packages/runtime/src/logging';
+import { createActivityExecutor, validateMediaActivity } from '../src/packages/integrations/src/index';
 import { createNativeVideoWorkflow } from '@video-quickly/contracts';
 import { fixtureNativeVideo } from './fixtures/native-video';
 

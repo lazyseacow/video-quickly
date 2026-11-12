@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { afterEach, expect, it } from 'vitest';
 import { modelSchema, projectSchema, promptLibraryItemSchema, promptPreviewSchema, promptSessionSchema, runSchema, runSummarySchema, shotSchema, workflowNodeSchema, subflowDefinitionSchema, type ProjectDocument, type PromptDraft } from '@video-quickly/contracts';
-import { createRuntime, SimulatedProcessExit, type RuntimeOptions } from '../packages/runtime/src/index';
+import { createRuntime, SimulatedProcessExit, type RuntimeOptions } from '../src/packages/runtime/src/index';
 import { importSkillFixture } from './fixtures/import-skill';
 import { planningFixtureResponse } from './fixtures/planning-response';
 

@@ -5,9 +5,9 @@ import type { IncomingMessage } from 'node:http';
 import { Readable } from 'node:stream';
 import { afterEach, expect, it, vi } from 'vitest';
 import { modelSchema, projectSchema, runInspectionSchema, runSchema, runStepPayloadSchema, workflowNodeSchema } from '@video-quickly/contracts';
-import { createRuntime, type RuntimeOptions } from '../packages/runtime/src';
-import * as publicHttp from '../packages/runtime/src/public-tool-download';
-import { readStoryboardWebResearch } from '../packages/runtime/src/storyboard-research';
+import { createRuntime, type RuntimeOptions } from '../src/packages/runtime/src';
+import * as publicHttp from '../src/packages/runtime/src/public-tool-download';
+import { readStoryboardWebResearch } from '../src/packages/runtime/src/storyboard-research';
 
 const directories: string[] = [], runtimes: ReturnType<typeof createRuntime>[] = [];
 afterEach(async () => {

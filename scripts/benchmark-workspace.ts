@@ -4,24 +4,25 @@ import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { cpus, platform, release, tmpdir, totalmem } from 'node:os';
 import { join, relative, resolve } from 'node:path';
 import { performance } from 'node:perf_hooks';
-import { createRuntime } from '../packages/runtime/src/index';
-import { DocumentStore, openDatabase } from '../packages/runtime/src/database';
+import { createRuntime } from '../src/packages/runtime/src/index';
+import { DocumentStore, openDatabase } from '../src/packages/runtime/src/database';
 import { seedLargeWorkspace } from '../tests/fixtures/large-workspace';
-import { editContent, ProjectEditSession } from '../apps/desktop/src/lib/project-edits';
-import { selectShot } from '../apps/desktop/src/lib/shot-selection';
+import { editContent, ProjectEditSession } from '../src/renderer/lib/project-edits';
+import { selectShot } from '../src/renderer/lib/shot-selection';
 import { projectSchema, type ProjectDetail } from '@video-quickly/contracts';
 
 const sourceRoot = resolve(import.meta.dirname, '..');
 const sourceFiles = [
   relative(sourceRoot, import.meta.filename),
   'tests/fixtures/large-workspace.ts',
-  'packages/runtime/src/index.ts',
-  'packages/runtime/src/database.ts',
-  'packages/runtime/src/read-models.ts',
-  'packages/runtime/src/characters.ts',
-  'packages/runtime/src/image-tools.ts',
-  'apps/desktop/src/lib/project-edits.ts',
-  'apps/desktop/src/lib/shot-selection.ts',
+  'src/packages/runtime/src/index.ts',
+  'src/packages/runtime/src/asset-library.ts',
+  'src/packages/runtime/src/database.ts',
+  'src/packages/runtime/src/read-models.ts',
+  'src/packages/runtime/src/characters.ts',
+  'src/packages/runtime/src/image-tools.ts',
+  'src/renderer/lib/project-edits.ts',
+  'src/renderer/lib/shot-selection.ts',
 ];
 const source = {
   head: execFileSync('git', ['rev-parse', 'HEAD'], { cwd: sourceRoot, encoding: 'utf8' }).trim(),

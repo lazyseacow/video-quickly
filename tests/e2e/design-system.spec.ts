@@ -146,7 +146,7 @@ test('previews imported images automatically and keeps navigation typography sta
   await library.click();
   expect(await typography()).toEqual(unselected);
   const card = page.locator('.asset-card').filter({ has: page.getByRole('heading', { name: asset.name, exact: true }) });
-  const image = card.getByRole('img', { name: asset.name, exact: true });
+  const image = card.getByRole('button', { name: `预览“${asset.name}”`, exact: true }).locator('img');
   await expect(image).toBeVisible();
   await expect.poll(() => image.evaluate((element: HTMLImageElement) => element.complete && element.naturalWidth > 0)).toBe(true);
   await expect(card.locator('p')).toHaveCount(0);
