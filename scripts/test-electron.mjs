@@ -548,7 +548,10 @@ try {
   await openProject(project.title);
   const title = page.getByLabel('镜头标题', { exact: true });
   await expect(title).toHaveValue('原生镜头');
-  await title.fill('Electron 原生编辑');
+  await title.focus();
+  await title.press('ControlOrMeta+a');
+  await page.keyboard.insertText('Electron 原生编辑');
+  await expect(title).toHaveValue('Electron 原生编辑');
   await page.getByRole('button', { name: '保存镜头', exact: true }).click();
   await expect.poll(async () => (await projectDocument(project.id)).shots[0].title).toBe('Electron 原生编辑');
   const undo = page.getByRole('button', { name: '撤销', exact: true }), redo = page.getByRole('button', { name: '重做', exact: true });
