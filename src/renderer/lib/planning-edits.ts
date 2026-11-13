@@ -15,6 +15,7 @@ export const storyboardDraftSchema = projectSchema.pick({ shots: true, creativeC
 export interface PlanningEditOptions {
   storyboard?: StoryboardDraft;
   profile?: PlanningProject['profile'];
+  shotId?: string;
   addShot?: boolean;
   onSaved?(context: PlanningProject['creativeContext']): void;
 }

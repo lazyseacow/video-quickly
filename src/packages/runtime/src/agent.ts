@@ -212,7 +212,7 @@ export async function executeDeepAgent(context: AgentContext): Promise<string> {
     })] : []),
     ...(business ? [tool(async input => JSON.stringify(await business.execute(input)), {
       name: 'execute_video_task', description: (business.operations
-        ? '执行剪辑与运镜准备，结果接回本次项目供流程导出。operation: image 补充镜头参考图、video 补充镜头视频、edit 调整剪辑、import 将工具生成素材入库并绑定目标镜头。image/video/import 必须指定单个 shotId。'
+        ? `执行剪辑与运镜准备，结果接回本次项目供流程导出。operation: ${business.operations.includes('image') ? 'image 补充镜头参考图、' : ''}video 补充镜头视频、edit 调整剪辑、import 将工具生成素材入库并绑定目标镜头。补充或导入素材时必须指定单个 shotId。`
         : '执行并保存视频制作任务，结果接回本次项目供后续任务使用。operation: brief 创意简报、style 风格、script 完整分镜、image 镜头参考图、video 镜头视频、edit 剪辑准备、export 导出成片、import 将工具生成素材入库并绑定目标镜头。image/video/import 可用 shotId 指定镜头。')
         + (business.boundaryTransitions ? 'edit 的 edits 用于裁剪，transitions 用于转场。按成片顺序指定两个相邻且有输出帧的镜头 ID。先裁剪，再计算转场。result.appliedTransitions 返回实际类型、起始帧、结束帧（不含）、起始时间与时长（微秒）。帧编号从 0 开始。' : '')
         + (listAudioAssets ? 'edit 的 timeline 支持拆分、重排、背景音乐、字幕和关键帧。应用顺序为裁剪、拆分、重排、字幕与运镜、背景音乐、转场。一次 edit 全部校验通过后一起保存。result.appliedEdits 返回实际应用结果，使用新 requestId 可继续编辑拆分后的镜头。' : '')

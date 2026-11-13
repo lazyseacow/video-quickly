@@ -42,8 +42,8 @@ it('projects frozen model generation tasks instead of later configuration or loc
   const run = await start(runtime, project.id);
   const before = await inspect(runtime, run.id);
   expect(before.workflowId).toBe('native-video');
-  expect(before.steps.filter(step => step.modelGeneration).map(step => step.id)).toEqual(['brief', 'style', 'script', 'assets', 'video']);
-  expect(before.steps.filter(step => !step.modelGeneration).map(step => step.id)).toEqual(['animation', 'export']);
+  expect(before.steps.filter(step => step.modelGeneration).map(step => step.id)).toEqual(['brief', 'style', 'script', 'video']);
+  expect(before.steps.filter(step => !step.modelGeneration).map(step => step.id)).toEqual(['assets', 'animation', 'export']);
   await runtime.dispatch('project.update', { projectId: project.id, revision: configured.revision, patch: { workflow: { ...configured.workflow, id: 'later-custom-flow', production: { ...configured.workflow.production, referenceMode: 'none' } } } });
   const after = await inspect(runtime, run.id);
   expect(after.workflowId).toBe('native-video'); expect(after.steps).toEqual(before.steps); expect(calls).toBe(1);

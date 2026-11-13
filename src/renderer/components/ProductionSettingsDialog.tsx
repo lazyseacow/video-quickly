@@ -1,10 +1,11 @@
 import { lazy, Suspense, useCallback, useId, useLayoutEffect, useRef, useState } from 'react';
-import { ChevronLeft, ChevronRight, Ellipsis, Pencil, Plus } from 'lucide-react';
-import { VIDEO_FIT_MODE_LABELS, applyWorkflowProposal, formatFrameRate, formatPlanningDocument, getMediaAdapters, nativeReferenceStep, productionEditingSkillIds, productionEditingStep, productionModelSetting, productionPlanningStep, productionPlanningSteps, productionSettingsSchema, resolveProductionWorkflow, supportsAutomaticCasting, supportsProductionAgent, usesManualPlanning, videoAspectRatioPreset, videoProfileSchema, type AssetRecord, type PlanningDocumentKind, type ProductionSettings, type RunSummary, type WorkflowDefinition, type WorkflowNode } from '@video-quickly/contracts';
+import { ChevronDown, ChevronLeft, ChevronRight, Ellipsis, Pencil, Plus, Trash2 } from 'lucide-react';
+import { MAX_STORYBOARD_SHOTS, VIDEO_FIT_MODE_LABELS, applyWorkflowProposal, formatFrameRate, formatPlanningDocument, generatedPlanningSchema, getMediaAdapters, nativeReferenceStep, productionEditingSkillIds, productionEditingStep, productionModelSetting, productionPlanningStep, productionPlanningSteps, productionSettingsSchema, resolveProductionWorkflow, supportsAutomaticCasting, supportsProductionAgent, usesManualPlanning, videoAspectRatioPreset, videoProfileSchema, type AssetRecord, type PlanningDocumentKind, type ProductionSettings, type RunSummary, type WorkflowDefinition, type WorkflowNode } from '@video-quickly/contracts';
 import type { WorkspaceView } from '../lib/types';
 import type { PlanningControls } from '../lib/planning-edits';
 import type { ProductionProjectSettings } from '../lib/stage-configuration-draft';
 import { matchingStepModels, stepGuidance } from '../lib/workflow-guidance';
+import { useRuntimeRead } from '../lib/use-runtime-read';
 import { Button, Combobox, Dialog, Field, IconButton, Notice, Select } from './Primitives';
 import VideoSettings from './VideoSettings';
 import { ProjectSettingsActions, type ProjectSettingsAction } from './ProjectSettingsPanel';
@@ -23,14 +24,17 @@ const unifiedModelFields = [
   { key: 'imageModelId', label: '图片模型', capability: 'image' },
 ] as const;
 const planningContentLabels = { brief: '简报内容', style: '风格内容', script: '分镜内容' };
+const planningTextKinds = ['brief', 'style'] as const;
 const autoPlanningPlaceholder = '未填写时由 AI 生成';
 type ConfigurationStep = typeof steps[number]['id'];
 export interface ProductionConfiguration { nodes: WorkflowNode[]; production: ProductionSettings; project: ProductionProjectSettings; }
 
-export default function ProductionSettingsDialog({ project, projectId, projectRevision, workflow, workspace, run, version, usedEntityKeys = [], initialStage = 'planning', initialNodeId, pendingConfiguration, configurationError, onSave, onDiscardPending, onClose, onOpenTool, onSectionChange, onImportReferenceAudio, planning }: {
+export default function ProductionSettingsDialog({ project, projectId, projectRevision, savedShotCount, workflow, workspace, run, version, usedEntityKeys = [], initialStage = 'planning', initialNodeId, pendingConfiguration, configurationError, onSave, onDiscardPending, onClose, onOpenTool, onSectionChange, onImportReferenceAudio, planning, onRemoveShot }: {
   project: ProductionProjectSettings; workflow: WorkflowDefinition; workspace: WorkspaceView; run?: RunSummary; version: number; usedEntityKeys?: string[];
   projectId?: string; projectRevision?: number;
+  savedShotCount: number;
   planning?: PlanningControls;
+  onRemoveShot: (shotId: string) => Promise<void>;
   initialStage?: string; initialNodeId?: string; pendingConfiguration?: boolean; configurationError?: string;
   onSave: (value: ProductionConfiguration) => Promise<boolean>;
   onDiscardPending?: () => Promise<boolean>; onClose: () => void;
@@ -43,9 +47,9 @@ export default function ProductionSettingsDialog({ project, projectId, projectRe
     style: settings.manualPlanningSteps?.includes('style') ? '' : project.style,
     originalText: project.originalText, profile: project.profile, creativeContext: project.creativeContext,
   }));
-  const [authored, setAuthored] = useState(() => ({
-    brief: settings.manualPlanningSteps?.includes('brief') ? project.brief : '',
-    style: settings.manualPlanningSteps?.includes('style') ? project.style : '',
+  const [authored, setAuthored] = useState<Partial<Record<PlanningDocumentKind, { text: string; runId?: string }>>>(() => ({
+    brief: settings.manualPlanningSteps?.includes('brief') ? { text: project.brief } : undefined,
+    style: settings.manualPlanningSteps?.includes('style') ? { text: project.style } : undefined,
   }));
   const [manualStoryboard, setManualStoryboard] = useState(() => settings.manualPlanningSteps?.includes('script') ?? false);
   const [nodes, setNodes] = useState(workflow.nodes);
@@ -79,23 +83,25 @@ export default function ProductionSettingsDialog({ project, projectId, projectRe
   }, [step, focusStep]);
   const active = Boolean(run && ['queued', 'running', 'waiting_review', 'waiting_external', 'retry_scheduled'].includes(run.status));
   const planningSteps = productionPlanningSteps.filter(kind => nodes.some(node => productionPlanningStep(workflow, node) === kind));
-  const shotCount = planning?.project.shots.length ?? 0;
-  const manualSteps = planningSteps.filter(kind => kind === 'script' ? manualStoryboard && shotCount > 0 : Boolean(authored[kind].trim()));
+  const { data: generated, error: generatedError, refresh: refreshGenerated } = useRuntimeRead(
+    'project.planning.outputs', { projectId }, version, generatedPlanningSchema, Boolean(projectId && planningSteps.length),
+  );
+  const projectShots = planning?.project.shots ?? [];
+  const shotCount = projectShots.length;
+  const manualSteps = planningSteps.filter(kind => kind === 'script' ? manualStoryboard && shotCount > 0 : Boolean(authored[kind]?.text.trim()));
   const resolved = resolveProductionWorkflow({ ...workflow, nodes, production: { ...settings, manualPlanningSteps: manualSteps.length ? manualSteps : undefined } });
   const automaticCasting = supportsAutomaticCasting(resolved);
-  const nativeAssets = nativeReferenceStep(resolved);
-  const nativeReferences = Boolean(nativeAssets);
-  const firstFrames = nativeAssets?.config.referenceMode === 'generate';
-  const showImageModel = nativeReferences || automaticCasting || resolved.production.referenceMode === 'generate';
+  const nativeReferences = Boolean(nativeReferenceStep(resolved));
+  const continues = resolved.production.continueFromLastFrame !== false;
+  const showImageModel = !nativeReferences && (automaticCasting || resolved.production.referenceMode === 'generate');
   const groupReferenceImages = settings.groupReferenceImages !== false;
   const requiredModelTasks = resolved.nodes.filter(node => !usesManualPlanning(resolved, node) && stepGuidance(node).requiresModel);
   const modelFields = unifiedModelFields.map(field => {
-    const nativeImage = nativeReferences && field.key === 'imageModelId';
     const tasks = requiredModelTasks.filter(node => productionModelSetting(node) === field.key);
     const models = workspace.models.filter(model => model.enabled && model.capabilities.includes(field.capability)
       && (field.key !== 'imageModelId' || getMediaAdapters(['image']).some(adapter => adapter.id === model.provider))
       && tasks.every(node => matchingStepModels(node, [model]).length > 0));
-    return { ...field, models, value: nativeImage ? nativeAssets?.modelId : settings[field.key], required: tasks.length > 0 && !nativeImage };
+    return { ...field, models, value: resolved.production[field.key], required: tasks.length > 0 };
   });
   const [textField, videoField, imageField] = modelFields;
   const assistantNode = resolved.nodes.find(node => node.id === assistantNodeId);
@@ -107,11 +113,21 @@ export default function ProductionSettingsDialog({ project, projectId, projectRe
   const inheritedAgentSkills = agentSkillIds.length > 0 && settings.agentSkillIds.length === 0;
   const toolNames = { music: '背景音乐', caption: '字幕样式' };
   const planningDisabled = active || Boolean(configurationError || planning?.disabledReason);
-  const projectPlanningText = (kind: PlanningDocumentKind) => authored[kind].trim() ? authored[kind] : fields[kind];
+  function generatedText(kind: PlanningDocumentKind) {
+    const output = generated?.[kind];
+    return output && output.runId !== settings.clearedPlanningOutputs?.[kind] ? output : undefined;
+  }
+  function planningTextSummary(kind: PlanningDocumentKind, empty: string) {
+    if (!planningSteps.includes(kind)) return fields[kind].trim() || empty;
+    const edit = authored[kind];
+    return edit?.text.trim() || (!edit && generatedText(kind) ? '继续由 AI 生成' : autoPlanningPlaceholder);
+  }
 
   function updateSettings(patch: Partial<ProductionSettings>) { setSettings(value => ({ ...value, ...patch })); setError(''); }
   function updateContent(kind: PlanningDocumentKind, text: string) {
-    setAuthored(current => ({ ...current, [kind]: text }));
+    const output = generatedText(kind);
+    const matchesAI = !settings.manualPlanningSteps?.includes(kind) && output?.text === text;
+    setAuthored(current => ({ ...current, [kind]: matchesAI ? undefined : { text, runId: current[kind]?.runId ?? output?.runId } }));
     setError('');
   }
   function updateNode(node: WorkflowNode, patch: Partial<WorkflowNode>) { setNodes(current => current.map(item => item.id === node.id ? { ...item, ...patch } : item)); setError(''); }
@@ -126,10 +142,11 @@ export default function ProductionSettingsDialog({ project, projectId, projectRe
     if (focus && value === step) { focusTarget.current = undefined; focusStep(value); }
   }
   function requestTool(tool: ProjectSettingsAction) { setRequestedTool(tool); selectStep('review', true); }
-  function editStoryboard() {
+  function editStoryboard(shotId?: string) {
     if (!planning || !validateProfile()) return;
     setError('');
-    planning.onEdit('script', { profile: fields.profile, addShot: !shotCount, onSaved: () => setManualStoryboard(true) });
+    planning.onEdit('script', shotId ? { profile: fields.profile, shotId }
+      : { profile: fields.profile, addShot: true, ...(!shotCount ? { onSaved: () => setManualStoryboard(true) } : {}) });
   }
   function validateProfile() {
     const result = videoProfileSchema.safeParse(fields.profile);
@@ -163,7 +180,7 @@ export default function ProductionSettingsDialog({ project, projectId, projectRe
     const following = steps[stepIndex + 1];
     if (inFlight.current || configurationError || !following || !validate()) return;
     if (step === 'materials') {
-      const missing = modelFields.find(({ required, key, models, value }) => (required || nativeReferences && key === 'imageModelId' && value) && !models.some(model => model.id === value));
+      const missing = modelFields.find(({ required, models, value }) => required && !models.some(model => model.id === value));
       if (missing) {
         setError(missing.models.length ? `请选择可用的${missing.label}。` : `暂无可用的${missing.label}，请在模型连接中添加或启用。`);
         form.current?.querySelector<HTMLInputElement>(`#${CSS.escape(`${id}-${missing.label}`)}`)?.focus();
@@ -175,14 +192,8 @@ export default function ProductionSettingsDialog({ project, projectId, projectRe
   function close() { closed.current = true; onClose(); }
   function modelField({ key, label, models, required, value }: (typeof modelFields)[number]) {
     const items = models.map(model => ({ id: model.id, label: model.name }));
-    if (key === 'imageModelId' && nativeReferences) items.unshift({ id: '', label: '不生成首帧' });
     return <Field label={label} required={required}>
-      <Combobox displayMode="label" id={`${id}-${label}`} label={label} required={required} value={value ?? ''} items={items} placeholder="选择或搜索模型" onChange={selected => {
-        if (key === 'imageModelId' && nativeAssets && productionModelSetting(nativeAssets) !== 'imageModelId') {
-          updateNode(nativeAssets, { modelId: undefined, config: { ...nativeAssets.config, modelBinding: 'default', modelOverride: false } });
-        }
-        updateSettings({ [key]: selected || undefined });
-      }} />
+      <Combobox displayMode="label" id={`${id}-${label}`} label={label} required={required} value={value ?? ''} items={items} placeholder="选择或搜索模型" onChange={selected => updateSettings({ [key]: selected || undefined })} />
     </Field>;
   }
   function advanced(group: { id: string; label: string; nodeIds: string[] }) {
@@ -210,12 +221,20 @@ export default function ProductionSettingsDialog({ project, projectId, projectRe
     inFlight.current = true; setPending('save'); setError('');
     try {
       const manualPlanningFields: NonNullable<ProductionSettings['manualPlanningFields']> = {};
-      const project = { ...fields, brief: projectPlanningText('brief'), style: projectPlanningText('style') };
-      for (const kind of ['brief', 'style'] as const) {
+      const clearedPlanningOutputs = { ...settings.clearedPlanningOutputs };
+      const project = { ...fields };
+      for (const kind of planningTextKinds) {
+        const edit = authored[kind];
+        if (edit) {
+          project[kind] = edit.text.trim() ? edit.text : '';
+          const runId = edit.runId ?? generatedText(kind)?.runId;
+          if (!project[kind] && runId) clearedPlanningOutputs[kind] = runId;
+        }
         const stored = settings.manualPlanningFields?.[kind];
         if (stored && formatPlanningDocument(kind, stored) === project[kind]) Object.assign(manualPlanningFields, { [kind]: stored });
       }
-      const production = { ...resolved.production, manualPlanningFields: manualPlanningFields.brief || manualPlanningFields.style ? manualPlanningFields : undefined };
+      const production = { ...resolved.production, manualPlanningFields: manualPlanningFields.brief || manualPlanningFields.style ? manualPlanningFields : undefined,
+        clearedPlanningOutputs: clearedPlanningOutputs.brief || clearedPlanningOutputs.style ? clearedPlanningOutputs : undefined };
       const saved = await onSave({ nodes: resolved.nodes, production, project });
       if (closed.current) return;
       if (saved) { close(); if (requestedTool) onOpenTool(requestedTool); }
@@ -239,10 +258,28 @@ export default function ProductionSettingsDialog({ project, projectId, projectRe
   const { width, height, frameRate, fitMode } = fields.profile;
   const aspectRatio = videoAspectRatioPreset(width, height)?.label;
   const storyboardContent = manualSteps.includes('script') ? `已填写 ${shotCount} 个镜头` : '';
-  const generationHints = <div className="production-settings__models production-settings__prompts">
-    {!manualSteps.includes('brief') && <Field label="创作要求"><textarea rows={3} maxLength={30000} value={fields.brief} onChange={event => setFields(current => ({ ...current, brief: event.target.value }))} placeholder="主题、受众、核心信息与时长" /></Field>}
-    {!manualSteps.includes('style') && <Field label="视觉风格"><textarea rows={3} value={fields.style} onChange={event => setFields(current => ({ ...current, style: event.target.value }))} placeholder="画面风格、色调与光线" /></Field>}
-  </div>;
+  const generatedStoryboard = storyboardContent ? undefined : generated?.script;
+  // An unapplied result belongs to the project revision it was generated from. Edits such as deleting the last shot supersede it.
+  const previewStoryboard = generatedStoryboard?.shots.length && (active
+    ? generatedStoryboard.runId === run?.id
+    : !shotCount && !savedShotCount && !generatedStoryboard.applied && generatedStoryboard.projectRevision === projectRevision)
+    ? generatedStoryboard.shots : undefined;
+  const storyboardShots = previewStoryboard ?? projectShots;
+  const matchesGenerated = generatedStoryboard?.shots.length === shotCount && projectShots.every((shot, index) => {
+    const original = generatedStoryboard.shots[index];
+    return shot.id === original.id && shot.title === original.title && shot.visualPrompt === original.visualPrompt
+      && shot.narration === original.narration && (shot.soundPrompt ?? '') === (original.soundPrompt ?? '');
+  });
+  const generatedStoryboardStatus = previewStoryboard || matchesGenerated ? `AI 生成 · ${storyboardShots.length} 个镜头` : '';
+  const storyboardStatus = generatedStoryboardStatus || storyboardContent || (shotCount ? `项目分镜 · ${shotCount} 个镜头` : autoPlanningPlaceholder);
+  function planningTextField(kind: PlanningDocumentKind) {
+    const edit = authored[kind];
+    const output = edit ? undefined : generatedText(kind);
+    return <Field key={kind} className="production-settings__planning-entry" label={planningContentLabels[kind]} hint={output ? 'AI 生成' : undefined}>
+      {control => <textarea {...control} rows={3} maxLength={30000} value={edit?.text ?? output?.text ?? ''}
+        placeholder={autoPlanningPlaceholder} onChange={event => updateContent(kind, event.target.value)} />}
+    </Field>;
+  }
   return <Dialog title="制作设置" onClose={close} onDismissStart={() => { closed.current = true; }} className="settings-dialog production-settings-dialog dialog--aligned-gutters">
     <nav className="dialog__band production-settings__steps" aria-label="制作设置步骤"><ol>{steps.map((item, index) => <li key={item.id}><button type="button" aria-current={step === item.id ? 'step' : undefined} disabled={Boolean(pending)} onClick={() => selectStep(item.id)}><span className="production-settings__step-index" aria-hidden="true">{index + 1}</span><span>{item.label}</span></button></li>)}</ol></nav>
     <div className="dialog__body">
@@ -259,24 +296,54 @@ export default function ProductionSettingsDialog({ project, projectId, projectRe
             </div>
             <textarea className="production-settings__original-text" aria-label="项目原文" rows={3} maxLength={30000} placeholder="可粘贴小说或剧本正文，供 AI 简报和分镜使用" value={fields.originalText ?? ''} onChange={event => setFields(current => ({ ...current, originalText: event.target.value }))} />
             {planningSteps.length > 0 && <div role="group" aria-label="策划内容" className="production-settings__planning-content">
-              {planningSteps.map(kind => kind === 'script' ? <div key={kind} className="production-settings__planning-entry">
-                <div className="field">
-                  <span className="field__label">{planningContentLabels.script}</span>
-                  <Button ref={storyboardAction} static variant="ghost" className="production-settings__storyboard-action" aria-labelledby={`${id}-storyboard-action`} aria-describedby={`${id}-storyboard-status`} aria-haspopup="dialog" disabled={!planning || planningDisabled} onClick={editStoryboard}>
-                    <span className="production-settings__storyboard-action-label" id={`${id}-storyboard-action`}>
-                      {shotCount ? <Pencil size={16} aria-hidden="true" /> : <Plus size={16} aria-hidden="true" />}{shotCount ? '编辑项目分镜' : '添加分镜'}
-                    </span>
-                    <span className="production-settings__storyboard-status" id={`${id}-storyboard-status`}>{storyboardContent || autoPlanningPlaceholder}</span>
-                  </Button>
-                </div>
-                {storyboardContent && <Button static variant="ghost" className="production-settings__storyboard-reset" onClick={() => { setManualStoryboard(false); storyboardAction.current?.focus(); }}>改用 AI 生成</Button>}
-              </div> : <Field key={kind} className="production-settings__planning-entry" label={planningContentLabels[kind]}>
-                <textarea rows={3} maxLength={30000} value={authored[kind]} placeholder={autoPlanningPlaceholder} onChange={event => updateContent(kind, event.target.value)} />
-              </Field>)}
+              {planningSteps.map(kind => kind === 'script' ? <div key={kind} role="group" aria-labelledby={`${id}-storyboard-heading`} className="production-settings__planning-entry production-settings__storyboard-card">
+                <header className="production-settings__storyboard-header">
+                  <div>
+                    <h3 id={`${id}-storyboard-heading`}>{planningContentLabels.script}</h3>
+                    <p className="production-settings__storyboard-status" id={`${id}-storyboard-status`}>{storyboardStatus}</p>
+                  </div>
+                  <div className="production-settings__storyboard-actions">
+                    {storyboardContent && <Button static variant="ghost" onClick={() => { setManualStoryboard(false); storyboardAction.current?.focus(); }}>改用 AI 生成</Button>}
+                    {!storyboardContent && shotCount > 0 && !planningDisabled && <Button static variant="ghost" onClick={() => { setManualStoryboard(true); storyboardAction.current?.focus(); }}>使用项目分镜</Button>}
+                    {(!previewStoryboard || !planningDisabled) && <Button ref={storyboardAction} static aria-describedby={`${id}-storyboard-status`} aria-haspopup="dialog" disabled={!planning || planningDisabled || shotCount >= MAX_STORYBOARD_SHOTS} onClick={() => editStoryboard()}>
+                      <Plus aria-hidden="true" />添加分镜
+                    </Button>}
+                  </div>
+                </header>
+                {storyboardShots.length > 0 && <ol role="list" className="production-settings__storyboard-shots">
+                  {storyboardShots.map(shot => {
+                    const locked = 'locked' in shot && shot.locked === true;
+                    const disabled = !planning || planningDisabled || locked;
+                    return <li key={shot.id}>
+                      <details>
+                        <summary>
+                          <ChevronDown size={16} aria-hidden="true" />
+                          <span>{shot.title}</span>
+                          <span className="production-settings__shot-duration">{(shot.durationUs / 1_000_000).toLocaleString('zh-CN', { maximumFractionDigits: 3 })} 秒</span>
+                        </summary>
+                        <dl className="production-settings__shot-details">
+                          <div><dt>画面</dt><dd>{shot.visualPrompt}</dd></div>
+                          {shot.narration && <div><dt>旁白</dt><dd>{shot.narration}</dd></div>}
+                          {shot.soundPrompt && <div><dt>声音</dt><dd>{shot.soundPrompt}</dd></div>}
+                        </dl>
+                      </details>
+                      {!previewStoryboard && <div className="production-settings__shot-actions">
+                        <IconButton label={`编辑镜头：${shot.title}`} title={locked ? '请先解锁镜头' : undefined}
+                          aria-haspopup="dialog" disabled={disabled} onClick={() => editStoryboard(shot.id)}><Pencil aria-hidden="true" /></IconButton>
+                        <IconButton label={`删除镜头：${shot.title}`} title={locked ? '请先解锁镜头' : undefined}
+                          aria-haspopup="dialog" disabled={disabled} className="production-settings__shot-delete"
+                          onClick={() => void onRemoveShot(shot.id)}><Trash2 aria-hidden="true" /></IconButton>
+                      </div>}
+                    </li>;
+                  })}
+                </ol>}
+              </div> : planningTextField(kind))}
             </div>}
-            {!planningSteps.length ? generationHints : !(manualSteps.includes('brief') && manualSteps.includes('style')) && <details className="form-disclosure form-disclosure--divided">
-              <summary>AI 生成要求</summary><div className="form-disclosure__body">{generationHints}</div>
-            </details>}
+            {generatedError && <Notice kind="error">读取 AI 产物失败。<Button static onClick={() => void refreshGenerated()}>重试</Button></Notice>}
+            {!planningSteps.length && <div className="production-settings__models production-settings__prompts">
+              <Field label="创作要求"><textarea rows={3} maxLength={30000} value={fields.brief} onChange={event => setFields(current => ({ ...current, brief: event.target.value }))} placeholder="主题、受众、核心信息与时长" /></Field>
+              <Field label="视觉风格"><textarea rows={3} value={fields.style} onChange={event => setFields(current => ({ ...current, style: event.target.value }))} placeholder="画面风格、色调与光线" /></Field>
+            </div>}
             <CreativeContextEditor floatingSections value={fields.creativeContext} version={version} usedEntityKeys={usedEntityKeys} onChange={creativeContext => setFields(current => ({ ...current, creativeContext }))} />
             {advanced({ id: 'planning', label: '创作要求', nodeIds: resolved.nodes.filter(node => stepGuidance(node).capability === 'text').map(node => node.id) })}
             {hasEditingStep && <details className="form-disclosure form-disclosure--divided production-settings__agent-capabilities" onToggle={event => {
@@ -304,7 +371,6 @@ export default function ProductionSettingsDialog({ project, projectId, projectRe
           <section className="form-stack" data-production-step="materials" hidden={step !== 'materials'} aria-label="模型与素材" tabIndex={-1}>
             {modelField(textField)}
             {modelField(videoField)}
-            {nativeReferences && modelField(imageField)}
             {!textField.required && hasEditingStep && <p className="production-settings__agent-help">文本模型可选，供剪辑 Agent 使用。</p>}
             {!nativeReferences && <div className="production-settings__models production-settings__reference-models">
               <Field label="参考素材" hint="直接生成时沿用镜头绑定的角色参考图。使用已有参考图时，采用镜头中选定的画面。"><Select value={settings.referenceMode} onChange={event => updateSettings({ referenceMode: event.target.value as ProductionSettings['referenceMode'] })}><option value="none">直接生成视频</option><option value="existing">使用已有参考图</option><option value="generate">先生成参考图</option></Select></Field>
@@ -315,7 +381,16 @@ export default function ProductionSettingsDialog({ project, projectId, projectRe
                 </Select>
               </Field>}
             </div>}
-            {nativeReferences ? <p className="field__hint">{firstFrames ? '角色和参考图相同的相邻镜头可用组图接口按组生成，各镜头保留自己的文字设定。其他模型按能力沿用组内首镜或逐镜生成。' : '使用已有画面，或按文字描述生成视频。'}</p>
+            {nativeReferences ? <div className="production-settings__continuation">
+              <label className="field-inline">
+                <input type="checkbox" {...{ switch: '' }} role="switch" name="continueFromLastFrame" checked={continues}
+                  aria-describedby={`${id}-continuation-hint`} onChange={event => updateSettings({ continueFromLastFrame: event.target.checked })} />
+                <span className="field__label">尾帧续镜</span>
+              </label>
+              <p className="field__hint" id={`${id}-continuation-hint`}>{continues
+                ? '首镜使用已有画面、角色参考图或文字生成。后续镜头依次使用上一镜尾帧。'
+                : '每个镜头使用自己的已有画面、角色参考图或文字独立生成。可并行处理。'}</p>
+            </div>
               : automaticCasting && <p className="field__hint">反复出镜的人物缺少参考图时，使用图片模型自动定妆。留空时使用唯一可用的图片模型。</p>}
             <ReferenceAudioPicker assets={workspace.assets} value={settings.referenceAudioAssetIds ?? []} onChange={referenceAudioAssetIds => updateSettings({ referenceAudioAssetIds })} onImport={importReferenceAudio} disabled={Boolean(pending)} />
             {advanced({ id: 'materials', label: '模型与素材', nodeIds: resolved.nodes.filter(node => stepGuidance(node).capability && stepGuidance(node).capability !== 'text').map(node => node.id) })}
@@ -332,12 +407,10 @@ export default function ProductionSettingsDialog({ project, projectId, projectRe
               <dl>
                 <div><dt>画面规格</dt><dd>{aspectRatio && `${aspectRatio} · `}{width} × {height} · {formatFrameRate(frameRate)} fps</dd></div>
                 <div><dt>素材适配</dt><dd>{VIDEO_FIT_MODE_LABELS[fitMode]}</dd></div>
-                <div><dt>{planningSteps.includes('brief') ? '简报内容' : '创作要求'}</dt><dd>{authored.brief.trim() || (planningSteps.includes('brief') ? autoPlanningPlaceholder : fields.brief.trim() || '尚未填写')}</dd></div>
+                <div><dt>{planningSteps.includes('brief') ? '简报内容' : '创作要求'}</dt><dd>{planningTextSummary('brief', '尚未填写')}</dd></div>
                 {Boolean(fields.originalText?.trim()) && <div><dt>项目原文</dt><dd>{fields.originalText?.length} 字符</dd></div>}
-                <div><dt>{planningSteps.includes('style') ? '风格内容' : '视觉风格'}</dt><dd>{authored.style.trim() || (planningSteps.includes('style') ? autoPlanningPlaceholder : fields.style.trim() || '沿用默认风格')}</dd></div>
-                {planningSteps.includes('script') && <div><dt>分镜内容</dt><dd>{storyboardContent || autoPlanningPlaceholder}</dd></div>}
-                {planningSteps.includes('brief') && !manualSteps.includes('brief') && Boolean(fields.brief.trim()) && <div><dt>创作要求</dt><dd>{fields.brief}</dd></div>}
-                {planningSteps.includes('style') && !manualSteps.includes('style') && Boolean(fields.style.trim()) && <div><dt>视觉风格要求</dt><dd>{fields.style}</dd></div>}
+                <div><dt>{planningSteps.includes('style') ? '风格内容' : '视觉风格'}</dt><dd>{planningTextSummary('style', '沿用默认风格')}</dd></div>
+                {planningSteps.includes('script') && <div><dt>分镜内容</dt><dd>{storyboardContent || (generatedStoryboardStatus ? '继续由 AI 生成' : autoPlanningPlaceholder)}</dd></div>}
                 <div><dt>项目角色池</dt><dd>{fields.creativeContext?.characterIds.length ? `已选择 ${fields.creativeContext.characterIds.length} 个角色` : '未选择'}</dd></div>
                 {fields.creativeContext?.continuity && <div><dt>连续性要求</dt><dd>{fields.creativeContext.continuity}</dd></div>}
                 {Boolean(fields.creativeContext?.entities.length) && <div><dt>文字设定</dt><dd>{fields.creativeContext?.entities.map(entity => entity.name).join('、')}</dd></div>}
@@ -352,9 +425,10 @@ export default function ProductionSettingsDialog({ project, projectId, projectRe
                 <div><dt>文本模型</dt><dd>{modelName(settings.textModelId)}</dd></div>
                 <div><dt>视频模型</dt><dd>{modelName(settings.videoModelId)}</dd></div>
                 {!nativeReferences && <div><dt>参考素材</dt><dd>{{ none: '直接生成视频', existing: '使用已有参考图', generate: '先生成参考图' }[settings.referenceMode]}</dd></div>}
-                {showImageModel && <div><dt>图片模型</dt><dd>{imageField.value || imageField.required ? modelName(imageField.value) : nativeReferences ? '不生成首帧' : '按需自动选择'}</dd></div>}
-                {nativeReferences ? <div><dt>首帧生成</dt><dd>{firstFrames ? '自动分组生成' : '使用已有画面或按文字生成视频'}</dd></div>
+                {showImageModel && <div><dt>图片模型</dt><dd>{imageField.value || imageField.required ? modelName(imageField.value) : '按需自动选择'}</dd></div>}
+                {nativeReferences ? <div><dt>{continues ? '首镜画面' : '镜头画面'}</dt><dd>已有画面、角色参考图或文字</dd></div>
                   : settings.referenceMode === 'generate' && <div><dt>首帧生成</dt><dd>{groupReferenceImages ? '自动组图' : '逐镜生成'}</dd></div>}
+                {nativeReferences && <div><dt>尾帧续镜</dt><dd>{continues ? '沿用上一镜尾帧' : '各镜头独立生成'}</dd></div>}
                 <div><dt>参考音频</dt><dd>{settings.referenceAudioAssetIds?.length ? `已选择 ${settings.referenceAudioAssetIds.length} 段` : '未添加'}</dd></div>
               </dl>
             </section>

@@ -14,7 +14,7 @@ export function videoEditingAgentNode(step: WorkflowNode, modelId: string, { age
   const { operation: _localOperation, ...config } = step.config;
   return { ...step, kind: 'agent', modelId, skillIds: agentSkillIds,
     description: '按需使用 Skill 和工具补充镜头素材，准备时间轴、运镜与转场。',
-    prompt: [step.prompt, '当前任务是剪辑与运镜准备。读取本次分镜、已生成素材和声音要求，根据创作要求判断哪些镜头需要补充素材或调整剪辑。按需使用相关 Skill 和 MCP 工具，优先使用已经准备好的素材。仅在明确需要修正时，才重新生成指定镜头的图片或视频。通过 execute_video_task 导入素材和应用剪辑，保留锁定镜头。',
+    prompt: [step.prompt, '当前任务是剪辑与运镜准备。读取本次分镜、已生成素材和声音要求，根据创作要求判断哪些镜头需要补充素材或调整剪辑。按需使用相关 Skill 和 MCP 工具，优先使用已经准备好的素材。仅在明确需要修正时，才重新生成指定镜头的视频。通过 execute_video_task 导入素材和应用剪辑，保留锁定镜头。',
       '先完成会改变镜头时长的素材处理。用 read_project_snapshot 获取最新镜头 ID，通过 edit 裁剪、拆分、重排，设置背景音乐、字幕、关键帧或转场。拆分后使用回执中的新镜头 ID。背景音乐先用 list_audio_assets 查找可用素材。需要在成片显示字幕时，检查制作设置中的字幕开关，可通过 timeline.subtitleMode 开启。转场用 fromShotId、toShotId 和 type 指定，顺序以本次重排后的成片为准。根据 result.appliedEdits 和 result.appliedTransitions 简要总结实际应用的结果。接下来的流程会自动导出。',
     ].filter(Boolean).join('\n\n'),
     config: { ...config, requiresModel: true, mcpServerIds: agentMcpServerIds, boundaryTransitions: true, timelineEdits: true },

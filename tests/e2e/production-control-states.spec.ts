@@ -84,12 +84,9 @@ for (const scenario of scenarios) test(`keeps control corners consistent across 
   await modelOption.hover(); const optionRadius = await modelOption.evaluate(element => getComputedStyle(element).borderRadius);
   await textModel.press('ArrowDown'); await expect(modelMenu.locator('.combobox__option--active')).toHaveCSS('border-radius', optionRadius);
   await page.screenshot({ path: info.outputPath('model-picker-states.png') }); await textModel.press('Enter');
-  const imageModel = dialog.getByRole('combobox', { name: '图片模型', exact: true });
   await expect(dialog.getByLabel('参考素材', { exact: true })).toHaveCount(0);
-  await expect(imageModel).toBeVisible();
-  await expect(imageModel).not.toHaveAttribute('aria-required', 'true');
+  await expect(dialog.getByRole('combobox', { name: '图片模型', exact: true })).toHaveCount(0);
   await expect(dialog.getByLabel('镜头同时处理数', { exact: true })).toHaveCount(0);
-  await fieldStates(page, dialog, imageModel, radius);
   await fieldStates(page, dialog, dialog.getByLabel('参考音频文件路径', { exact: true }), radius);
   await productionStep(dialog, '声音与成片');
   for (const label of ['声音要求', '字幕']) await fieldStates(page, dialog, dialog.getByLabel(label, { exact: true }), radius);

@@ -26,7 +26,9 @@ const style = {
 const shotVisual = '背景#F7F5F0，阴影（#AbC）、透明区域 #0000 和强调色（#E0A030FF）。\n镜头编号 #123456789 和标识 #FEEDfaceZ 保持原样。';
 
 async function produced(page: Page, request: APIRequestContext, info: TestInfo) {
-  const firstScriptResponse = JSON.stringify({ shots: [{ number: 1, title: '生成的蓝色镜头', narration: '天空是蓝色的。', visualPrompt: shotVisual, soundPrompt: '自然讲述', durationUs: 1_000_000 }] });
+  const firstScriptResponse = JSON.stringify({ shots: [{ number: 1, title: '生成的蓝色镜头', narration: '天空是蓝色的。',
+    initialFrame: shotVisual, characterPositions: '无人出镜。', actionTimeline: [{ startUs: 0, endUs: 1_000_000, action: '镜头保持当前构图。' }],
+    soundPrompt: '自然讲述', durationUs: 1_000_000 }] });
   const source = await fixture(request, info, false, 1, { brief, style, firstScriptResponse });
   try {
     await rpc(request, 'project.update', { projectId: source.project.id, patch: { workflow: { ...source.project.workflow, production: { ...source.project.workflow.production!, textModelId: source.models[0].id, videoModelId: source.video.id } } } });
@@ -98,13 +100,13 @@ for (const { width, theme } of [{ width: 1536, theme: 'dark' }, { width: 1024, t
       await expect(visual).toContainText('最后一段仍然可读。');
       await expect(dialog.getByText(/^(查看完整原文|查看模型原始返回)$/)).toHaveCount(0);
       await page.screenshot({ path: info.outputPath(`production-style-${width}-${theme}.png`) });
-      await expect(navigation.getByRole('button').locator('strong')).toHaveText(['简报生成', '风格与角色生成', '分镜生成', '参考图生成', '镜头视频生成', '剪辑与运镜准备', '导出成片']);
+      await expect(navigation.getByRole('button').locator('strong')).toHaveText(['简报生成', '风格与角色生成', '分镜生成', '参考素材准备', '镜头视频生成', '剪辑与运镜准备', '导出成片']);
       await expect(dialog.getByRole('button', { name: '编辑风格与角色', exact: true })).toBeInViewport();
 
       await navigation.getByRole('button', { name: /分镜生成/ }).click();
-      const visualPrompt = dialog.getByRole('region', { name: '分镜预览' }).getByText(shotVisual, { exact: true });
+      const visualPrompt = dialog.getByRole('region', { name: '分镜预览' }).locator('p').filter({ hasText: '背景#F7F5F0' });
       await expect(visualPrompt).toBeVisible();
-      expect(await visualPrompt.textContent()).toBe(shotVisual);
+      expect(await visualPrompt.textContent()).toContain(shotVisual);
       const swatches = visualPrompt.locator('.step-result__color-swatch');
       await expect(swatches).toHaveCount(4);
       for (const [index, color] of ['rgb(247, 245, 240)', 'rgb(170, 187, 204)', 'rgba(0, 0, 0, 0)', 'rgb(224, 160, 48)'].entries()) {

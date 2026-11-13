@@ -9,11 +9,11 @@ for (const viewport of [{ width: 1536, height: 960, theme: 'dark' }, { width: 39
     test.setTimeout(90_000);
     const errors: string[] = [], submissions: string[] = [];
     page.on('pageerror', error => errors.push(error.message)); page.on('console', message => { if (message.type() === 'error') errors.push(message.text()); });
-    const gates = { brief: gate(), style: gate(), script: gate(), assets: gate(), video: gate() };
+    const gates = { brief: gate(), style: gate(), script: gate(), video: gate() };
     const textStages = ['brief', 'style', 'script', 'script'] as const; // Storyboard outline, then one batch of shots.
     let textRequests = 0;
     const source = await fixture(request, info, false, 2, { beforeReply: async (_, path) => {
-      const id = path.includes('/images/') ? 'assets' : path.includes('contents/generations/tasks') ? 'video' : textStages[textRequests++];
+      const id = path.includes('contents/generations/tasks') ? 'video' : textStages[textRequests++];
       if (!id) throw new Error('Unexpected model request');
       submissions.push(id); gates[id].entered = true; await gates[id].promise;
     } });
@@ -29,10 +29,10 @@ for (const viewport of [{ width: 1536, height: 960, theme: 'dark' }, { width: 39
       }, { timeout: 30_000, message: 'The first real model request must begin before checking generation progress' }).toBe('brief request received');
       const production = page.getByRole('region', { name: '当前制作', exact: true }), progress = production.getByRole('list', { name: '制作阶段进度', exact: true });
       const stageLabels = ['策划与分镜', '素材与配音', '剪辑与动画', '审阅与导出'];
-      const labels = ['简报生成', '风格与角色生成', '分镜生成', '参考图生成', '镜头视频生成'];
+      const labels = ['简报生成', '风格与角色生成', '分镜生成', '参考素材准备', '镜头视频生成'];
       await expect(progress.locator('.workbench-guide__step-copy > strong')).toHaveText(stageLabels);
       await expect(progress).not.toContainText('创作要求');
-      const stages = [ ['brief', '简报生成', '策划与分镜', '创意简报'], ['style', '风格与角色生成', '策划与分镜', '风格与角色'], ['script', '分镜生成', '策划与分镜', '旁白与分镜'], ['assets', '参考图生成', '素材与配音', '参考素材准备'], ['video', '镜头视频生成', '素材与配音', '镜头视频生成'] ] as const;
+      const stages = [ ['brief', '简报生成', '策划与分镜', '创意简报'], ['style', '风格与角色生成', '策划与分镜', '风格与角色'], ['script', '分镜生成', '策划与分镜', '旁白与分镜'], ['video', '镜头视频生成', '素材与配音', '镜头视频生成'] ] as const;
       for (const [id, label, stage, task] of stages) {
         const selected = gates[id as keyof typeof gates]; await expect.poll(() => selected.entered).toBe(true);
         const card = progress.getByRole('button', { name: `打开阶段：${stage}`, exact: true });
@@ -61,7 +61,7 @@ for (const viewport of [{ width: 1536, height: 960, theme: 'dark' }, { width: 39
       await expect(production.getByLabel('成片状态', { exact: true })).toHaveCount(0);
       await expect(production.getByRole('button', { name: '查看制作记录', exact: true })).toHaveCount(0);
       expect(submissions.filter(id => id === 'brief')).toHaveLength(1); expect(submissions.filter(id => id === 'style')).toHaveLength(1); expect(submissions.filter(id => id === 'script')).toHaveLength(2);
-      expect(submissions.filter(id => id === 'video')).toHaveLength(2); expect(submissions.filter(id => id === 'assets')).toHaveLength(2);
+      expect(submissions.filter(id => id === 'video')).toHaveLength(2);
       await progress.getByRole('button', { name: '打开阶段：审阅与导出', exact: true }).click(); const record = page.getByRole('dialog', { name: '本次制作', exact: true });
       await expect(record.getByRole('tablist', { name: '制作阶段记录', exact: true })).toHaveCount(0); await expect(record.getByRole('navigation', { name: '本次制作步骤', exact: true }).getByRole('button', { name: /导出成片/ })).toHaveAttribute('aria-current', 'step'); await expect(record.getByRole('link', { name: '下载成片', exact: true })).toBeVisible();
       await record.getByRole('button', { name: '关闭对话框', exact: true }).click(); await page.screenshot({ path: info.outputPath('model-generation-complete.png') });

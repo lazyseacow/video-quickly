@@ -86,9 +86,9 @@ describe('pending stage configuration', () => {
     const remote = { ...workflow, version: workflow.version + 2, nodes: workflow.nodes.filter(node => node.id !== 'script').map(node => node.id === 'style' ? { ...node, prompt: '其他窗口保存的风格' } : node.id === 'assets' ? { ...node, modelId: 'remote-image-model', config: { ...node.config, modelOverride: true } } : node) };
     const result = applyStageConfigurationDraft(remote, draft);
     expect(result.conflicts.sort()).toEqual(['script', 'style']); expect(result.workflow).toBe(remote);
-    const independent = { ...workflow, production: { ...workflow.production, referenceMode: 'generate' as const }, nodes: workflow.nodes.map(node => node.id === 'assets' ? { ...node, modelId: 'remote-image-model', config: { ...node.config, modelOverride: true } } : node) };
+    const independent = { ...workflow, nodes: workflow.nodes.map(node => node.id === 'video' ? { ...node, modelId: 'remote-video-model', config: { ...node.config, modelOverride: true } } : node) };
     const merged = applyStageConfigurationDraft(independent, draft);
-    expect(merged.conflicts).toEqual([]); expect(merged.workflow.nodes.find(node => node.id === 'assets')?.modelId).toBe('remote-image-model');
+    expect(merged.conflicts).toEqual([]); expect(merged.workflow.nodes.find(node => node.id === 'video')?.modelId).toBe('remote-video-model');
   });
 
   it('starts a separate project draft without inheriting another project configuration', () => {

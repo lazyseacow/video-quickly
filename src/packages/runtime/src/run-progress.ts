@@ -22,14 +22,14 @@ export function createRunProgress(store: DocumentStore, changed: () => void = ()
     const assets = [...ids].map(id => store.get<AssetRecord>('asset', id)).filter((asset): asset is AssetRecord => Boolean(asset?.active));
     return { ...value, shots: progress.shots, assets };
   }
-  function begin(id: string, project: ProjectDocument, kind: 'image' | 'video' | undefined, assets: AssetRecord[]) {
+  function begin(id: string, project: ProjectDocument, kind: 'image' | 'video' | undefined, assets: AssetRecord[], continues?: boolean) {
     const previous = read(id), timestamp = new Date().toISOString();
-    const shots: GenerationShotProgress[] = kind ? project.shots.map(shot => {
+    const shots: GenerationShotProgress[] = kind ? project.shots.map((shot, index) => {
       const saved = previous?.shots.find(item => item.id === shot.id);
-      const reference = kind === 'video' ? assets.find(asset => asset.id === shot.assetId && asset.kind === 'image' && asset.active)
-        ?? assets.find(asset => asset.shotId === shot.id && asset.kind === 'image' && asset.active) : undefined;
+      const reference = kind === 'video' && (!continues || index === 0) ? assets.find(asset => asset.id === shot.assetId && asset.kind === 'image' && asset.active)
+        ?? (continues === undefined ? assets.find(asset => asset.shotId === shot.id && asset.kind === 'image' && asset.active) : undefined) : undefined;
       return { id: shot.id, title: shot.title, durationUs: shot.durationUs, status: saved?.status === 'completed' ? 'completed' : 'pending',
-        assetId: saved?.status === 'completed' ? saved.assetId : undefined, referenceAssetId: reference?.id, updatedAt: timestamp };
+        assetId: saved?.status === 'completed' ? saved.assetId : undefined, referenceAssetId: continues && index > 0 ? saved?.referenceAssetId : reference?.id, updatedAt: timestamp };
     }) : [];
     save(id, { phase: kind ? 'generating' : 'preparing', startedAt: previous && !previous.endedAt ? previous.startedAt : timestamp, updatedAt: timestamp, shots,
       ...(previous?.storyboard ? { storyboard: previous.storyboard, completed: previous.completed, total: previous.total } : {}) });
@@ -79,6 +79,15 @@ export function createRunProgress(store: DocumentStore, changed: () => void = ()
     if (!current || !current.shots.some(shot => shot.id === asset.shotId)) return;
     store.put('asset', asset.id, asset);
   }
+  function referenceFrame(id: string, frame: AssetRecord) {
+    const current = read(id);
+    if (!current || !current.shots.some(shot => shot.id === frame.shotId && shot.referenceAssetId !== frame.id)) return;
+    store.database.transaction(() => {
+      store.put('asset', frame.id, frame);
+      store.put('run-step-progress', id, { ...current, shots: current.shots.map(shot => shot.id === frame.shotId ? { ...shot, referenceAssetId: frame.id } : shot) });
+    })();
+    changed();
+  }
   function end(id: string, outcome: 'completed' | 'interrupted' | 'canceled') {
     const current = read(id);
     if (!current || current.endedAt) return;
@@ -86,5 +95,5 @@ export function createRunProgress(store: DocumentStore, changed: () => void = ()
     save(id, { ...current, ...(outcome === 'completed' ? { phase: 'completed' as const } : {}), updatedAt: timestamp, endedAt: timestamp,
       shots: current.shots.map(shot => outcome !== 'completed' && activeStates.has(shot.status) ? { ...shot, status: outcome, updatedAt: timestamp } : shot) });
   }
-  return { begin, storyboard, phase, media, asset, end, summary, detail };
+  return { begin, storyboard, phase, media, asset, referenceFrame, end, summary, detail };
 }

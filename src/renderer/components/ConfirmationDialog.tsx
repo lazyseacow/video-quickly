@@ -65,7 +65,7 @@ function ReferenceThumbnail({ path }: { path: string }) {
 function VideoReferenceDetails({ review }: { review: VideoReferenceReview }) {
   return <section className="video-reference-review" aria-label="视频参考图">
     <h3>视频参考图</h3>
-    {review.status === 'pending' ? <p className="charge-estimate__hint">{review.until === 'storyboard' ? '生成分镜后确定各镜头的参考图。' : '素材准备完成后确定各镜头的参考图。'}</p> : <>
+    {review.status === 'pending' ? <p className="charge-estimate__hint">{review.until === 'storyboard' ? '生成分镜后确定参考图。' : review.until === 'previous-video' ? '上一镜完成后提取尾帧作为下一镜参考图。' : '素材准备完成后确定参考图。'}</p> : <>
       <ul className="video-reference-review__shots">{review.shots.map(shot => <li key={shot.id}>
         <strong>{shot.title}</strong> <small>{shot.mode === 'single' ? '单图输入' : '多图参考'}</small>
         <ul className="video-reference-review__images">{shot.images.map(file => <li key={file.id}><ReferenceThumbnail path={file.path} /><span>{file.name}</span></li>)}</ul>

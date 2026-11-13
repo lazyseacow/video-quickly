@@ -39,13 +39,20 @@ for (const { width, height, theme } of [
     await expectGap(original, planning, 12);
     const brief = planning.getByRole('textbox', { name: '简报内容', exact: true });
     const style = planning.getByRole('textbox', { name: '风格内容', exact: true });
-    const storyboard = planning.getByRole('button', { name: '添加分镜', exact: true });
+    const storyboard = planning.getByRole('group', { name: '分镜内容', exact: true });
+    const addStoryboard = storyboard.getByRole('button', { name: '添加分镜', exact: true });
     for (const input of [brief, style]) await expect(input).toHaveAttribute('placeholder', '未填写时由 AI 生成');
-    await expect(storyboard).toContainText('未填写时由 AI 生成');
-    const [briefBox, styleBox, storyboardBox] = await Promise.all([brief, style, storyboard].map(bounds));
-    expect(storyboardBox.height).toBeCloseTo(briefBox.height, 0);
+    await expect(addStoryboard).toHaveAccessibleDescription('未填写时由 AI 生成');
+    const [briefBox, styleBox, storyboardBox, addBox] = await Promise.all([brief, style, storyboard, addStoryboard].map(bounds));
+    expect(addBox.height).toBeGreaterThanOrEqual(40);
+    expect(addBox.width).toBeLessThan(storyboardBox.width / 2);
+    expect(addBox.height).toBeLessThan(briefBox.height);
+    expect(styleBox.width).toBeCloseTo(briefBox.width, 0);
     expect(storyboardBox.width).toBeCloseTo(styleBox.width, 0);
-    if (width > 640) expect(storyboardBox.y).toBeCloseTo(styleBox.y, 0);
+    expect(styleBox.x).toBeCloseTo(briefBox.x, 0);
+    expect(storyboardBox.x).toBeCloseTo(styleBox.x, 0);
+    expect(styleBox.y).toBeGreaterThan(briefBox.bottom);
+    expect(storyboardBox.y).toBeGreaterThan(styleBox.bottom);
 
     const [frame, navigation, title, body, action] = await Promise.all([
       bounds(surface), bounds(steps), bounds(dialog.getByRole('heading', { name: '制作设置' })),
@@ -84,10 +91,9 @@ for (const { width, height, theme } of [
     expect((await bounds(original)).height).toBeCloseTo(initial.height, 0);
 
     await productionStep(dialog, '模型与素材');
-    const models = await Promise.all(['文本模型', '视频模型', '图片模型'].map(name => bounds(dialog.getByRole('combobox', { name, exact: true }))));
+    const models = await Promise.all(['文本模型', '视频模型'].map(name => bounds(dialog.getByRole('combobox', { name, exact: true }))));
     for (const model of models) expect(model.width).toBeCloseTo(body.width, 0);
     expect(models[1].y).toBeGreaterThan(models[0].bottom);
-    expect(models[2].y).toBeGreaterThan(models[1].bottom);
     await dialog.screenshot({ path: info.outputPath(`production-models-${width}-${theme}.png`) });
 
     await productionStep(dialog, '声音与成片');

@@ -83,7 +83,7 @@ it('rejects damaged reference images before preview or model submission', async 
 
 it('verifies saved upstream media before using it in an experiment', async () => {
   const source = await fixture('image');
-  const project = projectSchema.parse(await source.runtime.dispatch('project.update', { projectId: source.project.id, revision: source.project.revision, patch: { workflow: { ...source.project.workflow, production: { ...source.project.workflow.production, referenceMode: 'generate', imageModelId: source.model.id } } } }));
+  const project = projectSchema.parse(await source.runtime.dispatch('project.update', { projectId: source.project.id, revision: source.project.revision, patch: { workflow: { ...source.project.workflow, id: 'prompt-media-upstream', production: { ...source.project.workflow.production, referenceMode: 'generate', imageModelId: source.model.id } } } }));
   const run = runSchema.parse(await source.runtime.dispatch('run.start', { projectId: project.id, nodeId: 'assets' })); await source.runtime.waitForIdle();
   const result = await source.runtime.dispatch('node.result', { runId: run.id, nodeId: 'assets' }) as { assets: unknown[] };
   const generated = result.assets.map(asset => assetSchema.parse(asset)); expect(generated).toHaveLength(2);

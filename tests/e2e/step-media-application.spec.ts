@@ -1,14 +1,8 @@
-import { expect, test, type APIRequestContext } from '@playwright/test';
+import { expect, test } from '@playwright/test';
 import type { ProjectDocument } from '@video-quickly/contracts';
 import { fixture, latest, rpc, saved } from './native-video-fixture';
 import { openProjectFromList } from './workspace-navigation';
 import { confirmAction } from './confirmation-actions';
-
-async function applyFirstFrames(request: APIRequestContext, project: ProjectDocument) {
-  const run = await rpc<{ id: string }>(request, 'run.start', { projectId: project.id, revision: project.revision, nodeId: 'assets' });
-  await expect.poll(async () => (await latest(request, project.id))?.status).toBe('succeeded');
-  return rpc<ProjectDocument>(request, 'node.apply', { runId: run.id, nodeId: 'assets', revision: project.revision });
-}
 
 test('renders validated videos in the workbench while later shots are still generating', async ({ page, request }, info) => {
   test.setTimeout(90_000);
@@ -45,7 +39,7 @@ test('renders validated videos in the workbench while later shots are still gene
     expect(await saved(request, configured.id)).toEqual(configured);
 
     await clips.nth(1).getByRole('button', { name: /^定位镜头 2/ }).click();
-    await expect(player).toContainText('本地素材');
+    await expect(player).toContainText('待生成');
     second.resolve();
     await expect(stage).toContainText('2/3', { timeout: 30_000 });
     await expect(shots.nth(1)).toHaveAttribute('aria-pressed', 'true');
@@ -73,11 +67,10 @@ test('renders validated videos in the workbench while later shots are still gene
 test('automatically binds a completed video task to the open project', async ({ page, request }, info) => {
   const source = await fixture(request, info);
   try {
-    const project = await rpc<ProjectDocument>(request, 'project.update', { projectId: source.project.id, revision: source.project.revision, patch: {
+    const configured = await rpc<ProjectDocument>(request, 'project.update', { projectId: source.project.id, revision: source.project.revision, patch: {
       shots: [{ id: 'target', title: '视频自动应用', narration: '生成时的旁白', visualPrompt: '蓝色天空', durationUs: 2_000_000 }],
       workflow: { ...source.project.workflow, production: { ...source.project.workflow.production, videoModelId: source.video.id } },
     } });
-    const configured = await applyFirstFrames(request, project);
     await page.goto('/'); await openProjectFromList(page, source.project.title);
     const video = page.getByLabel('镜头视频', { exact: true }); await expect(video).toHaveValue('');
     await rpc(request, 'run.start', { projectId: configured.id, revision: configured.revision, nodeId: 'video' });
@@ -99,7 +92,6 @@ test('applies saved video results manually after an edit during generation and s
   try {
     await rpc<ProjectDocument>(request, 'project.update', { projectId: source.project.id, revision: source.project.revision, patch: { shots: Array.from({ length: 3 }, (_, index) => ({ id: `shot-${index}`, title: `保留的分镜 ${index + 1}`, narration: '生成时的旁白', visualPrompt: '蓝色天空', durationUs: 2_000_000 })) } });
     const configured = await rpc<ProjectDocument>(request, 'project.update', { projectId: source.project.id, patch: { workflow: { ...source.project.workflow, production: { ...source.project.workflow.production!, textModelId: source.models[0].id, videoModelId: source.video.id } } } });
-    await applyFirstFrames(request, configured);
     const node = configured.workflow.nodes.find(node => node.id === 'video')!;
     await rpc(request, 'run.start', { projectId: source.project.id, nodeId: node.id });
     await entered.promise;

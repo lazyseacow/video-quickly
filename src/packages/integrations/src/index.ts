@@ -1,16 +1,16 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { createReadStream, existsSync } from 'node:fs';
-import { mkdir, readFile, writeFile, rename } from 'node:fs/promises';
+import { mkdir, readFile, writeFile, rename, rm } from 'node:fs/promises';
 import { basename, dirname, extname, join, resolve } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
-import { prepareGeneratedVideo, renderProject } from '@video-quickly/video/node';
+import { prepareGeneratedVideo, renderProject, runMedia } from '@video-quickly/video/node';
 import { buildMediaPrompt, characterSceneFirstFrame, getMediaAdapters, groupsNativeFirstFrames, groupsReferenceImages, hasTemplateValue, imageReferenceLimit, MediaRequestRejectedError, isVideoGenerationNode, planReferenceImageSequences, seedreamTextOnly, singleFrameVideoModel, singleImageRequestModel, validateCreativeReferences, videoReferenceImages, type VideoReferenceImages } from '@video-quickly/contracts';
 import { providerReportedUsage, sumProviderUsage, requestModelParameters, validateModelParameters, type ProviderUsage, type AssetRecord, type JsonValue, type ModelProfile, type Shot } from '@video-quickly/contracts';
 import { MediaRequestQueue } from './media-concurrency.js';
 import { MAX_CHARACTER_REFERENCE_BYTES, MAX_CHARACTER_REFERENCE_TOTAL_BYTES, resolveCharacterReferences, type ResolvedCharacterReferences } from './character-references.js';
 import { resolveReferenceAudio } from './audio-references.js';
 import { resolveImageEdit } from './image-edit.js';
-import { appendSkillContext } from '@video-quickly/contracts';
+import { appendSkillContext, assetSchema, openingFrameShots } from '@video-quickly/contracts';
 import type { MediaActivityContext, MediaDiagnosticEvent } from './media-context.js';
 import { boundedResponseBytes, endpoint, MAX_MEDIA_BYTES, nested, objectSchema, requestJson, stringOrUndefined } from './media-http.js';
 import { currentVideoImage, imageRequestSize, mediaPollRequest, mediaSubmissionRequest, seedanceVideoBody, videoFrameBytes } from './media-protocols.js';
@@ -50,7 +50,8 @@ function visualPrompt(context: MediaActivityContext, shot: Shot, references: Res
 type MediaPreflightContext = Pick<MediaActivityContext, 'project' | 'node' | 'assets' | 'model' | 'characters' | 'legacyVideoReferences'> & Partial<Pick<MediaActivityContext, 'operationId' | 'dataDirectory' | 'signal'>> & { pendingVideoInput?: boolean };
 
 function mediaRequestModel({ project, node, model }: Pick<MediaPreflightContext, 'project' | 'node' | 'model'>): ModelProfile | undefined {
-  const firstFrames = groupsNativeFirstFrames(project.workflow, node) || node.config.useFirstShotReference === true && groupsReferenceImages(node);
+  const firstFrames = node.kind === 'assets' && node.config.continueFromLastFrame === true
+    || groupsNativeFirstFrames(project.workflow, node) || node.config.useFirstShotReference === true && groupsReferenceImages(node);
   return model && firstFrames ? singleImageRequestModel(model) : model;
 }
 
@@ -69,15 +70,9 @@ function mediaReferences(context: MediaPreflightContext, shot: Shot, plan?: Vide
   const includeImages = !sceneFrame || !currentVideoImage(context, shot);
   return resolveCharacterReferences({ project: context.project, shot, characters: context.characters, assets: context.assets, includeImages });
 }
-function validateReferenceProtocol(context: MediaPreflightContext, shot: Shot, references: ResolvedCharacterReferences, plan?: VideoReferenceImages, needsAnchor = false): void {
-  const model = context.model;
-  if (!model || !references.images.length && !plan?.frame && !context.node.config.imageEdit && !needsAnchor) return;
-  const editSourceId = context.node.config.imageEdit && typeof context.node.config.imageEdit === 'object' && !Array.isArray(context.node.config.imageEdit) ? context.node.config.imageEdit.sourceAssetId : undefined;
-  const count = references.images.length + Number(needsAnchor) + Number(typeof editSourceId === 'string' && !references.images.some(image => image.assetId === editSourceId));
+function validateMappedReferences(model: ModelProfile): void {
   if (model.provider === 'custom-http') {
     if (!hasTemplateValue(model.parameters.requestTemplate, '{{character_images}}')) throw new Error('自定义 HTTP 图片参考须在 requestTemplate 中配置完整的 {{character_images}} 数组占位符。');
-    if (needsAnchor && !hasTemplateValue(model.parameters.requestTemplate, '{{prompt}}', false)) throw new Error('自定义 HTTP 首帧组图须在 requestTemplate 中配置 {{prompt}}。');
-    return;
   }
   if (model.provider === 'comfyui') {
     const mapping = model.parameters.inputMapping;
@@ -85,6 +80,17 @@ function validateReferenceProtocol(context: MediaPreflightContext, shot: Shot, r
     const [nodeId, inputName, ...extra] = mapping.character_images.split('.');
     if (extra.length || !nodeId || !inputName || ['__proto__', 'constructor', 'prototype'].includes(inputName)) throw new Error('ComfyUI 输入映射须使用“节点编号.输入名称”。');
     objectSchema.parse(nested(model.parameters.workflow, nodeId, 'inputs'));
+  }
+}
+
+function validateReferenceProtocol(context: MediaPreflightContext, shot: Shot, references: ResolvedCharacterReferences, plan?: VideoReferenceImages, needsAnchor = false): void {
+  const model = context.model;
+  if (!model || !references.images.length && !plan?.frame && !context.node.config.imageEdit && !needsAnchor) return;
+  const editSourceId = context.node.config.imageEdit && typeof context.node.config.imageEdit === 'object' && !Array.isArray(context.node.config.imageEdit) ? context.node.config.imageEdit.sourceAssetId : undefined;
+  const count = references.images.length + Number(needsAnchor) + Number(typeof editSourceId === 'string' && !references.images.some(image => image.assetId === editSourceId));
+  if (model.provider === 'custom-http' || model.provider === 'comfyui') {
+    validateMappedReferences(model);
+    if (model.provider === 'custom-http' && needsAnchor && !hasTemplateValue(model.parameters.requestTemplate, '{{prompt}}', false)) throw new Error('自定义 HTTP 首帧组图须在 requestTemplate 中配置 {{prompt}}。');
     return;
   }
   if (references.images.some(image => !imageMimeTypes.includes(image.mimeType))) throw new Error('当前图像参考接口仅接受 PNG、JPEG 或 WebP，请转换角色参考图。');
@@ -101,7 +107,7 @@ function validateReferenceProtocol(context: MediaPreflightContext, shot: Shot, r
   }
   const image = plan ? plan.frame : currentVideoImage(context, shot);
   const total = count + (image && !plan?.referenceIds.includes(image.id) ? 1 : 0);
-  if (model.provider === 'openai-compatible' && total !== 1) throw new Error('当前连接使用 OpenAI 兼容视频接口，每个镜头仅支持一张输入图。请配置图片模型并重新开始制作，以生成包含出镜角色的镜头首帧。');
+  if (model.provider === 'openai-compatible' && total !== 1) throw new Error('当前连接使用 OpenAI 兼容视频接口，每个镜头仅支持一张输入图。请添加包含所需主体的镜头画面，或切换到多图参考连接。');
   if (model.provider === 'seedance') {
     const referenceImages = model.parameters.characterReferenceMode === 'reference_image';
     if (referenceImages || context.project.workflow.production.referenceAudioAssetIds?.length) {
@@ -124,6 +130,10 @@ export async function validateMediaActivity(context: MediaPreflightContext): Pro
   if (capability && !getMediaAdapters([capability]).some(adapter => adapter.id === model.provider)) throw new Error('所选模型的服务协议不适用于此制作步骤');
   if (capability === 'image' && ['openai-compatible', 'seedream'].includes(model.provider)) imageRequestSize(model, context.project.profile);
   const nativeFirstFrames = groupsNativeFirstFrames(context.project.workflow, context.node);
+  const openingFrameOnly = capability === 'image' && context.node.config.continueFromLastFrame === true;
+  const continues = capability === 'video' && context.node.config.continueFromLastFrame === true;
+  const builtInVideo = capability === 'video' && typeof context.node.config.continueFromLastFrame === 'boolean';
+  const receiptShots = openingFrameOnly ? openingFrameShots(context.project.shots) : context.project.shots;
   const sequences = capability === 'image' ? planReferenceImageSequences(context) : [];
   const nativeShots = new Set<string>(), anchoredShots = new Set<string>();
   for (const { seedream, batches } of sequences) {
@@ -137,7 +147,7 @@ export async function validateMediaActivity(context: MediaPreflightContext): Pro
     // can run before the failed task; its own missing receipt is not permission
     // to create more paid work while another submission remains ambiguous.
     const directory = mediaActivityDirectory(context.dataDirectory, context.project.id, context.operationId);
-    for (const shot of context.project.shots) {
+    for (const shot of receiptShots) {
       context.signal?.throwIfAborted();
       if (nativeFirstFrames && shot.locked) continue;
       const receipt = await readReceipt(join(directory, `${mediaShotFileId(shot.id)}.receipt.json`));
@@ -151,9 +161,19 @@ export async function validateMediaActivity(context: MediaPreflightContext): Pro
   if (!['assets', 'animation'].includes(context.node.kind)) return;
   await resolveImageEdit(context);
   if (model.provider === 'seedance' && isVideoGenerationNode(context.node)) await resolveReferenceAudio({ assetIds: context.project.workflow.production.referenceAudioAssetIds ?? [], assets: context.assets, projectId: context.project.id, signal: context.signal });
+  if (continues && (context.project.shots.slice(1).some(shot => !shot.locked) || context.pendingVideoInput && context.project.shots.length === 0)) {
+    // Validate the adapter's image input even when the tail frame is not available yet.
+    validateMappedReferences(model);
+  }
+  if (builtInVideo) for (const shot of receiptShots) {
+    if (!shot.locked) continue;
+    const video = context.assets.find(asset => asset.id === shot.videoAssetId && asset.projectId === context.project.id && asset.kind === 'video' && asset.active);
+    if (!video || !await validAsset(video)) throw new Error(`锁定镜头「${shot.title}」缺少可用视频，请恢复视频或解锁该镜头。`);
+  }
   if (isVideoGenerationNode(context.node) && context.pendingVideoInput) return;
-  for (const shot of context.project.shots) {
+  for (const shot of continues ? receiptShots.slice(0, 1) : receiptShots) {
     context.signal?.throwIfAborted();
+    if (builtInVideo && shot.locked) continue;
     const kind = context.node.kind === 'assets' ? 'image' : 'video';
     if (shot.locked && kind === 'image' && (nativeFirstFrames || context.node.config.useFirstShotReference === true && groupsReferenceImages(context.node))) continue;
     const existing = context.assets.find(asset => asset.projectId === context.project.id && asset.shotId === shot.id && asset.kind === kind && asset.active);
@@ -225,6 +245,34 @@ async function assetFor(path: string, context: MediaActivityContext, kind: Asset
 async function validAsset(asset: AssetRecord): Promise<boolean> {
   if (!existsSync(asset.path)) return false;
   return createHash('sha256').update(await readFile(asset.path)).digest('hex') === asset.sha256;
+}
+
+async function continuationFrame(context: MediaActivityContext, directory: string, shot: Shot, previous: AssetRecord): Promise<AssetRecord> {
+  const path = join(directory, `${mediaShotFileId(JSON.stringify([shot.id, previous.sha256]))}-opening.jpg`);
+  const metadataPath = `${path}.json`;
+  const cached = assetSchema.safeParse(await readReceipt<unknown>(metadataPath));
+  if (cached.success && cached.data.path === path && cached.data.kind === 'image' && cached.data.projectId === context.project.id
+    && cached.data.shotId === shot.id && await validAsset(cached.data)) return cached.data;
+  const temporary = join(directory, `${randomUUID()}.jpg`);
+  const ffmpeg = context.ffmpegPath ?? 'ffmpeg';
+  const decode = ['-i', previous.path, '-map', '0:v:0', '-fps_mode', 'passthrough', '-c:v', 'mjpeg', '-q:v', '2', '-update', '1', temporary];
+  const args = ['-nostdin', '-v', 'error', '-y'];
+  try {
+    // Keep replacing a single JPEG so decoding the last second does not buffer frames in memory.
+    // Short clips can be decoded directly. Seeking past their start may emit no frames.
+    await runMedia(ffmpeg, [...args, ...(previous.durationUs && previous.durationUs > 1_000_000 ? ['-sseof', '-1'] : []), ...decode], { signal: context.signal });
+    if (!existsSync(temporary)) await runMedia(ffmpeg, [...args, ...decode], { signal: context.signal });
+    if (!existsSync(temporary)) throw new Error('上一镜没有可读取的视频帧。');
+    await rename(temporary, path);
+    const frame = { ...await assetFor(path, context, 'image', shot), name: `${shot.title} · 续镜首帧.jpg`, provenance: '上一镜尾帧' };
+    await atomicJson(metadataPath, frame);
+    return frame;
+  } catch (error) {
+    context.signal.throwIfAborted();
+    throw new Error(`无法为镜头「${shot.title}」提取上一镜尾帧。`, { cause: error });
+  } finally {
+    await rm(temporary, { force: true });
+  }
 }
 
 const retryablePollCodes = new Set(['ECONNRESET', 'ECONNREFUSED', 'ETIMEDOUT', 'EAI_AGAIN', 'ENOTFOUND', 'ENETDOWN', 'ENETUNREACH', 'EHOSTDOWN', 'EHOSTUNREACH', 'EPIPE', 'UND_ERR_SOCKET', 'UND_ERR_CONNECT_TIMEOUT', 'UND_ERR_HEADERS_TIMEOUT', 'UND_ERR_BODY_TIMEOUT', 'UND_ERR_RES_CONTENT_LENGTH_MISMATCH']);
@@ -376,7 +424,7 @@ async function generateMedia(context: MediaActivityContext, directory: string, s
   if (!model) throw new Error('请为此步骤选择相应的生成模型，或先导入素材');
   const parameters = requestModelParameters(model, kind);
   if (kind === 'video') parameters.generate_audio = true;
-  const verifyImage = kind === 'image' && (Boolean(sequence) || groupsNativeFirstFrames(context.project.workflow, context.node)
+  const verifyImage = kind === 'image' && (context.node.config.continueFromLastFrame === true || Boolean(sequence) || groupsNativeFirstFrames(context.project.workflow, context.node)
     || context.node.config.useFirstShotReference === true && groupsReferenceImages(context.node));
   const extension = kind === 'image' ? '.png' : '.mp4';
   const fileId = mediaShotFileId(shot.id);
@@ -492,7 +540,8 @@ export function createActivityExecutor(options: { ffmpegPath?: string } = {}) {
     if (isVideoGenerationNode(context.node) && !context.model) throw new Error('请选择视频模型。');
     await validateMediaActivity(context);
     if (context.node.config.operation === 'prepare-references' && context.node.config.referenceMode !== 'generate') {
-      const assets = context.node.config.referenceMode === 'none' ? [] : context.project.shots.flatMap(shot => {
+      const referenceShots = context.node.config.continueFromLastFrame === true ? openingFrameShots(context.project.shots) : context.project.shots;
+      const assets = context.node.config.referenceMode === 'none' ? [] : referenceShots.flatMap(shot => {
         const asset = context.assets.find(asset => asset.id === shot.assetId && asset.active && asset.kind === 'image');
         return asset ? [asset] : [];
       });
@@ -543,6 +592,8 @@ export function createActivityExecutor(options: { ffmpegPath?: string } = {}) {
     if (regenerating && (context.project.shots.length !== 1 || context.project.shots[0].id !== context.node.config.shotId || context.project.shots[0].locked)) throw new Error('重新生成须仅包含一个未锁定的目标镜头。');
     const sequences = planReferenceImageSequences(context);
     const assets: AssetRecord[] = [];
+    const continues = kind === 'video' && context.node.config.continueFromLastFrame === true;
+    const builtInVideo = kind === 'video' && typeof context.node.config.continueFromLastFrame === 'boolean';
     const queueSignal = context.queueSignal ? AbortSignal.any([context.signal, context.queueSignal]) : context.signal;
     for (const { batches, seedream } of sequences) {
       let anchor: AssetRecord | undefined;
@@ -556,12 +607,14 @@ export function createActivityExecutor(options: { ffmpegPath?: string } = {}) {
           else for (const member of batch) context.onDiagnostic?.({ ...event, shotId: member.id });
         };
         if (!regenerating && shot.locked) {
-          const existing = context.assets.find(asset => asset.projectId === context.project.id && asset.shotId === shot.id && asset.kind === kind && asset.active);
+          const existing = context.assets.find(asset => asset.projectId === context.project.id && asset.shotId === shot.id && asset.kind === kind && asset.active
+            && (!builtInVideo || asset.id === shot.videoAssetId));
           if (existing && await validAsset(existing)) {
             assets.push(existing); context.onAsset?.(existing);
             diagnostic({ event: 'media.reused', level: 'info', cached: true, assetId: existing.id });
             continue;
           }
+          if (builtInVideo) throw new Error(`锁定镜头「${shot.title}」缺少可用视频，请恢复视频或解锁该镜头。`);
         }
         const instruction = regenerating && typeof context.node.config.instruction === 'string' ? context.node.config.instruction : '';
         const generationShot = instruction && !context.node.prompt.trim().endsWith(instruction.trim()) ? { ...shot, visualPrompt: `${shot.visualPrompt}\n\n本次调整要求：${instruction}` } : shot;
@@ -569,20 +622,29 @@ export function createActivityExecutor(options: { ffmpegPath?: string } = {}) {
         diagnostic({ event: 'media.queued', level: 'info', phase: 'queue' });
         try {
           const batchAssets = await requests.run(model.id, queueSignal, async () => {
-            const generationContext = { ...context, model, onDiagnostic: diagnostic };
+            let generationContext = { ...context, model, onDiagnostic: diagnostic };
             started = performance.now();
             diagnostic({ event: 'media.started', level: 'info', phase: 'generate', queueMs: started - queued });
             try {
               const onUsage = (usage?: ProviderUsage) => usages.push(usage);
+              const previous = continues ? assets.at(-1) : undefined;
+              let target = generationShot;
+              if (previous) {
+                const frame = await continuationFrame(context, directory, shot, previous);
+                context.onReferenceFrame?.(frame);
+                generationContext = { ...generationContext, legacyVideoReferences: false, assets: [...context.assets, frame],
+                  node: { ...context.node, config: { ...context.node.config, requiresShotFirstFrame: true } } };
+                target = { ...target, assetId: frame.id };
+              }
               const generated = seedream ? await generateSeedreamBatch(generationContext, directory, batch, onUsage, anchor)
-                : [await generateMedia(generationContext, directory, generationShot, kind, onUsage, anchor || batches.length > 1 ? { anchor } : undefined)];
+                : [await generateMedia(generationContext, directory, target, kind, onUsage, anchor || batches.length > 1 ? { anchor } : undefined)];
               for (const asset of generated) {
                 context.onAsset?.(asset);
                 diagnostic({ event: 'media.completed', level: 'info', phase: 'generate', shotId: asset.shotId, assetId: asset.id, byteSize: asset.size, durationMs: performance.now() - started });
               }
               return generated;
             } catch (error) { context.onFailure?.(error); throw error; }
-          });
+          }, context.modelConcurrency);
           assets.push(...batchAssets);
           anchor ??= batchAssets[0];
         } catch (error) {

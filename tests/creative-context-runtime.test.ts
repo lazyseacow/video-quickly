@@ -35,7 +35,7 @@ const generatedScript = () => ({
   ],
 });
 
-async function fixture(extra: { full?: boolean; scriptOutput?: string; failpoint?: RuntimeOptions['failpoint']; holdScript?: boolean; automaticCasting?: 'first-frame' | 'multi-reference'; relay?: boolean; legacyDirect?: boolean; imageResponse?: (prompt: string, body: Record<string, unknown>) => Buffer | Buffer[]; clipsByFrame?: ReadonlyMap<string, Buffer>; acceptImageRequest?: (path: string, body: Record<string, unknown>) => boolean } = {}) {
+async function fixture(extra: { full?: boolean; imageWorkflow?: boolean; scriptOutput?: string; failpoint?: RuntimeOptions['failpoint']; holdScript?: boolean; characterReferenceMode?: 'first_frame' | 'reference_image'; relay?: boolean; legacyDirect?: boolean; imageResponse?: (prompt: string, body: Record<string, unknown>) => Buffer | Buffer[]; clipsByFrame?: ReadonlyMap<string, Buffer>; acceptImageRequest?: (path: string, body: Record<string, unknown>) => boolean } = {}) {
   const directory = await mkdtemp(join(tmpdir(), 'vq-creative-context-')); directories.push(directory);
   const requests: Array<{ path: string; body: Record<string, unknown> }> = [];
   let entered!: () => void, release!: () => void;
@@ -81,7 +81,7 @@ async function fixture(extra: { full?: boolean; scriptOutput?: string; failpoint
         response.end(JSON.stringify({ error: { message: 'Unsupported canvas or image request fields' } }));
         return;
       }
-      const bytes = extra.imageResponse?.(String(body.prompt), body) ?? (extra.automaticCasting ? Buffer.concat([png, Buffer.from(String(requests.length))]) : png);
+      const bytes = extra.imageResponse?.(String(body.prompt), body) ?? png;
       const images = Array.isArray(bytes) ? bytes : [bytes];
       response.end(JSON.stringify({ data: images.map(image => ({ b64_json: image.toString('base64') })), usage: { generated_images: images.length } }));
     }
@@ -100,54 +100,42 @@ async function fixture(extra: { full?: boolean; scriptOutput?: string; failpoint
   const text = modelSchema.parse(await runtime.dispatch('model.save', { model: { name: '本地文本', provider: 'openai-compatible', baseUrl: `${baseUrl}/v1`, connectionType: 'text', capabilities: ['text'], model: 'fixture-text' } }));
   const image = modelSchema.parse(await runtime.dispatch('model.save', { model: { name: '本地图片', provider: 'openai-compatible', baseUrl: `${baseUrl}/v1`, connectionType: 'image', capabilities: ['image'], model: 'gpt-image-fixture' } }));
   const videoModel = modelSchema.parse(await runtime.dispatch('model.save', { model: { name: '本地视频', connectionType: 'video', capabilities: ['video'], model: 'seedance-2-0-fixture',
-    ...(extra.relay ? { provider: 'openai-compatible', baseUrl: `${baseUrl}/v1` } : { provider: 'seedance', baseUrl, parameters: { characterReferenceMode: extra.automaticCasting === 'first-frame' ? 'first_frame' : 'reference_image' } }),
+    ...(extra.relay ? { provider: 'openai-compatible', baseUrl: `${baseUrl}/v1` } : { provider: 'seedance', baseUrl, parameters: { characterReferenceMode: extra.characterReferenceMode ?? 'reference_image' } }),
   } }));
   const created = projectSchema.parse(await runtime.dispatch('project.create', { title: '花园中的角色', brief: '小青与小红在花园找到红木盒', profile: { width: 160, height: 90, frameRate: { numerator: 30, denominator: 1 } } }));
   const workflow = createNativeVideoWorkflow();
   const nodes = workflow.nodes.filter(node => extra.full ? !extra.legacyDirect || node.id !== 'assets' : ['script', 'assets'].includes(node.id));
   const ids = new Set(nodes.map(node => node.id));
   const project = projectSchema.parse(await runtime.dispatch('project.update', { projectId: created.id, revision: created.revision, patch: {
-    creativeContext: creativeContextSchema.parse({ characterIds: extra.automaticCasting ? [] : profiles.map(profile => profile.id), continuity: '同一个傍晚，衣服保持不变', entities: [
+    creativeContext: creativeContextSchema.parse({ characterIds: profiles.map(profile => profile.id), continuity: '同一个傍晚，衣服保持不变', entities: [
       { key: 'garden', kind: 'scene', name: '花园', description: '左侧木门，右侧石喷泉' }, { key: 'kitchen', kind: 'scene', name: '厨房', description: '白色瓷砖与银色水槽' },
     ] }),
-    workflow: { ...workflow, nodes, edges: nodes.slice(1).map((node, index) => ({ id: `${nodes[index].id}-${node.id}`, source: nodes[index].id, target: node.id })), stages: workflow.stages?.flatMap(stage => { const nodeIds = stage.nodeIds.filter(id => ids.has(id)); return nodeIds.length ? [{ ...stage, nodeIds }] : []; }), production: { ...workflow.production, textModelId: text.id, imageModelId: extra.legacyDirect ? undefined : image.id, videoModelId: videoModel.id, referenceMode: extra.relay ? 'none' : 'generate' } },
+    workflow: { ...workflow, ...(extra.imageWorkflow ? { id: 'creative-image-workflow' } : {}), nodes, edges: nodes.slice(1).map((node, index) => ({ id: `${nodes[index].id}-${node.id}`, source: nodes[index].id, target: node.id })), stages: workflow.stages?.flatMap(stage => { const nodeIds = stage.nodeIds.filter(id => ids.has(id)); return nodeIds.length ? [{ ...stage, nodeIds }] : []; }), production: { ...workflow.production, textModelId: text.id, imageModelId: extra.imageWorkflow ? image.id : undefined, videoModelId: videoModel.id, referenceMode: extra.imageWorkflow ? 'generate' : 'none' } },
   } }));
   const current = async (target = runtime): Promise<ProjectDocument> => (await target.dispatch('project.get', { projectId: project.id }) as { project: ProjectDocument }).project;
   return { runtime, project, directory, profiles, references, referenceBytes, requests, options, current, enteredScript, release, image, text };
 }
 
-it('retains native Seedream groups in a configured image workflow', async () => {
-  const front = await fixtureCharacterImage(), side = await fixtureCharacterImage(true);
-  const source = await fixture({ imageResponse: (_prompt, body) => body.sequential_image_generation === 'auto' ? [front, side, front, side] : body.sequential_image_generation === 'disabled' ? side : front });
-  await source.runtime.dispatch('model.save', { model: { ...source.image, model: 'doubao-seedream-5-0-lite-260128' } });
+it.skipIf(!mediaAvailable)('prepares only the existing opening image when the built-in reference step runs alone', async () => {
+  const front = await fixtureCharacterImage();
+  const source = await fixture({ full: true });
+  const path = join(source.directory, 'opening.png');
+  await writeFile(path, front);
+  const opening = assetSchema.parse(await source.runtime.dispatch('asset.import', { projectId: source.project.id, path, kind: 'image' }));
   const project = projectSchema.parse(await source.runtime.dispatch('project.update', { projectId: source.project.id, revision: source.project.revision, patch: {
-    shots: ['推开花园木门', '走过石喷泉', '绕到花坛旁', '抬头看树', '拾起落叶', '进入厨房'].map((prompt, index) => ({ id: `shot-${index}`, title: prompt, visualPrompt: prompt, narration: '', durationUs: 2_000_000,
-      characterIds: [source.profiles[0].id], creativeEntityKeys: [index < 5 ? 'garden' : 'kitchen'] })),
+    shots: ['推开花园木门', '走过石喷泉'].map((prompt, index) => ({ id: `shot-${index}`, title: prompt, visualPrompt: prompt, narration: '', durationUs: 2_000_000,
+      assetId: index === 0 ? opening.id : source.references[0].id, characterIds: [source.profiles[0].id], creativeEntityKeys: ['garden'] })),
   } }));
   const run = runSchema.parse(await source.runtime.dispatch('run.start', { projectId: project.id, nodeId: 'assets' }));
   await source.runtime.waitForIdle();
   const finished = runSchema.parse(await source.runtime.dispatch('run.get', { runId: run.id }));
   expect(finished.status, finished.error).toBe('succeeded');
-  const calls = source.requests.filter(request => request.path.includes('/images/'));
-  expect(calls).toHaveLength(3);
-  const original = `data:image/png;base64,${source.referenceBytes[0].toString('base64')}`;
-  const grouped = calls.find(request => request.body.sequential_image_generation === 'auto')!;
-  expect(grouped.path).toBe('/v1/images/generations');
-  expect(grouped.body).toMatchObject({ sequential_image_generation_options: { max_images: 4 }, image: [original] });
-  expect(grouped.body.prompt).toEqual(expect.stringContaining('镜头 1「推开花园木门」'));
-  expect(grouped.body.prompt).toEqual(expect.stringContaining('镜头 2「走过石喷泉」'));
-  expect(grouped.body.prompt).not.toEqual(expect.stringContaining('进入厨房'));
-  const continuation = calls.find(request => request.body.sequential_image_generation === 'disabled')!;
-  expect(continuation.body).toMatchObject({ image: [original, `data:image/png;base64,${front.toString('base64')}`], prompt: expect.stringContaining('拾起落叶') });
-  expect(calls.find(request => request.path.endsWith('/images/edits'))?.body.images).toEqual([{ image_url: original }]);
-  const { assets, providerUsage } = await source.runtime.dispatch('node.result', { runId: run.id, nodeId: 'assets' }) as { assets: AssetRecord[]; providerUsage: { images: number } };
-  expect(assets.map(asset => asset.shotId)).toEqual(project.shots.map(shot => shot.id));
-  expect(await Promise.all(assets.map(asset => readFile(asset.path)))).toEqual([front, side, front, side, side, front]);
-  expect(providerUsage).toMatchObject({ images: 6 });
+  expect(source.requests).toHaveLength(0);
+  expect(await source.runtime.dispatch('node.result', { runId: run.id, nodeId: 'assets' })).toMatchObject({ source: 'local', referenceAssetIds: [opening.id] });
 });
 
 it('starts from no shots, binds frozen roles and sends each real reference only to its own image request', async () => {
-  const source = await fixture();
+  const source = await fixture({ imageWorkflow: true });
   const started = runSchema.parse(await source.runtime.dispatch('run.start', { projectId: source.project.id })); await source.runtime.waitForIdle();
   const finished = runSchema.parse(await source.runtime.dispatch('run.get', { runId: started.id })); expect(finished.status, finished.error).toBe('succeeded');
   const project = await source.current();
@@ -222,14 +210,14 @@ it('backs up the role pool and reference files before shots exist', async () => 
 
 it.each([false, true])('resumes committed script output with frozen context across reopening; edited library = %s', async edited => {
   let interrupted = false;
-  const source = await fixture({ failpoint(point, id) { if (!interrupted && point === 'after-commit' && id === 'script') { interrupted = true; throw new SimulatedProcessExit(); } } });
+  const source = await fixture({ imageWorkflow: true, failpoint(point, id) { if (!interrupted && point === 'after-commit' && id === 'script') { interrupted = true; throw new SimulatedProcessExit(); } } });
   const started = runSchema.parse(await source.runtime.dispatch('run.start', { projectId: source.project.id })); await source.runtime.waitForIdle(); expect(interrupted).toBe(true);
   await source.runtime.close(); runtimes.delete(source.runtime);
   const recovered = createRuntime({ ...source.options, failpoint: undefined }); runtimes.add(recovered);
   if (edited) await recovered.dispatch('character.save', { character: { ...source.profiles[0], description: '恢复前改变成黄色外衣' } });
   await recovered.dispatch('run.resume', { runId: started.id }); await recovered.waitForIdle();
   const record = runSchema.parse(await recovered.dispatch('run.get', { runId: started.id })); expect(record.status, record.error).toBe(edited ? 'needs_attention' : 'succeeded');
-  expect(source.requests.filter(request => request.path.endsWith('/chat/completions'))).toHaveLength(2);
+  expect(source.requests.filter(request => request.path.endsWith('/chat/completions'))).toHaveLength(1);
   const images = source.requests.filter(request => request.path.endsWith('/images/edits')); expect(images).toHaveLength(2);
   expect(images[0].body.prompt).toEqual(expect.stringContaining('蓝外衣')); expect(images[0].body.prompt).not.toEqual(expect.stringContaining('黄色外衣'));
   const project = await source.current(recovered); expect(project.shots).toHaveLength(edited ? 0 : 2);
@@ -249,13 +237,14 @@ it('retains new context as an isolated step result until explicit application an
 });
 
 it.skipIf(!mediaAvailable)('carries roles and textual continuity through real video requests and an exported MP4 with audio', async () => {
-  const source = await fixture({ full: true });
+  const source = await fixture({ full: true, characterReferenceMode: 'first_frame' });
   const started = runSchema.parse(await source.runtime.dispatch('run.start', { projectId: source.project.id })); await source.runtime.waitForIdle();
   const completed = runSchema.parse(await source.runtime.dispatch('run.get', { runId: started.id })); expect(completed.status, completed.error).toBe('succeeded');
   const current = await source.current(); expect(current.shots.every(shot => shot.videoAssetId && shot.characterIds?.length === 1)).toBe(true);
-  const videoCalls = source.requests.filter(request => !request.path.endsWith('/chat/completions') && !request.path.endsWith('/images/edits')); expect(videoCalls).toHaveLength(2);
+  expect(source.requests.filter(request => request.path.includes('/images/'))).toHaveLength(0);
+  const videoCalls = source.requests.filter(request => request.path.endsWith('/contents/generations/tasks')); expect(videoCalls).toHaveLength(2);
   videoCalls.forEach((request, index) => {
-    expect(request.body.content).toEqual(expect.arrayContaining([{ type: 'image_url', image_url: { url: `data:image/png;base64,${png.toString('base64')}` }, role: 'first_frame' }]));
+    expect(request.body.content).toEqual(expect.arrayContaining([{ type: 'image_url', image_url: { url: index === 0 ? `data:image/png;base64,${source.referenceBytes[0].toString('base64')}` : expect.stringMatching(/^data:image\/jpeg;base64,/) }, role: 'first_frame' }]));
     expect(JSON.stringify(request.body.content)).toContain(source.profiles[index].description);
     expect(JSON.stringify(request.body.content)).not.toContain(source.profiles[1 - index].description);
   });
@@ -264,21 +253,25 @@ it.skipIf(!mediaAvailable)('carries roles and textual continuity through real vi
   expect(media.width).toBe(160); expect(media.height).toBe(90); expect(media.audio).toBe(true); expect(media.duration).toBeGreaterThan(0);
 });
 
-it.skipIf(!mediaAvailable)('groups native Seedream first frames with shared image inputs and keeps shot-specific text settings', async () => {
+it.skipIf(!mediaAvailable)('uses an existing opening image and reuses the original tail when redoing a compatible video shot', async () => {
   const shots = [
     { id: 'meeting', title: '双人见面', narration: '', visualPrompt: '小青与小红在门口见面', durationUs: 4_000_000, characterKeys: ['role-1', 'role-2'] },
     { id: 'talking', title: '双人交谈', narration: '', visualPrompt: '小青与小红在喷泉边交谈', durationUs: 4_000_000, characterKeys: ['role-1', 'role-2'], entityKeys: ['lantern'] },
   ];
   const entities = [{ key: 'lantern', kind: 'prop', name: '蓝色纸灯', description: '方形纸罩，温暖的橙色灯芯' }];
-  const frames = [await fixtureCharacterImage(), await fixtureCharacterImage(true)];
-  const source = await fixture({ full: true, relay: true, scriptOutput: JSON.stringify({ shots, entities }), imageResponse: (prompt, body) =>
-    body.sequential_image_generation === 'auto' ? frames : frames[shots.findIndex(shot => prompt.includes(shot.visualPrompt))] });
-  await source.runtime.dispatch('model.save', { model: { ...source.image, model: 'doubao-seedream-5-0-lite-260128' } });
+  const opening = await fixtureCharacterImage();
+  const source = await fixture({ full: true, relay: true });
+  const path = join(source.directory, 'opening.png');
+  await writeFile(path, opening);
+  const asset = assetSchema.parse(await source.runtime.dispatch('asset.import', { projectId: source.project.id, path, kind: 'image' }));
   const project = projectSchema.parse(await source.runtime.dispatch('project.update', { projectId: source.project.id, revision: source.project.revision, patch: {
-    shots: shots.map(({ characterKeys, entityKeys: _entities, ...shot }) => ({ ...shot, characterIds: characterKeys.map(key => source.profiles[key === 'role-1' ? 0 : 1].id) })),
+    shots: shots.map(({ characterKeys, entityKeys, ...shot }, index) => ({ ...shot, ...(index === 0 ? { assetId: asset.id } : {}),
+      characterIds: characterKeys.map(key => source.profiles[key === 'role-1' ? 0 : 1].id), creativeEntityKeys: entityKeys })),
+    creativeContext: { ...source.project.creativeContext, entities: [...source.project.creativeContext!.entities, ...entities] },
+    workflow: { ...source.project.workflow, production: { ...source.project.workflow.production, manualPlanningSteps: ['script'] } },
   } }));
-  expect(project.workflow.production.referenceMode).toBe('generate');
-  await expect(source.runtime.dispatch('billing.prepare', { method: 'run.start', params: { projectId: project.id, nodeId: 'video' } })).rejects.toThrow('缺少可用的首帧');
+  expect(project.workflow.production.referenceMode).toBe('existing');
+  expect(await source.runtime.dispatch('billing.prepare', { method: 'run.start', params: { projectId: project.id, nodeId: 'video' } })).toMatchObject({ videoReferences: { status: 'pending' } });
   const readiness = await source.runtime.dispatch('project.readiness', { projectId: project.id });
   expect(readiness).toMatchObject({ ready: true });
   expect(source.requests).toHaveLength(0);
@@ -287,36 +280,27 @@ it.skipIf(!mediaAvailable)('groups native Seedream first frames with shared imag
   await source.runtime.waitForIdle();
   const finished = runSchema.parse(await source.runtime.dispatch('run.get', { runId: started.id }));
   expect(finished.status, finished.error).toBe('succeeded');
-  const pictureCalls = source.requests.filter(request => request.path.includes('/images/'));
-  expect(pictureCalls).toHaveLength(1);
-  const [picture] = pictureCalls;
-  const roleImages = source.referenceBytes.map(bytes => `data:image/png;base64,${bytes.toString('base64')}`);
-  expect(picture).toMatchObject({
-    path: '/v1/images/generations',
-    body: { model: 'doubao-seedream-5-0-lite-260128', image: roleImages, stream: false,
-      sequential_image_generation: 'auto', sequential_image_generation_options: { max_images: 2 } },
-  });
-  const prompt = String(picture.body.prompt);
-  const firstShot = prompt.indexOf(`镜头 1「${shots[0].title}」`), secondShot = prompt.indexOf(`镜头 2「${shots[1].title}」`);
-  expect(firstShot).toBeGreaterThanOrEqual(0);
-  expect(secondShot).toBeGreaterThan(firstShot);
-  expect(prompt.slice(firstShot, secondShot)).toContain(shots[0].visualPrompt);
-  expect(prompt.slice(firstShot, secondShot)).not.toContain('道具「蓝色纸灯」');
-  expect(prompt.slice(secondShot)).toContain(shots[1].visualPrompt);
-  expect(prompt.slice(secondShot)).toContain('道具「蓝色纸灯」：方形纸罩，温暖的橙色灯芯');
+  expect(source.requests.filter(request => request.path.includes('/images/'))).toHaveLength(0);
   const videoCalls = source.requests.filter(request => request.path === '/v1/videos');
   expect(videoCalls).toHaveLength(2);
-  expect(source.requests.indexOf(picture)).toBeLessThan(source.requests.indexOf(videoCalls[0]));
   const produced = await source.current();
-  const { assets, providerUsage } = await source.runtime.dispatch('node.result', { runId: started.id, nodeId: 'assets' }) as { assets: AssetRecord[]; providerUsage: { images: number } };
-  expect(assets.map(asset => asset.shotId)).toEqual(produced.shots.map(shot => shot.id));
-  expect(await Promise.all(assets.map(asset => readFile(asset.path)))).toEqual(frames);
-  expect(providerUsage).toMatchObject({ images: 2 });
-  for (const [index, shot] of shots.entries()) {
-    const request = videoCalls.find(call => String(call.body.prompt).includes(shot.visualPrompt));
-    expect(request?.body).toMatchObject({ model: 'seedance-2-0-fixture', images: [frames[index].toString('base64')], prompt: expect.stringContaining('以镜头首帧中的人物形象和构图为准') });
-    expect(produced.shots[index].assetId).toBe(assets.find(asset => asset.shotId === produced.shots[index].id)?.id);
-  }
+  expect(videoCalls[0].body).toMatchObject({ images: [opening.toString('base64')], prompt: expect.stringContaining(shots[0].visualPrompt) });
+  expect(videoCalls[0].body.prompt).not.toContain('道具「蓝色纸灯」');
+  const { progress } = await source.runtime.dispatch('run.step.payload', { runId: started.id, nodeId: 'video', kind: 'output' }) as { progress: { shots: { referenceAssetId?: string }[]; assets: AssetRecord[] } };
+  const tail = progress.assets.find(asset => asset.id === progress.shots[1].referenceAssetId)!;
+  expect(tail).toMatchObject({ shotId: produced.shots[1].id, provenance: '上一镜尾帧' });
+  expect(videoCalls[1].body).toMatchObject({ images: [(await readFile(tail.path)).toString('base64')], prompt: expect.stringContaining(shots[1].visualPrompt) });
+  expect(videoCalls[1].body.prompt).toContain('道具「蓝色纸灯」：方形纸罩，温暖的橙色灯芯');
+  expect(produced.shots[1].assetId).toBeUndefined();
+  const regenerate = { projectId: produced.id, revision: produced.revision, shotId: produced.shots[1].id, kind: 'video',
+    source: { runId: started.id, nodeId: 'video', requestId: randomUUID() } };
+  expect(await source.runtime.dispatch('billing.prepare', { method: 'shot.regenerate', params: regenerate })).toMatchObject({ videoReferences: { status: 'ready', shots: [{ images: [{ id: tail.id }] }] } });
+  const redo = runSchema.parse(await source.runtime.dispatch('shot.regenerate', regenerate));
+  await source.runtime.waitForIdle();
+  expect(runSchema.parse(await source.runtime.dispatch('run.get', { runId: redo.id })).status).toBe('succeeded');
+  const redoCalls = source.requests.filter(request => request.path === '/v1/videos');
+  expect(redoCalls).toHaveLength(3);
+  expect(redoCalls[2].body.images).toEqual(videoCalls[1].body.images);
 });
 
 it('passes the requested composition to a Seedream relay and saves one original image per request', async () => {
@@ -473,83 +457,36 @@ it.skipIf(!mediaAvailable)('rejects several independent references for a single-
   expect(source.requests[0].body.prompt).toContain('以镜头首帧中的人物形象和构图为准');
 });
 
-it.skipIf(!mediaAvailable).each(['first-frame', 'multi-reference'] as const)('reuses one library reference and one generated look across shots with %s video', async automaticCasting => {
+it.skipIf(!mediaAvailable).each(['first_frame', 'reference_image'] as const)('uses existing role references and describes unillustrated roles with %s video', async characterReferenceMode => {
   const scriptOutput = JSON.stringify({
     entities: [
-      { key: 'qing', kind: 'character', name: '小青', description: '蓝外衣、黑色短发' },
       { key: 'chen', kind: 'character', name: '老陈', description: '圆眼镜、棕色外套' },
       { key: 'passerby', kind: 'character', name: '路人', description: '黑帽子' },
     ],
     shots: [
-      { title: '花园见面', narration: '他们在木门见面。', visualPrompt: '小青与老陈在花园相遇', entityKeys: ['qing', 'chen'], durationUs: 4_000_000 },
-      { title: '交谈', narration: '两人聊起木盒。', visualPrompt: '小青与老陈在喷泉旁交谈', entityKeys: ['qing', 'chen'], durationUs: 4_000_000 },
-      { title: '路人经过', narration: '', visualPrompt: '一个戴黑帽的路人走过', entityKeys: ['passerby'], durationUs: 4_000_000 },
+      { title: '花园见面', narration: '他们在木门见面。', visualPrompt: '小青与老陈在花园相遇', characterKeys: ['role-1'], entityKeys: ['chen'], durationUs: 4_000_000 },
+      { title: '交谈', narration: '两人聊起木盒。', visualPrompt: '小青与老陈在喷泉旁交谈', characterKeys: ['role-1'], entityKeys: ['chen'], durationUs: 4_000_000 },
+      { title: '路人经过', narration: '', visualPrompt: '一个戴黑帽的路人走过', characterKeys: [], entityKeys: ['passerby'], durationUs: 4_000_000 },
     ],
   });
-  let interrupted = false;
-  const source = await fixture({ full: true, scriptOutput, automaticCasting, failpoint(point, id) {
-    if (automaticCasting === 'first-frame' && point === 'after-result' && id === 'assets:casting:looks' && !interrupted) {
-      interrupted = true;
-      throw new SimulatedProcessExit();
-    }
-  } });
-  let runtime = source.runtime;
+  const source = await fixture({ full: true, scriptOutput, characterReferenceMode });
+  const { runtime } = source;
   const started = runSchema.parse(await runtime.dispatch('run.start', { projectId: source.project.id }));
   await runtime.waitForIdle();
-  if (automaticCasting === 'first-frame') {
-    expect(interrupted).toBe(true);
-    expect(source.requests.filter(request => request.path.endsWith('/images/generations'))).toHaveLength(1);
-    await runtime.close(); runtimes.delete(runtime);
-    runtime = createRuntime({ ...source.options, failpoint: undefined }); runtimes.add(runtime);
-    await runtime.dispatch('run.resume', { runId: started.id });
-    await runtime.waitForIdle();
-  }
   const completed = runSchema.parse(await runtime.dispatch('run.get', { runId: started.id }));
   expect(completed.status, completed.error).toBe('succeeded');
   const result = await source.current(runtime);
-  const cast = result.creativeContext!.entities;
-  expect(cast.find(entity => entity.key === 'qing')?.referenceAssetIds).toEqual([source.references[0].id]);
-  expect(cast.find(entity => entity.key === 'passerby')?.referenceAssetIds).toBeUndefined();
-  const lookId = cast.find(entity => entity.key === 'chen')!.referenceAssetIds![0];
-  const { assets } = await runtime.dispatch('node.result', { runId: started.id, nodeId: 'assets' }) as { assets: AssetRecord[] };
-  const look = assets.find(asset => asset.id === lookId)!;
-  expect(look).toMatchObject({ projectId: result.id, name: '老陈 · 定妆图.png' });
-  expect(look.shotId).toBeUndefined();
-  const imageUrl = async (asset: AssetRecord) => `data:image/png;base64,${(await readFile(asset.path)).toString('base64')}`;
-  const appearance = await imageUrl(look);
-  const looks = source.requests.filter(request => request.path.endsWith('/images/generations') && String(request.body.prompt).includes('定妆设定图'));
-  expect(looks).toHaveLength(1);
-  expect(looks[0].body.prompt).toContain('老陈');
-  const images = source.requests.filter(request => request.path.includes('/images/') && !looks.includes(request));
-  expect(images).toHaveLength(3);
-  const roleImages = [{ image_url: `data:image/png;base64,${source.referenceBytes[0].toString('base64')}` }, { image_url: appearance }];
-  const firstFrame = assets.find(asset => asset.shotId === result.shots[0].id)!;
-  expect(images[0].body.images).toEqual(roleImages);
-  expect(images[1].body.images).toEqual([...roleImages, { image_url: await imageUrl(firstFrame) }]);
-  expect(images[2].path).toBe('/v1/images/generations');
-  expect(images[2].body).not.toHaveProperty('images');
-  for (const request of images.slice(0, 2)) {
-    expect(request.body.prompt).toContain('人物「老陈」参考图：图片 2');
-  }
+  expect(result.creativeContext?.entities.find(entity => entity.key === 'chen')?.referenceAssetIds).toBeUndefined();
+  expect(source.requests.filter(request => request.path.includes('/images/'))).toHaveLength(0);
   const videoCalls = source.requests.filter(request => request.path.endsWith('/contents/generations/tasks'));
   expect(videoCalls).toHaveLength(3);
   for (const [index, request] of videoCalls.entries()) {
-    const inputs = (request.body.content as Array<{ type: string }>).filter(item => item.type === 'image_url');
-    const frame = assets.find(asset => asset.id === result.shots[index].assetId)!;
-    expect(inputs).toEqual([{ type: 'image_url', image_url: { url: await imageUrl(frame) }, role: 'first_frame' }]);
-    expect(frame.sha256).not.toEqual(look.sha256);
+    const content = request.body.content as Array<{ type: string; text?: string }>;
+    const inputs = content.filter(item => item.type === 'image_url');
+    expect(inputs).toEqual([{ type: 'image_url',
+      image_url: { url: index === 0 ? `data:image/png;base64,${source.referenceBytes[0].toString('base64')}` : expect.stringMatching(/^data:image\/jpeg;base64,/) },
+      role: index === 0 ? characterReferenceMode : 'first_frame',
+    }]);
+    expect(content[0].text).toContain(index < 2 ? '圆眼镜、棕色外套' : '黑帽子');
   }
-  if (automaticCasting === 'first-frame') {
-    const shotId = result.shots[0].id;
-    const regenerated = runSchema.parse(await runtime.dispatch('shot.regenerate', { projectId: result.id, shotId, revision: result.revision, kind: 'image',
-      source: { runId: started.id, nodeId: 'assets', requestId: randomUUID() } }));
-    await runtime.waitForIdle();
-    const finished = runSchema.parse(await runtime.dispatch('run.get', { runId: regenerated.id }));
-    expect(finished.status, finished.error).toBe('succeeded');
-    expect(source.requests.at(-1)?.body.images).toEqual(images[0].body.images);
-  }
-  const backup = await runtime.dispatch('project.backup', { projectId: result.id }) as { path: string };
-  const manifest = JSON.parse(await readFile(join(backup.path, 'project.json'), 'utf8')) as { project: ProjectDocument; assets: AssetRecord[] };
-  expect(manifest.project.creativeContext?.entities.find(entity => entity.key === 'chen')?.referenceAssetIds).toEqual([lookId]);
-  expect(manifest.assets.find(asset => asset.id === lookId)).toMatchObject({ projectId: result.id, sha256: look.sha256 });
 });

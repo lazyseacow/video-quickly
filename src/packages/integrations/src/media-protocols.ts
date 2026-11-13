@@ -85,7 +85,9 @@ function customHttpSubmission({ context, model, shot, kind, requestId, prompt, i
 
 function imageSubmission({ context, model, requestId, parameters, prompt, references, imageEdit }: MediaSubmissionInput): ProtocolRequest<MediaSubmission> {
   const imageParameters: Record<string, JsonValue> = { ...parameters, model: model.model, prompt, size: imageRequestSize(model, context.project.profile) };
-  if (typeof context.node.config.groupReferenceImages === 'boolean') for (const key of ['sequential_image_generation', 'sequential_image_generation_options', 'stream', 'partial_images']) delete imageParameters[key];
+  if (context.node.config.continueFromLastFrame === true || typeof context.node.config.groupReferenceImages === 'boolean') {
+    for (const key of ['sequential_image_generation', 'sequential_image_generation_options', 'stream', 'partial_images']) delete imageParameters[key];
+  }
   if (model.provider === 'seedream') delete imageParameters.n;
   else imageParameters.n = 1;
   const editing = references.images.length > 0 && model.provider === 'openai-compatible';

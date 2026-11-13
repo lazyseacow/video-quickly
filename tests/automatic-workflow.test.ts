@@ -30,13 +30,16 @@ async function fixture(extra: Partial<RuntimeOptions> = {}) {
   const media = vi.fn(async (context: ActivityExecutionContext) => {
     expect(context.project.brief).toContain('三幕叙事'); expect(context.project.style).toContain('蓝绿色水彩');
     const shot = context.project.shots[0]; expect(shot.title).toBe('水滴的旅程');
-    if (context.node.kind !== 'assets') expect(context.assets.some(asset => asset.id === shot.assetId)).toBe(true);
+    if (context.node.kind === 'assets') {
+      expect(context.model).toBeUndefined();
+      return { source: 'local', references: 0, referenceAssetIds: [] };
+    }
     if (context.node.kind === 'export') {
       expect(context.assets.some(asset => asset.id === shot.videoAssetId)).toBe(true);
       return { completed: true, shotIds: context.project.shots.map(shot => shot.id) };
     }
     if (context.node.config.operation === 'prepare-edit') return { source: 'local', shots: context.project.shots.length };
-    const kind = context.node.kind === 'assets' ? 'image' : 'video';
+    const kind = 'video';
     const bytes = Buffer.from(`controlled ${kind} boundary`), path = join(directory, `${kind}.fixture`);
     await writeFile(path, bytes);
     const asset = assetSchema.parse({ id: `generated-${kind}`, projectId: context.project.id, shotId: shot.id, name: kind, kind, path,
@@ -64,7 +67,7 @@ it('automatically chains all seven tasks, forwards generated text and media, and
   expect(provider).toHaveBeenCalledTimes(4); expect(media.mock.calls.map(([context]) => context.node.kind)).toEqual(['assets', 'animation', 'animation', 'export']);
   const saved = await current(runtime, project.id);
   expect(saved).toMatchObject({ revision: project.revision + 1, brief: expect.stringContaining('三幕叙事'), style: expect.stringContaining('蓝绿色水彩'),
-    shots: [{ assetId: 'generated-image', videoAssetId: 'generated-video' }] });
+    shots: [{ videoAssetId: 'generated-video' }] });
   expect(saved.workflow.production.manualPlanningFields).toMatchObject({ brief: { topic: expect.stringContaining('三幕叙事') }, style: { artStyle: expect.stringContaining('蓝绿色水彩') } });
   expect((await runtime.dispatch('run.get', { runId: run.id }) as { events?: { type: string }[] }).events?.some(event => event.type === 'review.waiting')).not.toBe(true);
 });
@@ -262,23 +265,23 @@ it('rejects storyboard fields outside the advertised production schema', async (
   });
 });
 
-it.each(['assets', 'video'] as const)('rejects incompatible %s assets before committing the step', async nodeId => {
+it('rejects incompatible video assets before committing the step', async () => {
+  const nodeId = 'video';
   const { runtime, project, media } = await fixture();
   const produce = media.getMockImplementation()!;
   media.mockImplementation(async context => {
     const output = await produce(context);
     if (context.node.id !== nodeId || !output.assets) return output;
     const assets = output.assets.map(asset => ({ ...asset, kind: 'audio' as const }));
-    if (nodeId === 'assets') context.onAsset?.(assets[0]);
     return { assets };
   });
   const run = runSchema.parse(await runtime.dispatch('run.start', { projectId: project.id }));
   await runtime.waitForIdle();
   const inspection = runInspectionSchema.parse(await runtime.dispatch('run.inspect', { runId: run.id }));
   expect(inspection.steps.find(step => step.id === nodeId)).toMatchObject({
-    status: 'failed', outputAvailable: false, unknownSubmission: false, error: expect.stringContaining(nodeId === 'assets' ? 'kind' : 'assets[0].kind'),
+    status: 'failed', outputAvailable: false, unknownSubmission: false, error: expect.stringContaining('assets[0].kind'),
   });
-  expect(media.mock.calls.map(([context]) => context.node.id)).toEqual(nodeId === 'assets' ? ['assets'] : ['assets', 'video']);
+  expect(media.mock.calls.map(([context]) => context.node.id)).toEqual(['assets', 'video']);
   expect(await current(runtime, project.id)).toEqual(project);
   expect(await runtime.dispatch('asset.list')).toMatchObject({ items: expect.not.arrayContaining([expect.objectContaining({ kind: 'audio' })]) });
   media.mockImplementation(produce);
@@ -305,7 +308,7 @@ it('publishes generated video and its storyboard before export despite a save wi
     expect(resaved.revision).toBeGreaterThan(project.revision);
     resumeVideo.resolve(); await exportStarted.promise;
     const published = await current(runtime, project.id);
-    expect(published).toMatchObject({ revision: resaved.revision + 1, shots: [{ assetId: 'generated-image', videoAssetId: 'generated-video' }] });
+    expect(published).toMatchObject({ revision: resaved.revision + 1, shots: [{ videoAssetId: 'generated-video' }] });
     revisionAtVideo = published.revision;
   } finally { resumeVideo.resolve(); resumeExport.resolve(); }
   await runtime.waitForIdle();
@@ -339,13 +342,13 @@ it('restores the missing storyboard after workflow configuration changes while p
   expect(await current(runtime, project.id)).toEqual(planningEdited);
   const restored = projectSchema.parse(await runtime.dispatch('project.update', { projectId: project.id, revision: planningEdited.revision, patch: { workflow } }));
   const request = { runId: run.id, nodeId: 'video', revision: restored.revision };
-  const reference = join(directory, 'image.fixture'), bytes = await readFile(reference);
-  await writeFile(reference, Buffer.alloc(bytes.length));
+  const clip = join(directory, 'video.fixture'), bytes = await readFile(clip);
+  await writeFile(clip, Buffer.alloc(bytes.length));
   await expect(runtime.dispatch('node.apply', request)).rejects.toThrow('素材校验失败');
   expect(await current(runtime, project.id)).toEqual(restored);
-  await writeFile(reference, bytes);
+  await writeFile(clip, bytes);
   const applied = projectSchema.parse(await runtime.dispatch('node.apply', request));
-  expect(applied).toMatchObject({ revision: restored.revision + 1, shots: [{ title: '水滴的旅程', assetId: 'generated-image', videoAssetId: 'generated-video' }] });
+  expect(applied).toMatchObject({ revision: restored.revision + 1, shots: [{ title: '水滴的旅程', videoAssetId: 'generated-video' }] });
   expect(applied.workflow.nodes).toEqual(restored.workflow.nodes);
   expect(applied.workflow.production.videoModelId).toBeUndefined();
   expect(media.mock.calls.filter(([context]) => context.node.id === 'video')).toHaveLength(1);

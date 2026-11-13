@@ -14,8 +14,6 @@ for (const { width, theme } of [{ width: 1536, theme: 'dark' }, { width: 600, th
     const settings = await open(page, source.project);
     await pick(settings, '文本模型', source.models[0]); await pick(settings, '视频模型', source.video);
     await productionStep(settings, '模型与素材');
-    await settings.getByRole('combobox', { name: '图片模型', exact: true }).click();
-    await settings.getByRole('option', { name: '不生成首帧', exact: true }).click();
     await expect(settings.getByRole('button', { name: '项目混音设置', exact: true })).toHaveCount(0);
     await expect(settings.getByText('参考音频', { exact: true })).toBeVisible();
     await productionStep(settings, '声音与成片'); await expect(settings.getByRole('button', { name: '背景音乐', exact: true })).toBeVisible();
@@ -116,14 +114,14 @@ for (const height of [960, 720]) test(`keeps the image preview in place while sc
   try {
     await page.setViewportSize({ width: 1536, height }); await page.emulateMedia({ reducedMotion: 'reduce' });
     const image = await rpc<{ id: string }>(request, 'model.save', { model: { name: '参考图夹具', provider: 'openai-compatible', connectionType: 'image', capabilities: ['image'], model: 'fixture-image', baseUrl: source.models[0].baseUrl } });
-    await rpc(request, 'project.update', { projectId: source.project.id, patch: { workflow: { ...source.project.workflow, production: { ...source.project.workflow.production!, textModelId: source.models[0].id, videoModelId: source.video.id, imageModelId: image.id, referenceMode: 'generate' } } } });
+    await rpc(request, 'project.update', { projectId: source.project.id, patch: { workflow: { ...source.project.workflow, id: 'image-gallery-fixture', production: { ...source.project.workflow.production!, textModelId: source.models[0].id, videoModelId: source.video.id, imageModelId: image.id, referenceMode: 'generate' } } } });
     const run = await rpc<{ id: string }>(request, 'run.start', { projectId: source.project.id });
     await expect.poll(async () => (await rpc<RunSummary>(request, 'run.get', { runId: run.id })).status, { timeout: 60_000 }).toBe('succeeded');
     await page.goto('/');
     await openProjectFromList(page, source.project.title);
     await page.getByRole('button', { name: '打开阶段：素材与配音', exact: true }).click();
     const dialog = page.getByRole('dialog', { name: '本次制作', exact: true }), output = dialog.locator('.step-result');
-    await dialog.getByRole('navigation', { name: '本次制作步骤' }).getByRole('button', { name: /参考图生成/ }).click();
+    await dialog.getByRole('navigation', { name: '本阶段制作步骤' }).getByRole('button', { name: /参考素材准备/ }).click();
     const thumbnails = output.getByRole('group', { name: '选择预览素材', exact: true }), preview = output.locator('.step-result__preview');
     await expect(dialog.getByRole('button', { name: '在项目中查看与应用', exact: true })).toHaveCount(0);
     await expect(thumbnails.getByRole('button', { name: /^预览/ })).toHaveCount(shotCount);

@@ -17,7 +17,7 @@ for (const kind of ['image', 'video'] as const) for (const viewport of [{ width:
       await page.setViewportSize(viewport); await page.emulateMedia({ reducedMotion: viewport.reducedMotion });
       await page.addInitScript(theme => localStorage.setItem('vq-theme', theme), viewport.theme);
       const image = modelSchema.parse(await rpc(request, 'model.save', { model: { name: '等待体验参考图', provider: 'openai-compatible', connectionType: 'image', capabilities: ['image'], model: 'fixture-image', baseUrl: source.models[0].baseUrl } }));
-      await rpc(request, 'project.update', { projectId: source.project.id, patch: { workflow: { ...source.project.workflow, production: { ...source.project.workflow.production, textModelId: source.models[0].id, videoModelId: source.video.id, imageModelId: image.id, referenceMode: 'generate' } } } });
+      await rpc(request, 'project.update', { projectId: source.project.id, patch: { workflow: { ...source.project.workflow, ...(kind === 'image' ? { id: 'image-progress-fixture' } : {}), production: { ...source.project.workflow.production, textModelId: source.models[0].id, videoModelId: source.video.id, ...(kind === 'image' ? { imageModelId: image.id, referenceMode: 'generate' } : {}) } } } });
       const run = await rpc<RunSummary>(request, 'run.start', { projectId: source.project.id });
       const nodeId = kind === 'image' ? 'assets' : 'video';
       await blocked.pending;
@@ -26,6 +26,8 @@ for (const kind of ['image', 'video'] as const) for (const viewport of [{ width:
       const trigger = page.getByRole('button', { name: '打开阶段：素材与配音', exact: true });
       await expect(trigger).toContainText('1/3'); await expect(trigger.locator('.spin')).toBeVisible(); await trigger.click();
       const dialog = page.getByRole('dialog', { name: '本次制作', exact: true });
+      const navigation = dialog.getByRole('navigation', { name: kind === 'image' ? '本阶段制作步骤' : '本次制作步骤' });
+      if (kind === 'image') await navigation.getByRole('button', { name: /参考素材准备/ }).click();
       const detail = dialog.getByRole('region', { name: /^步骤详情：/ });
       const heading = detail.locator('.run-inspector__step-heading');
       const progress = detail.getByRole('region', { name: '步骤进度', exact: true });
@@ -33,10 +35,10 @@ for (const kind of ['image', 'video'] as const) for (const viewport of [{ width:
       await expect(heading).toHaveCount(kind === 'video' ? 0 : 1);
       await expect(dialog.getByRole('region', { name: '步骤进度', exact: true })).toHaveCount(1);
       await expect(dialog.getByText('制作中', { exact: true })).toHaveCount(0);
-      await expect(dialog.getByRole('button', { name: '刷新本次制作', exact: true })).toBeVisible();
+      await expect(dialog.getByRole('button', { name: kind === 'image' ? '刷新阶段制作' : '刷新本次制作', exact: true })).toBeVisible();
       await expect(progress.getByRole('progressbar')).toHaveAttribute('aria-valuenow', '33');
       await expect(progress).toContainText('已等待'); await expect(dialog).not.toContainText('这个步骤尚未保存产物');
-      await expect(dialog.getByRole('navigation', { name: '本次制作步骤' })).not.toContainText('1/3');
+      await expect(navigation).not.toContainText('1/3');
       const gallery = dialog.getByRole('group', { name: '选择预览素材', exact: true });
       await expect(gallery.getByRole('button', { name: /^预览/ })).toHaveCount(3);
       await expect(gallery.locator('[data-generation-state="completed"]')).toHaveCount(1);
@@ -60,7 +62,10 @@ for (const kind of ['image', 'video'] as const) for (const viewport of [{ width:
       await expect(heading).toContainText('已完成');
       await expect(heading.getByRole('heading')).toHaveCount(kind === 'video' ? 0 : 1);
       await expect(dialog.getByRole('button', { name: /^重新生成镜头/ })).toHaveCount(3);
-      await expect(dialog.locator('.step-progress__time')).toHaveCount(0); expect(source.requests).toHaveLength(10); expect(errors).toEqual([]);
+      await expect(dialog.locator('.step-progress__time')).toHaveCount(0);
+      expect(source.requests.filter(body => body.generate_audio === true)).toHaveLength(3);
+      expect(source.requests.filter(body => body.model === image.model)).toHaveLength(kind === 'image' ? 3 : 0);
+      expect(errors).toEqual([]);
       await page.screenshot({ path: info.outputPath(`completed-${kind}-${viewport.width}.png`) });
     } finally { held.release(); await source.close(); }
   });
@@ -112,7 +117,7 @@ test('restores partial previews on reload and stops without submitting a second 
     await dialog.getByRole('button', { name: '停止', exact: true }).click();
     await expect.poll(async () => (await latest(request, source.project.id))?.status).toBe('canceled');
     await expect(dialog.getByRole('region', { name: '步骤进度', exact: true })).toContainText('制作已停止');
-    await expect(dialog.locator('[data-generation-state="completed"]')).toHaveCount(1); expect(submissions).toBe(2); expect(source.requests).toHaveLength(8);
+    await expect(dialog.locator('[data-generation-state="completed"]')).toHaveCount(1); expect(submissions).toBe(2); expect(source.requests).toHaveLength(6);
   } finally { held.release(); await source.close(); }
 });
 
@@ -160,7 +165,7 @@ for (const viewport of [{ width: 1464, height: 895, theme: 'dark' }, { width: 10
       expect(await action.evaluate(element => element.scrollWidth <= element.clientWidth + 1)).toBe(true);
       expect(await dialog.evaluate(element => element.scrollWidth <= element.clientWidth)).toBe(true);
       // Brief, style, outline, two storyboard batches and six videos.
-      expect(submissions).toBe(6); expect(source.requests).toHaveLength(17);
+      expect(submissions).toBe(6); expect(source.requests).toHaveLength(11);
       await expect(page.locator('vite-error-overlay')).toHaveCount(0);
       await page.screenshot({ path: info.outputPath(`six-videos-ready-${viewport.width}.png`) });
     } finally { held.forEach(item => item.release()); await source.close(); }

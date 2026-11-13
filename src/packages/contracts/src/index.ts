@@ -23,7 +23,7 @@ import { motionKeyframesSchema } from './keyframes.js';
 import { creativeContextSchema, creativeEntityKeysSchema } from './creative-context.js';
 export { creativeContextSchema, creativeEntitySchema, creativeEntityKeysSchema, creativeCharacterBindings, projectCharacterIds, validateCreativeReferences, shotCreativePrompt, creativeEntityLabels, creativeReferenceAssetIds, hasCharacterAppearance, isCreativeReferenceAsset, type CreativeContext, type CreativeEntity } from './creative-context.js';
 import { productionSettingsSchema, resolveProductionWorkflow } from './production.js';
-export { productionSettingsSchema, resolveProductionWorkflow, nativeReferenceStep, groupsReferenceImages, groupsNativeFirstFrames, isVideoGenerationNode, isModelGenerationNode, captionsEnabled, productionEditingStep, productionEditingSkillIds, productionModelSetting, supportsProductionAgent, supportsAutomaticCasting, productionPlanningSteps, productionPlanningStep, usesManualPlanning, MAX_REFERENCE_AUDIO_BYTES, MAX_REFERENCE_AUDIOS, type ProductionPlanningStep, type ProductionSettings } from './production.js';
+export { productionSettingsSchema, resolveProductionWorkflow, nativeReferenceStep, openingFrameShots, groupsReferenceImages, groupsNativeFirstFrames, isVideoGenerationNode, isModelGenerationNode, captionsEnabled, productionEditingStep, productionEditingSkillIds, productionModelSetting, supportsProductionAgent, supportsAutomaticCasting, productionPlanningSteps, productionPlanningStep, usesManualPlanning, MAX_REFERENCE_AUDIO_BYTES, MAX_REFERENCE_AUDIOS, type ProductionPlanningStep, type ProductionSettings } from './production.js';
 export { MAX_STORYBOARD_SHOTS, planningDocumentSchemas, planningDocumentSections, formatPlanningDocument, type ManualPlanningFields, type PlanningDocumentKind } from './planning-fields.js';
 export * from './asset-recovery.js';
 export { skillPromptContext, appendSkillContext, supportsSkillScript } from './skill-context.js';
@@ -155,6 +155,15 @@ export const shotSchema = z.object({
     .default({ panX: 0, panY: 0, zoom: 1.05, transition: 'fade' }),
 });
 export type Shot = z.infer<typeof shotSchema>;
+const generatedPlanningTextSchema = z.object({ runId: z.string().min(1), text: z.string() });
+export const generatedPlanningSchema = z.object({
+  brief: generatedPlanningTextSchema.optional(),
+  style: generatedPlanningTextSchema.optional(),
+  script: z.object({
+    runId: z.string().min(1), projectRevision: z.number().int(), applied: z.boolean(),
+    shots: z.array(shotSchema.pick({ id: true, title: true, durationUs: true, visualPrompt: true, narration: true, soundPrompt: true })),
+  }).optional(),
+});
 export const clipEditSourceSchema = z.object({
   id: z.string().min(1),
   original: shotSchema.pick({ durationUs: true, sourceInUs: true, audioInUs: true, videoInUs: true, sceneInUs: true, sceneDurationUs: true, sceneIndex: true, captionTrack: true, assetId: true, audioAssetId: true, videoAssetId: true }),
@@ -220,7 +229,7 @@ export const chargeEstimateSchema = z.object({
 });
 export type ChargeEstimate = z.infer<typeof chargeEstimateSchema>;
 const videoReferenceReviewSchema = z.discriminatedUnion('status', [
-  z.object({ status: z.literal('pending'), until: z.enum(['storyboard', 'references']) }),
+  z.object({ status: z.literal('pending'), until: z.enum(['storyboard', 'references', 'previous-video']) }),
   z.object({ status: z.literal('ready'), shots: z.array(z.object({
     id: z.string(), title: z.string(), mode: z.enum(['single', 'multiple']),
     images: z.array(z.object({ id: z.string(), name: z.string(), path: z.string(), sha256: z.string() })),
@@ -566,8 +575,8 @@ export function createNativeVideoWorkflow(): WorkflowDefinition {
     { id: 'brief', kind: 'brief', label: '创意简报', description: '明确主题、观众与核心诉求', prompt: '根据项目标题与创意要求，形成可直接用于制作的简报，明确目标观众、核心信息、叙事顺序、时长与表达要求。保留明确约束。', config: { modelBinding: 'default', requiresModel: true } },
     { id: 'style', kind: 'style', label: '风格与角色', description: '统一画风、角色与场景要求', prompt: '承接创意简报，制定画风、色彩、构图、光线与角色方案，保持全片连续。', config: { modelBinding: 'default', requiresModel: true } },
     { id: 'script', kind: 'script', label: '旁白与分镜', description: '组织台词、画面和时长', prompt: '根据简报和风格生成完整分镜，按顺序提供标题、完整台词、画面描述、声音要求与微秒时长。保持叙事、角色和声音连续，保留锁定镜头。', config: { modelBinding: 'default', requiresModel: true } },
-    { id: 'assets', kind: 'assets', label: '参考素材准备', description: '准备已有参考素材，或使用所选图片模型生成首帧。', prompt: '生成适合视频首帧的参考图，保持主体、场景和画风一致，不叠加字幕、水印或文字。', config: { operation: 'prepare-references', modelBinding: 'default' } },
-    { id: 'video', kind: 'animation', label: '镜头视频生成', description: '按分镜、台词和可用参考画面生成视频、人声和环境音。', prompt: '根据当前镜头的画面描述、台词与声音要求生成视频。保持角色、画风和声音连续，完整表达台词，声音与画面同步。不要生成画面字幕、文字标注或水印。', config: { operation: 'generate-native-video', modelBinding: 'default', requiresModel: true } },
+    { id: 'assets', kind: 'assets', label: '参考素材准备', description: '准备已有参考素材。', prompt: '', config: { operation: 'prepare-references', modelBinding: 'default' } },
+    { id: 'video', kind: 'animation', label: '镜头视频生成', description: '按分镜生成视频、人声和环境音。', prompt: '根据当前镜头的画面描述、台词与声音要求生成视频。保持角色、画风和声音连续，完整表达台词，声音与画面同步。不要生成画面字幕、文字标注或水印。', config: { operation: 'generate-native-video', modelBinding: 'default', requiresModel: true } },
     { id: 'animation', kind: 'animation', label: '剪辑与运镜准备', description: '按分镜顺序准备时间轴、转场与混音。', prompt: '', config: { operation: 'prepare-edit' } },
     { id: 'export', kind: 'export', label: '导出成片', description: '检查素材并按选定规格导出成片。', prompt: '', config: {} },
   ];

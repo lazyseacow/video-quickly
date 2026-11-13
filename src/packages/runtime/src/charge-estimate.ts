@@ -15,7 +15,7 @@ export function plannedNodeCharge(node: WorkflowNode, model: ModelProfile | unde
   if (kind === 'text') return { model, kind, count: 1 };
   const metrics = project && model ? requestCostMetrics(project, node, model) : undefined;
   return { model, kind, count: kind === 'image' ? metrics?.images : metrics?.requestCount, videoSeconds: metrics?.videoSeconds,
-    controlledImageCount: kind === 'image' && (node.config.useFirstShotReference === true || typeof node.config.groupReferenceImages === 'boolean') };
+    controlledImageCount: kind === 'image' && (node.config.continueFromLastFrame === true || node.config.useFirstShotReference === true || typeof node.config.groupReferenceImages === 'boolean') };
 }
 
 function estimate(work: PlannedCharge): ChargeLine['estimated'] {

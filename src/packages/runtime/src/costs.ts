@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import type Database from 'better-sqlite3';
 import { z } from 'zod';
 import { costRequestMetricsSchema, costSummarySchema, tokenMetrics, getModelPlatform, costTaskDetailSchema, costTaskSchema, currencySchema, defaultVideoRequestSeconds, providerUsageSchema, requestModelParameters, usageRecordSchema, type CostRequestMetrics, type CostSummary, type ModelCapability, type ModelPricing, type ModelProfile, type ProjectDocument, type ProviderUsage, type UsageRecord, type TokenMetric, type WorkflowNode } from '@video-quickly/contracts';
-import { groupsNativeFirstFrames, groupsReferenceImages, imageSequenceMode, planReferenceImageSequences, type CharacterProfile } from '@video-quickly/contracts';
+import { groupsNativeFirstFrames, groupsReferenceImages, imageSequenceMode, openingFrameShots, planReferenceImageSequences, type CharacterProfile } from '@video-quickly/contracts';
 import { DocumentStore } from './database.js';
 
 type CurrencyMetric = 'estimatedAmount' | 'actualAmount' | 'estimatedRecords' | 'actualRecords';
@@ -189,6 +189,10 @@ export interface CostStart {
 export function requestCostMetrics(project: ProjectDocument, node: WorkflowNode, model: ModelProfile, characters?: CharacterProfile[]): CostRequestMetrics {
   const base: CostRequestMetrics = { source: 'request', requestCount: 1 };
   if (!['assets', 'animation'].includes(node.kind)) return base;
+  if (node.kind === 'assets' && node.config.continueFromLastFrame === true) {
+    const count = openingFrameShots(project.shots).length;
+    return { source: 'request', requestCount: count, images: count };
+  }
   if (node.config.useFirstShotReference === true && groupsReferenceImages(node)) {
     const count = project.shots.filter(shot => !shot.locked).length;
     return { source: 'request', requestCount: count, images: count };

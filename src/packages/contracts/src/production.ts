@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import type { ModelProfile, WorkflowDefinition, WorkflowNode } from './index.js';
+import type { ModelProfile, Shot, WorkflowDefinition, WorkflowNode } from './index.js';
 import { manualPlanningFieldsSchema } from './planning-fields.js';
 import { modelToolProtocolIssue } from './model-connections.js';
 
@@ -16,8 +16,10 @@ export const productionSettingsSchema = z.object({
   agentMcpServerIds: z.array(z.string().min(1)).default([]),
   manualPlanningSteps: z.array(z.enum(productionPlanningSteps)).max(3).refine(steps => new Set(steps).size === steps.length, '策划步骤不能重复。').optional(),
   manualPlanningFields: manualPlanningFieldsSchema.optional(),
+  clearedPlanningOutputs: z.object({ brief: z.string().min(1).optional(), style: z.string().min(1).optional() }).optional(),
   textModelId: z.string().min(1).optional(), videoModelId: z.string().min(1).optional(), imageModelId: z.string().min(1).optional(),
   referenceMode: z.enum(['none', 'existing', 'generate']).default('none'),
+  continueFromLastFrame: z.boolean().optional(),
   groupReferenceImages: z.boolean().optional(),
   referenceAudioAssetIds: z.array(z.string().min(1)).max(MAX_REFERENCE_AUDIOS).refine(ids => new Set(ids).size === ids.length, '参考音频不能重复。').optional(),
   soundPrompt: z.string().max(10000).default('使用自然清晰的中文人声，保持全片声音风格一致，环境音与画面匹配。'),
@@ -72,19 +74,23 @@ export function nativeReferenceStep(workflow: Pick<WorkflowDefinition, 'id' | 'n
 /** Resolve defaults before recording a run; the recorded nodes remain self-contained. */
 export function resolveProductionWorkflow(workflow: WorkflowDefinition): WorkflowDefinition {
   const nativeReferences = nativeReferenceStep(workflow);
-  const firstFrames = nativeReferences && Boolean(productionModelSetting(nativeReferences) === 'imageModelId' ? workflow.production.imageModelId : nativeReferences.modelId);
-  const settings: ProductionSettings = nativeReferences ? { ...workflow.production, referenceMode: firstFrames ? 'generate' : 'existing', groupReferenceImages: undefined } : workflow.production;
+  const continueFromLastFrame = workflow.production.continueFromLastFrame ?? true;
+  const settings: ProductionSettings = nativeReferences ? { ...workflow.production, imageModelId: undefined, referenceMode: 'existing',
+    continueFromLastFrame, groupReferenceImages: undefined } : workflow.production;
   return { ...workflow, production: settings, nodes: workflow.nodes.map(node => {
     const setting = productionModelSetting(node);
     let modelId = node.modelId;
     if (node.config.operation === 'prepare-edit' || node.config.operation === 'prepare-references' && settings.referenceMode !== 'generate') modelId = undefined;
     else if (setting) modelId = settings[setting];
     const config = { ...node.config };
+    delete config.continueFromLastFrame;
     if (config.operation === 'prepare-references') {
       if (node === nativeReferences) {
         delete config.useFirstShotReference;
-        if (firstFrames) config.groupReferenceImages = true;
-        else { delete config.groupReferenceImages; delete config.requiresModel; }
+        delete config.groupReferenceImages;
+        delete config.modelOverride;
+        delete config.requiresModel;
+        config.continueFromLastFrame = continueFromLastFrame;
       } else {
         delete config.useFirstShotReference;
         if (settings.referenceMode === 'generate') config.groupReferenceImages = settings.groupReferenceImages !== false;
@@ -92,8 +98,8 @@ export function resolveProductionWorkflow(workflow: WorkflowDefinition): Workflo
       }
     }
     if (config.operation === 'generate-native-video') {
-      if (firstFrames && node.id === 'video') config.requiresShotFirstFrame = true;
-      else delete config.requiresShotFirstFrame;
+      if (nativeReferences && node.id === 'video') config.continueFromLastFrame = continueFromLastFrame;
+      delete config.requiresShotFirstFrame;
     }
     return { ...node, modelId, config: { ...config,
       ...(node.config.modelBinding === 'default' && textModelTasks.has(node.kind) || node.config.operation === 'generate-native-video' ? { requiresModel: true } : {}),
@@ -101,6 +107,12 @@ export function resolveProductionWorkflow(workflow: WorkflowDefinition): Workflo
       ...(node.config.operation === 'generate-native-video' ? { soundPrompt: settings.soundPrompt } : {}),
     } };
   }) };
+}
+
+/** Scope reference preparation and replay of older opening-image runs to the opening shot. */
+export function openingFrameShots(shots: readonly Shot[]): Shot[] {
+  const first = shots[0];
+  return first && !first.locked ? [first] : [];
 }
 
 export function groupsReferenceImages(node: Pick<WorkflowNode, 'kind' | 'config'>): boolean {

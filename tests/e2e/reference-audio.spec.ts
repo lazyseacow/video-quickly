@@ -32,7 +32,7 @@ for (const scenario of [
       const image = await rpc<AssetRecord>(request, 'asset.import', { projectId: project.id, path, kind: 'image' });
       const characterImage = await rpc<AssetRecord>(request, 'asset.import', { path, kind: 'image' });
       const character = await rpc<CharacterProfile>(request, 'character.save', { character: { name: '参考角色', description: '保持角色外观一致。', referenceAssetIds: [characterImage.id] } });
-      project = await rpc<ProjectDocument>(request, 'project.update', { projectId: project.id, revision: project.revision, patch: { shots: [{ id: 'reference-shot', title: '场景', narration: '天空是蓝色的。', visualPrompt: '蓝色天空', durationUs: 2_000_000, assetId: image.id, characterIds: [character.id] }] } });
+      project = await rpc<ProjectDocument>(request, 'project.update', { projectId: project.id, revision: project.revision, patch: { shots: [{ id: 'reference-shot', title: '场景', narration: '天空是蓝色的。', visualPrompt: '蓝色天空', durationUs: 2_000_000, assetId: image.id, characterIds: [character.id] }], workflow: { ...project.workflow, production: { ...project.workflow.production, manualPlanningSteps: ['script'] } } } });
     }
     let dialog = await open(page, project);
     await pick(dialog, '文本模型', source.models[0]); await pick(dialog, '视频模型', video);
@@ -59,8 +59,9 @@ for (const scenario of [
     await expect.poll(async () => (await latest(request, project.id))?.status, { timeout: 30_000 }).toBe('succeeded');
     const videoRequest = source.requests.find(value => value.generate_audio === true);
     expect(videoRequest).toMatchObject({ model: scenario.model, content: expect.arrayContaining([{ type: 'audio_url', audio_url: { url: audio.dataUrl }, role: 'reference_audio' }]) });
-    expect(videoRequest?.content).toEqual(expect.arrayContaining([expect.objectContaining({ type: 'image_url', role: 'reference_image' })]));
-    expect(JSON.stringify(videoRequest?.content)).toContain('为本镜头的首帧');
+    const images = (videoRequest?.content as { type: string; role?: string }[]).filter(item => item.type === 'image_url');
+    expect(images).toEqual(scenario.image ? expect.arrayContaining([expect.objectContaining({ role: 'reference_image' })]) : []);
+    expect(source.requests.some(value => 'size' in value && 'prompt' in value)).toBe(false);
     expect(source.requests.filter(value => value.generate_audio === true)).toHaveLength(1);
     dialog = await open(page, await saved(request, project.id)); await productionStep(dialog, '模型与素材');
     await dialog.getByRole('button', { name: `移除参考音频：${scenario.file}`, exact: true }).click(); await saveProduction(dialog); await expect(dialog).toHaveCount(0);

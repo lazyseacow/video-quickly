@@ -22,12 +22,20 @@ export function stepGuidance(node: Pick<WorkflowNode, 'kind' | 'config'>): StepG
   if (node.config.operation === 'prepare-references') {
     const generatesImages = node.config.referenceMode === 'generate';
     let purpose = generatesImages ? '为各镜头生成参考首帧。' : '准备参考素材，或直接使用文字生成视频。';
-    if (groupsReferenceImages(node)) {
+    if (node.config.continueFromLastFrame === true) {
+      purpose = generatesImages ? '为第一个镜头生成首帧。' : '准备首镜已有画面或角色参考图。没有参考图时，首镜按文字生成。';
+    } else if (node.config.continueFromLastFrame === false) {
+      purpose = '准备各镜头已有的画面或角色参考图。没有参考图的镜头按文字生成。';
+    } else if (groupsReferenceImages(node)) {
       purpose = node.config.useFirstShotReference === true
         ? '先生成第一镜首帧，再以它和角色参考图生成后续首帧。'
         : '根据镜头参考条件与模型能力使用原生组图、组内首镜续图或逐镜生成。';
     }
     return { ...guidance.assets, purpose, local: '参考素材准备', capability: generatesImages ? 'image' : undefined, requiresModel: generatesImages };
+  }
+  if (node.config.operation === 'generate-native-video' && typeof node.config.continueFromLastFrame === 'boolean') {
+    const purpose = node.config.continueFromLastFrame ? '按顺序生成视频，后续镜头沿用上一镜尾帧。' : '各镜头可并行生成，使用各自的已有参考图或文字。';
+    return { ...guidance.animation, purpose, requiresModel: true };
   }
   if (node.config.operation === 'prepare-edit') return { ...guidance.animation, capability: undefined, local: '本地剪辑准备' };
   return node.config.requiresModel === true ? { ...guidance[node.kind], requiresModel: true } : guidance[node.kind];

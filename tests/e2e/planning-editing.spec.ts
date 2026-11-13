@@ -1,6 +1,8 @@
 import { expect, test, type APIRequestContext, type Page, type TestInfo } from '@playwright/test';
 import { type CharacterProfile, type ProjectDocument } from '@video-quickly/contracts';
+import { confirmAction } from './confirmation-actions';
 import { fixture, latest, rpc, saved } from './native-video-fixture';
+import { openProduction, productionStep } from './production-settings';
 import { openProjectFromList } from './workspace-navigation';
 
 test.use({ reducedMotion: 'reduce' });
@@ -190,7 +192,7 @@ test('keeps locked shot inputs read-only while allowing another shot to be edite
   } finally { await source.close(); }
 });
 
-test('shows the saved storyboard during video generation and after stopping before it was applied', async ({ page, request }, info) => {
+test('preserves the run storyboard while applying and deleting its project shots', async ({ page, request }, info) => {
   const video = Promise.withResolvers<void>();
   let videoRequested = false;
   const source = await fixture(request, info, true, 2, { beforeReply: async (_body, path) => {
@@ -204,8 +206,10 @@ test('shows the saved storyboard during video generation and after stopping befo
     await rpc(request, 'project.update', { projectId: source.project.id, patch: { workflow: { ...source.project.workflow, production: { ...source.project.workflow.production!, textModelId: source.models[0].id, videoModelId: source.video.id } } } });
     const run = await rpc<{ id: string }>(request, 'run.start', { projectId: source.project.id }); runId = run.id; await source.pending;
     await openWorkbench(page, source.project);
-    await page.getByRole('button', { name: '打开阶段：策划与分镜', exact: true }).click();
+    const planningStage = page.getByRole('button', { name: '打开阶段：策划与分镜', exact: true });
+    await planningStage.click();
     const dialog = page.getByRole('dialog', { name: '本次制作', exact: true });
+    const storyboardStep = dialog.getByRole('navigation', { name: '本次制作步骤', exact: true }).getByRole('button', { name: /分镜生成/ });
     await expect(dialog.getByRole('tablist', { name: '步骤详情视图', exact: true })).toHaveCount(0);
     await expect(dialog.getByRole('button', { name: '编辑创意简报', exact: true })).toBeDisabled();
     await expect(dialog).toContainText('完成或停止后可修改策划内容');
@@ -213,7 +217,7 @@ test('shows the saved storyboard during video generation and after stopping befo
     await expect.poll(() => videoRequested).toBe(true);
     const before = await saved(request, source.project.id);
     expect(before.shots).toHaveLength(0);
-    await dialog.getByRole('navigation', { name: '本次制作步骤', exact: true }).getByRole('button', { name: /分镜生成/ }).click();
+    await storyboardStep.click();
     const storyboard = dialog.getByRole('region', { name: '本次产物', exact: true }).getByRole('region', { name: '分镜预览', exact: true });
     await expect(storyboard).toContainText('2 个镜头');
     await expect(storyboard.getByRole('heading', { name: '生成的蓝色镜头 1', exact: true })).toBeVisible();
@@ -225,6 +229,16 @@ test('shows the saved storyboard during video generation and after stopping befo
     await expect.poll(async () => (await latest(request, source.project.id))?.status).toBe('canceled');
     runId = '';
     await expect(storyboard).toContainText('2 个镜头');
+    await dialog.getByRole('button', { name: '关闭对话框', exact: true }).click();
+    const settings = await openProduction(page, before);
+    await productionStep(settings, '创作要求');
+    const settingsStoryboard = settings.getByRole('group', { name: '分镜内容', exact: true });
+    await expect(settingsStoryboard).toContainText('AI 生成 · 2 个镜头');
+    await expect(settingsStoryboard.getByText('生成的蓝色镜头 1', { exact: true })).toBeVisible();
+    await settings.getByRole('button', { name: '关闭对话框', exact: true }).click();
+    await planningStage.click();
+    await storyboardStep.click();
+
     const edit = dialog.getByRole('button', { name: '编辑旁白与分镜', exact: true });
     await edit.click();
     const editor = page.getByRole('dialog', { name: '编辑旁白与分镜', exact: true });
@@ -236,17 +250,41 @@ test('shows the saved storyboard during video generation and after stopping befo
     expect(await saved(request, source.project.id)).toEqual(before);
 
     await edit.click();
+    const visualPrompt = await editor.getByLabel('画面要求', { exact: true }).first().inputValue();
+    expect(visualPrompt).toContain('蓝色天空');
     await editor.getByLabel('旁白', { exact: true }).first().fill('从本次制作取回后编辑的旁白。');
     await editor.getByRole('button', { name: '保存到项目', exact: true }).click();
     await expect(editor).toHaveCount(0);
     const after = await saved(request, source.project.id);
     expect(after.shots).toMatchObject([
-      { title: '生成的蓝色镜头 1', narration: '从本次制作取回后编辑的旁白。', visualPrompt: '蓝色天空', soundPrompt: '自然讲述', durationUs: 1_000_000 },
+      { title: '生成的蓝色镜头 1', narration: '从本次制作取回后编辑的旁白。', visualPrompt, soundPrompt: '自然讲述', durationUs: 1_000_000 },
       { title: '生成的蓝色镜头 2', narration: '天空是蓝色的。' },
     ]);
     expect(after.workflow.production.manualPlanningSteps).toContain('script');
     await expect(storyboard).toContainText('天空是蓝色的。');
     await expect(storyboard).not.toContainText('从本次制作取回后编辑的旁白。');
+
+    await dialog.getByRole('button', { name: '关闭对话框', exact: true }).click();
+    await openProduction(page, after);
+    await productionStep(settings, '创作要求');
+    for (const shot of after.shots) {
+      await settingsStoryboard.getByRole('button', { name: `删除镜头：${shot.title}`, exact: true }).click();
+      await confirmAction(page, '确认移除');
+      await expect(settingsStoryboard.getByText(shot.title, { exact: true })).toHaveCount(0);
+    }
+    await expect.poll(async () => (await saved(request, source.project.id)).shots).toEqual([]);
+    await expect(settingsStoryboard.getByRole('listitem')).toHaveCount(0);
+    await openProduction(page, after);
+    await productionStep(settings, '创作要求');
+    await expect(settings.getByRole('textbox', { name: '风格内容', exact: true })).toHaveAccessibleDescription('AI 生成');
+    await expect(settingsStoryboard.getByRole('listitem')).toHaveCount(0);
+    await expect(settingsStoryboard.getByRole('button', { name: '添加分镜', exact: true })).toBeEnabled();
+
+    await settings.getByRole('button', { name: '关闭对话框', exact: true }).click();
+    await planningStage.click();
+    await storyboardStep.click();
+    await expect(storyboard).toContainText('2 个镜头');
+    await expect(storyboard.getByRole('heading', { name: '生成的蓝色镜头 1', exact: true })).toBeVisible();
   } finally {
     try { if (runId) await rpc(request, 'run.cancel', { runId }); }
     finally { video.resolve(); await source.close(); }

@@ -136,8 +136,12 @@ async function fixture(extra: Partial<RuntimeOptions> = {}) {
       const library = createSkillLibrary({ store, directory, changed() {}, logger: createLogger({ dataDirectory: directory, component: 'runtime' }) });
       const node = legacyVideoAgentNode(savedProject);
       const skillNodes = node.skillIds.length ? [node] : [node, ...savedProject.workflow.nodes];
-      const legacyProduction = { ...savedProject.workflow.production, executionMode: 'agent' };
-      const saved: RunSnapshot = { project: { ...savedProject, workflow: { ...savedProject.workflow, production: legacyProduction } },
+      const legacyProduction = { ...savedProject.workflow.production, executionMode: 'agent', imageModelId: image.id, referenceMode: 'generate' as const };
+      const legacyNodes = savedProject.workflow.nodes.map(item => {
+        const { continueFromLastFrame: _continuation, ...config } = item.config;
+        return item.id === 'assets' ? { ...item, modelId: image.id, config: { ...config, referenceMode: 'generate' } } : { ...item, config };
+      });
+      const saved: RunSnapshot = { project: { ...savedProject, workflow: { ...savedProject.workflow, production: legacyProduction, nodes: legacyNodes } },
         nodes: [node], models, mcpServers: store.list('mcp-server'), handlerVersion: 1, characters: [], characterAssets: [],
         ...await library.prepareForNodes(skillNodes) };
       store.put('run-snapshot', id, saved);

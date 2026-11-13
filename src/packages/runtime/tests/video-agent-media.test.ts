@@ -60,16 +60,19 @@ it.skipIf(!mediaAvailable).each(['MCP', 'legacy planning Skill'] as const)('resu
         expect(shot).toBeDefined(); expect(input.prompt).toContain(shot!.visualPrompt);
         const image = request.url === '/generate-image';
         if (image) imageRequests++;
-        else { videoRequests++; expect(input.images).toEqual([`data:image/png;base64,${imageBytes.toString('base64')}`]); }
+        else {
+          videoRequests++;
+          expect(input.images).toEqual(videoRequests === 1 ? [] : [expect.stringMatching(/^data:image\/jpeg;base64,/)]);
+        }
         response.end(JSON.stringify({ url: `${baseUrl}/${image ? 'source.png' : shot === storyboard[0] ? 'blue.mp4' : 'red.mp4'}` })); return;
       }
       const index = controllerRequests++;
       const receipt = JSON.parse(input.messages?.findLast(message => message.role === 'tool')?.content ?? '{}');
       let call: { name: string; input: Record<string, unknown> } | undefined;
       if (index === 0) {
-        expect({ imageRequests, videoRequests }).toEqual({ imageRequests: 2, videoRequests: 2 });
+        expect({ imageRequests, videoRequests }).toEqual({ imageRequests: 0, videoRequests: 2 });
         const fields = input.tools?.find(tool => tool.function.name === 'execute_video_task')?.function.parameters.properties;
-        expect(fields?.operation).toMatchObject({ enum: ['image', 'video', 'edit', 'import'] });
+        expect(fields?.operation).toMatchObject({ enum: ['video', 'edit', 'import'] });
         expect(fields?.transitions).toMatchObject({ items: { required: ['fromShotId', 'toShotId', 'type'], properties: { type: { enum: ['cut', 'fade', 'wipe'] } } } });
         expect(fields?.edits).not.toHaveProperty('items.properties.transition');
         expect(Object.keys((fields?.timeline as { properties: Record<string, unknown> }).properties)).toEqual(['splits', 'reorder', 'music', 'captions', 'subtitleMode', 'keyframes']);
@@ -78,8 +81,10 @@ it.skipIf(!mediaAvailable).each(['MCP', 'legacy planning Skill'] as const)('resu
       if (index === 1) {
         const project = projectSchema.parse(receipt);
         const [first, second] = project.shots; fromShotId = first.id; toShotId = second.id;
+        expect(first.assetId).toBeUndefined();
+        expect(second.assetId).toBeUndefined();
         for (const shot of [first, second]) {
-          expect(shot.assetId).toBeTruthy(); expect(shot.videoAssetId).toBeTruthy(); expect(shot.animation.transition).toBe('cut');
+          expect(shot.videoAssetId).toBeTruthy(); expect(shot.animation.transition).toBe('cut');
         }
         call = { name: 'execute_video_task', input: { operation: 'import', requestId: 'import', shotId: fromShotId, data: imageBytes.toString('base64'), mimeType: 'image/png' } };
       }
@@ -188,7 +193,7 @@ it.skipIf(!mediaAvailable).each(['MCP', 'legacy planning Skill'] as const)('resu
   if (skillId) expect(inspection.selected?.skills).toEqual([expect.objectContaining({ id: skillId, enabled: true })]);
   expect(inspection.steps.map(step => step.id)).toEqual(['brief', 'style', 'script', 'assets', 'video', 'animation', 'animation/tool/import', 'animation/tool/edit', 'animation/tool/invalid', 'animation/tool/structure', 'animation/tool/motion', 'export']);
   expect(inspection.steps.filter(step => step.status !== 'succeeded').map(step => [step.id, step.status])).toEqual([['animation/tool/invalid', 'failed']]);
-  expect({ controllerRequests, imageRequests, videoRequests }).toEqual({ controllerRequests: 8, imageRequests: 2, videoRequests: 2 });
+  expect({ controllerRequests, imageRequests, videoRequests }).toEqual({ controllerRequests: 8, imageRequests: 0, videoRequests: 2 });
   const saved = projectSchema.parse((await reopened.dispatch('project.get', { projectId: project.id }) as { project: ProjectDocument }).project);
   expect(saved.shots[0]).toMatchObject({ id: fromShotId, durationUs: 800_000, animation: { transition: 'cut' }, audioProcessing: { videoAudio: { enabled: true } } });
   expect(saved.shots.map(shot => shot.id)).toEqual([fromShotId, rightShotId, toShotId]);
@@ -236,5 +241,5 @@ it.skipIf(!mediaAvailable).each(['MCP', 'legacy planning Skill'] as const)('resu
   expect(musicAmplitude(8_000)).toBeGreaterThan(.01);
   expect(musicAmplitude(320)).toBeLessThan(musicAmplitude(8_000) * .25);
   const replay = await reopened.dispatch('run.replay', { runId: run.id }) as { externalCalls: number; matchesSnapshot: boolean };
-  expect(replay).toMatchObject({ externalCalls: 0, matchesSnapshot: true }); expect(imageRequests).toBe(2); expect(videoRequests).toBe(2);
+  expect(replay).toMatchObject({ externalCalls: 0, matchesSnapshot: true }); expect(imageRequests).toBe(0); expect(videoRequests).toBe(2);
 }, 60_000);

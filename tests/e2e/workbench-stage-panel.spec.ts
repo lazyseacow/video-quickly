@@ -45,8 +45,8 @@ for (const viewport of [{ width: 1536, height: 960, theme: 'dark' }, { width: 10
     await expect(dialog.getByRole('combobox', { name: '文本模型', exact: true })).toBeVisible();
     await expect(dialog.getByRole('listbox')).toHaveCount(0);
     await pickProductionModel(dialog, '文本模型', source.text); await pickProductionModel(dialog, '视频模型', source.video);
-    await pickProductionModel(dialog, '图片模型', source.image);
-    const modelBounds = await Promise.all(['文本模型', '视频模型', '图片模型'].map(label => dialog.getByRole('combobox', { name: label, exact: true }).boundingBox()));
+    await expect(dialog.getByRole('combobox', { name: '图片模型', exact: true })).toHaveCount(0);
+    const modelBounds = await Promise.all(['文本模型', '视频模型'].map(label => dialog.getByRole('combobox', { name: label, exact: true }).boundingBox()));
     for (const [index, bounds] of modelBounds.entries()) {
       expect(bounds!.x).toBeCloseTo(modelBounds[0]!.x);
       expect(bounds!.width).toBeCloseTo(modelBounds[0]!.width);
@@ -112,8 +112,8 @@ for (const viewport of [{ width: 1536, height: 960, theme: 'dark' }, { width: 10
   });
 }
 
-test('checks required models and saves once from review with the image model left blank', async ({ page, request }, info) => {
-  const source = await productionFixture(request, { configureImage: false }), dialog = await openProduction(page, source.project);
+test('checks required models and saves once from review', async ({ page, request }, info) => {
+  const source = await productionFixture(request), dialog = await openProduction(page, source.project);
   let writes = 0, starts = 0;
   page.on('request', request => { if (!request.url().endsWith('/__desktop_rpc') || request.method() !== 'POST') return; const method = request.postDataJSON().method; if (method === 'project.update') writes++; if (method === 'run.start') starts++; });
   await dialog.getByLabel('简报内容', { exact: true }).fill('给初学者解释潮汐，控制在一分钟以内。');
@@ -138,14 +138,8 @@ test('checks required models and saves once from review with the image model lef
   await expect(video).toBeFocused();
   await pickProductionModel(dialog, '视频模型', source.video);
   await expect(dialog.getByLabel('参考素材', { exact: true })).toHaveCount(0);
-  const image = dialog.getByRole('combobox', { name: '图片模型', exact: true });
-  await expect(image).not.toHaveAttribute('aria-required', 'true');
-  await expect(image).toHaveValue('不生成首帧');
-  await pickProductionModel(dialog, '图片模型', source.image);
-  await image.fill('不生成首帧');
-  await dialog.getByRole('option', { name: '不生成首帧', exact: true }).click();
-  await expect(image).toHaveValue('不生成首帧');
-  await dialog.screenshot({ path: info.outputPath('production-optional-image-model.png') });
+  await expect(dialog.getByRole('combobox', { name: '图片模型', exact: true })).toHaveCount(0);
+  await dialog.screenshot({ path: info.outputPath('production-required-models.png') });
   await next.click();
   await dialog.getByLabel('声音要求', { exact: true }).fill('自然中文解说，轻柔海浪声');
   await dialog.getByLabel('字幕', { exact: true }).selectOption('script');

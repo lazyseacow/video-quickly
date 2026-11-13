@@ -502,21 +502,24 @@ export default function Workbench({ project, workspace, action, notify, onRegist
     const ids = [...selectionRef.current.ids], newIds = Object.fromEntries(ids.map(id => [id, crypto.randomUUID()]));
     await editGroup('复制所选镜头', ids, current => bulkDuplicateShots(current, ids, newIds), next => normalizeSelection({ ids: ids.map(id => newIds[id]), primary: newIds[selectedShotId ?? ''] ?? newIds[ids[0]], anchor: newIds[ids[0]] }, next.shots.map(shot => shot.id)));
   }
-  async function removeShot() {
-    const ids = [...selectionRef.current.ids];
+  async function removeShots(ids: readonly string[], single = false) {
     if (!ids.length) return;
     const before = structuredClone(session.state.present.shots.filter(shot => ids.includes(shot.id)));
+    if (before.length !== ids.length) { notify('镜头已移除，请重新选择。', true); return; }
     const locked = before.find(shot => shot.locked);
     if (locked) { notify(`镜头“${locked.title}”已锁定，请先解锁。`, true); return; }
-    if (!await confirm({ title: '移除所选镜头？', description: `将移除 ${ids.length} 个镜头及其旁白、字幕和运镜设置。素材文件会保留，移除后可通过撤销恢复。`, confirmLabel: '确认移除' })) return;
-    await editGroup('移除所选镜头', ids, current => {
+    const subject = single ? `镜头「${before[0].title}」` : `${ids.length} 个镜头`;
+    if (!await confirm({ title: single ? '删除镜头？' : '移除所选镜头？', description: `将移除${single ? '' : ' '}${subject}及其旁白、字幕和运镜设置。素材文件会保留，移除后可通过撤销恢复。`, confirmLabel: '确认移除' })) return;
+    await editGroup(single ? '移除镜头' : '移除所选镜头', ids, current => {
       if (!sameContent(before, current.shots.filter(shot => ids.includes(shot.id)))) throw new Error('待移除镜头有新的修改，输入已保留；请核对后重新移除。');
       return bulkRemoveShots(current, ids);
     }, next => {
       const id = next.shots[Math.min(selectedIndex, next.shots.length - 1)]?.id;
+      if (single) return normalizeSelection(selectionRef.current, next.shots.map(shot => shot.id), id);
       session.select(id); return { ids: id ? [id] : [], primary: id, anchor: id };
     });
   }
+  function removeShot() { return removeShots([...selectionRef.current.ids]); }
   async function changeHistory(direction: 'undo' | 'redo') {
     if (session.state.busy || savingEdits || session.state.conflict) return;
     const wasSaved = !session.dirty;
@@ -633,6 +636,10 @@ export default function Workbench({ project, workspace, action, notify, onRegist
   function openPlanningEditor(section: PlanningSection, options?: PlanningEditOptions) {
     if (isProductionActive || savingEdits || session.state.busy || session.state.conflict) return;
     const current = session.state.present;
+    if (options?.shotId) {
+      const shot = current.shots.find(item => item.id === options.shotId);
+      if (!shot || shot.locked) { notify(shot ? '请先解锁镜头，再修改分镜。' : '镜头已移除，请重新选择。', true); return; }
+    }
     clock.pause();
     const manualPlanningFields = current.workflow.production.manualPlanningFields;
     const structuredDocument = section !== 'script' && Boolean(manualPlanningFields?.[section]);
@@ -643,13 +650,20 @@ export default function Workbench({ project, workspace, action, notify, onRegist
     if (isProductionActive) throw new Error('制作正在进行，完成或停止后再修改策划内容。');
     if (savingEdits || session.state.busy) throw new Error('正在保存项目，请稍后重试。');
     if (session.state.conflict) throw new Error('项目已有外部修改，请先关闭窗口并比较合并，输入会保留到关闭前。');
+    const shotId = planningEditor.options?.shotId;
+    if (shotId && (change.kind !== 'script' || change.shots.length !== 1 || change.shots[0].id !== shotId || change.newShots?.length || change.creativeContext !== undefined)) {
+      throw new Error('只能保存当前镜头的修改。');
+    }
+    if (planningEditor.options?.addShot && (change.kind !== 'script' || change.shots.length || change.creativeContext !== undefined)) {
+      throw new Error('只能保存新增的镜头。');
+    }
     const next = applyPlanningEdit(session.state.present, planningEditor.baseline, change);
     if (planningEditor.options?.storyboard && change.kind === 'script') {
       const { production } = next.workflow;
       const manualPlanningSteps = [...new Set([...(production.manualPlanningSteps ?? []), 'script' as const])];
       next.workflow = { ...next.workflow, production: { ...production, manualPlanningSteps } };
     }
-    session.edit(next, `修改${planningLabels[change.kind]}`);
+    session.edit(next, shotId ? '修改镜头内容' : `修改${planningLabels[change.kind]}`);
     const saved = await save();
     if (saved) planningEditor.options?.onSaved?.(next.creativeContext);
     return saved;
@@ -1154,8 +1168,10 @@ export default function Workbench({ project, workspace, action, notify, onRegist
         onOpenOutput={selection => { setStageEditor(undefined); onOpenOutput(selection); }}
       /> : <ProductionSettingsDialog
         planning={productionPlanning}
+        onRemoveShot={id => removeShots([id], true)}
         projectId={project.id}
         projectRevision={project.revision}
+        savedShotCount={project.shots.length}
         onImportReferenceAudio={async path => await action<AssetRecord>('asset.import', { projectId: project.id, path, kind: 'audio', purpose: 'reference-audio' }, '参考音频已导入') ?? undefined}
         usedEntityKeys={content.shots.flatMap(shot => shot.creativeEntityKeys ?? [])}
         project={stageConfiguration.projectSettings ?? displayedProject}
@@ -1220,6 +1236,7 @@ export default function Workbench({ project, workspace, action, notify, onRegist
         baseline={planningEditor.baseline}
         storyboard={planningEditor.options?.storyboard}
         addInitialShot={planningEditor.options?.addShot}
+        shotId={planningEditor.options?.shotId}
         structuredDocument={planningEditor.structuredDocument}
         version={workspace.version}
         images={workspace.assets.filter(asset => asset.kind === 'image' && (!asset.projectId || asset.projectId === project.id))}

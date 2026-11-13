@@ -31,7 +31,7 @@ import { executeMediaGraph } from './media-graph.js';
 import { discoverModels, generateText, shouldRetryWithPromptFormat, testModelConnection, textIncompleteMessage, textModelWithTaskSchema, TextRequestRejectedError, type ModelRequestPhase, type TextProvider } from './providers.js';
 import { seedExampleProject } from './seed.js';
 import { seedBuiltInDramaTemplates } from './builtin-drama-templates.js';
-import { createNativeVideoWorkflow, resolveProductionWorkflow, nativeReferenceStep, groupsNativeFirstFrames, groupsReferenceImages, isVideoGenerationNode, DEFAULT_AUDIO_PROCESSING, planReferenceImageSequences, planningDocumentSchemas, productionEditingSkillIds, productionEditingStep, productionPlanningStep, productionSettingsSchema, sameJsonContent, singleImageRequestModel, supportsProductionAgent, usesManualPlanning } from '@video-quickly/contracts';
+import { createNativeVideoWorkflow, resolveProductionWorkflow, nativeReferenceStep, openingFrameShots, groupsNativeFirstFrames, groupsReferenceImages, isVideoGenerationNode, DEFAULT_AUDIO_PROCESSING, planReferenceImageSequences, planningDocumentSchemas, productionEditingSkillIds, productionEditingStep, productionPlanningStep, productionSettingsSchema, sameJsonContent, singleImageRequestModel, supportsProductionAgent, usesManualPlanning } from '@video-quickly/contracts';
 import { createSkillLibrary } from './skill-library.js';
 import { appendSkillContext, supportsSkillScript } from '@video-quickly/contracts';
 import { connectMcp, mcpServerSchema, type McpServer } from './mcp.js';
@@ -108,6 +108,7 @@ export interface ActivityExecutionContext {
   promptUpstream?: Record<string, JsonValue>;
   onProgress?: (value: number) => void;
   onAsset?: (asset: AssetRecord) => void;
+  onReferenceFrame?: (asset: AssetRecord) => void;
   onDiagnostic?: (event: MediaDiagnosticEvent) => void;
   preparedAudioMix?: PreparedAudioMix;
   persistRemoteTask(id: string): void;
@@ -918,9 +919,11 @@ export function createRuntime(options: RuntimeOptions) {
     let pending: Promise<unknown> = Promise.resolve();
     let fatalError: unknown;
     let stopped = false;
+    const usesOpeningReferences = saved.project.workflow.nodes.some(localOpeningReferences);
     return { readProject,
       models: saved.models.filter(model => model.enabled).map(({ id, name, capabilities }) => ({ id, name, capabilities })),
-      ...(autonomous ? { isComplete: () => store.get<{ projectDigest: string }>('agent-export', `${runId}:${parent.id}`)?.projectDigest === fingerprint(readProject()) } : { operations: ['image', 'video', 'edit', 'import'] as const }),
+      ...(autonomous ? { isComplete: () => store.get<{ projectDigest: string }>('agent-export', `${runId}:${parent.id}`)?.projectDigest === fingerprint(readProject()) }
+        : { operations: usesOpeningReferences ? ['video', 'edit', 'import'] as const : ['image', 'video', 'edit', 'import'] as const }),
       // Pending tool calls in older snapshots still use the original edit schema.
       boundaryTransitions: parent.config.boundaryTransitions === true,
       listAudioAssets,
@@ -1025,6 +1028,10 @@ export function createRuntime(options: RuntimeOptions) {
 
   type PreparedCasting = { project: ProjectDocument; assets: AssetRecord[]; libraryAssets: AssetRecord[]; frameModelId?: string };
 
+  function localOpeningReferences(node: WorkflowNode): boolean {
+    return node.id === 'assets' && typeof node.config.continueFromLastFrame === 'boolean' && node.config.referenceMode === 'existing';
+  }
+
   function readCasting(runId: string): PreparedCasting | undefined {
     const record = journal.get(runId, 'assets:casting');
     return record?.status === 'completed' && record.result ? JSON.parse(record.result) as PreparedCasting : undefined;
@@ -1041,7 +1048,7 @@ export function createRuntime(options: RuntimeOptions) {
     const needsSceneFrame = (value: ProjectDocument, shot: Shot) => !saved.useOriginalVideoReferences && !shot.locked && singleFrameVideoModel(videoModel, value) && needsComposedSceneFrame(value, shot, profiles);
     const bindingsChanged = cast.project.shots.some((shot, index) => shot !== project.shots[index]);
     if (!cast.missing.length && !bindingsChanged && (mode === 'generate' || !cast.project.shots.some(shot => needsSceneFrame(cast.project, shot)))) return;
-    const allowImplicitModel = !saved.useOriginalVideoReferences || !nativeReferenceStep(project.workflow);
+    const allowImplicitModel = !localOpeningReferences(node) && (!saved.useOriginalVideoReferences || !nativeReferenceStep(project.workflow));
     const input = { project, video, videoModel, modelId: node.modelId ?? (allowImplicitModel ? project.workflow.production.imageModelId : undefined) };
     const libraryAssets = await journal.execute(runId, `${node.id}:casting:matches`, { projectId: project.id, roles: cast.missing }, 'local', async () => {
       if (!cast.missing.length) return [];
@@ -1056,7 +1063,7 @@ export function createRuntime(options: RuntimeOptions) {
       ].map(asset => [asset.id, asset])).values()];
       const missing = cast.missing.filter(role => !references.has(role.key));
       const configuredModel = castingImageModel(saved.models, input.modelId, allowImplicitModel);
-      const imageModel = configuredModel && (node.config.useFirstShotReference === true || groupsNativeFirstFrames(project.workflow, node))
+      const imageModel = configuredModel && (node.config.continueFromLastFrame === true || node.config.useFirstShotReference === true || groupsNativeFirstFrames(project.workflow, node))
         ? singleImageRequestModel(configuredModel) : configuredModel;
       const canGenerate = Boolean(imageModel) || allowImplicitModel;
       const generate = async (kind: 'looks' | 'frames', imageProject: ProjectDocument, imageAssets: AssetRecord[]) => {
@@ -1143,7 +1150,9 @@ export function createRuntime(options: RuntimeOptions) {
       ? await prepareCasting(runId, node, saved, initialProject, controller.signal) : readCasting(runId);
     const executionProject: FrozenProjectDocument = node.id === 'assets' && !frozenInput ? casting?.project ?? initialProject : initialProject;
     const nativeFirstFrames = groupsNativeFirstFrames(executionProject.workflow, node);
-    const mediaProject = node.config.agentTask && typeof node.config.shotId === 'string'
+    const openingFrameOnly = node.kind === 'assets' && node.config.continueFromLastFrame === true && node.config.operation === 'prepare-references';
+    const mediaProject = openingFrameOnly && node.modelId ? { ...executionProject, shots: openingFrameShots(executionProject.shots) }
+      : node.config.agentTask && typeof node.config.shotId === 'string'
       ? { ...executionProject, shots: executionProject.shots.filter(shot => shot.id === node.config.shotId) }
       : nativeFirstFrames || node.config.useFirstShotReference === true && groupsReferenceImages(node)
         ? { ...executionProject, shots: executionProject.shots.filter(shot => !shot.locked) } : executionProject;
@@ -1258,7 +1267,8 @@ export function createRuntime(options: RuntimeOptions) {
     }
     try {
     const result = await journal.execute(runId, node.id, input, storyboardBatchSize ? 'local' : safety, async context => {
-      runProgress.begin(context.operationId, mediaProject, selectedModel && node.kind === 'assets' ? 'image' : selectedModel && isVideoGenerationNode(node) ? 'video' : undefined, activityAssets);
+      const continuation = typeof node.config.continueFromLastFrame === 'boolean' ? node.config.continueFromLastFrame : undefined;
+      runProgress.begin(context.operationId, mediaProject, selectedModel && node.kind === 'assets' ? 'image' : selectedModel && isVideoGenerationNode(node) ? 'video' : undefined, activityAssets, continuation);
       if (usesProvider) {
         runProgress.phase(context.operationId, 'requesting');
         const requestText = async (request: { prompt: string; operationId: string; outputSchema?: Record<string, unknown>; outputSchemaName?: string }, receipt?: { operationId: string; attempt: number }) => {
@@ -1384,23 +1394,29 @@ export function createRuntime(options: RuntimeOptions) {
             if (name === 'media.render_started') runProgress.phase(context.operationId, 'rendering');
           },
           onAsset: value => publishAsset(value, outputKind ? mediaProject : executionProject),
+          ...(isVideoGenerationNode(node) && node.config.continueFromLastFrame === true ? {
+            onReferenceFrame: value => runProgress.referenceFrame(context.operationId, validateProductionMediaPreview(value, 'image', mediaProject)),
+          } : {}),
           ...(node.kind === 'export' ? { preparedAudioMix: audioPreview.ready(executionProject, activityAssets) } : {}),
           onProgress: value => { if (batch) batches.progress(batch.batchId, batch.targetId, value); runProgress.phase(context.operationId, 'rendering', false, value); } };
         let output: JsonValue;
         const legacyScheduling = executionProject.workflow.execution;
         const groupedImages = legacyScheduling && groupsReferenceImages(node) && planReferenceImageSequences(activityContext).some(sequence => sequence.seedream || sequence.batches.length > 1);
-        if (saved.handlerVersion >= 3 && legacyScheduling && selectedModel && ['assets', 'animation'].includes(node.kind) && !node.config.agentTask && !groupedImages) {
+        const parallelVideos = continuation === false && node.id === 'video' && isVideoGenerationNode(node) && mediaProject.shots.length > 1;
+        const concurrency = parallelVideos ? 2 : saved.handlerVersion >= 3 && !groupedImages && continuation !== true ? legacyScheduling?.maxConcurrentShots : undefined;
+        if (concurrency && selectedModel && ['assets', 'animation'].includes(node.kind) && !node.config.agentTask) {
           // Each Send owns a stable shot identity. The adapter keeps its existing
           // parent operation + shot receipts, including ambiguous POST protection.
           const shots = mediaProject.shots;
           const scheduling = new AbortController();
-          const outputs = await executeMediaGraph({ database, runId, nodeId: node.id, shotIds: shots.map(shot => shot.id), concurrency: legacyScheduling.maxConcurrentShots, signal: controller.signal,
+          const outputs = await executeMediaGraph({ database, runId, nodeId: node.id, shotIds: shots.map(shot => shot.id), concurrency, signal: controller.signal,
             execute: async shotId => {
               const shot = shots.find(shot => shot.id === shotId);
               if (!shot) throw new Error('运行快照缺少并行镜头。');
               const project = { ...mediaProject, shots: [shot] };
               try {
-                const output = await trackWork(() => executeActivity({ ...activityContext, project, onAsset: outputKind ? value => publishAsset(value, project) : activityContext.onAsset, queueSignal: scheduling.signal, onFailure: error => scheduling.abort(error) }), project.id);
+                const output = await trackWork(() => executeActivity({ ...activityContext, project, onAsset: outputKind ? value => publishAsset(value, project) : activityContext.onAsset,
+                  queueSignal: scheduling.signal, onFailure: error => scheduling.abort(error), ...(parallelVideos ? { modelConcurrency: concurrency } : {}) }), project.id);
                 return outputKind ? validateProductionMediaOutput(output, outputKind, project) : output;
               } catch (error) { scheduling.abort(error); throw error; }
             } });
@@ -1685,7 +1701,7 @@ export function createRuntime(options: RuntimeOptions) {
           const cast = recurringCast(value, profiles);
           const needsFrames = scope.legacyVideoReferences && node.config.referenceMode !== 'generate' && singleFrameVideoModel(videoModel, value)
             && cast.project.shots.some(shot => !shot.locked && needsComposedSceneFrame(cast.project, shot, profiles));
-          const allowImplicitModel = Boolean(scope.legacyVideoReferences) || !nativeReferenceStep(value.workflow);
+          const allowImplicitModel = !localOpeningReferences(node) && (Boolean(scope.legacyVideoReferences) || !nativeReferenceStep(value.workflow));
           const imageModel = castingImageModel(models, node.modelId ?? (allowImplicitModel ? value.workflow.production.imageModelId : undefined), allowImplicitModel);
           if ((imageModel || allowImplicitModel) && (shotsMayChange || cast.missing.length || needsFrames)) work.push({ kind: 'image', model: imageModel });
         }
@@ -1717,7 +1733,8 @@ export function createRuntime(options: RuntimeOptions) {
       const preparesFrame = value.workflow.production.referenceMode !== 'none' && prior.some(step => step.kind === 'assets' && step.modelId && isModelGenerationNode(step));
       const preparesCast = prior.some(step => step.id === 'assets' && step.config.automaticCasting === true) && recurringCast(value, profiles).missing.length > 0;
       if (preparesFrame || preparesCast) return { status: 'pending', until: 'references' };
-      for (const shot of value.shots) {
+      const continues = node.config.continueFromLastFrame === true && value.shots.length > 1;
+      for (const shot of continues ? value.shots.slice(0, 1) : value.shots) {
         if (shot.locked && assets.some(asset => asset.active && asset.kind === 'video' && asset.projectId === value.id && asset.shotId === shot.id)) continue;
         const plan = videoReferenceImages(value, node, model, shot, profiles, assets);
         if (plan.mode === 'text') { textShots++; continue; }
@@ -1729,6 +1746,7 @@ export function createRuntime(options: RuntimeOptions) {
         if (plan.frame && !plan.referenceIds.includes(plan.frame.id)) images.push(plan.frame);
         shots.push({ id: `${node.id}:${shot.id}`, title: videoNodes.length === 1 ? shot.title : `${node.label} · ${shot.title}`, mode: plan.mode, images: images.map(({ id, name, path, sha256 }) => ({ id, name, path, sha256 })) });
       }
+      if (continues) return { status: 'pending', until: 'previous-video' };
     }
     return shots.length || textShots ? { status: 'ready', shots, textShots } : undefined;
   }
@@ -1787,8 +1805,18 @@ export function createRuntime(options: RuntimeOptions) {
     const model = saved?.models.find(item => item.id === (node?.modelId ?? castModel));
     if (model && !supportsRegenerationModel(model, input.kind)) throw new Error('本次制作未保存可用的对应生成模型。');
     if (!node || !source || !shot) return { work: [{ kind: regenerationKinds[input.kind].capability, model, count: 1 }] };
-    const scope = { ...source, shots: [{ ...shot, locked: false }] };
-    return { work: [plannedNodeCharge(node, model, scope)], videoReferences: saved?.useOriginalVideoReferences && model ? reviewVideoReferences(scope, [node], [model], { ...saved, assets: undefined }) : undefined };
+    const continuation = sourceContinuationFrame(source, node, runId, shot);
+    const scopedNode = continuation ? { ...node, config: { ...node.config, requiresShotFirstFrame: true } } : node;
+    const scope = { ...source, shots: [{ ...shot, ...(continuation ? { assetId: continuation } : {}), locked: false }] };
+    return { work: [plannedNodeCharge(scopedNode, model, scope)], videoReferences: saved?.useOriginalVideoReferences && model ? reviewVideoReferences(scope, [scopedNode], [model], { ...saved, assets: undefined }) : undefined };
+  }
+
+  function sourceContinuationFrame(project: ProjectDocument, node: WorkflowNode, runId: string, shot: Shot): string | undefined {
+    if (!isVideoGenerationNode(node) || node.config.continueFromLastFrame !== true || project.shots[0]?.id === shot.id) return;
+    if (shot.locked) return;
+    const frameId = runProgress.detail(`${runId}:${node.id}`)?.shots.find(item => item.id === shot.id)?.referenceAssetId;
+    if (!frameId) throw new Error('本次制作的续镜首帧记录缺失，请从工作台重新生成。');
+    return frameId;
   }
 
   function requiresChargeConfirmation(method: ChargeAction, params: unknown): boolean {
@@ -1923,7 +1951,8 @@ export function createRuntime(options: RuntimeOptions) {
     const pending = database.prepare("SELECT body FROM documents WHERE kind = 'run' AND json_extract(body, '$.projectId') = ? AND json_extract(body, '$.regenerationSource.runId') = ? AND json_extract(body, '$.regenerationSource.nodeId') = ? AND json_extract(body, '$.regenerationSource.shotId') = ? AND json_extract(body, '$.status') NOT IN ('succeeded','canceled') ORDER BY rowid DESC LIMIT 1").get(value.id, source.runId, source.nodeId, input.shotId) as { body: string } | undefined;
     if (pending) return hydrateRun(runSchema.parse(JSON.parse(pending.body)));
     const { execution: _legacyScheduling, ...workflow } = sourceProject.workflow;
-    const inputProject = { ...sourceProject, workflow, shots: [{ ...sourceShot, locked: false }] };
+    const continuation = sourceContinuationFrame(sourceProject, originalNode, original.id, sourceShot);
+    const inputProject = { ...sourceProject, workflow, shots: [{ ...sourceShot, ...(continuation ? { assetId: continuation } : {}), locked: false }] };
     const upstream = upstreamResults(original.id, originalNode, frozen);
     const selectedCharacters = (frozen.characters ?? []).filter(profile => sourceShot.characterIds?.includes(profile.id));
     const referenceIds = new Set([...selectedCharacters.flatMap(profile => profile.referenceAssetIds), ...creativeReferenceAssetIds(inputProject, sourceShot)]);
@@ -1938,7 +1967,7 @@ export function createRuntime(options: RuntimeOptions) {
     const existing = repeated(); if (existing) return hydrateRun(existing);
     if (batches.blocked(value.id) || projectBusy(value.id) || [...active.keys()].some(runId => run(runId).projectId === value.id)) throw new Error('该项目已有未完成的制作，请先处理现有任务。');
     const id = randomUUID(), instruction = input.instruction?.trim();
-    const node: WorkflowNode = { ...originalNode, id: 'regenerate', modelId: model.id, requiresReview: false, label: `重新生成镜头${regenerationKinds[input.kind].label}`, prompt: [originalNode.prompt, instruction].filter(Boolean).join('\n\n'), config: { ...originalNode.config, ...(generatedFrameModel ? { referenceMode: 'generate' } : {}), shotId: baseline.id, regenerationKind: input.kind, ...(instruction ? { instruction } : {}) } };
+    const node: WorkflowNode = { ...originalNode, id: 'regenerate', modelId: model.id, requiresReview: false, label: `重新生成镜头${regenerationKinds[input.kind].label}`, prompt: [originalNode.prompt, instruction].filter(Boolean).join('\n\n'), config: { ...originalNode.config, ...(continuation ? { requiresShotFirstFrame: true } : {}), ...(generatedFrameModel ? { referenceMode: 'generate' } : {}), shotId: baseline.id, regenerationKind: input.kind, ...(instruction ? { instruction } : {}) } };
     const saved: RunSnapshot = { project: structuredClone(value), models: frozen.models, skills: frozen.skills, mcpServers: frozen.mcpServers, nodes: [node], handlerVersion: 4, unifiedShotProfile: true, characters: selectedCharacters, characterAssets, assets: frozenAssets,
       ...(frozen.outputContractVersion ? { outputContractVersion: frozen.outputContractVersion } : {}), ...(frozen.useOriginalVideoReferences ? { useOriginalVideoReferences: true } : {}), regeneration: { shotId: baseline.id, kind: input.kind, baseline: structuredClone(baseline), instruction }, sourceGeneration: { inputProject: structuredClone(inputProject), upstream: structuredClone(upstream), requestHash } };
     const createdAt = now();
@@ -2009,6 +2038,7 @@ export function createRuntime(options: RuntimeOptions) {
       case 'run.inspect':
       case 'run.step.payload':
       case 'run.step.versions':
+      case 'project.planning.outputs':
       case 'run.diagnostics': return runInspector.dispatch(method, rawParams);
       case 'project.create': {
         const input = z.object({ title: z.string().min(1).max(160), brief: z.string().max(30000).default(''), originalText: projectSchema.shape.originalText, profile: videoProfileSchema.optional(), skillIds: z.array(z.string().min(1)).max(500).optional(), templateId: z.string().optional(), seriesTemplateId: z.string().min(1).optional(), seriesTemplateRevision: z.number().int().positive().optional() }).refine(value => Boolean(value.seriesTemplateId) === (value.seriesTemplateRevision !== undefined), '请选择系列模板及其当前修订。').parse(rawParams);

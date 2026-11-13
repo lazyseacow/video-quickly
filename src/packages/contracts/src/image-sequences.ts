@@ -1,7 +1,7 @@
 import type { CharacterProfile, JsonValue, ModelProfile, ProjectDocument, Shot, WorkflowNode } from './index.js';
 import { creativeReferenceAssetIds } from './creative-context.js';
 import { imageSequenceMode } from './model-parameters.js';
-import { groupsNativeFirstFrames, groupsReferenceImages } from './production.js';
+import { groupsNativeFirstFrames, groupsReferenceImages, openingFrameShots } from './production.js';
 
 interface ImageSequence {
   batches: Shot[][];
@@ -42,6 +42,7 @@ function supportsAnchor(model: ModelProfile, referenceCount: number): boolean {
 /** Keep a shared reference order. Locked shots and changes to the reference inputs start a new sequence. */
 export function planReferenceImageSequences({ project, node, model, characters = [] }: { project: ProjectDocument; node: WorkflowNode; model?: ModelProfile; characters?: CharacterProfile[] }): ImageSequence[] {
   const singleShots = (shots: readonly Shot[]): ImageSequence[] => shots.map(shot => ({ batches: [[shot]], seedream: false }));
+  if (node.kind === 'assets' && node.config.continueFromLastFrame === true) return singleShots(openingFrameShots(project.shots));
   if (!model || !groupsReferenceImages(node)) return singleShots(project.shots);
   if (node.config.useFirstShotReference === true) {
     const batches = project.shots.filter(shot => !shot.locked).map(shot => [shot]);

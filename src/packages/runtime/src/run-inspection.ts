@@ -8,7 +8,7 @@ import type Database from 'better-sqlite3';
 import { SqliteSaver } from '@langchain/langgraph-checkpoint-sqlite';
 import { z } from 'zod';
 import {
-  getMediaAdapters, isModelGenerationNode, jsonValueSchema, modelSchema, pageInputSchema, runInspectionSchema, runStepPayloadSchema, skillSchema, workflowNodeSchema, workflowSchema,
+  generatedPlanningSchema, getMediaAdapters, isModelGenerationNode, jsonValueSchema, modelSchema, pageInputSchema, productionPlanningSteps, runInspectionSchema, runStepPayloadSchema, skillSchema, workflowNodeSchema, workflowSchema,
   type JsonValue, type ModelProfile, type ProjectDocument, type RecordPage, type RunInspection, type RunRecord, type RunStepSummary, type SkillPackage, type StepOutputVersion, type WorkflowNode,
 } from '@video-quickly/contracts';
 import { UNCONFIRMED_ACTIVITY_MESSAGE } from './activities.js';
@@ -218,6 +218,34 @@ export function createRunInspector(options: {
     if (!saved) throw new Error('该运行没有保存冻结流程。');
     return readPayload(runId, nodeId, kind, saved, await redactor(saved.models), responseAttempt);
   }
+  async function planningOutputs(projectId: string) {
+    const select = database.prepare<{ projectId: string; step: string }, { id: string; projectRevision: number; models: string; value: string }>(`
+      SELECT r.id, json_extract(r.body, '$.projectRevision') AS projectRevision, json_extract(s.body, '$.models') AS models,
+        CASE WHEN @step = 'script' THEN json_extract(o.body, '$.shots') ELSE json_extract(o.body, '$.text') END AS value
+      FROM documents r
+      JOIN documents s ON s.kind = 'run-snapshot' AND s.id = r.id
+      JOIN documents o ON o.kind = 'node-result' AND o.id = r.id || ':' || @step
+      WHERE r.kind IN ('run', 'asset') AND r.kind = 'run' AND json_extract(r.body, '$.projectId') = @projectId
+        AND coalesce(json_extract(r.body, '$.purpose'), 'production') = 'production'
+        AND json_extract(s.body, '$.project.workflow.id') = 'native-video'
+        AND json_extract(o.body, '$.source') = 'model'
+        AND NOT EXISTS (SELECT 1 FROM documents removed WHERE removed.kind = 'run-history-deletion' AND removed.id = r.id)
+      ORDER BY r.rowid DESC LIMIT 1
+    `);
+    const redactors = new Map<string, ReturnType<typeof redactor>>();
+    const entries = await Promise.all(productionPlanningSteps.map(async step => {
+      const record = select.get({ projectId, step });
+      if (!record?.value) return [step, undefined];
+      const redact = redactors.get(record.id) ?? redactor(z.array(modelSchema).parse(JSON.parse(record.models)));
+      redactors.set(record.id, redact);
+      const redactValue = await redact;
+      if (step !== 'script') return [step, { runId: record.id, text: redactValue(record.value) }];
+      const shots = generatedPlanningSchema.shape.script.unwrap().shape.shots.parse(JSON.parse(record.value));
+      const applied = Boolean(store.get('run-video-application', record.id) || store.get('run-application', record.id));
+      return [step, { runId: record.id, projectRevision: record.projectRevision, applied, shots: redactValue(json(shots)) }];
+    }));
+    return generatedPlanningSchema.parse(Object.fromEntries(entries));
+  }
   function versions(runId: string, nodeId: string, before: number | undefined, limit: number): RecordPage<StepOutputVersion> {
     const run = options.run(runId), saved = metadata(runId), node = saved?.nodes.find(value => value.id === nodeId);
     if (!node) throw new Error('该运行的冻结流程中没有这个步骤。');
@@ -274,6 +302,7 @@ export function createRunInspector(options: {
     async dispatch(method: string, raw: unknown) {
       if (method === 'run.inspect') { const input = runInput.extend({ nodeId: z.string().min(1).optional() }).parse(raw); return inspect(input.runId, input.nodeId); }
       if (method === 'run.step.payload') { const input = stepInput.extend({ kind: z.enum(['input', 'output']), responseAttempt: z.number().int().positive().optional() }).parse(raw); return payload(input.runId, input.nodeId, input.kind, input.responseAttempt); }
+      if (method === 'project.planning.outputs') return planningOutputs(z.object({ projectId: z.string().min(1) }).parse(raw).projectId);
       if (method === 'run.step.versions') { const input = stepInput.merge(pageInputSchema).parse(raw); return versions(input.runId, input.nodeId, input.before, input.limit); }
       if (method === 'run.diagnostics') return diagnostics(runInput.parse(raw).runId);
       throw new Error('未知的步骤详情操作。');

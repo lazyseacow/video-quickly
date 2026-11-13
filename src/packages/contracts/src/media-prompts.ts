@@ -69,8 +69,13 @@ export interface VideoReferenceImages {
 }
 
 export function videoReferenceImages(project: ProjectDocument, node: WorkflowNode, model: ModelProfile, shot: Shot, characters: readonly CharacterProfile[], assets: readonly AssetRecord[]): VideoReferenceImages {
-  if (node.config.operation === 'generate-native-video' && node.config.requiresShotFirstFrame === true) {
-    const frame = assets.find(asset => asset.id === shot.assetId && asset.active && asset.kind === 'image' && (!asset.projectId || asset.projectId === project.id));
+  const generatedOpening = node.config.operation === 'generate-native-video' && node.config.requiresShotFirstFrame === true;
+  const continuation = node.config.continueFromLastFrame === true && node.config.operation === 'regenerate' && node.config.requiresShotFirstFrame === true;
+  const frameForShot = (tail = false) => assets.find(asset => asset.id === shot.assetId && asset.active && asset.kind === 'image'
+    && (!asset.projectId || asset.projectId === project.id) && (!tail || asset.provenance === '上一镜尾帧'));
+  const originalTail = continuation ? frameForShot(true) : undefined;
+  if (generatedOpening || originalTail) {
+    const frame = originalTail ?? frameForShot();
     if (!frame) throw new Error(`镜头「${shot.title}」缺少可用的首帧，请先运行「参考素材准备」并应用结果。`);
     const mode = model.provider === 'seedance' && project.workflow.production.referenceAudioAssetIds?.length ? 'multiple' : 'single';
     return { mode, referenceIds: [], frame };
@@ -87,14 +92,14 @@ export function videoReferenceImages(project: ProjectDocument, node: WorkflowNod
   if (frameId && !frame) throw new Error(`镜头「${shot.title}」的参考画面不可用，请恢复或重新选择图片。`);
   const referenceAudio = model.provider === 'seedance' && Boolean(project.workflow.production.referenceAudioAssetIds?.length);
   if (referenceAudio && /seedance[-_.]?2[-_.]0(?:[-_.]|$)/i.test(model.model) && !frame && !referenceIds.length) {
-    throw new Error(`镜头「${shot.title}」使用 Seedance 2.0 参考音频时需要一张参考图。请添加镜头画面、选择图片模型，或选用支持纯音频参考的 Seedance 2.5。`);
+    throw new Error(`镜头「${shot.title}」使用 Seedance 2.0 参考音频时需要一张参考图。请添加镜头画面，或选用支持纯音频参考的 Seedance 2.5。`);
   }
   if (singleFrameVideoModel(model, project)) {
     if (frame) return { mode: 'single', referenceIds: [], frame };
     if (!groups.length) return { mode: 'text', referenceIds: [] };
     // A single attachment can cover several bindings if they explicitly share an image.
     const primary = groups[0].find(id => groups.every(group => group.includes(id)));
-    if (!primary) throw new Error(`镜头「${shot.title}」绑定了多组参考图。当前视频连接每镜头接收一张图，请添加包含所需主体的镜头画面、选择图片模型，或切换到多图参考连接。`);
+    if (!primary) throw new Error(`镜头「${shot.title}」绑定了多组参考图。当前视频连接每镜头接收一张图，请添加包含所需主体的镜头画面，或切换到多图参考连接。`);
     return { mode: 'single', referenceIds: [primary] };
   }
   if (frame && !referenceAudio && !referenceIds.length) return { mode: 'single', referenceIds, frame };
@@ -161,6 +166,7 @@ export function buildMediaPrompt(project: ProjectDocument, node: WorkflowNode, s
     shotCreativePrompt(project, shot),
     resolvePromptBindings(node, project, shot, upstream).prompt,
     characterReferencePrompt(selected, references),
+    videoReferences?.frame?.provenance === '上一镜尾帧' ? '从输入画面中的动作、站位和光线接续，保持人物造型，并按本镜头要求继续推进。' : '',
     sceneFirstFrame ? '以镜头首帧中的人物形象和构图为准。' : creativeReferencePrompt(project, shot, references),
     ...(video ? [
       videoReferences && videoReferences.mode !== 'text' ? '全镜头保持参考人物的身份、五官比例、发型和关键辨识特征。动作与运镜按分镜推进。仅在明确要求时改变服装或造型。' : '',

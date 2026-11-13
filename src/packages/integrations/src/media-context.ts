@@ -29,6 +29,7 @@ export interface MediaActivityContext {
   operationId: string;
   signal: AbortSignal;
   queueSignal?: AbortSignal;
+  modelConcurrency?: number;
   onFailure?: (error: unknown) => void;
   dataDirectory: string;
   assets: AssetRecord[];
@@ -37,6 +38,7 @@ export interface MediaActivityContext {
   promptUpstream?: Record<string, JsonValue>;
   onProgress?: (value: number) => void;
   onAsset?: (asset: AssetRecord) => void;
+  onReferenceFrame?: (asset: AssetRecord) => void;
   onDiagnostic?: (event: MediaDiagnosticEvent) => void;
   preparedAudioMix?: PreparedAudioMix;
   model?: ModelProfile;

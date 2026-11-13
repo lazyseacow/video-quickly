@@ -17,8 +17,8 @@ const duration = shotSchema.shape.durationUs;
 const imageExtensions = ['png', 'jpg', 'jpeg', 'webp', 'svg'];
 const newShot = (): DraftShot => ({ id: crypto.randomUUID(), title: '', narration: '', visualPrompt: '', seconds: '6' });
 
-export default function PlanningResultEditor({ section, baseline, storyboard, addInitialShot, structuredDocument, version, images, onImportImage, onSave, onClose }: {
-  section: PlanningSection; baseline: PlanningProject; storyboard?: StoryboardDraft; addInitialShot?: boolean; structuredDocument?: boolean; version: number;
+export default function PlanningResultEditor({ section, baseline, storyboard, addInitialShot, shotId, structuredDocument, version, images, onImportImage, onSave, onClose }: {
+  section: PlanningSection; baseline: PlanningProject; storyboard?: StoryboardDraft; addInitialShot?: boolean; shotId?: string; structuredDocument?: boolean; version: number;
   images: AssetRecord[]; onImportImage(path: string): Promise<AssetRecord | undefined>;
   onSave(change: PlanningChange): Promise<boolean>; onClose(): void;
 }) {
@@ -26,16 +26,17 @@ export default function PlanningResultEditor({ section, baseline, storyboard, ad
   const [document, setDocument] = useState<Record<string, string>>(() => section === 'script' ? {} : initialPlanningDocument(section, baseline.manualPlanningFields?.[section], baseline[section], baseline.title));
   const [context, setContext] = useState<CreativeContext | null>(storyboard?.creativeContext ?? baseline.creativeContext ?? null);
   const [shots, setShots] = useState<DraftShot[]>(() => {
+    if (section === 'script' && addInitialShot) return [newShot()];
     const proposed = new Map(storyboard?.shots.map(shot => [shot.id, shot]));
-    const merged = baseline.shots.map(shot => {
+    const current = shotId ? baseline.shots.filter(shot => shot.id === shotId) : baseline.shots;
+    const merged = current.map(shot => {
       const next = proposed.get(shot.id);
       proposed.delete(shot.id);
       return !shot.locked && next ? { ...next, assetId: shot.assetId } : shot;
     });
-    const shots = [...merged, ...proposed.values()].map(({ id, title, narration, visualPrompt, soundPrompt, durationUs, characterIds, creativeEntityKeys, assetId }) => ({
+    return [...merged, ...proposed.values()].map(({ id, title, narration, visualPrompt, soundPrompt, durationUs, characterIds, creativeEntityKeys, assetId }) => ({
       id, title, narration, visualPrompt, soundPrompt, seconds: String(durationUs / microseconds), characterIds, creativeEntityKeys, assetId,
     }));
-    return section === 'script' && addInitialShot && !shots.length ? [newShot()] : shots;
   });
   const [pending, setPending] = useState(false), [error, setError] = useState(''), [attempted, setAttempted] = useState(false);
   const [staged, setStaged] = useState<ReadonlySet<string>>(() => new Set());
@@ -45,6 +46,7 @@ export default function PlanningResultEditor({ section, baseline, storyboard, ad
   const form = useRef<HTMLFormElement>(null);
   const inFlight = useRef(false);
   const originals = new Map(baseline.shots.map(shot => [shot.id, shot]));
+  const shotOffset = addInitialShot ? baseline.shots.length : shotId ? baseline.shots.findIndex(shot => shot.id === shotId) : 0;
   const availableImages = new Map([...importedImages, ...images].map(asset => [asset.id, asset]));
   const imageChoices = [...availableImages.values()].filter(asset => asset.active);
   function updateShot(id: string, patch: Partial<DraftShot>) {
@@ -53,7 +55,7 @@ export default function PlanningResultEditor({ section, baseline, storyboard, ad
   }
   function addShot() {
     const shot = newShot();
-    setShots(current => current.length >= MAX_STORYBOARD_SHOTS ? current : [...current, shot]);
+    setShots(current => current.length + shotOffset >= MAX_STORYBOARD_SHOTS ? current : [...current, shot]);
     requestAnimationFrame(() => form.current?.querySelector<HTMLInputElement>(`[data-shot-title="${CSS.escape(shot.id)}"]`)?.focus());
   }
   async function importImage() {
@@ -118,7 +120,7 @@ export default function PlanningResultEditor({ section, baseline, storyboard, ad
     } catch (failure) { setError(failure instanceof Error ? failure.message : String(failure)); }
     finally { inFlight.current = false; setPending(false); }
   }
-  return <Dialog title={`编辑${planningLabels[section]}`} onClose={onClose} className="planning-result-editor" dismissDisabled={pending || importingImage}>
+  return <Dialog title={shotId ? '编辑镜头' : `编辑${planningLabels[section]}`} onClose={onClose} className="planning-result-editor" dismissDisabled={pending || importingImage}>
     <form ref={form} noValidate onSubmit={event => { event.preventDefault(); void submit(); }} onKeyDown={event => {
       if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 's') { event.preventDefault(); event.currentTarget.requestSubmit(); }
     }}>
@@ -140,11 +142,11 @@ export default function PlanningResultEditor({ section, baseline, storyboard, ad
               const imageLocked = Boolean(original?.sceneTemplate || original?.clipEdit);
               return <li key={shot.id}>
                 <header>
-                  <strong>镜头 {String(index + 1).padStart(2, '0')}</strong>
+                  <strong>镜头 {String(shotOffset + index + 1).padStart(2, '0')}</strong>
                   {original?.locked && <span><LockKeyhole size={14} />已锁定</span>}
-                  {!original && <Button static variant="ghost" disabled={staged.has(shot.id)} aria-label={`移除新增镜头 ${index + 1}`} onClick={() => setShots(current => current.filter(item => item.id !== shot.id))}>移除</Button>}
+                  {!original && <Button static variant="ghost" disabled={staged.has(shot.id)} aria-label={`移除新增镜头 ${shotOffset + index + 1}`} onClick={() => setShots(current => current.filter(item => item.id !== shot.id))}>移除</Button>}
                 </header>
-                <fieldset disabled={original?.locked || staged.has(shot.id)} className="planning-result-editor__fields" aria-label={`镜头 ${index + 1} 内容`}>
+                <fieldset disabled={original?.locked || staged.has(shot.id)} className="planning-result-editor__fields" aria-label={`镜头 ${shotOffset + index + 1} 内容`}>
                   <div className="planning-result-editor__shot-basics">
                     <Field label="镜头标题" hint="最多 160 个字符" required><input required maxLength={shotSchema.shape.title.maxLength ?? undefined} data-shot-title={shot.id} data-validation-message="请填写镜头标题，最多 160 个字符。" value={shot.title} onChange={event => updateShot(shot.id, { title: event.target.value })} /></Field>
                     <Field label="镜头时长（秒）" hint={original?.clipEdit ? '在时间轴调整' : '0.5 至 600 秒'} required={!original?.clipEdit}><input type="number" min={(duration.minValue ?? 0) / microseconds} max={(duration.maxValue ?? 600 * microseconds) / microseconds} step={1 / microseconds} required={!original?.clipEdit} disabled={Boolean(original?.clipEdit)} data-validation-message="镜头时长须在 0.5 至 600 秒之间，最多 6 位小数。" value={shot.seconds} onChange={event => updateShot(shot.id, { seconds: event.target.value })} /></Field>
@@ -183,7 +185,7 @@ export default function PlanningResultEditor({ section, baseline, storyboard, ad
                 </fieldset>
               </li>;
             })}</ol>}</CharacterPickerLibrary> : <p className="planning-result-editor__hint">添加镜头后，可逐项填写标题、时长、旁白和画面要求。</p>}
-            <Button static className="planning-result-editor__add" disabled={shots.length >= MAX_STORYBOARD_SHOTS} onClick={addShot}><Plus size={16} />添加镜头</Button>
+            {!shotId && <Button static className="planning-result-editor__add" disabled={shots.length + shotOffset >= MAX_STORYBOARD_SHOTS} onClick={addShot}><Plus size={16} />添加镜头</Button>}
           </>}
         </fieldset>
       </div>

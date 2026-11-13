@@ -27,7 +27,7 @@ const enumFields: Record<string, ReadonlySet<string>> = {
 const methodWords = new Set(('workspace snapshot summary project create get update archive restore backup saveShot shot candidate apply candidates regenerate ' +
   'run list start cancel resume review replay plan events activities diagnostics inspect step payload versions node result model save delete test discover ' +
   'skill import group resource toggle tool register cost billing task tasks character references workflow workflowTemplate seriesTemplate render batch export research search analyze source read ' +
-  'asset select retain waveform caption system status runtime reconnect host secret set audio preview levels silence mix prepare edit history undo redo readiness recovery scan confirm').split(' '));
+  'asset select retain waveform caption system status runtime reconnect host secret set audio preview levels silence mix prepare edit history undo redo readiness recovery scan confirm planning outputs').split(' '));
 const builtinNodeIds = new Set(['brief', 'research', 'style', 'script', 'assets', 'video', 'animation', 'export', 'review', 'join', 'condition', 'subflow', 'agent']);
 const errorNames = new Set(['Error', 'TypeError', 'SyntaxError', 'RangeError', 'ReferenceError', 'AggregateError', 'URIError', 'EvalError', 'AbortError', 'TimeoutError', 'ZodError', 'AmbiguousActivityError', 'UnconfirmedActivityError', 'ActivityInputChangedError', 'LockedShotChangeError', 'VideoGenerationError', 'ModelResponseValidationError', 'ModelServiceResponseError', 'TextRequestRejectedError', 'MediaRequestRejectedError']);
 const errorCodes = new Set([

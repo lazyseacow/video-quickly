@@ -37,41 +37,37 @@ it('shares text and video choices while preserving explicit task overrides and k
   expect(resolveProductionWorkflow({ ...workflow, production: { ...workflow.production!, textModelId: undefined } }).nodes.find(node => node.id === 'brief')?.modelId).toBeUndefined();
 });
 
-it('requires generated first frames only while the built-in image model is selected', () => {
+it('keeps legacy image model bindings out of built-in video production', () => {
   const initial = createNativeVideoWorkflow();
-  const withImage = resolveProductionWorkflow({ ...initial, production: { ...initial.production, imageModelId: 'image' } });
-  expect(withImage.production.referenceMode).toBe('generate');
-  const imageStep = withImage.nodes.find(node => node.id === 'assets')!;
-  expect(imageStep).toMatchObject({ modelId: 'image', config: { groupReferenceImages: true } });
-  expect(imageStep.config.useFirstShotReference).toBeUndefined();
-  expect(withImage.nodes.find(node => node.id === 'video')?.config.requiresShotFirstFrame).toBe(true);
-  const cleared = resolveProductionWorkflow({ ...withImage, production: { ...withImage.production, imageModelId: undefined } });
-  expect(cleared.production.referenceMode).toBe('existing');
-  const assets = cleared.nodes.find(node => node.id === 'assets')!;
-  expect(assets.modelId).toBeUndefined();
-  expect(assets.config.groupReferenceImages).toBeUndefined();
-  expect(assets.config.useFirstShotReference).toBeUndefined();
-  expect(cleared.nodes.find(node => node.id === 'video')?.config.requiresShotFirstFrame).toBeUndefined();
-  expect(() => validateExecutionModel(assets, undefined)).not.toThrow();
+  const workflow = resolveProductionWorkflow({ ...initial, production: { ...initial.production, imageModelId: 'image', referenceMode: 'generate' } });
+  expect(workflow.production.continueFromLastFrame).toBe(true);
+  expect(workflow.production.referenceMode).toBe('existing');
+  expect(workflow.nodes.some(node => node.kind === 'assets' && node.modelId)).toBe(false);
+  const video = workflow.nodes.find(node => node.id === 'video')!;
+  expect(video.config.continueFromLastFrame).toBe(true);
+  expect(video.config.requiresShotFirstFrame).toBeUndefined();
 });
 
-it('keeps locked shots as native group boundaries and counts only generated first frames', () => {
+it('keeps existing image grouping and billing for custom workflows', () => {
   const initial = createNativeVideoWorkflow();
-  const workflow = resolveProductionWorkflow({ ...initial, production: { ...initial.production, imageModelId: 'image' } });
+  const workflow = resolveProductionWorkflow({ ...initial, id: 'custom-video', production: { ...initial.production, referenceMode: 'generate', imageModelId: 'image' } });
   const project = projectSchema.parse({ id: 'grouped-first-frames', title: '首帧分组', brief: '', profile: DEFAULT_VIDEO_PROFILE, revision: 1, createdAt: '', updatedAt: '', workflow,
     shots: ['a', 'b', 'locked', 'c', 'd'].map(id => ({ id, title: id, narration: '', visualPrompt: '同一场景', durationUs: 1_000_000, locked: id === 'locked' })),
   });
   const node = workflow.nodes.find(node => node.id === 'assets')!;
   const model = modelSchema.parse({ id: 'image', name: '图片模型', provider: 'openai-compatible', model: 'doubao-seedream-5-0-lite-260128', baseUrl: 'http://127.0.0.1:1', connectionType: 'image', capabilities: ['image'], createdAt: '', updatedAt: '' });
   expect(planReferenceImageSequences({ project, node, model }).map(sequence => [sequence.seedream, sequence.batches.map(batch => batch.map(shot => shot.id))]))
-    .toEqual([[true, [['a', 'b']]], [true, [['c', 'd']]]]);
-  expect(requestCostMetrics(project, node, model)).toEqual({ source: 'request', requestCount: 2, images: 4 });
+    .toEqual([[true, [['a', 'b']]], [false, [['locked']]], [true, [['c', 'd']]]]);
+  expect(requestCostMetrics(project, node, model)).toEqual({ source: 'request' });
+  const unlocked = { ...project, shots: project.shots.filter(shot => !shot.locked) };
+  expect(requestCostMetrics(unlocked, node, model)).toEqual({ source: 'request', requestCount: 1, images: 4 });
+  expect(workflow.nodes.find(candidate => candidate.id === 'video')?.config.continueFromLastFrame).toBeUndefined();
 
   const { groupReferenceImages: _group, ...legacyConfig } = node.config;
   const legacy = { ...node, config: { ...legacyConfig, useFirstShotReference: true } };
   expect(planReferenceImageSequences({ project, node: legacy, model }).map(sequence => [sequence.seedream, sequence.batches.map(batch => batch.map(shot => shot.id))]))
     .toEqual([[false, [['a'], ['b'], ['c'], ['d']]]]);
-  expect(requestCostMetrics(project, legacy, model)).toEqual({ source: 'request', requestCount: 4, images: 4 });
+  expect(requestCostMetrics(unlocked, legacy, model)).toEqual({ source: 'request', requestCount: 4, images: 4 });
 });
 
 it('validates known Seedance audio-only combinations when no shot image is available', () => {
@@ -125,10 +121,11 @@ it('keeps explicit model edits from the workflow editor when unified defaults ch
 
 type StoryboardVisual = { initialFrame: string; characterPositions: string; actionTimeline: { startUs: number; endUs: number; action: string }[] };
 
-async function fixture(audio = true, failpoint?: RuntimeOptions['failpoint'], shotCount = 1, visuals: StoryboardVisual[] = []) {
+async function fixture(audio = true, failpoint?: RuntimeOptions['failpoint'], shotCount = 1, visuals: StoryboardVisual[] = [], afterAsset?: (asset: AssetRecord) => void,
+  beforeVideoReply?: (body: Record<string, unknown>) => Promise<void>) {
   const directory = await mkdtemp(join(tmpdir(), 'vq-native-video-')); directories.push(directory);
   const source = join(directory, 'source.mp4');
-  await runMedia(ffmpeg, ['-hide_banner', '-loglevel', 'error', '-y', '-f', 'lavfi', '-i', 'color=c=blue:s=160x90:r=30:d=1', ...(audio ? ['-f', 'lavfi', '-i', 'sine=frequency=440:sample_rate=48000:duration=1'] : []), '-c:v', 'libx264', '-pix_fmt', 'yuv420p', ...(audio ? ['-c:a', 'aac', '-shortest'] : ['-an']), source]);
+  await runMedia(ffmpeg, ['-hide_banner', '-loglevel', 'error', '-y', '-f', 'lavfi', '-i', 'color=c=blue:s=160x90:r=30:d=1,drawbox=c=red:t=fill:enable=gte(t\\,0.5)', ...(audio ? ['-f', 'lavfi', '-i', 'sine=frequency=440:sample_rate=48000:duration=1'] : []), '-c:v', 'libx264', '-pix_fmt', 'yuv420p', ...(audio ? ['-c:a', 'aac', '-shortest'] : ['-an']), source]);
   const bytes = await readFile(source), frame = (await fixtureCharacterImage()).toString('base64'); let submissions = 0, textCalls = 0, imageCalls = 0;
   const received: Record<string, unknown>[] = [];
   let baseUrl = '';
@@ -137,23 +134,48 @@ async function fixture(audio = true, failpoint?: RuntimeOptions['failpoint'], sh
     if (request.method === 'POST') {
       let body = ''; for await (const chunk of request) body += chunk;
       if (/\/images\/(generations|edits)$/.test(request.url ?? '')) { imageCalls++; response.end(JSON.stringify({ data: [{ b64_json: frame }] })); return; }
-      received.push(JSON.parse(body)); submissions++; response.end(JSON.stringify({ id: `native-task-${submissions}` }));
+      const payload = JSON.parse(body) as Record<string, unknown>, id = `native-task-${++submissions}`;
+      received.push(payload);
+      await beforeVideoReply?.(payload);
+      response.end(JSON.stringify({ id }));
     } else if (request.url === '/video.mp4') { response.setHeader('content-type', 'video/mp4'); response.end(bytes); }
     else response.end(JSON.stringify({ status: 'succeeded', content: { video_url: `${baseUrl}/video.mp4` } }));
   });
   servers.push(server); await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
   const address = server.address(); if (!address || typeof address === 'string') throw new Error('Fixture server unavailable'); baseUrl = `http://127.0.0.1:${address.port}`;
   const storyboard = JSON.stringify({ shots: Array.from({ length: shotCount }, (_, index) => ({ title: `视频镜头 ${index + 1}`, narration: '雨落下了。', soundPrompt: '轻声讲述，雨声', durationUs: 2_000_000, ...(visuals[index] ?? { visualPrompt: '蓝色天空' }) })) });
-  const options: RuntimeOptions = { dataDirectory: directory, seed: false, ffmpegPath: ffmpeg, preflightActivity: validateMediaActivity, executeActivity: createActivityExecutor({ ffmpegPath: ffmpeg }), failpoint,
+  const execute = createActivityExecutor({ ffmpegPath: ffmpeg });
+  const options: RuntimeOptions = { dataDirectory: directory, seed: false, ffmpegPath: ffmpeg, preflightActivity: validateMediaActivity, failpoint,
+    executeActivity: afterAsset ? context => execute({ ...context, onAsset: asset => { context.onAsset?.(asset); afterAsset(asset); } }) : execute,
     provider: async ({ prompt }) => { textCalls++; return prompt.includes('自动视频制作步骤：旁白与分镜') ? storyboardFixtureResponse(prompt, storyboard) : planningFixtureResponse(prompt, '连续的蓝色画面与自然声音。'); } };
   const runtime = createRuntime(options); runtimes.add(runtime);
   const project = projectSchema.parse(await runtime.dispatch('project.create', { title: '视频制作', brief: '讲述雨水', profile: { width: 160, height: 90, frameRate: { numerator: 30, denominator: 1 } } }));
   const text = modelSchema.parse(await runtime.dispatch('model.save', { model: { name: '文本夹具', provider: 'ollama', model: 'text', connectionType: 'text', capabilities: ['text'], baseUrl } }));
   const video = modelSchema.parse(await runtime.dispatch('model.save', { model: { name: '视频夹具', provider: 'seedance', model: 'custom-video-endpoint', connectionType: 'video', capabilities: ['video'], baseUrl } }));
-  const image = modelSchema.parse(await runtime.dispatch('model.save', { model: { name: '图片夹具', provider: 'openai-compatible', model: 'fixture-image', connectionType: 'image', capabilities: ['image'], baseUrl } }));
-  const configured = projectSchema.parse(await runtime.dispatch('project.update', { projectId: project.id, revision: project.revision, patch: { workflow: resolveProductionWorkflow({ ...project.workflow, production: { ...project.workflow.production!, textModelId: text.id, videoModelId: video.id, imageModelId: image.id } }) } }));
+  const configured = projectSchema.parse(await runtime.dispatch('project.update', { projectId: project.id, revision: project.revision, patch: { workflow: resolveProductionWorkflow({ ...project.workflow, production: { ...project.workflow.production!, textModelId: text.id, videoModelId: video.id } }) } }));
   return { runtime, options, configured, received, counts: () => ({ submissions, textCalls }), imageCalls: () => imageCalls, current: async (target = runtime) => (await target.dispatch('project.get', { projectId: project.id }) as { project: ProjectDocument }).project };
 }
+
+it.skipIf(!mediaAvailable)('resumes tail-frame continuation without resubmitting the completed opening shot', async () => {
+  let interrupted = false;
+  const source = await fixture(true, undefined, 2, [], asset => {
+    if (asset.kind !== 'video' || interrupted) return;
+    interrupted = true;
+    throw new SimulatedProcessExit();
+  });
+  const started = runSchema.parse(await source.runtime.dispatch('run.start', { projectId: source.configured.id }));
+  await source.runtime.waitForIdle();
+  expect(interrupted).toBe(true);
+  expect(source.counts().submissions).toBe(1);
+  await source.runtime.close(); runtimes.delete(source.runtime);
+  const recovered = createRuntime(source.options); runtimes.add(recovered);
+  await recovered.dispatch('run.resume', { runId: started.id }); await recovered.waitForIdle();
+  const run = runSchema.parse(await recovered.dispatch('run.get', { runId: started.id }));
+  expect(run.status, run.error).toBe('succeeded');
+  expect(source.imageCalls()).toBe(0);
+  expect(source.counts().submissions).toBe(2);
+  expect(source.received[1].content).toEqual(expect.arrayContaining([{ type: 'image_url', role: 'first_frame', image_url: { url: expect.stringMatching(/^data:image\/jpeg;base64,/) } }]));
+});
 
 it.skipIf(!mediaAvailable)('produces videos from existing storyboard frames or text without selecting an image model', async () => {
   const source = await fixture();
@@ -164,7 +186,7 @@ it.skipIf(!mediaAvailable)('produces videos from existing storyboard frames or t
     creativeContext: { entities: [{ key: 'person', kind: 'character', name: '雨中人', description: '蓝色雨衣' }] },
     shots: ['有画面的镜头', '只有描述的镜头'].map((title, index) => ({ id: `manual-${index}`, title, visualPrompt: '雨中人望向蓝色天空', narration: '雨落下了。', durationUs: 2_000_000,
       creativeEntityKeys: ['person'], ...(index === 0 ? { assetId: asset.id } : {}) })),
-    workflow: { ...source.configured.workflow, production: { ...source.configured.workflow.production, imageModelId: undefined, manualPlanningSteps: ['script'] } },
+    workflow: { ...source.configured.workflow, production: { ...source.configured.workflow.production, manualPlanningSteps: ['script'] } },
   } }));
   expect(await source.runtime.dispatch('project.readiness', { projectId: project.id })).toMatchObject({ ready: true });
   const billing = await source.runtime.dispatch('billing.prepare', { method: 'run.start', params: { projectId: project.id } }) as { estimate: { items: Array<{ kind: string }> } };
@@ -176,7 +198,51 @@ it.skipIf(!mediaAvailable)('produces videos from existing storyboard frames or t
   expect(source.imageCalls()).toBe(0);
   expect(source.received).toHaveLength(2);
   expect(source.received[0].content).toEqual(expect.arrayContaining([{ type: 'image_url', image_url: { url: `data:image/png;base64,${frame.toString('base64')}` }, role: 'first_frame' }]));
-  expect(source.received[1].content).toEqual([{ type: 'text', text: expect.stringContaining('蓝色雨衣') }]);
+  expect(source.received[1].content).toEqual([expect.objectContaining({ type: 'text', text: expect.stringContaining('从输入画面中的动作') }),
+    expect.objectContaining({ role: 'first_frame', image_url: { url: expect.stringMatching(/^data:image\/jpeg;base64,/) } })]);
+});
+
+it.skipIf(!mediaAvailable)('submits independent shots with their own references while another shot is waiting', async () => {
+  const release = Promise.withResolvers<void>();
+  const waitingNarration = '第一镜独立生成。', imageNarration = '第二镜使用自己的画面。';
+  const completedShotIds: (string | undefined)[] = [];
+  const textFor = (body: Record<string, unknown>) => (body.content as { text: string }[])[0].text;
+  const source = await fixture(true, undefined, 2, [], asset => {
+    if (asset.kind === 'video') completedShotIds.push(asset.shotId);
+  }, async body => {
+    if (textFor(body).includes(waitingNarration)) await release.promise;
+  });
+  const frame = await fixtureCharacterImage(), path = join(source.options.dataDirectory, 'second-shot.png');
+  await writeFile(path, frame);
+  const reference = await source.runtime.dispatch('asset.import', { projectId: source.configured.id, path, kind: 'image' }) as AssetRecord;
+  const project = projectSchema.parse(await source.runtime.dispatch('project.update', { projectId: source.configured.id, revision: source.configured.revision, patch: {
+    shots: [
+      { id: 'text-shot', title: '纯文字镜头', visualPrompt: '雨中小巷', narration: waitingNarration, durationUs: 2_000_000 },
+      { id: 'image-shot', title: '已有画面镜头', visualPrompt: '晴朗田野', narration: imageNarration, durationUs: 2_000_000, assetId: reference.id },
+    ],
+    workflow: { ...source.configured.workflow, production: { ...source.configured.workflow.production, manualPlanningSteps: ['script'], continueFromLastFrame: false } },
+  } }));
+  expect(project.workflow.production.continueFromLastFrame).toBe(false);
+  expect(await source.runtime.dispatch('project.readiness', { projectId: project.id })).toMatchObject({ ready: true });
+  expect(await source.runtime.dispatch('billing.prepare', { method: 'run.start', params: { projectId: project.id } })).toMatchObject({
+    videoReferences: { status: 'ready', textShots: 1, shots: [{ title: '已有画面镜头', images: [{ id: reference.id }] }] },
+  });
+  const started = runSchema.parse(await source.runtime.dispatch('run.start', { projectId: project.id }));
+  try {
+    await expect.poll(() => source.received.length, { timeout: 10_000 }).toBe(2);
+    expect(source.received.find(body => textFor(body).includes(waitingNarration))?.content).toEqual([expect.objectContaining({ type: 'text' })]);
+    expect(source.received.find(body => textFor(body).includes(imageNarration))?.content).toEqual([
+      expect.objectContaining({ type: 'text' }),
+      { type: 'image_url', role: 'first_frame', image_url: { url: `data:image/png;base64,${frame.toString('base64')}` } },
+    ]);
+    await expect.poll(() => completedShotIds, { timeout: 10_000 }).toEqual(['image-shot']);
+  } finally { release.resolve(); }
+  await source.runtime.waitForIdle();
+  const finished = runSchema.parse(await source.runtime.dispatch('run.get', { runId: started.id }));
+  expect(finished.status, finished.error).toBe('succeeded');
+  expect(source.imageCalls()).toBe(0);
+  const output = await source.runtime.dispatch('run.step.payload', { runId: started.id, nodeId: 'video', kind: 'output' });
+  expect(output).toMatchObject({ value: { assets: [{ shotId: 'text-shot' }, { shotId: 'image-shot' }] } });
 });
 
 it.skipIf(!mediaAvailable)('submits self-contained shots with one profile and exports their native sound', async () => {
@@ -210,6 +276,17 @@ it.skipIf(!mediaAvailable)('submits self-contained shots with one profile and ex
   expect(project.shots[0].visualPrompt).toContain('0.8–2 秒 四叔从怀中取出两本线装书放到木桌上，书和手完整入画。');
   expect(project.shots[1].visualPrompt).toContain('0–2 秒 王林脸颊微红，双手捧起两本书，低头翻看。');
   expect(source.counts()).toEqual({ submissions: 2, textCalls: 4 });
+  expect(source.imageCalls()).toBe(0);
+  const [opening, continued] = source.received.map(body => (body.content as { role?: string; image_url?: { url: string } }[]).find(item => item.role === 'first_frame')?.image_url?.url);
+  expect(opening).toBeUndefined();
+  expect(continued).toMatch(/^data:image\/jpeg;base64,/);
+  const tail = join(source.options.dataDirectory, 'submitted-tail.jpg');
+  const sample = join(source.options.dataDirectory, 'submitted-tail.rgb');
+  await writeFile(tail, Buffer.from(continued!.split(',')[1], 'base64'));
+  await runMedia(ffmpeg, ['-v', 'error', '-i', tail, '-vf', 'crop=16:16,scale=1:1', '-frames:v', '1', '-pix_fmt', 'rgb24', '-f', 'rawvideo', sample]);
+  const [red, green, blue] = await readFile(sample);
+  expect(red).toBeGreaterThan(200);
+  expect(Math.max(green, blue)).toBeLessThan(50);
   for (const [index, body] of source.received.entries()) {
     expect(body).toMatchObject({ generate_audio: true, ratio: '9:16', duration: 2 });
     const [{ text }] = body.content as { text: string }[];
