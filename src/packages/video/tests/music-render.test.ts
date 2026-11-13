@@ -58,14 +58,21 @@ it.skipIf(!mediaAvailable)('mixes source-tail loops on project time with fades, 
   expect(amplitude(880, 3.3)).toBeLessThan(plateau * .5);
   expect(amplitude(880, 3.7)).toBeLessThan(plateau * .1);
   expect(amplitude(440, 2.5)).toBeLessThan(plateau * .1);
-  async function darkPixels(time: string, name: string): Promise<number> {
+  async function lowerFrame(time: string, name: string): Promise<Buffer> {
     const path = join(directory, name + '.rgb');
     await runMedia(ffmpeg, ['-hide_banner', '-loglevel', 'error', '-y', '-ss', time, '-i', result.videoPath, '-frames:v', '1', '-vf', 'crop=320:45:0:135', '-pix_fmt', 'rgb24', '-f', 'rawvideo', path]);
-    const pixels = await readFile(path); let dark = 0;
-    for (let index = 0; index < pixels.length; index += 3) if (pixels[index] < 100 && pixels[index + 1] < 100 && pixels[index + 2] < 100) dark++;
-    return dark;
+    return readFile(path);
   }
-  expect(await darkPixels('1.5', 'caption')).toBeGreaterThan(await darkPixels('0.2', 'gap') + 50);
+  const [caption, gap, after] = await Promise.all([lowerFrame('1.5', 'caption'), lowerFrame('0.2', 'gap'), lowerFrame('3.7', 'after')]);
+  function changedPixels(frame: Buffer) {
+    let changed = 0;
+    for (let offset = 0; offset < frame.length; offset += 3) {
+      if (Math.abs(frame[offset] - gap[offset]) + Math.abs(frame[offset + 1] - gap[offset + 1]) + Math.abs(frame[offset + 2] - gap[offset + 2]) > 24) changed++;
+    }
+    return changed;
+  }
+  expect(changedPixels(caption)).toBeGreaterThan(50);
+  expect(changedPixels(after)).toBeLessThan(10);
   const segments = (await readdir(outputDirectory)).filter(name => /^segment-.*\.mp4$/.test(name));
   const created = await Promise.all(segments.map(name => stat(join(outputDirectory, name)).then(value => value.mtimeMs)));
   const revised = { ...project, musicClips: project.musicClips?.map(clip => ({ ...clip, gainDb: -18, startUs: 3_500_000 })) };

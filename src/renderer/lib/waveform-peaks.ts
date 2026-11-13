@@ -19,7 +19,7 @@ export function waveformSpanColumns(waveform: AudioWaveform, spans: readonly Wav
 }
 
 /** Each displayed column keeps the maximum measured peak in its source interval. */
-export function waveformColumns(waveform: AudioWaveform, sourceInUs: number, durationUs: number, count: number, loop = false): number[] {
+export function waveformColumns(waveform: AudioWaveform, sourceInUs: number, durationUs: number, count: number, loop = false, timeAtProgress?: (progress: number) => number): number[] {
   const windowUs = 1_000_000 / waveform.peaksPerSecond;
   const peakBetween = (startUs: number, endUs: number) => {
     let peak = 0;
@@ -30,15 +30,15 @@ export function waveformColumns(waveform: AudioWaveform, sourceInUs: number, dur
   };
   const periodUs = waveform.durationUs - sourceInUs;
   const columns = Math.max(1, Math.floor(count));
-  const widthUs = durationUs / columns;
-  const loopPeak = loop && periodUs > 0 && widthUs >= periodUs ? peakBetween(sourceInUs, waveform.durationUs) : undefined;
+  const loopPeak = loop && periodUs > 0 ? peakBetween(sourceInUs, waveform.durationUs) : 0;
   return Array.from({ length: columns }, (_, index) => {
     // Preserve exact split endpoints before ceil selects source peak buckets.
     // Dividing first can move the final column into the next source window.
-    const fromUs = index * durationUs / columns, toUs = (index + 1) * durationUs / columns;
+    const fromUs = timeAtProgress ? timeAtProgress(index / columns) : index * durationUs / columns;
+    const toUs = timeAtProgress ? timeAtProgress((index + 1) / columns) : (index + 1) * durationUs / columns;
     if (!loop) return peakBetween(sourceInUs + fromUs, sourceInUs + toUs);
     if (periodUs <= 0) return 0;
-    if (loopPeak !== undefined) return loopPeak;
+    if (toUs - fromUs >= periodUs) return loopPeak;
     const cycleStartUs = Math.floor(fromUs / periodUs) * periodUs;
     const start = sourceInUs + (fromUs - cycleStartUs), end = sourceInUs + (toUs - cycleStartUs);
     return Math.max(peakBetween(start, end), end > waveform.durationUs ? peakBetween(sourceInUs, sourceInUs + end - waveform.durationUs) : 0);

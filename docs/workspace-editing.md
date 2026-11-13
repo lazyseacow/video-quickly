@@ -325,7 +325,7 @@ OpenAI 兼容图片参考使用当前图片编辑 JSON `images` 数组，最多 
 
 `transition-loading.spec.ts` 使用两个独立长 GOP 视频和实际混音，在资源请求边界延迟下一镜头，检查等待期间画面可见、声音暂停、进度不越过转场，以及恢复后的可见帧与真实 MP4 一致。另覆盖提前准备、冷定位、首帧未就绪、等待中暂停／定位、普通片段播放节奏和资源释放。连续播放回归同时检查画布像素和实际可见性。
 
-取整、权重及擦除边界沿用随包 FFmpeg 的 [xfade](https://github.com/FFmpeg/FFmpeg/blob/611cec792a/libavfilter/vf_xfade.c) 和 [tpad](https://github.com/FFmpeg/FFmpeg/blob/611cec792a/libavfilter/vf_tpad.c) 实现。MP4 的 YUV420 编码会在擦除边缘产生正常的色度重采样；非边缘画面用 MP4 对照，精确的擦除边界另用无损 RGB 验证。
+取整、权重及擦除边界沿用随包 FFmpeg 的 [xfade](https://github.com/FFmpeg/FFmpeg/blob/8dca1586f4/libavfilter/vf_xfade.c) 和 [tpad](https://github.com/FFmpeg/FFmpeg/blob/8dca1586f4/libavfilter/vf_tpad.c) 实现。MP4 的 YUV420 编码会在擦除边缘产生正常的色度重采样；非边缘画面用 MP4 对照，精确的擦除边界另用无损 RGB 验证。
 
 ## 视频缩略图与真实媒体基准
 

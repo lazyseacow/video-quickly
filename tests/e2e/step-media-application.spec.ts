@@ -23,7 +23,7 @@ test('renders validated videos in the workbench while later shots are still gene
     const player = page.getByRole('region', { name: '视频预览播放器', exact: true });
     const shots = page.locator('.outline-shot'), clips = page.locator('.timeline-clip--video');
     const stage = page.getByRole('button', { name: '打开阶段：素材与配音', exact: true });
-    await expect(player).toContainText('本地示例');
+    await expect(player).toContainText('默认画面');
     await rpc(request, 'run.start', { projectId: configured.id, revision: configured.revision });
     await expect(stage).toContainText('1/3', { timeout: 30_000 });
     await expect(player.getByRole('button', { name: '编辑项目', exact: true })).toBeVisible();
@@ -40,10 +40,24 @@ test('renders validated videos in the workbench while later shots are still gene
 
     await clips.nth(1).getByRole('button', { name: /^定位镜头 2/ }).click();
     await expect(player).toContainText('待生成');
+    const preview = player.locator('.preview-frame canvas');
+    await page.getByRole('slider', { name: '预览播放位置', exact: true }).press('Shift+ArrowRight');
+    const placeholder = (element: HTMLCanvasElement) => {
+      const [red, green, blue, alpha] = element.getContext('2d')!.getImageData(0, 0, 1, 1).data;
+      return element.width > 1 && red === green && green === blue && red < 64 && alpha === 255;
+    };
+    await expect(preview).toHaveAttribute('aria-label', '生成的蓝色镜头 2 · 镜头预览');
+    for (const canvas of [preview, shots.nth(1).locator('canvas'), clips.nth(1).locator('canvas').first()]) {
+      await expect.poll(() => canvas.evaluate(placeholder)).toBe(true);
+    }
     second.resolve();
     await expect(stage).toContainText('2/3', { timeout: 30_000 });
     await expect(shots.nth(1)).toHaveAttribute('aria-pressed', 'true');
     await expect(player).toContainText('视频素材');
+    await expect.poll(() => preview.evaluate((element: HTMLCanvasElement) => {
+      const [red, green, blue] = element.getContext('2d')!.getImageData(element.width / 2, element.height / 2, 1, 1).data;
+      return blue > 150 && red < 60 && green < 60;
+    })).toBe(true);
     await expect(player.locator('.prepared-mix-preview')).toHaveAttribute('data-status', 'ready');
     await page.screenshot({ path: info.outputPath('live-video-preview.png') });
     await page.setViewportSize({ width: 390, height: 844 });

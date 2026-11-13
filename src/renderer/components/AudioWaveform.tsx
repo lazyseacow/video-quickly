@@ -27,8 +27,8 @@ function readWaveform(asset: AssetRecord, key: string): Promise<Waveform> {
   return request;
 }
 
-export default memo(function AudioWaveform({ asset, sourceInUs, durationUs, spans, mappingError, loop = false, label = '旁白', showSourceLabel = true }: {
-  asset?: AssetRecord; sourceInUs: number; durationUs: number; spans?: readonly WaveformSpan[]; mappingError?: string; loop?: boolean; label?: string; showSourceLabel?: boolean;
+export default memo(function AudioWaveform({ asset, sourceInUs, durationUs, spans, mappingError, loop = false, label = '旁白', showSourceLabel = true, timeAtProgress }: {
+  asset?: AssetRecord; sourceInUs: number; durationUs: number; spans?: readonly WaveformSpan[]; mappingError?: string; loop?: boolean; label?: string; showSourceLabel?: boolean; timeAtProgress?: (progress: number) => number;
 }) {
   const container = useRef<HTMLSpanElement>(null);
   const [visible, setVisible] = useState(false);
@@ -53,7 +53,11 @@ export default memo(function AudioWaveform({ asset, sourceInUs, durationUs, span
     return () => { active = false; };
   }, [visible, key]);
   const current = result?.key === key ? result : undefined;
-  const peaks = useMemo(() => current?.waveform ? spans ? waveformSpanColumns(current.waveform, spans, durationUs, Math.min(1600, Math.max(1, Math.ceil(width / 2)))) : waveformColumns(current.waveform, sourceInUs, durationUs, Math.min(1600, Math.max(1, Math.ceil(width / 2))), loop) : [], [current?.waveform, sourceInUs, durationUs, spans, width, loop]);
+  const peaks = useMemo(() => {
+    if (!current?.waveform) return [];
+    const columns = Math.min(1600, Math.max(1, Math.ceil(width / 2)));
+    return spans ? waveformSpanColumns(current.waveform, spans, durationUs, columns) : waveformColumns(current.waveform, sourceInUs, durationUs, columns, loop, timeAtProgress);
+  }, [current?.waveform, sourceInUs, durationUs, spans, width, loop, timeAtProgress]);
   const path = peaks.map((peak, index) => { const height = peak * 13; return `M${index + .5},${16 - height}V${16 + height}`; }).join('');
   const error = mappingError || (!asset?.active ? '关联音频素材缺失' : current?.error);
   const state = error ? 'error' : current?.waveform ? 'ready' : visible ? 'loading' : 'waiting';

@@ -55,6 +55,7 @@
   --media-overlay: #141414a3;
   --on-media: var(--neutral-0);
   --media-placeholder: var(--field);
+  --media-default-picture: var(--neutral-800);
   --media-player-background: var(--neutral-900);
   --media-shadow: none;
   --media-caption-background: #141414d9;

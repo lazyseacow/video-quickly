@@ -273,7 +273,7 @@ test('scrubs continuously, steps fractional frames and preserves the editing dra
   expect(headerAfter.x).toBeCloseTo(headerBefore.x, 1);
   expect(Math.abs(playheadAfter.x - playheadBefore.x)).toBeLessThan(2);
   await expect(ruler).toHaveAttribute('aria-valuenow', '5973');
-  await page.getByRole('button', { name: '适配完整时间轴', exact: true }).click();
+  await page.getByRole('button', { name: '重置时间轴缩放', exact: true }).click();
   await expect(page.getByLabel('时间轴缩放', { exact: true })).toHaveValue('1');
   expect(await page.locator('.timeline-scroll').evaluate(element => element.scrollLeft)).toBe(0);
   await ruler.press('Home');
@@ -287,6 +287,67 @@ test('scrubs continuously, steps fractional frames and preserves the editing dra
   await page.getByRole('button', { name: '我的项目', exact: true }).click();
   await page.locator('.project-card').filter({ hasText: '时间轴交互验收' }).getByRole('button', { name: /继续创作/ }).click();
   await expect(page.getByLabel('镜头标题', { exact: true })).toHaveValue('尚未保存的标题');
+});
+
+test('keeps 54 mixed-length shots readable and maps the scrolled ruler to the correct shot', async ({ page, request }, info) => {
+  await page.setViewportSize({ width: 1024, height: 720 });
+  const response = await request.post('/__desktop_rpc', { data: { method: 'project.create', params: { title: '长时间轴默认画面验收' } } });
+  expect(response.ok()).toBe(true);
+  const { result: project } = await response.json();
+  const shots = Array.from({ length: 54 }, (_, index) => ({
+    id: `dense-${index}`, title: `待生成镜头 ${index + 1}`, narration: '', visualPrompt: '',
+    durationUs: index % 3 === 0 ? 30_000_000 : 500_000,
+    animation: { panX: index % 2 ? .2 : 0, zoom: 1.1, transition: 'cut' },
+  }));
+  const updated = await request.post('/__desktop_rpc', { data: { method: 'project.update', params: { projectId: project.id, revision: project.revision, patch: { shots } } } });
+  expect(updated.ok()).toBe(true);
+  await openApp(page); await openProjectFromList(page, project.title);
+
+  const timeline = page.getByRole('region', { name: '项目时间轴', exact: true });
+  const scroller = timeline.locator('.timeline-scroll');
+  const clips = timeline.locator('.timeline-clip--video');
+  await expect(clips).toHaveCount(54);
+  await expect.poll(() => clips.evaluateAll(elements => elements.every((element, index) => {
+    const { left, width } = element.getBoundingClientRect();
+    const previous = elements[index - 1]?.getBoundingClientRect();
+    return width >= 71.99 && (!previous || left - previous.right >= 3.98);
+  }))).toBe(true);
+  const preview = page.locator('.preview-frame canvas');
+  const pixels = (canvas: HTMLCanvasElement) => canvas.toDataURL();
+  await expect(preview).toHaveAttribute('data-rendered-frame', '0');
+  const firstPicture = await preview.evaluate(pixels);
+  await page.screenshot({ path: info.outputPath('timeline-54-shots-dark-1024.png') });
+
+  const ruler = timeline.getByRole('slider', { name: '预览播放位置' });
+  const header = timeline.locator('.timeline-track-headers');
+  const headerLeft = (await header.boundingBox())?.x;
+  const index = 50;
+  const shotStartUs = shots.slice(0, index).reduce((sum, shot) => sum + shot.durationUs, 0);
+  const clip = clips.nth(index);
+  await clip.scrollIntoViewIfNeeded();
+  expect(await scroller.evaluate(element => element.scrollLeft)).toBeGreaterThan(0);
+  expect((await header.boundingBox())?.x).toBe(headerLeft);
+  const bounds = await clip.boundingBox(), rulerBounds = await ruler.boundingBox();
+  if (!bounds || !rulerBounds) throw new Error('滚动后应可看到目标镜头和时间尺');
+  const x = bounds.x + (bounds.width + 4) / 2;
+  await page.mouse.click(x, rulerBounds.y + rulerBounds.height / 2);
+  await expect.poll(async () => Math.abs(Number(await ruler.getAttribute('aria-valuenow')) - (shotStartUs + 250_000) / 1000)).toBeLessThanOrEqual(17);
+  await expect(preview).toHaveAttribute('aria-label', '待生成镜头 51 · 镜头预览');
+  expect(await preview.evaluate(pixels)).toBe(firstPicture);
+  expect(Math.abs((await timeline.locator('.playhead').boundingBox())!.x - x)).toBeLessThan(3);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(1024);
+  const last = page.locator('.outline-shot').last();
+  await last.click();
+  await expect(ruler).toHaveAttribute('aria-valuenow', '557500');
+  await expect(clips.last()).toBeInViewport({ ratio: .9 });
+  await expect(timeline.getByRole('slider', { name: '镜头出点' })).toBeInViewport({ ratio: 1 });
+
+  await page.setViewportSize({ width: 1536, height: 960 });
+  await setWorkspaceTheme(page, 'light');
+  await page.locator('.outline-shot').first().click();
+  await scroller.evaluate(element => { element.scrollLeft = 0; });
+  await ruler.press('Home');
+  await page.screenshot({ path: info.outputPath('timeline-54-shots-light-1536.png') });
 });
 
 test('edits real project state, output profiles and theme', async ({ page }) => {

@@ -92,6 +92,8 @@ pnpm test:desktop
 
 [Desktop verification](https://github.com/lazyseacow/video-quickly/actions/workflows/ci.yml) 在 Windows 和两个 Mac 架构执行完整矩阵。每次交付核对对应提交、实际包、清单和安装记录的 SHA-256，失败或缺少报告时不生成成功清单。平台专项及证据见 [Windows 验收](windows-verification.md)和 [Mac 验收](macos-verification.md)。
 
+[Desktop package verification](https://github.com/lazyseacow/video-quickly/actions/workflows/desktop-packages.yml) 在推送 `codex/package-verification/**` 分支或手动运行时执行 Windows x64 和 Intel macOS 的打包、完整原生回归及隔离安装验收。按产物名称中的提交 SHA 核对报告。
+
 浏览器中的故意缺失素材与制作检查夹具使用 `preview:e2e` 的同一真实 HTTP、事件和媒体桥接，每条测试拥有独立预览进程、随机端口和临时工作区，复用已构建的客户端。结束时等待执行器与媒体读取器关闭、确认子进程退出后，仅清理该夹具创建且归属未变化的目录；故障文件不会混入其他并行测试的项目封面或素材库。
 
 浏览器测试固定 Playwright 1.64.1，并通过 `pnpm patch` 回移[官方 TCP 随机端口修复 #43605](https://github.com/microsoft/playwright/pull/43605)。该补丁保留原 Chromium 配置，只向已有禁用列表加入 `TcpPortRandomizationWin`，处理 Windows Server 2025 上加载本地资源的 `ERR_NO_BUFFER_SPACE`。升级到包含此修复的稳定版本后，应移除补丁并重跑三平台验收。

@@ -23,3 +23,9 @@ it('loops the selected music tail and retains a peak when a column crosses the l
   expect(waveformColumns(waveform, 20_000, 60_000, 2, true)).toEqual([.9, .9]);
   expect(waveformColumns(waveform, 40_000, 20_000, 2, true)).toEqual([0, 0]);
 });
+
+it('samples the timeline time for each display column when a short shot expands', () => {
+  const timeAtProgress = (progress: number) => progress <= .5 ? progress * 20_000 : 10_000 + (progress - .5) * 80_000;
+  expect(waveformColumns(waveform, 0, 50_000, 2, false, timeAtProgress)).toEqual([.1, .9]);
+  expect(waveformColumns(waveform, 20_000, 50_000, 2, true, timeAtProgress)).toEqual([.9, .9]);
+});

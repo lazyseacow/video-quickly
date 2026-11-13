@@ -1,0 +1,69 @@
+name: Desktop package verification
+
+on:
+  push:
+    branches: ['codex/package-verification/**']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  packages:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 35
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Windows x64
+            runner: windows-2025
+            platform: win32
+          - name: Intel macOS
+            runner: macos-15-intel
+            platform: darwin
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa # v4
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version-file: .node-version
+          architecture: x64
+          cache: pnpm
+      - name: Verify native runner
+        env:
+          EXPECTED_PLATFORM: ${{ matrix.platform }}
+        run: node -e "if(process.platform!==process.env.EXPECTED_PLATFORM||process.arch!=='x64')throw Error('Runner architecture mismatch');console.log(process.platform,process.arch,process.version)"
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm prepare:media
+      - run: pnpm build:desktop
+      - name: Verify the macOS bundle
+        if: runner.os == 'macOS'
+        run: node scripts/verify-macos-bundle.mjs
+      - name: Run the complete packaged Electron regression
+        run: pnpm test:desktop --packaged
+      - name: Verify Windows installation and overwrite upgrade
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $taskInstallers = @(Get-ChildItem -LiteralPath '.generated/electron-release' -Filter '*-setup.exe')
+          if ($taskInstallers.Count -ne 1) { throw '应恰好有一个安装包' }
+          ./scripts/install-smoke.ps1 -InstallerPath $taskInstallers[0].FullName
+      - name: Verify macOS ZIP installation, overwrite and data retention
+        if: runner.os == 'macOS'
+        run: node scripts/install-macos-smoke.mjs
+      - name: Upload verification evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: desktop-package-${{ matrix.platform }}-x64-${{ github.sha }}
+          retention-days: 14
+          path: |
+            .generated/electron-results.json
+            .generated/electron-artifacts/
+            .generated/install-smoke.json
+            .generated/macos-portability.json
+            .generated/macos-install-smoke.json

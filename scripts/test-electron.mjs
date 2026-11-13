@@ -118,6 +118,7 @@ async function launch() {
   if (!checks.gettingStarted) {
     const project = await verifyGettingStarted();
     await verifyGenericWorkflow(project);
+    await verifyStoryboardTimeline(project);
     if (compact) await verifyNativeCompactDialogs({ page, rpc, openProject, fixture, artifacts, ffmpegPath: fixtureFfmpeg, environment: packaged ? environment : process.env, checks });
     await verifyNativeMediaExtensions({ page, rpc, openProject, fixture, artifacts, ffmpegPath: fixtureFfmpeg, environment: packaged ? environment : process.env, checks });
     await verifyNativeTransitions({ page, rpc, openProject, fixture, artifacts, ffmpegPath: fixtureFfmpeg, environment: packaged ? environment : process.env, checks });
@@ -187,13 +188,18 @@ async function verifyGenericWorkflow(project) {
   await steps.getByRole('button', { name: '模型与素材', exact: true }).click();
   await expect(dialog.getByRole('combobox', { name: '文本模型', exact: true })).toHaveValue('');
   await expect(dialog.getByRole('combobox', { name: '视频模型', exact: true })).toHaveValue('');
-  await expect(dialog.getByRole('combobox', { name: '图片模型', exact: true })).toHaveValue('不生成首帧');
+  await expect(dialog.getByRole('combobox', { name: '图片模型', exact: true })).toHaveCount(0);
+  const continuation = dialog.getByRole('switch', { name: '尾帧续镜', exact: true });
+  await expect(continuation).toBeChecked();
+  await continuation.press('Space');
+  await expect(continuation).not.toBeChecked();
   await expect(dialog.getByText('高级设置', { exact: true })).toHaveCount(0);
   await steps.getByRole('button', { name: '创作要求', exact: true }).click();
   await expect(dialog.getByLabel('简报内容', { exact: true })).toHaveValue('未提交的项目配置');
   await expect(dialog.getByLabel('风格内容', { exact: true })).toHaveValue('未提交的项目风格');
   await page.screenshot({ path: join(artifacts, 'desktop-workflow-stage.png') });
   await steps.getByRole('button', { name: '确认保存', exact: true }).click();
+  await expect(dialog.getByText('各镜头独立生成', { exact: true })).toBeVisible();
   await expect(dialog.getByRole('button', { name: '保存设置', exact: true })).toBeVisible();
   await expect(dialog.getByRole('button', { name: '保存并开始制作', exact: true })).toHaveCount(0);
   await dialog.getByRole('button', { name: '关闭对话框', exact: true }).click();
@@ -232,9 +238,46 @@ async function verifyGenericWorkflow(project) {
   await experiment.getByRole('button', { name: '关闭', exact: true }).click(); await expect(experiment).toHaveCount(0);
   await launcher.getByRole('button', { name: '取消', exact: true }).click(); await expect(launcher).toHaveCount(0);
   assert.equal((await projectDocument(project.id)).revision, project.revision); assert.equal(credentialContacts, contactsBeforePreview);
+  await openProject(project.title);
+  await expect(page.getByRole('textbox', { name: '项目名称', exact: true })).toHaveValue(project.title);
   checks.promptOfflinePreview = true; checks.promptSessionPersistence = true; checks.promptTemplateVersions = true; checks.promptConfigurationIsolation = true;
   checks.projectSettings = true;
   checks.genericWorkflow = true;
+}
+async function verifyStoryboardTimeline(originalProject) {
+  const title = '原生分镜与时间轴验收';
+  const project = await rpc('project.create', { title, profile: { width: 320, height: 180, frameRate: { numerator: 30, denominator: 1 } } });
+  const shots = Array.from({ length: 54 }, (_, index) => ({
+    id: `native-timeline-${index}`, title: `待生成镜头 ${index + 1}`, narration: '', visualPrompt: '',
+    durationUs: index % 3 === 0 ? 30_000_000 : 500_000,
+    animation: { transition: 'cut', panX: index % 2 ? .2 : 0 },
+  }));
+  await rpc('project.update', { projectId: project.id, revision: project.revision, patch: { shots } });
+  await openProject(title);
+  const timeline = page.getByRole('region', { name: '项目时间轴', exact: true });
+  const clips = timeline.locator('.timeline-clip--video');
+  const preview = page.locator('.preview-frame canvas');
+  await expect(clips).toHaveCount(shots.length);
+  await expect.poll(() => clips.evaluateAll(elements => elements.every((element, index) => {
+    const bounds = element.getBoundingClientRect();
+    const previous = elements[index - 1]?.getBoundingClientRect();
+    return bounds.width >= 71.99 && (!previous || bounds.left - previous.right >= 3.98);
+  }))).toBe(true);
+  await expect(preview).toHaveAttribute('data-rendered-time-us', '0');
+  await expect(page.getByRole('region', { name: '视频预览播放器', exact: true })).toContainText('默认画面');
+  const firstPicture = await preview.evaluate(canvas => canvas.toDataURL());
+  await page.screenshot({ path: join(artifacts, 'desktop-storyboard-timeline.png') });
+
+  await page.locator('.outline-shot').last().click();
+  const lastStartUs = shots.slice(0, -1).reduce((total, shot) => total + shot.durationUs, 0);
+  await expect(timeline.getByRole('slider', { name: '预览播放位置', exact: true })).toHaveAttribute('aria-valuenow', String(lastStartUs / 1_000));
+  await expect(preview).toHaveAttribute('data-rendered-time-us', String(lastStartUs));
+  assert.equal(await preview.evaluate(canvas => canvas.toDataURL()), firstPicture);
+  await expect.poll(() => timeline.locator('.timeline-scroll').evaluate(element => element.scrollLeft)).toBeGreaterThan(0);
+  await expect(clips.last()).toBeInViewport({ ratio: .9 });
+  await page.screenshot({ path: join(artifacts, 'desktop-storyboard-timeline-end.png') });
+  checks.storyboardTimeline = true;
+  await openProject(originalProject.title);
 }
 async function verifyGettingStarted() {
   const guide = page.getByRole('dialog', { name: '使用指南', exact: true });

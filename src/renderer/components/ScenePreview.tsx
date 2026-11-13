@@ -77,6 +77,7 @@ export const ScenePreview = memo(function ScenePreview({ project, shot, shotInde
   const templateActive = Boolean(shot.sceneTemplate);
   const hasVideo = !templateActive && Boolean(shot.videoAssetId);
   const hasImage = !templateActive && !hasVideo && Boolean(shot.assetId);
+  const defaultPicture = !templateActive && !hasVideo && !hasImage;
   const imageAsset = useMemo(() => hasImage ? assets.find(asset => asset.id === shot.assetId) : undefined, [assets, shot.assetId, hasImage]);
   const videoAsset = useMemo(() => hasVideo ? assets.find(asset => asset.id === shot.videoAssetId) : undefined, [assets, shot.videoAssetId, hasVideo]);
   useAssetAvailabilityKey([imageAsset?.id, videoAsset?.id]);
@@ -212,5 +213,5 @@ export const ScenePreview = memo(function ScenePreview({ project, shot, shotInde
   }, [requestRender]);
 
   if (frameSink) return null;
-  return <span ref={container} className={`scene-preview ${thumbnail ? 'scene-preview--thumbnail' : ''}`} aria-busy={loading}><canvas ref={canvas} className={className} role="img" aria-label={`${shot.title} · 镜头预览`} style={error || loading ? { visibility: 'hidden' } : undefined} /><ScenePreviewState error={error} loading={loading} thumbnail={thumbnail} onRetry={() => setRetry(value => value + 1)} onRepair={onRepair} /></span>;
+  return <span ref={container} className={`scene-preview ${thumbnail ? 'scene-preview--thumbnail' : ''}`} data-default-picture={defaultPicture || undefined} aria-busy={loading}><canvas ref={canvas} className={className} role="img" aria-label={`${shot.title} · 镜头预览`} style={error || loading ? { visibility: 'hidden' } : undefined} /><ScenePreviewState error={error} loading={loading} thumbnail={thumbnail} onRetry={() => setRetry(value => value + 1)} onRepair={onRepair} /></span>;
 }, samePreviewProps);

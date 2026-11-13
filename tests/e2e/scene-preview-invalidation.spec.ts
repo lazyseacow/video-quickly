@@ -106,7 +106,7 @@ test('keeps an unchanged thumbnail out of renders when another shot title change
   const own = await measure(page);
   expect(own.reads).toBeGreaterThan(unrelated.reads);
   expect(own.paints).toBeGreaterThan(unrelated.paints);
-  expect(own.pixels).not.toBe(unrelated.pixels);
+  expect(own.pixels).toBe(unrelated.pixels);
   expect(errors).toEqual([]);
 });
 

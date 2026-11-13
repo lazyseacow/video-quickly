@@ -977,13 +977,13 @@ export default function Workbench({ project, workspace, action, notify, onRegist
               {content.workflow.production && <Field label="镜头声音要求"><textarea value={draft.soundPrompt ?? ''} onChange={event => setDraft({ ...draft, soundPrompt: event.target.value })} placeholder="说话者、语气、环境音与音乐…" /></Field>}
               <Field label="画面素材">
                 <Select value={draft.assetId ?? ''} disabled={Boolean(draft.sceneTemplate)} onChange={event => setDraft({ ...draft, assetId: event.target.value || undefined })}>
-                  <option value="">使用示例画面</option>
+                  <option value="">使用默认画面</option>
                   {workspace.assets.filter(asset => asset.active && asset.kind === 'image' && (!asset.projectId || asset.projectId === project.id)).map(asset => <option key={asset.id} value={asset.id}>{asset.name}</option>)}
                 </Select>
               </Field>
               <Field label="镜头视频">
                 <Select value={draft.videoAssetId ?? ''} disabled={Boolean(draft.sceneTemplate)} onChange={event => setDraft({ ...draft, videoAssetId: event.target.value || undefined, videoInUs: event.target.value ? 0 : undefined })}>
-                  <option value="">使用二维画面与运镜</option>
+                  <option value="">使用画面素材</option>
                   {workspace.assets.filter(asset => asset.active && asset.kind === 'video' && (!asset.projectId || asset.projectId === project.id)).map(asset => <option key={asset.id} value={asset.id}>{asset.name}</option>)}
                 </Select>
               </Field>

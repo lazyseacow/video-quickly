@@ -1,6 +1,6 @@
 import { primaryModifier } from '../lib/desktop';
 import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type MouseEvent, type PointerEvent } from 'react';
-import { ArrowLeft, ArrowRight, Copy, ListChecks, Magnet, Mic, Music2, ScanLine, Scissors, Trash2, X, ZoomIn, ZoomOut, SlidersHorizontal, Volume2 } from 'lucide-react';
+import { ArrowLeft, ArrowRight, Copy, ListChecks, Magnet, Mic, Music2, RotateCcw, Scissors, Trash2, X, ZoomIn, ZoomOut, SlidersHorizontal, Volume2 } from 'lucide-react';
 import { frameAtTime, timeAtFrame, type AssetRecord, type FrameRate, type ProjectDocument, type Shot, usesVideoAudio } from '@video-quickly/contracts';
 import type { TimelineClip } from '@video-quickly/video';
 import { canSplitShot, maximumSourceOutUs, minimumShotDurationUs, minimumSourceInUs, snapTimeUs } from '@video-quickly/video/editing';
@@ -11,10 +11,12 @@ import { Button, IconButton, formatTime } from './Primitives';
 import AudioWaveform from './AudioWaveform';
 import TimelineShotRow, { type TimelineDragView as DragView, type TimelineRowHandlers } from './TimelineShotRow';
 import { useScenePreviewContext } from '../lib/scene-preview-context';
+import { CLIP_GAP_PX, createTimelineLayout, MINIMUM_CLIP_WIDTH_PX, type TimelineLayout } from '../lib/timeline-layout';
 import { useCommittedCallback } from '../lib/use-committed-callback';
 import './timeline.css';
 
 const THUMBNAIL_WIDTH_PX = 72;
+const MAX_THUMBNAILS_PER_CLIP = 48;
 
 interface Props {
   project: ProjectDocument; assets: AssetRecord[]; shots: Shot[]; timeline: TimelineClip[]; selectedId?: string; selectedIds?: readonly string[]; rate: FrameRate; clock: PlaybackClock;
@@ -26,22 +28,29 @@ interface Props {
   onTrim: (id: string, inUs: number, outUs: number, revision?: number) => Promise<void>;
   onOpenMusic?: () => void;
 }
-type Gesture = { pointerId: number; element: HTMLButtonElement; id: string; ids: readonly string[]; mode: 'move' | 'in' | 'out'; shot: Shot; x: number; width: number; totalUs: number; startUs: number; revision: number; previousTimeUs: number; moved: boolean; targetIndex: number; inUs: number; outUs: number; snappedUs?: number };
+type Gesture = {
+  pointerId: number; element: HTMLButtonElement; id: string; index: number; ids: readonly string[]; mode: 'move' | 'in' | 'out'; shot: Shot;
+  x: number; layout: TimelineLayout; startUs: number; revision: number; previousTimeUs: number;
+  slots: number[]; moved: boolean; targetIndex: number; inUs: number; outUs: number;
+};
 
 export default memo(function Timeline({ project, assets, shots, timeline, selectedId, selectedIds, rate, clock, sourceDurationUs, sourceStatus, editingDisabled, readOnly = false, onSelect, onSelectAll, onClearSelection, onBulkEdit, onMove, onDuplicate, onRemove, onSplit, onReorder, onTrim, onOpenMusic }: Props) {
   const [zoom, setZoom] = useState(1);
   const [snapping, setSnapping] = useState(true);
   const [drag, setDrag] = useState<DragView>();
-  const [trackWidth, setTrackWidth] = useState(0);
+  const [viewportWidth, setViewportWidth] = useState(0);
   const modifierLabel = primaryModifier().label;
   const previewContext = useScenePreviewContext(project);
   const scroller = useRef<HTMLDivElement>(null);
-  const track = useRef<HTMLDivElement>(null);
   const gesture = useRef<Gesture | undefined>(undefined);
   const suppressClick = useRef(false);
-  const anchor = useRef<{ time: number; x: number } | undefined>(undefined);
-  const totalUs = timeline.at(-1)?.endUs ?? 0;
-  const pixelsPerUs = totalUs ? trackWidth / totalUs : 0;
+  const lastRevealedShot = useRef<TimelineClip | undefined>(undefined);
+  const anchor = useRef<{ timeUs: number; x: number } | undefined>(undefined);
+  const layout = useMemo(() => createTimelineLayout(timeline, viewportWidth, zoom), [timeline, viewportWidth, zoom]);
+  const { totalUs } = layout;
+  const trim = drag && drag.mode !== 'move' ? drag : undefined;
+  const visibleLayout = useMemo(() => trim ? createTimelineLayout(timeline, viewportWidth, zoom, { index: trim.index, durationUs: trim.outUs - trim.inUs }) : layout, [trim, timeline, viewportWidth, zoom, layout]);
+  const markerX = trim ? visibleLayout.edges[trim.index + Number(trim.mode === 'out')] : drag?.markerX;
   const selectedIndex = shots.findIndex(shot => shot.id === selectedId);
   const selected = useMemo(() => { const ids = new Set(selectedIds ?? (selectedId ? [selectedId] : [])); return new Set(shots.filter(shot => ids.has(shot.id)).map(shot => shot.id)); }, [shots, selectedIds, selectedId]);
   const draggingIds = useMemo(() => new Set(drag?.ids), [drag?.ids]);
@@ -53,11 +62,14 @@ export default memo(function Timeline({ project, assets, shots, timeline, select
   const musicClips = project.musicClips ?? [];
   const trimmingDisabled = editingDisabled || !singleSelected || Boolean(shots[selectedIndex]?.locked) || sourceStatus === 'loading' || sourceStatus === 'error';
   const sourceOutLimit = sourceDurationUs === undefined ? undefined : maximumSourceOutUs(sourceDurationUs, rate);
-  const divisions = Math.round(6 * zoom);
+  const preferredDivisions = Math.max(Math.round(6 * zoom), visibleLayout.minimumWidthsApplied ? Math.round(visibleLayout.width / 160) : 0);
+  const divisions = Math.max(1, Math.min(preferredDivisions, Math.floor(visibleLayout.width / MINIMUM_CLIP_WIDTH_PX)));
   useLayoutEffect(() => {
-    if (!track.current) return;
-    const observer = new ResizeObserver(entries => setTrackWidth(entries[0]?.contentRect.width ?? 0));
-    observer.observe(track.current); return () => observer.disconnect();
+    const element = scroller.current;
+    if (!element) return;
+    const observer = new ResizeObserver(([entry]) => setViewportWidth(entry.contentRect.width));
+    observer.observe(element);
+    return () => observer.disconnect();
   }, []);
   useEffect(() => () => { const current = gesture.current; gesture.current = undefined; if (current?.element.hasPointerCapture(current.pointerId)) current.element.releasePointerCapture(current.pointerId); }, []);
   useLayoutEffect(() => {
@@ -71,64 +83,89 @@ export default memo(function Timeline({ project, assets, shots, timeline, select
   function changeZoom(value: number) {
     if (value === zoom) return;
     const element = scroller.current;
-    const ruler = element?.querySelector<HTMLElement>('.timeline-ruler');
-    if (element && ruler) {
-      const time = totalUs ? clock.getSnapshot().timeUs / totalUs : 0;
-      anchor.current = { time, x: ruler.offsetLeft + ruler.clientWidth * time - element.scrollLeft };
+    if (element) {
+      const { timeUs } = clock.getSnapshot();
+      anchor.current = { timeUs, x: layout.xAt(timeUs) - element.scrollLeft };
     }
     setZoom(value);
   }
   useLayoutEffect(() => {
     if (scroller.current && anchor.current) {
-      const { time, x } = anchor.current;
-      const ruler = scroller.current.querySelector<HTMLElement>('.timeline-ruler');
-      if (ruler) scroller.current.scrollLeft = ruler.offsetLeft + ruler.clientWidth * time - x;
+      const { timeUs, x } = anchor.current;
+      scroller.current.scrollLeft = layout.xAt(timeUs) - x;
       anchor.current = undefined;
     }
-  }, [zoom]);
+  }, [layout]);
+  useLayoutEffect(() => {
+    const element = scroller.current;
+    if (!element || !viewportWidth || drag) return;
+    const clip = timeline[selectedIndex];
+    const previous = lastRevealedShot.current;
+    lastRevealedShot.current = clip;
+    if (!clip || (clip.shotId === previous?.shotId && clip.startUs === previous.startUs)) return;
+    const left = layout.edges[selectedIndex];
+    const right = layout.edges[selectedIndex + 1];
+    if (left < element.scrollLeft || right > element.scrollLeft + viewportWidth) {
+      element.scrollLeft = right - left > viewportWidth || left < element.scrollLeft ? left : right - viewportWidth;
+    }
+  }, [drag, layout, selectedIndex, timeline, viewportWidth]);
   function begin(event: PointerEvent<HTMLButtonElement>, shot: Shot, index: number, mode: Gesture['mode']) {
     suppressClick.current = false;
-    if (event.button !== 0 || event.ctrlKey || event.metaKey || event.shiftKey || editingDisabled || readOnly || !track.current || (mode !== 'move' && trimmingDisabled)) return;
-    const width = track.current.getBoundingClientRect().width;
-    if (!width || !totalUs) return;
+    const element = scroller.current;
+    if (event.button !== 0 || event.ctrlKey || event.metaKey || event.shiftKey || editingDisabled || readOnly || !element || !totalUs || (mode !== 'move' && trimmingDisabled)) return;
     event.currentTarget.setPointerCapture(event.pointerId);
     clock.pause();
-    const ids = mode === 'move' && selected.has(shot.id) ? shots.filter(value => selected.has(value.id)).map(value => value.id) : [shot.id];
-    const firstIndex = mode === 'move' && selected.has(shot.id) ? shots.findIndex(value => selected.has(value.id)) : index;
+    const moveSelection = mode === 'move' && selected.has(shot.id);
+    const ids = moveSelection ? shots.filter(value => selected.has(value.id)).map(value => value.id) : [shot.id];
+    const firstIndex = moveSelection ? shots.findIndex(value => selected.has(value.id)) : index;
+    const slots = [0];
+    if (mode === 'move') {
+      const moving = new Set(ids);
+      timeline.forEach((clip, index) => {
+        if (!moving.has(clip.shotId)) slots.push(slots.at(-1)! + layout.edges[index + 1] - layout.edges[index]);
+      });
+    }
     const inUs = shot.clipEdit?.inUs ?? shot.sourceInUs ?? 0;
-    gesture.current = { pointerId: event.pointerId, element: event.currentTarget, id: shot.id, ids, shot, mode, x: event.clientX, width, totalUs, startUs: timeline[firstIndex].startUs, revision: project.revision, previousTimeUs: clock.getSnapshot().timeUs, moved: false, targetIndex: firstIndex, inUs, outUs: inUs + shot.durationUs };
+    gesture.current = {
+      pointerId: event.pointerId, element: event.currentTarget, id: shot.id, index, ids, shot, mode,
+      x: event.clientX + element.scrollLeft, layout, startUs: timeline[firstIndex].startUs, revision: project.revision,
+      previousTimeUs: clock.getSnapshot().timeUs, slots, moved: false, targetIndex: firstIndex, inUs, outUs: inUs + shot.durationUs,
+    };
   }
   function move(event: PointerEvent<HTMLButtonElement>) {
     const current = gesture.current;
     if (!current || current.pointerId !== event.pointerId || readOnly) return;
-    const delta = event.clientX - current.x;
+    const delta = event.clientX + (scroller.current?.scrollLeft ?? 0) - current.x;
     if (!current.moved && Math.abs(delta) < 4) return;
     current.moved = true;
-    const deltaUs = delta / current.width * current.totalUs;
-    const threshold = snapping && !event.altKey ? 8 / current.width * current.totalUs : 0;
     const originalIn = current.shot.clipEdit?.inUs ?? current.shot.sourceInUs ?? 0;
-    let markerUs: number | undefined;
+    const { layout, slots } = current;
+    let markerX: number | undefined;
     if (current.mode === 'move') {
-      const moving = new Set(current.ids), remaining = shots.filter(shot => !moving.has(shot.id));
-      const slots = [0]; for (const shot of remaining) slots.push(slots.at(-1)! + shot.durationUs);
-      const proposed = current.startUs + deltaUs;
-      const snapped = snapTimeUs(proposed, rate, slots, threshold);
-      current.targetIndex = slots.reduce((best, value, index) => Math.abs(value - snapped) < Math.abs(slots[best] - snapped) ? index : best, 0);
-      markerUs = slots[current.targetIndex];
+      const proposedX = layout.xAt(current.startUs) + delta;
+      current.targetIndex = slots.reduce((best, x, index) => Math.abs(x - proposedX) < Math.abs(slots[best] - proposedX) ? index : best, 0);
+      markerX = slots[current.targetIndex];
     } else {
       const edge = current.mode === 'in' ? current.startUs : current.startUs + current.shot.durationUs;
-      const proposed = edge + deltaUs;
-      const anchors = [...timeline.flatMap(clip => [clip.startUs, clip.endUs]), current.previousTimeUs];
-      const snapped = snapTimeUs(proposed, rate, anchors, threshold);
+      const proposedX = layout.xAt(edge) + delta;
+      let proposed = layout.timeAt(proposedX);
+      if (snapping && !event.altKey) {
+        let closest = 8;
+        for (let index = 0; index < layout.edges.length; index++) {
+          const distance = Math.abs(layout.edges[index] - proposedX);
+          if (distance <= closest) { closest = distance; proposed = layout.times[index]; }
+        }
+        if (Math.abs(layout.xAt(current.previousTimeUs) - proposedX) <= closest) proposed = current.previousTimeUs;
+      }
+      const snapped = snapTimeUs(proposed, rate);
       const shift = snapped - edge;
       const minimum = minimumShotDurationUs(rate);
       if (current.mode === 'in') current.inUs = Math.max(minimumSourceInUs(current.shot), Math.min(originalIn + current.shot.durationUs - minimum, originalIn + shift));
       else current.outUs = Math.max(originalIn + minimum, Math.min(sourceOutLimit ?? originalIn + 600_000_000, originalIn + current.shot.durationUs + shift));
-      markerUs = current.startUs + (current.mode === 'in' ? current.inUs - originalIn : current.outUs - originalIn);
+      const markerUs = current.startUs + (current.mode === 'in' ? current.inUs - originalIn : current.outUs - originalIn);
       clock.seek(markerUs);
     }
-    current.snappedUs = markerUs;
-    setDrag({ id: current.id, ids: current.ids, mode: current.mode, deltaPx: delta, inUs: current.inUs, outUs: current.outUs, markerUs });
+    setDrag({ id: current.id, index: current.index, ids: current.ids, mode: current.mode, deltaPx: delta, inUs: current.inUs, outUs: current.outUs, markerX });
   }
   function finish(event: PointerEvent<HTMLButtonElement>) {
     const current = gesture.current;
@@ -188,7 +225,7 @@ export default memo(function Timeline({ project, assets, shots, timeline, select
       </div>}
       {drag ? <output className="timeline-drag-readout">{drag.mode === 'move' ? '调整镜头顺序' : `${(drag.inUs / 1e6).toFixed(3)} – ${(drag.outUs / 1e6).toFixed(3)} 秒`}</output> : <TimelineReadout clock={clock} rate={rate} />}
       <div className="timeline-view-actions" role="group" aria-label="时间轴视图">
-        <IconButton label="适配完整时间轴" onClick={() => changeZoom(1)}><ScanLine size={16} /></IconButton>
+        <IconButton label="重置时间轴缩放" onClick={() => changeZoom(1)}><RotateCcw size={16} /></IconButton>
         <IconButton className="timeline-zoom-step" label="缩小时间轴" disabled={zoom <= 1} onClick={() => changeZoom(Math.max(1, Math.round((zoom - .5) * 10) / 10))}><ZoomOut size={15} /></IconButton>
         <input className="timeline-zoom" aria-label="时间轴缩放" aria-valuetext={zoomPercent} type="range" min="1" max="5" step="0.1" value={zoom} onChange={event => changeZoom(Number(event.target.value))} />
         <IconButton className="timeline-zoom-step" label="放大时间轴" disabled={zoom >= 5} onClick={() => changeZoom(Math.min(5, Math.round((zoom + .5) * 10) / 10))}><ZoomIn size={15} /></IconButton>
@@ -203,33 +240,37 @@ export default memo(function Timeline({ project, assets, shots, timeline, select
         {originalCount > 0 && <div className="track-header track-header--audio"><span className="track-header__type"><Volume2 size={14} /><b>A{audioCount ? 2 : 1}</b></span><strong>原声</strong><small>{originalCount} 段</small></div>}
         {musicClips.length > 0 && <div className="track-header track-header--audio"><span className="track-header__type"><Music2 size={14} /><b>A{1 + Number(audioCount > 0) + Number(originalCount > 0)}</b></span><strong>背景音乐</strong><small>{musicClips.length} 段音频</small></div>}
       </div>
-      <div className="timeline-scroll" ref={scroller}><div className="timeline-content" style={{ width: `${zoom * 100}%` }}>
-        <TimelinePosition clock={clock} rate={rate} totalUs={totalUs} zoom={zoom} />
-        {drag?.markerUs !== undefined && <div className="timeline-drop-marker" aria-hidden="true" style={{ left: `calc(12px + (100% - 32px) * ${drag.markerUs / (totalUs || 1)})` }} />}
-        {tracks.map(kind => <div className={`track track--${kind} ${kind === 'original' ? 'track--audio' : ''}`} key={kind} style={{ backgroundSize: `${100 / divisions}% 100%` }}><div className="track-clips" ref={kind === 'video' ? track : undefined}>
+      <div className="timeline-scroll" ref={scroller}><div className="timeline-content" style={{ inlineSize: visibleLayout.width || `${zoom * 100}%` }}>
+        <TimelinePosition clock={clock} rate={rate} layout={visibleLayout} divisions={divisions} totalUs={totalUs} viewportWidth={viewportWidth} />
+        {markerX !== undefined && <div className="timeline-drop-marker" aria-hidden="true" style={{ left: markerX }} />}
+        {tracks.map(kind => <div className={`track track--${kind} ${kind === 'original' ? 'track--audio' : ''}`} key={kind} style={{ backgroundSize: `${100 / divisions}% 100%` }}><div className="track-clips">
           {shots.map((shot, index) => {
             const clip = timeline[index];
             const active = drag && (drag.mode === 'move' ? draggingIds.has(shot.id) : drag.id === shot.id) ? drag : undefined;
-            const clipInUs = shot.clipEdit?.inUs ?? shot.sourceInUs ?? 0;
-            const startUs = clip.startUs + (active?.mode === 'in' ? active.inUs - clipInUs : 0);
-            const durationUs = active && active.mode !== 'move' ? active.outUs - active.inUs : clip.durationUs;
-            // Keep the captured handle mounted until even a narrow trim gesture finishes.
-            const trimming = active?.mode === 'in' || active?.mode === 'out';
-            const handles = !readOnly && kind === 'video' && singleSelected && shot.id === selectedId && (trimming || durationUs * pixelsPerUs > 84);
+            const trimming = trim?.index === index;
+            const durationUs = trimming ? trim.outUs - trim.inUs : clip.durationUs;
+            const clipWidth = layout.edges[index + 1] - layout.edges[index];
+            const left = visibleLayout.edges[index];
+            const width = (trim ? visibleLayout.edges[index + 1] - left : clipWidth) - CLIP_GAP_PX;
+            const handles = !readOnly && kind === 'video' && singleSelected && shot.id === selectedId;
             // Sample the committed clip so a trim gesture can resize the strip without decoding new frames.
-            const thumbnailCount = kind === 'video' ? Math.max(1, Math.round(clip.durationUs * pixelsPerUs / THUMBNAIL_WIDTH_PX)) : 0;
+            const thumbnailCount = kind === 'video' && (shot.videoAssetId || shot.assetId || shot.sceneTemplate) ? Math.min(MAX_THUMBNAILS_PER_CLIP, Math.max(1, Math.round(clipWidth / THUMBNAIL_WIDTH_PX))) : 1;
             const sounding = kind === 'audio' ? Boolean(shot.audioAssetId) : kind === 'original' && usesVideoAudio(shot);
             const soundAsset = assetById.get((kind === 'original' ? shot.videoAssetId : shot.audioAssetId) ?? '');
-            return <TimelineShotRow key={shot.id} project={previewContext} assets={assets} shot={shot} index={index} kind={kind} selected={selected.has(shot.id)} active={active} startUs={startUs} durationUs={durationUs} totalUs={totalUs} thumbnailCount={thumbnailCount} handles={handles} trimmingDisabled={handles && trimmingDisabled} editingDisabled={editingDisabled} sourceOutLimit={handles ? sourceOutLimit : undefined} sourceDurationUs={sourceDurationUs} rate={rate} sounding={sounding} soundAsset={soundAsset} modifierLabel={modifierLabel} handlers={rowHandlers} />;
+            return <TimelineShotRow key={shot.id} project={previewContext} assets={assets} shot={shot} index={index} kind={kind} selected={selected.has(shot.id)} active={active} left={left} width={width} durationUs={durationUs} thumbnailCount={thumbnailCount} handles={handles} trimmingDisabled={handles && trimmingDisabled} editingDisabled={editingDisabled} sourceOutLimit={handles ? sourceOutLimit : undefined} sourceDurationUs={sourceDurationUs} rate={rate} sounding={sounding} soundAsset={soundAsset} modifierLabel={modifierLabel} handlers={rowHandlers} />;
           })}
         </div></div>)}
         {musicClips.length > 0 && <div className="track track--audio track--music" style={{ backgroundSize: `${100 / divisions}% 100%` }}><div className="track-clips">
           {musicClips.map(clip => {
-            const visibleDuration = Math.min(clip.durationUs, totalUs - clip.startUs);
+            const visibleDuration = Math.min(clip.durationUs, visibleLayout.totalUs - clip.startUs);
             if (visibleDuration <= 0) return null;
-            return <div className="timeline-clip timeline-clip--audio timeline-clip--music" key={clip.id} style={{ left: `${clip.startUs / totalUs * 100}%`, width: `calc(${visibleDuration / totalUs * 100}% - 2px)` }}>
+            const left = visibleLayout.xAt(clip.startUs);
+            const span = visibleLayout.xAt(clip.startUs + visibleDuration) - left;
+            const width = Math.max(0, span - 2);
+            const timeAtProgress = visibleLayout.minimumWidthsApplied ? (progress: number) => Math.round(visibleLayout.timeAt(left + progress * span)) - clip.startUs : undefined;
+            return <div className="timeline-clip timeline-clip--audio timeline-clip--music" key={clip.id} style={{ left, width }}>
               <button type="button" className="timeline-clip__select" disabled={editingDisabled || !onOpenMusic} onClick={onOpenMusic} aria-label={`编辑背景音乐：${assetById.get(clip.assetId)?.name ?? '素材缺失'}`}>
-                <AudioWaveform asset={assetById.get(clip.assetId)} sourceInUs={clip.sourceInUs} durationUs={visibleDuration} loop={clip.loop} label="背景音乐" />
+                <AudioWaveform asset={assetById.get(clip.assetId)} sourceInUs={clip.sourceInUs} durationUs={visibleDuration} loop={clip.loop} label="背景音乐" timeAtProgress={timeAtProgress} />
               </button>
             </div>;
           })}
@@ -249,10 +290,10 @@ const TimelineReadout = memo(function TimelineReadout({ clock, rate }: { clock: 
   return <output className="timeline-readout" aria-label="时间轴当前时间" aria-live="off"><b>{formatTime(timeUs)}</b><span>F {frameAtTime(timeUs, rate) + 1}</span></output>;
 });
 
-function TimelinePosition({ clock, rate, totalUs, zoom }: { clock: PlaybackClock; rate: FrameRate; totalUs: number; zoom: number }) {
+function TimelinePosition({ clock, rate, layout, divisions, totalUs, viewportWidth }: { clock: PlaybackClock; rate: FrameRate; layout: TimelineLayout; divisions: number; totalUs: number; viewportWidth: number }) {
   const { timeUs, playing } = usePlayback(clock);
   const ruler = useRef<HTMLDivElement>(null);
-  const pointer = useRef<{ id: number; left: number; width: number; initialTimeUs: number; completed: () => void } | undefined>(undefined);
+  const pointer = useRef<{ id: number; element: HTMLDivElement; initialTimeUs: number; completed: () => void } | undefined>(undefined);
   const pending = useRef<number | undefined>(undefined);
   const request = useRef<number | undefined>(undefined);
   const [dragging, setDragging] = useState(false);
@@ -261,21 +302,23 @@ function TimelinePosition({ clock, rate, totalUs, zoom }: { clock: PlaybackClock
   useEffect(() => () => { if (request.current !== undefined) cancelAnimationFrame(request.current); }, []);
   useEffect(() => {
     if (!playing || !ruler.current) return;
-    const element = ruler.current.closest('.timeline-scroll');
-    if (!(element instanceof HTMLElement)) return;
-    const x = ruler.current.offsetLeft + ruler.current.clientWidth * (totalUs ? timeUs / totalUs : 0);
-    if (x > element.scrollLeft + element.clientWidth - 28) element.scrollLeft = x - element.clientWidth * .25;
-    else if (x < element.scrollLeft + ruler.current.offsetLeft) element.scrollLeft = Math.max(0, x - ruler.current.offsetLeft);
-  }, [playing, timeUs, totalUs, zoom]);
+    const element = ruler.current.closest<HTMLElement>('.timeline-scroll');
+    if (!element) return;
+    const x = layout.xAt(timeUs);
+    if (x > element.scrollLeft + viewportWidth - 16) element.scrollLeft = x - viewportWidth * .25;
+    else if (x < element.scrollLeft) element.scrollLeft = x;
+  }, [playing, timeUs, layout, viewportWidth]);
   function position(clientX: number) {
     const bounds = pointer.current;
-    if (bounds) pending.current = Math.max(0, Math.min(totalUs, (clientX - bounds.left) / bounds.width * totalUs));
+    if (bounds) {
+      const x = clientX - bounds.element.getBoundingClientRect().left;
+      pending.current = Math.max(0, Math.min(totalUs, layout.timeAt(x)));
+    }
   }
   function pointerDown(event: PointerEvent<HTMLDivElement>) {
     if (event.button !== 0 || !totalUs) return;
-    const bounds = event.currentTarget.getBoundingClientRect();
-    pointer.current = { id: event.pointerId, left: bounds.left, width: bounds.width, initialTimeUs: clock.getSnapshot().timeUs, completed: beginGuideAction('timeline-seeked') };
-    event.currentTarget.setPointerCapture(event.pointerId); event.currentTarget.focus();
+    pointer.current = { id: event.pointerId, element: event.currentTarget, initialTimeUs: clock.getSnapshot().timeUs, completed: beginGuideAction('timeline-seeked') };
+    event.currentTarget.setPointerCapture(event.pointerId); event.currentTarget.focus({ preventScroll: true });
     setDragging(true); position(event.clientX); flush();
   }
   function pointerMove(event: PointerEvent<HTMLDivElement>) {
@@ -301,16 +344,22 @@ function TimelinePosition({ clock, rate, totalUs, zoom }: { clock: PlaybackClock
     else if (event.key === 'Home') clock.seek(0);
     else if (event.key === 'End') clock.seek(totalUs);
     event.preventDefault(); event.stopPropagation();
-    if (clock.getSnapshot().timeUs !== initialTimeUs) completed();
+    const { timeUs } = clock.getSnapshot();
+    const scroller = event.currentTarget.closest<HTMLElement>('.timeline-scroll');
+    if (scroller) {
+      const x = layout.xAt(timeUs);
+      if (x < scroller.scrollLeft || x >= scroller.scrollLeft + viewportWidth) scroller.scrollLeft = x - viewportWidth / 2;
+    }
+    if (timeUs !== initialTimeUs) completed();
   }
-  const divisions = Math.round(6 * zoom);
-  return <><div ref={ruler} className={`timeline-ruler ${dragging ? 'is-scrubbing' : ''}`} style={{ backgroundSize: `${100 / (divisions * 5)}% 6px` }} role="slider" tabIndex={0} aria-label="预览播放位置" aria-disabled={!totalUs} aria-valuemin={0} aria-valuemax={Math.round(totalUs / 1000)} aria-valuenow={Math.round(timeUs / 1000)} aria-valuetext={`${formatTime(timeUs)}，第 ${frameAtTime(timeUs, rate) + 1} 帧`} aria-keyshortcuts="ArrowLeft ArrowRight Home End" onKeyDown={keydown} onPointerDown={pointerDown} onPointerMove={pointerMove} onPointerUp={pointerEnd} onPointerCancel={pointerEnd} onLostPointerCapture={pointerEnd}><TimelineRulerMarks divisions={divisions} totalUs={totalUs} /></div><div className="playhead-lane" aria-hidden="true"><div className={`playhead ${dragging ? 'is-scrubbing' : ''}`} style={{ transform: `translateX(${totalUs ? timeUs / totalUs * 100 : 0}%)` }} /></div></>;
+  return <><div ref={ruler} className={`timeline-ruler ${dragging ? 'is-scrubbing' : ''}`} style={{ backgroundSize: `${100 / (divisions * 5)}% 6px` }} role="slider" tabIndex={0} aria-label="预览播放位置" aria-disabled={!totalUs} aria-valuemin={0} aria-valuemax={Math.round(totalUs / 1000)} aria-valuenow={Math.round(timeUs / 1000)} aria-valuetext={`${formatTime(timeUs)}，第 ${frameAtTime(timeUs, rate) + 1} 帧`} aria-keyshortcuts="ArrowLeft ArrowRight Home End" onKeyDown={keydown} onPointerDown={pointerDown} onPointerMove={pointerMove} onPointerUp={pointerEnd} onPointerCancel={pointerEnd} onLostPointerCapture={pointerEnd}><TimelineRulerMarks layout={layout} divisions={divisions} /></div><div className="playhead-lane" aria-hidden="true"><div className={`playhead ${dragging ? 'is-scrubbing' : ''}`} style={{ transform: `translateX(${layout.xAt(timeUs)}px)` }} /></div></>;
 }
 
-const TimelineRulerMarks = memo(function TimelineRulerMarks({ divisions, totalUs }: { divisions: number; totalUs: number }) {
-  const fractional = totalUs % (divisions * 1_000_000) !== 0;
-  return Array.from({ length: totalUs ? divisions + 1 : 1 }, (_, index) => {
-    const label = formatTime(totalUs * index / divisions);
+const TimelineRulerMarks = memo(function TimelineRulerMarks({ layout, divisions }: { layout: TimelineLayout; divisions: number }) {
+  const times = Array.from({ length: layout.totalUs ? divisions + 1 : 1 }, (_, index) => Math.round(layout.timeAt(layout.width * index / divisions)));
+  const fractional = times.some(timeUs => timeUs % 1_000_000 !== 0);
+  return times.map((timeUs, index) => {
+    const label = formatTime(timeUs);
     return <span className="ruler-marker" key={index} style={{ left: `${index / divisions * 100}%` }}><span>{fractional ? label : label.split('.')[0]}</span></span>;
   });
 });

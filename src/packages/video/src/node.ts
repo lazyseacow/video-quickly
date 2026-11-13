@@ -169,7 +169,8 @@ export async function renderProject(options: RenderOptions): Promise<RenderResul
     const original = clipEditSource(shot, project)?.original, frozenVideo = clipEditSource(shot, project)?.assetHashes.find(value => value.assetId === videoAsset?.id);
     if (frozenVideo && frozenVideo.sha256 !== videoAsset?.sha256) throw new Error('剪辑来源视频已变化，请恢复原素材或重新建立剪辑。');
     const sceneIdentity = { durationUs: shot.sceneDurationUs ?? original?.sceneDurationUs ?? original?.durationUs ?? shot.durationUs, index: shot.sceneIndex ?? original?.sceneIndex ?? index };
-    const fingerprint=createHash('sha256').update(JSON.stringify({shot:visualShot,profile,image:imageAsset?.sha256,video:videoAsset?.sha256,captionLayout:shot.captionStyle?captionLayoutFor(shot):undefined,visualSpans,sceneIdentity,timing:{count:timing.frameCount,phase:timing.phaseUs},renderer:shot.animation.keyframes?.length?'canvas-v7-keyframes':'canvas-v7-global-edl'})).digest('hex').slice(0,24);
+    const renderer = !shot.sceneTemplate && !imageAsset && !videoAsset ? 'canvas-v8-placeholder' : shot.animation.keyframes?.length ? 'canvas-v7-keyframes' : 'canvas-v7-global-edl';
+    const fingerprint=createHash('sha256').update(JSON.stringify({shot:visualShot,profile,image:imageAsset?.sha256,video:videoAsset?.sha256,captionLayout:shot.captionStyle?captionLayoutFor(shot):undefined,visualSpans,sceneIdentity,timing:{count:timing.frameCount,phase:timing.phaseUs},renderer})).digest('hex').slice(0,24);
     const segment=join(options.outputDirectory,`segment-${fingerprint}.mp4`);
     const manifestPath=segment+'.json';
     const exists=await stat(segment).then(()=>true,()=>false);
