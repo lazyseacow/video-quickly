@@ -4,6 +4,10 @@ import { createSceneTemplate, DEFAULT_AUDIO_PROCESSING, DEFAULT_CAPTION_STYLE, f
 import { coloredCaptionPixels, decodeTransitionFrames, transitionPixels, transitionPoints, writeTransitionImage, writeTransitionVideo, type PixelPoint, type Rgb } from '../fixtures/transition-media';
 import { openProjectFromList } from './workspace-navigation';
 
+// Continuous screenshots and DOM snapshots disturb the real-time preview cadence.
+// Keep action traces, pixel observations and explicit screenshots for failure evidence.
+test.use({ trace: { mode: 'retain-on-failure', screenshots: false, snapshots: false } });
+
 type Transition = 'cut' | 'fade' | 'wipe';
 type PaintedFrame = { source?: 'raf'; readbackMs?: number; frame: number; timeUs: number; pixels: Rgb[]; transition: string | undefined; visible?: boolean; busy?: boolean };
 const rates = [{ label: '30', value: { numerator: 30, denominator: 1 }, boundaryUs: 1_000_000 }, { label: '60', value: { numerator: 60, denominator: 1 }, boundaryUs: 1_000_000 }, { label: '30000-1001', value: { numerator: 30000, denominator: 1001 }, boundaryUs: 1_017_000 }];
