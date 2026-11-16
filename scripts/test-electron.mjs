@@ -187,7 +187,8 @@ async function verifyGenericWorkflow(project) {
   await steps.getByRole('button', { name: '模型与素材', exact: true }).click();
   await expect(dialog.getByRole('combobox', { name: '文本模型', exact: true })).toHaveValue('');
   await expect(dialog.getByRole('combobox', { name: '视频模型', exact: true })).toHaveValue('');
-  await expect(dialog.getByRole('combobox', { name: '图片模型', exact: true })).toHaveValue('不生成首帧');
+  await expect(dialog.getByRole('combobox', { name: '图片模型', exact: true })).toHaveCount(0);
+  await expect(dialog.getByRole('switch', { name: '尾帧续镜', exact: true })).toBeChecked();
   await expect(dialog.getByText('高级设置', { exact: true })).toHaveCount(0);
   await steps.getByRole('button', { name: '创作要求', exact: true }).click();
   await expect(dialog.getByLabel('简报内容', { exact: true })).toHaveValue('未提交的项目配置');
@@ -232,6 +233,7 @@ async function verifyGenericWorkflow(project) {
   await experiment.getByRole('button', { name: '关闭', exact: true }).click(); await expect(experiment).toHaveCount(0);
   await launcher.getByRole('button', { name: '取消', exact: true }).click(); await expect(launcher).toHaveCount(0);
   assert.equal((await projectDocument(project.id)).revision, project.revision); assert.equal(credentialContacts, contactsBeforePreview);
+  await openProject(project.title);
   checks.promptOfflinePreview = true; checks.promptSessionPersistence = true; checks.promptTemplateVersions = true; checks.promptConfigurationIsolation = true;
   checks.projectSettings = true;
   checks.genericWorkflow = true;
