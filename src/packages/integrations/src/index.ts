@@ -3,14 +3,15 @@ import { createReadStream, existsSync } from 'node:fs';
 import { mkdir, readFile, writeFile, rename, rm } from 'node:fs/promises';
 import { basename, dirname, extname, join, resolve } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
-import { prepareGeneratedVideo, renderProject, runMedia } from '@video-quickly/video/node';
+import { prepareGeneratedVideo, probeMedia, renderProject, runMedia } from '@video-quickly/video/node';
+import { resolveShotTime } from '@video-quickly/video/clip-edits';
 import { buildMediaPrompt, characterSceneFirstFrame, getMediaAdapters, groupsNativeFirstFrames, groupsReferenceImages, hasTemplateValue, imageReferenceLimit, MediaRequestRejectedError, isVideoGenerationNode, planReferenceImageSequences, seedreamTextOnly, singleFrameVideoModel, singleImageRequestModel, validateCreativeReferences, videoReferenceImages, type VideoReferenceImages } from '@video-quickly/contracts';
 import { providerReportedUsage, sumProviderUsage, requestModelParameters, validateModelParameters, type ProviderUsage, type AssetRecord, type JsonValue, type ModelProfile, type Shot } from '@video-quickly/contracts';
 import { MediaRequestQueue } from './media-concurrency.js';
 import { MAX_CHARACTER_REFERENCE_BYTES, MAX_CHARACTER_REFERENCE_TOTAL_BYTES, resolveCharacterReferences, type ResolvedCharacterReferences } from './character-references.js';
 import { resolveReferenceAudio } from './audio-references.js';
 import { resolveImageEdit } from './image-edit.js';
-import { appendSkillContext, assetSchema, openingFrameShots } from '@video-quickly/contracts';
+import { appendSkillContext, assetSchema, firstFrameAtUs, openingFrameShots, timeAtFrame } from '@video-quickly/contracts';
 import type { MediaActivityContext, MediaDiagnosticEvent } from './media-context.js';
 import { boundedResponseBytes, endpoint, MAX_MEDIA_BYTES, nested, objectSchema, requestJson, stringOrUndefined } from './media-http.js';
 import { currentVideoImage, imageRequestSize, mediaPollRequest, mediaSubmissionRequest, seedanceVideoBody, videoFrameBytes } from './media-protocols.js';
@@ -53,6 +54,11 @@ function mediaRequestModel({ project, node, model }: Pick<MediaPreflightContext,
   const firstFrames = node.kind === 'assets' && node.config.continueFromLastFrame === true
     || groupsNativeFirstFrames(project.workflow, node) || node.config.useFirstShotReference === true && groupsReferenceImages(node);
   return model && firstFrames ? singleImageRequestModel(model) : model;
+}
+
+function boundVideoAsset(context: Pick<MediaPreflightContext, 'project' | 'assets'>, shot: Shot): AssetRecord | undefined {
+  return context.assets.find(asset => asset.id === shot.videoAssetId && asset.active && asset.kind === 'video'
+    && (!asset.projectId || asset.projectId === context.project.id));
 }
 
 const mediaActivityDirectory = (dataDirectory: string, projectId: string, operationId: string) => resolve(dataDirectory, 'projects', projectId, 'activities', createHash('sha256').update(operationId).digest('hex').slice(0, 24));
@@ -167,7 +173,7 @@ export async function validateMediaActivity(context: MediaPreflightContext): Pro
   }
   if (builtInVideo) for (const shot of receiptShots) {
     if (!shot.locked) continue;
-    const video = context.assets.find(asset => asset.id === shot.videoAssetId && asset.projectId === context.project.id && asset.kind === 'video' && asset.active);
+    const video = boundVideoAsset(context, shot);
     if (!video || !await validAsset(video)) throw new Error(`锁定镜头「${shot.title}」缺少可用视频，请恢复视频或解锁该镜头。`);
   }
   if (isVideoGenerationNode(context.node) && context.pendingVideoInput) return;
@@ -247,21 +253,28 @@ async function validAsset(asset: AssetRecord): Promise<boolean> {
   return createHash('sha256').update(await readFile(asset.path)).digest('hex') === asset.sha256;
 }
 
-async function continuationFrame(context: MediaActivityContext, directory: string, shot: Shot, previous: AssetRecord): Promise<AssetRecord> {
-  const path = join(directory, `${mediaShotFileId(JSON.stringify([shot.id, previous.sha256]))}-opening.jpg`);
+async function continuationFrame(context: MediaActivityContext, directory: string, shot: Shot, previous: { asset: AssetRecord; shot: Shot; startUs: number }): Promise<AssetRecord> {
+  const rate = context.project.profile.frameRate;
+  const lastFrame = firstFrameAtUs(previous.startUs + previous.shot.durationUs, rate) - 1;
+  const localUs = Math.max(0, timeAtFrame(lastFrame, rate) - previous.startUs);
+  const sourceUs = resolveShotTime(previous.shot, context.project, localUs).videoUs;
+  const path = join(directory, `${mediaShotFileId(JSON.stringify([shot.id, previous.asset.sha256, sourceUs]))}-opening.jpg`);
   const metadataPath = `${path}.json`;
   const cached = assetSchema.safeParse(await readReceipt<unknown>(metadataPath));
   if (cached.success && cached.data.path === path && cached.data.kind === 'image' && cached.data.projectId === context.project.id
     && cached.data.shotId === shot.id && await validAsset(cached.data)) return cached.data;
   const temporary = join(directory, `${randomUUID()}.jpg`);
   const ffmpeg = context.ffmpegPath ?? 'ffmpeg';
-  const decode = ['-i', previous.path, '-map', '0:v:0', '-fps_mode', 'passthrough', '-c:v', 'mjpeg', '-q:v', '2', '-update', '1', temporary];
-  const args = ['-nostdin', '-v', 'error', '-y'];
   try {
-    // Keep replacing a single JPEG so decoding the last second does not buffer frames in memory.
-    // Short clips can be decoded directly. Seeking past their start may emit no frames.
-    await runMedia(ffmpeg, [...args, ...(previous.durationUs && previous.durationUs > 1_000_000 ? ['-sseof', '-1'] : []), ...decode], { signal: context.signal });
-    if (!existsSync(temporary)) await runMedia(ffmpeg, [...args, ...decode], { signal: context.signal });
+    const metadata = await probeMedia(previous.asset.path, context.ffprobePath, context.signal);
+    const [numerator, denominator] = (metadata.frameRate ?? '').split('/').map(Number);
+    const sourceFps = numerator > 0 && denominator > 0 ? numerator / denominator : rate.numerator / rate.denominator;
+    const lastSourceSeconds = Math.max(0, (metadata.videoDuration ?? metadata.duration) - 1 / sourceFps);
+    const target = Math.min(sourceUs / 1_000_000, lastSourceSeconds), seek = Math.max(0, target - 1);
+    // Retain the preceding source frame at the last output sample, including held tails and clip-plan jumps.
+    const filter = `trim=end=${target - seek + 1},select=lte(t\\,${target - seek + 0.000001})`;
+    await runMedia(ffmpeg, ['-nostdin', '-v', 'error', '-y', '-ss', String(seek), '-i', previous.asset.path,
+      '-map', '0:v:0', '-vf', filter, '-fps_mode', 'passthrough', '-c:v', 'mjpeg', '-q:v', '2', '-update', '1', temporary], { signal: context.signal });
     if (!existsSync(temporary)) throw new Error('上一镜没有可读取的视频帧。');
     await rename(temporary, path);
     const frame = { ...await assetFor(path, context, 'image', shot), name: `${shot.title} · 续镜首帧.jpg`, provenance: '上一镜尾帧' };
@@ -594,6 +607,8 @@ export function createActivityExecutor(options: { ffmpegPath?: string } = {}) {
     const assets: AssetRecord[] = [];
     const continues = kind === 'video' && context.node.config.continueFromLastFrame === true;
     const builtInVideo = kind === 'video' && typeof context.node.config.continueFromLastFrame === 'boolean';
+    let previousVideo: { asset: AssetRecord; shot: Shot; startUs: number } | undefined;
+    let videoDurationUs = 0;
     const queueSignal = context.queueSignal ? AbortSignal.any([context.signal, context.queueSignal]) : context.signal;
     for (const { batches, seedream } of sequences) {
       let anchor: AssetRecord | undefined;
@@ -607,10 +622,12 @@ export function createActivityExecutor(options: { ffmpegPath?: string } = {}) {
           else for (const member of batch) context.onDiagnostic?.({ ...event, shotId: member.id });
         };
         if (!regenerating && shot.locked) {
-          const existing = context.assets.find(asset => asset.projectId === context.project.id && asset.shotId === shot.id && asset.kind === kind && asset.active
-            && (!builtInVideo || asset.id === shot.videoAssetId));
+          const existing = builtInVideo ? boundVideoAsset(context, shot)
+            : context.assets.find(asset => asset.projectId === context.project.id && asset.shotId === shot.id && asset.kind === kind && asset.active);
           if (existing && await validAsset(existing)) {
-            assets.push(existing); context.onAsset?.(existing);
+            if (builtInVideo) {
+              if (continues) { previousVideo = { asset: existing, shot, startUs: videoDurationUs }; videoDurationUs += shot.durationUs; }
+            } else { assets.push(existing); context.onAsset?.(existing); }
             diagnostic({ event: 'media.reused', level: 'info', cached: true, assetId: existing.id });
             continue;
           }
@@ -627,7 +644,7 @@ export function createActivityExecutor(options: { ffmpegPath?: string } = {}) {
             diagnostic({ event: 'media.started', level: 'info', phase: 'generate', queueMs: started - queued });
             try {
               const onUsage = (usage?: ProviderUsage) => usages.push(usage);
-              const previous = continues ? assets.at(-1) : undefined;
+              const previous = continues ? previousVideo : undefined;
               let target = generationShot;
               if (previous) {
                 const frame = await continuationFrame(context, directory, shot, previous);
@@ -646,6 +663,11 @@ export function createActivityExecutor(options: { ffmpegPath?: string } = {}) {
             } catch (error) { context.onFailure?.(error); throw error; }
           }, context.modelConcurrency);
           assets.push(...batchAssets);
+          if (continues) {
+            const asset = batchAssets[0], durationUs = asset.durationUs ?? shot.durationUs;
+            previousVideo = { asset, shot: { ...shot, durationUs, sourceInUs: undefined, videoInUs: 0, clipEdit: undefined }, startUs: videoDurationUs };
+            videoDurationUs += durationUs;
+          }
           anchor ??= batchAssets[0];
         } catch (error) {
           const canceled = context.signal.aborted || started === undefined && queueSignal.aborted;

@@ -6,13 +6,14 @@ import { mkdtemp, readFile, rm, unlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { afterEach, expect, it } from 'vitest';
-import { captionsEnabled, createNativeVideoWorkflow, DEFAULT_VIDEO_PROFILE, getModelParameterFields, modelSchema, planReferenceImageSequences, projectSchema, resolveProductionWorkflow, runInspectionSchema, runSchema, videoReferenceImages, type AssetRecord, type ProjectDocument, type ShotCandidate } from '@video-quickly/contracts';
+import { assetSchema, captionsEnabled, createNativeVideoWorkflow, DEFAULT_VIDEO_PROFILE, getModelParameterFields, modelSchema, planReferenceImageSequences, projectSchema, resolveProductionWorkflow, runInspectionSchema, runSchema, videoReferenceImages, type AssetRecord, type ProjectDocument, type ShotCandidate } from '@video-quickly/contracts';
 import { requestCostMetrics } from '../src/packages/runtime/src/costs';
 import { validateExecutionModel } from '../src/packages/runtime/src/execution-model';
 import { matchingStepModels } from '../src/renderer/lib/workflow-guidance';
 import { createRuntime, SimulatedProcessExit, type RuntimeOptions } from '../src/packages/runtime/src';
 import { createActivityExecutor, validateMediaActivity } from '../src/packages/integrations/src';
 import { probeMedia, runMedia } from '../src/packages/video/src/node';
+import { captureClipEditSource } from '../src/packages/video/src/clip-edits';
 import { applyProductionProjectDraft, applyStageConfigurationDraft, stageConfigurationDraftSchema, updateProductionConfigurationDraft } from '../src/renderer/lib/stage-configuration-draft';
 
 const ffmpeg = process.env.VIDEO_QUICKLY_FFMPEG ?? 'ffmpeg';
@@ -175,6 +176,97 @@ it.skipIf(!mediaAvailable)('resumes tail-frame continuation without resubmitting
   expect(source.imageCalls()).toBe(0);
   expect(source.counts().submissions).toBe(2);
   expect(source.received[1].content).toEqual(expect.arrayContaining([{ type: 'image_url', role: 'first_frame', image_url: { url: expect.stringMatching(/^data:image\/jpeg;base64,/) } }]));
+});
+
+it.skipIf(!mediaAvailable).each([true, false])('reuses a video shared by locked shots when continuation is %s', async continues => {
+  const source = await fixture();
+  const asset = await source.runtime.dispatch('asset.import', {
+    ...(continues ? { projectId: source.configured.id } : {}), path: join(source.options.dataDirectory, 'source.mp4'), kind: 'video',
+  }) as AssetRecord;
+  expect(asset.shotId).toBeUndefined();
+  const project = projectSchema.parse(await source.runtime.dispatch('project.update', { projectId: source.configured.id, revision: source.configured.revision, patch: {
+    shots: [
+      { id: 'locked-a', title: '已确认的第一镜', narration: '', visualPrompt: '蓝色画面', durationUs: 500_000, videoInUs: 0, videoAssetId: asset.id, locked: true },
+      { id: 'locked-b', title: '复用同一视频的第二镜', narration: '', visualPrompt: '蓝色画面', durationUs: 500_000, videoInUs: 0, videoAssetId: asset.id, locked: true },
+      { id: 'generated', title: '继续制作的镜头', narration: '雨落下了。', visualPrompt: '继续展示天空', durationUs: 1_000_000 },
+    ],
+    workflow: { ...source.configured.workflow, production: { ...source.configured.workflow.production, manualPlanningSteps: ['script'], continueFromLastFrame: continues } },
+  } }));
+  expect(await source.runtime.dispatch('project.readiness', { projectId: project.id })).toMatchObject({ ready: true });
+  const started = runSchema.parse(await source.runtime.dispatch('run.start', { projectId: project.id }));
+  await source.runtime.waitForIdle();
+  const finished = runSchema.parse(await source.runtime.dispatch('run.get', { runId: started.id }));
+  expect(finished.status, finished.error).toBe('succeeded');
+  expect(source.counts().submissions).toBe(1);
+  const completed = await source.current();
+  expect(completed.shots.slice(0, 2)).toEqual(project.shots.slice(0, 2));
+  expect(await source.runtime.dispatch('run.step.payload', { runId: started.id, nodeId: 'video', kind: 'output' })).toMatchObject({
+    value: { assets: [expect.objectContaining({ shotId: 'generated' })] },
+    progress: { completed: 3, total: 3, shots: [
+      expect.objectContaining({ id: 'locked-a', assetId: asset.id, status: 'completed' }),
+      expect.objectContaining({ id: 'locked-b', assetId: asset.id, status: 'completed' }),
+      expect.objectContaining({ id: 'generated', status: 'completed' }),
+    ] },
+  });
+  const locked = projectSchema.parse(await source.runtime.dispatch('project.update', { projectId: completed.id, revision: completed.revision, patch: { shots: completed.shots.map(shot => ({ ...shot, locked: true })) } }));
+  const reused = runSchema.parse(await source.runtime.dispatch('run.start', { projectId: locked.id, nodeId: 'video' }));
+  await source.runtime.waitForIdle();
+  const reusedRun = runSchema.parse(await source.runtime.dispatch('run.get', { runId: reused.id }));
+  expect(reusedRun.status, reusedRun.error).toBe('succeeded');
+  expect(source.counts().submissions).toBe(1);
+  const applied = projectSchema.parse(await source.runtime.dispatch('node.apply', { runId: reused.id, nodeId: 'video', revision: locked.revision }));
+  expect(applied.shots).toEqual(locked.shots);
+  const assets = await source.runtime.dispatch('asset.list') as { items: AssetRecord[] };
+  expect(assetSchema.parse(assets.items.find(item => item.id === asset.id))).toEqual(asset);
+});
+
+it.skipIf(!mediaAvailable).each([
+  { name: 'trimmed', offsets: { videoInUs: 0 }, blue: true },
+  { name: 'video offset', offsets: { sourceInUs: 0, videoInUs: 300_000 }, blue: false },
+  { name: 'source offset', offsets: { sourceInUs: 300_000 }, blue: false },
+  { name: 'global frame phase', offsets: { videoInUs: 20_000 }, blue: false },
+  { name: 'clip plan', offsets: { videoInUs: 800_000 }, blue: true },
+  { name: 'held tail', offsets: { videoInUs: 900_000, durationUs: 1_500_000 }, blue: false },
+])('continues from the last visible frame of a $name locked shot', async ({ name, offsets, blue }) => {
+  const source = await fixture();
+  const initial = projectSchema.parse(await source.runtime.dispatch('project.update', { projectId: source.configured.id, revision: source.configured.revision, patch: {
+    shots: [
+      { id: 'opening', title: '已裁剪的前镜', narration: '', visualPrompt: '蓝色画面', durationUs: 500_000 },
+      { id: 'continued', title: '续镜', narration: '雨落下了。', visualPrompt: '接续前镜画面', durationUs: 1_000_000 },
+    ],
+  } }));
+  const asset = await source.runtime.dispatch('asset.import', { projectId: initial.id, shotId: 'opening', path: join(source.options.dataDirectory, 'source.mp4'), kind: 'video' }) as AssetRecord;
+  const imported = await source.current();
+  const opening = { ...imported.shots[0], sourceInUs: undefined, videoInUs: undefined, durationUs: 500_000, ...offsets, locked: true };
+  const clipSource = captureClipEditSource(opening, [asset], 'original-video');
+  const clipPlan = { id: 'edited-video', sourceId: clipSource.id, spans: [
+    { id: 'visible-blue', durationUs: 480_000, originInUs: 0, sourceInUs: 0, audioInUs: 0, videoInUs: 0, sceneInUs: 0 },
+    { id: 'unsampled-red', durationUs: 20_000, originInUs: 800_000, sourceInUs: 800_000, audioInUs: 800_000, videoInUs: 800_000, sceneInUs: 480_000 },
+  ] };
+  const project = projectSchema.parse(await source.runtime.dispatch('project.update', { projectId: imported.id, revision: imported.revision, patch: {
+    shots: [
+      ...(name === 'global frame phase' ? [{ ...opening, id: 'leading', title: '前置镜头', durationUs: 516_667, videoInUs: 0 }] : []),
+      { ...opening, ...(name === 'clip plan' ? { clipEdit: { planId: clipPlan.id, inUs: 0, restoreInUs: 0, restoreDurationUs: 1_000_000 } } : {}) },
+      imported.shots[1],
+    ],
+    ...(name === 'clip plan' ? { clipEditSources: [clipSource], clipEditPlans: [clipPlan] } : {}),
+    workflow: { ...imported.workflow, production: { ...imported.workflow.production, manualPlanningSteps: ['script'] } },
+  } }));
+  const started = runSchema.parse(await source.runtime.dispatch('run.start', { projectId: project.id }));
+  await source.runtime.waitForIdle();
+  const finished = runSchema.parse(await source.runtime.dispatch('run.get', { runId: started.id }));
+  expect(finished.status, finished.error).toBe('succeeded');
+  expect(source.received).toHaveLength(1);
+  expect((await source.current()).shots.find(shot => shot.id === 'opening')).toEqual(project.shots.find(shot => shot.id === 'opening'));
+  const content = source.received[0].content as { role?: string; image_url?: { url: string } }[];
+  const frameUrl = content.find(item => item.role === 'first_frame')?.image_url?.url;
+  expect(frameUrl).toMatch(/^data:image\/jpeg;base64,/);
+  const frame = join(source.options.dataDirectory, 'continuation.jpg'), sample = join(source.options.dataDirectory, 'continuation.rgb');
+  await writeFile(frame, Buffer.from(frameUrl!.split(',')[1], 'base64'));
+  await runMedia(ffmpeg, ['-v', 'error', '-i', frame, '-vf', 'scale=1:1', '-frames:v', '1', '-pix_fmt', 'rgb24', '-f', 'rawvideo', sample]);
+  const [red, , actualBlue] = await readFile(sample);
+  expect(blue ? actualBlue : red).toBeGreaterThan(200);
+  expect(blue ? red : actualBlue).toBeLessThan(50);
 });
 
 it.skipIf(!mediaAvailable)('produces videos from existing storyboard frames or text without selecting an image model', async () => {

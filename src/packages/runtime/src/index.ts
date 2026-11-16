@@ -1156,6 +1156,8 @@ export function createRuntime(options: RuntimeOptions) {
       ? { ...executionProject, shots: executionProject.shots.filter(shot => shot.id === node.config.shotId) }
       : nativeFirstFrames || node.config.useFirstShotReference === true && groupsReferenceImages(node)
         ? { ...executionProject, shots: executionProject.shots.filter(shot => !shot.locked) } : executionProject;
+    const generatedMediaProject = isVideoGenerationNode(node) && typeof node.config.continueFromLastFrame === 'boolean'
+      ? { ...mediaProject, shots: mediaProject.shots.filter(shot => !shot.locked) } : mediaProject;
     // Keep locked shots as group boundaries without expecting newly generated assets for them.
     const mediaInputProject = nativeFirstFrames ? executionProject : mediaProject;
     store.put('node-project', `${runId}:${node.id}`, executionProject);
@@ -1417,16 +1419,22 @@ export function createRuntime(options: RuntimeOptions) {
               try {
                 const output = await trackWork(() => executeActivity({ ...activityContext, project, onAsset: outputKind ? value => publishAsset(value, project) : activityContext.onAsset,
                   queueSignal: scheduling.signal, onFailure: error => scheduling.abort(error), ...(parallelVideos ? { modelConcurrency: concurrency } : {}) }), project.id);
-                return outputKind ? validateProductionMediaOutput(output, outputKind, project) : output;
+                const outputProject = parallelVideos && shot.locked ? { ...project, shots: [] } : project;
+                return outputKind ? validateProductionMediaOutput(output, outputKind, outputProject) : output;
               } catch (error) { scheduling.abort(error); throw error; }
             } });
           const assets: AssetRecord[] = [], usages = [];
           for (const shot of shots) {
             const result = outputs[shot.id], generated = nodeResultAssets(result);
+            if (parallelVideos && shot.locked && !generated.length) continue;
             if (generated.length !== 1 || generated[0].projectId !== executionProject.id || generated[0].shotId !== shot.id) throw new Error('并行步骤须为每个镜头返回对应的一份素材。');
             const asset = generated[0], info = await stat(asset.path).catch(() => undefined);
             if (!info?.isFile() || info.size !== asset.size) throw new Error('已完成的生成素材缺失或损坏，请显式重新生成此镜头；恢复不会重新提交模型请求。');
             if (await hashFileSha256(asset.path) !== asset.sha256) throw new Error('已完成的生成素材缺失或损坏，请显式重新生成此镜头；恢复不会重新提交模型请求。');
+            if (parallelVideos && shot.locked) {
+              if (asset.id !== shot.videoAssetId) throw new Error('锁定镜头的已保存视频与本次输入不一致。');
+              continue;
+            }
             assets.push(asset);
             const usage = providerUsageSchema.safeParse(result && typeof result === 'object' && !Array.isArray(result) ? result.providerUsage : undefined);
             usages.push(usage.success ? usage.data : undefined);
@@ -1437,7 +1445,7 @@ export function createRuntime(options: RuntimeOptions) {
         const usage = providerUsageSchema.safeParse(output && typeof output === 'object' && !Array.isArray(output) ? output.providerUsage : undefined);
         if (costOperation) costs.status(costOperation, 'completed', usage.success ? usage.data : undefined);
         runProgress.phase(context.operationId, 'saving');
-        const validated = outputKind ? validateProductionMediaOutput(output, outputKind, mediaProject) : output;
+        const validated = outputKind ? validateProductionMediaOutput(output, outputKind, generatedMediaProject) : output;
         if (node.id === 'assets' && casting?.assets.length && validated && typeof validated === 'object' && !Array.isArray(validated)) {
           return { ...validated, ...(casting.frameModelId ? { source: 'model', modelId: casting.frameModelId } : {}),
             assets: [...nodeResultAssets(validated), ...casting.assets] } as unknown as JsonValue;
@@ -1735,7 +1743,7 @@ export function createRuntime(options: RuntimeOptions) {
       if (preparesFrame || preparesCast) return { status: 'pending', until: 'references' };
       const continues = node.config.continueFromLastFrame === true && value.shots.length > 1;
       for (const shot of continues ? value.shots.slice(0, 1) : value.shots) {
-        if (shot.locked && assets.some(asset => asset.active && asset.kind === 'video' && asset.projectId === value.id && asset.shotId === shot.id)) continue;
+        if (shot.locked && assets.some(asset => asset.id === shot.videoAssetId && asset.active && asset.kind === 'video' && (!asset.projectId || asset.projectId === value.id))) continue;
         const plan = videoReferenceImages(value, node, model, shot, profiles, assets);
         if (plan.mode === 'text') { textShots++; continue; }
         const images = plan.referenceIds.map(id => {
