@@ -8,7 +8,7 @@
 
 浏览器流程分成四个独立 `windows-2025` job，以 `--shard=1/4` 至 `--shard=4/4` 执行；每片一个 worker，文件内保持串行，隔离实时媒体回归、项目读取和大型编辑器操作的同机调度竞争。分片保存包含提交、系统、架构、片号和总数的身份记录、Playwright blob、截图及 RPC 诊断，产物名称绑定平台、提交 SHA 和片号。原生验证 job 等待四片成功，再按确切名称下载，通过官方 `playwright merge-reports` 生成原有 `browser-results.json`。`scripts/browser-reports.ts` 以显式总数四核对身份，并将合并后的逐用例身份与当前 `--list` 发现结果比较，拒绝缺片、重复、替换、失败和跳过，另存 `browser-coverage.json`。随后保留全部原生、打包、安装和发布清单检查；浏览器证据与合并附件一并归档。浏览器安装单独设置 `PLAYWRIGHT_DOWNLOAD_CONNECTION_TIMEOUT=120000`，容许下载连接等待两分钟，不修改测试或断言超时。
 
-`pnpm prepare:media` 按 `scripts/media-manifest.json` 下载、核对 FFmpeg 来源及 SHA-256。许可、来源和 Node 版本随执行组件归档。Electron 产物位于 `.generated/electron-release`；命令使用 `--publish never`，不发布 Release。
+`pnpm prepare:media` 按 `scripts/media-manifest.json` 下载、核对 FFmpeg 来源及 SHA-256。Windows 固定使用上游保留两年的月末归档，避免每日构建清理后下载失效；更新时同步核对归档摘要。许可、来源和 Node 版本随执行组件归档。Electron 产物位于 `.generated/electron-release`；命令使用 `--publish never`，不发布 Release。
 
 `pnpm test:desktop --packaged` 在独立临时工作区启动本次实际目录包，验证沙箱／预加载、真实 IPC／Node、编辑历史、MP4 导出、媒体 Range 与读取边界、失联重连和重启草稿。报告为 `.generated/electron-results.json`，截图／失败证据在 `.generated/electron-artifacts`。发布清单只在所有要求的报告成功且非空时生成。
 

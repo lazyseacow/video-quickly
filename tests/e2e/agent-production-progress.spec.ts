@@ -10,7 +10,6 @@ import type { ModelProfile, ProjectDocument, RunInspection, RunSummary } from '@
 import { test } from './isolated-workspace';
 import { rpc } from './native-video-fixture';
 import { openProjectFromList } from './workspace-navigation';
-import { fixtureCharacterImage } from '../fixtures/character-image';
 
 function gate() { let release!: () => void; const promise = new Promise<void>(resolve => { release = resolve; }); return { promise, release }; }
 
@@ -19,7 +18,7 @@ for (const surface of [{ width: 1536, height: 960, theme: 'dark' }, { width: 600
   test.setTimeout(60000);
   const sourcePath = info.outputPath('agent-source.mp4');
   await promisify(execFile)(process.env.VIDEO_QUICKLY_FFMPEG ?? 'ffmpeg', ['-hide_banner', '-loglevel', 'error', '-y', '-f', 'lavfi', '-i', 'color=c=blue:s=160x90:r=30:d=2', '-f', 'lavfi', '-i', 'sine=frequency=440:sample_rate=48000:duration=2', '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-c:a', 'aac', '-shortest', sourcePath]);
-  const source = await readFile(sourcePath), frame = (await fixtureCharacterImage()).toString('base64');
+  const source = await readFile(sourcePath);
   const editing = gate(), entered = gate(), errors: string[] = [];
   let baseUrl = '', controllerCalls = 0, videoRequests = 0;
   const server = createServer({ keepAliveTimeout: 0 }, async (incoming, response) => {
@@ -28,8 +27,7 @@ for (const surface of [{ width: 1536, height: 960, theme: 'dark' }, { width: 600
       let encoded = ''; for await (const chunk of incoming) encoded += chunk.toString();
       const payload = JSON.parse(encoded) as { images?: string[]; tools?: unknown[]; messages: Array<{ role: string; content?: string }> };
       response.setHeader('content-type', 'application/json');
-      if (incoming.url === '/images/generations') { response.end(JSON.stringify({ data: [{ b64_json: frame }] })); return; }
-      if (incoming.url === '/generate-video') { videoRequests++; expect(payload.images).toEqual([`data:image/png;base64,${frame}`]); response.end(JSON.stringify({ url: `${baseUrl}/source.mp4` })); return; }
+      if (incoming.url === '/generate-video') { videoRequests++; expect(payload.images).toEqual([]); response.end(JSON.stringify({ url: `${baseUrl}/source.mp4` })); return; }
       let tool: Record<string, unknown> | undefined;
       let toolName = 'execute_video_task';
       if (payload.tools?.length) {
@@ -55,10 +53,9 @@ for (const surface of [{ width: 1536, height: 960, theme: 'dark' }, { width: 600
     baseUrl = `http://127.0.0.1:${address.port}`;
     const text = await rpc<ModelProfile>(request, 'model.save', { model: { name: `Agent 进度 ${randomUUID()}`, provider: 'openai-compatible', baseUrl: `${baseUrl}/v1`, model: 'fixture', connectionType: 'text', capabilities: ['text', 'tools'] } });
     const video = await rpc<ModelProfile>(request, 'model.save', { model: { name: `镜头生成 ${randomUUID()}`, provider: 'custom-http', baseUrl, model: 'fixture', connectionType: 'video', capabilities: ['video'], parameters: { requestPath: 'generate-video', requestTemplate: { prompt: '{{prompt}}', images: '{{character_images}}' }, resultUrlPath: 'url' } } });
-    const image = await rpc<ModelProfile>(request, 'model.save', { model: { name: `首帧生成 ${randomUUID()}`, provider: 'openai-compatible', baseUrl, model: 'fixture', connectionType: 'image', capabilities: ['image'] } });
     await rpc(request, 'tool.register', { server: { name: '剪辑工具', transport: 'http', url: `${baseUrl}/mcp`, enabled: true } });
     const created = await rpc<ProjectDocument>(request, 'project.create', { title: `Agent 制作进度 ${randomUUID()}`, brief: '制作蓝色天空视频', profile: { width: 160, height: 90, frameRate: { numerator: 30, denominator: 1 } } });
-    const project = await rpc<ProjectDocument>(request, 'project.update', { projectId: created.id, revision: created.revision, patch: { workflow: { ...created.workflow, production: { ...created.workflow.production, textModelId: text.id, videoModelId: video.id, imageModelId: image.id } } } });
+    const project = await rpc<ProjectDocument>(request, 'project.update', { projectId: created.id, revision: created.revision, patch: { workflow: { ...created.workflow, production: { ...created.workflow.production, textModelId: text.id, videoModelId: video.id } } } });
     await page.setViewportSize(surface); await page.addInitScript(theme => localStorage.setItem('vq-theme', theme), surface.theme);
     await page.goto('/'); await openProjectFromList(page, project.title);
     await page.getByRole('button', { name: '开始制作', exact: true }).click(); await confirmAction(page, '确认开始制作'); await entered.promise;

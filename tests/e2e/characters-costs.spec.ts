@@ -2,6 +2,7 @@ import { confirmAction } from './confirmation-actions';
 import { openAssetLibrary, openProjectFromList } from './workspace-navigation';
 import { openCosts, setWorkspaceTheme } from './workspace-settings';
 import { fixtureCharacterImage } from '../fixtures/character-image';
+import { storyboardFixtureResponse } from '../fixtures/planning-response';
 import { createServer } from 'node:http';
 import { readFile, writeFile } from 'node:fs/promises';
 import { expect, test, type APIRequestContext, type Page } from '@playwright/test';
@@ -292,8 +293,10 @@ test('sends frozen character settings into generation and records provider token
   const errors = observeErrors(page), calls: string[] = [];
   const server = createServer({ keepAliveTimeout: 0 }, (request, response) => { void (async () => {
     let body = ''; for await (const chunk of request) body += chunk.toString(); calls.push(body);
+    const input = JSON.parse(body) as { messages: Array<{ content?: string }> };
+    const content = storyboardFixtureResponse(input.messages.map(message => message.content ?? '').join('\n'), JSON.stringify({ shots: [{ title: '人物候选', narration: '候选旁白', visualPrompt: '人物轻轻推门', durationUs: 1_000_000 }] }));
     response.setHeader('content-type', 'application/json');
-    response.end(JSON.stringify({ choices: [{ message: { content: JSON.stringify({ shots: [{ title: '人物候选', narration: '候选旁白', visualPrompt: '人物轻轻推门', durationUs: 1_000_000 }] }) } }], usage: { prompt_tokens: 100, completion_tokens: 50, total_tokens: 150 } }));
+    response.end(JSON.stringify({ choices: [{ message: { content } }], usage: { prompt_tokens: 100, completion_tokens: 50, total_tokens: 150 } }));
   })().catch(error => response.destroy(error instanceof Error ? error : undefined)); });
   await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
   try {

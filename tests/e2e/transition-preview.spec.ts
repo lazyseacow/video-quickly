@@ -96,6 +96,8 @@ async function healthy(page: Page, errors: string[]) { await expect(page.locator
 async function capturePaints(canvas: Locator, points: PixelPoint[]) {
   return canvas.evaluateHandle((element: HTMLCanvasElement, points) => {
     const state = { active: true, raf: 0, observer: null as MutationObserver | null, samples: [] as PaintedFrame[], commits: [] as { source: 'commit'; frame: number; wallMs: number }[] };
+    const sampling = document.createElement('canvas'); sampling.width = points.length; sampling.height = 1;
+    const samplingContext = sampling.getContext('2d', { willReadFrequently: false })!;
     function observe() {
       if (!state.active) return;
       const frame = Number(element.dataset.renderedFrame);
@@ -104,11 +106,10 @@ async function capturePaints(canvas: Locator, points: PixelPoint[]) {
       const occluded = Boolean(statusBounds && statusBounds.width >= bounds.width * .95 && statusBounds.height >= bounds.height * .95 && statusStyle?.backgroundColor !== 'transparent' && Number(alpha ?? 1) * Number(statusStyle?.opacity ?? 1) >= .95);
       const visible = style.visibility !== 'hidden' && style.display !== 'none' && bounds.width > 0 && !occluded, busy = element.closest('.scene-preview')?.getAttribute('aria-busy') === 'true';
       if (state.samples.at(-1)?.frame !== frame || state.samples.at(-1)?.visible !== visible || state.samples.at(-1)?.busy !== busy) {
-        // One readback observes the same eight pixels without eight GPU syncs.
-        const left = Math.min(...points.map(point => point.x)), top = Math.min(...points.map(point => point.y));
-        const width = Math.max(...points.map(point => point.x)) - left + 1, height = Math.max(...points.map(point => point.y)) - top + 1;
-        const start = performance.now(), pixels = element.getContext('2d')!.getImageData(left, top, width, height).data;
-        state.samples.push({ source: 'raf', readbackMs: performance.now() - start, frame, timeUs: Number(element.dataset.renderedTimeUs), transition: element.dataset.transition, visible, busy, pixels: points.map(({ x, y }) => { const offset = ((y - top) * width + x - left) * 4; return [pixels[offset], pixels[offset + 1], pixels[offset + 2]] as Rgb; }) });
+        const start = performance.now();
+        points.forEach(({ x, y }, index) => samplingContext.drawImage(element, x, y, 1, 1, index, 0, 1, 1));
+        const pixels = samplingContext.getImageData(0, 0, points.length, 1).data;
+        state.samples.push({ source: 'raf', readbackMs: performance.now() - start, frame, timeUs: Number(element.dataset.renderedTimeUs), transition: element.dataset.transition, visible, busy, pixels: points.map((_, index) => [pixels[index * 4], pixels[index * 4 + 1], pixels[index * 4 + 2]] as Rgb) });
       }
     }
     // Diagnose commits between RAF observations without counting them as
@@ -150,7 +151,8 @@ for (const scenario of [
       const visible = samples.filter(sample => sample.visible && !sample.busy && sample.frame >= scenario.startFrame && sample.frame <= endFrame);
       expect(visible.some(sample => sample.frame < scenario.boundaryFrame)).toBe(true);
       const effect = visible.filter(sample => sample.frame >= scenario.boundaryFrame && sample.frame < scenario.boundaryFrame + 6);
-      expect(new Set(effect.map(sample => sample.frame)).size).toBeGreaterThanOrEqual(3);
+      // A cut has one instantaneous boundary; fade and wipe must present intermediate pictures.
+      if (transition !== 'cut') expect(new Set(effect.map(sample => sample.frame)).size).toBeGreaterThanOrEqual(3);
       expect(effect.some(sample => sample.frame === scenario.boundaryFrame)).toBe(true);
       for (const sample of effect) {
         expect(sample.transition).toBe(transition);

@@ -141,7 +141,7 @@ test('opens a reference image trial in the project candidate comparison', async 
     const created = await rpc<ProjectDocument>(request, 'project.create', { title: '参考素材候选实验' });
     const project = await rpc<ProjectDocument>(request, 'project.update', { projectId: created.id, revision: created.revision, patch: {
       shots: [{ id: 'reference-shot', title: '首帧参考', narration: '', visualPrompt: '蓝色木盒', durationUs: 1_000_000 }],
-      workflow: { ...created.workflow, production: { ...created.workflow.production, referenceMode: 'generate', imageModelId: model.id } },
+      workflow: { ...created.workflow, id: 'reference-image-trial', production: { ...created.workflow.production, referenceMode: 'generate', imageModelId: model.id } },
     } });
     const dialog = await openExperiment(await openLauncher(page, project, 'assets'));
     await dialog.getByLabel('目标镜头', { exact: true }).selectOption('reference-shot');

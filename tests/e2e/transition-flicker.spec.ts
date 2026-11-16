@@ -77,18 +77,20 @@ for (const scenario of [{ transition: 'fade', cold: false }, { transition: 'wipe
   await seek(page, 126); if (!scenario.cold) await page.waitForTimeout(800);
   const capture = await canvas.evaluateHandle((element: HTMLCanvasElement, points) => {
     const state = { active: true, raf: 0, observer: null as MutationObserver | null, samples: [] as Sample[], commits: [] as { source: 'commit'; wallMs: number; uiMs: number; frame: number }[] };
+    const sampling = document.createElement('canvas'); sampling.width = points.length; sampling.height = 1;
+    const samplingContext = sampling.getContext('2d', { willReadFrequently: false })!;
     function tick() {
       if (!state.active) return;
       const bounds = element.getBoundingClientRect(), style = getComputedStyle(element), parent = element.closest('.scene-preview'), badge = parent?.querySelector<HTMLElement>('.timeline-preview__buffering'), badgeStyle = badge && getComputedStyle(badge), audio = document.querySelector<HTMLAudioElement>('audio[data-audio-role="处理后混音"]');
       const status = parent?.querySelector<HTMLElement>('[role="status"]'), statusBounds = status?.getBoundingClientRect(), statusStyle = status && getComputedStyle(status), alpha = statusStyle?.backgroundColor.match(/rgba\([^,]+,[^,]+,[^,]+,\s*([\d.]+)\)/)?.[1];
       const occluded = Boolean(statusBounds && statusBounds.width >= bounds.width * .95 && statusBounds.height >= bounds.height * .95 && statusStyle?.backgroundColor !== 'transparent' && Number(alpha ?? 1) * Number(statusStyle?.opacity ?? 1) >= .95);
       const coordinates = points.map(({ x, y }) => ({ x: Math.floor(x * element.width / 1920), y: Math.floor(y * element.height / 1080) }));
-      const left = Math.min(...coordinates.map(point => point.x)), top = Math.min(...coordinates.map(point => point.y));
-      const width = Math.max(...coordinates.map(point => point.x)) - left + 1, height = Math.max(...coordinates.map(point => point.y)) - top + 1;
-      // Read the same eight pixels on every RAF with one canvas synchronization.
-      const start = performance.now(), pixels = element.getContext('2d')!.getImageData(left, top, width, height).data;
+      // Read only eight pixels; a full bounding-box readback can itself stall a 200ms transition.
+      const start = performance.now();
+      coordinates.forEach(({ x, y }, index) => samplingContext.drawImage(element, x, y, 1, 1, index, 0, 1, 1));
+      const pixels = samplingContext.getImageData(0, 0, points.length, 1).data;
       const readbackMs = performance.now() - start;
-      state.samples.push({ source: 'raf', wallMs: performance.now(), readbackMs, uiMs: Number(document.querySelector('[role="slider"][aria-label="预览播放位置"]')?.getAttribute('aria-valuenow')), frame: Number(element.dataset.renderedFrame ?? -1), width: element.width, height: element.height, visible: style.visibility !== 'hidden' && style.display !== 'none' && bounds.width > 0 && !occluded, badge: Boolean(badge && badge.getBoundingClientRect().width && badgeStyle?.display !== 'none' && badgeStyle?.visibility !== 'hidden' && Number(badgeStyle?.opacity ?? 1) > 0), audioPaused: audio?.paused ?? true, audioMs: (audio?.currentTime ?? 0) * 1000, buffered: element.dataset.transitionBuffered === 'true', cachePixels: Number(element.dataset.transitionCachePixels ?? 0), pixels: coordinates.map(({ x, y }) => { const offset = ((y - top) * width + x - left) * 4; return [pixels[offset], pixels[offset + 1], pixels[offset + 2]] as Rgb; }) });
+      state.samples.push({ source: 'raf', wallMs: performance.now(), readbackMs, uiMs: Number(document.querySelector('[role="slider"][aria-label="预览播放位置"]')?.getAttribute('aria-valuenow')), frame: Number(element.dataset.renderedFrame ?? -1), width: element.width, height: element.height, visible: style.visibility !== 'hidden' && style.display !== 'none' && bounds.width > 0 && !occluded, badge: Boolean(badge && badge.getBoundingClientRect().width && badgeStyle?.display !== 'none' && badgeStyle?.visibility !== 'hidden' && Number(badgeStyle?.opacity ?? 1) > 0), audioPaused: audio?.paused ?? true, audioMs: (audio?.currentTime ?? 0) * 1000, buffered: element.dataset.transitionBuffered === 'true', cachePixels: Number(element.dataset.transitionCachePixels ?? 0), pixels: coordinates.map((_, index) => [pixels[index * 4], pixels[index * 4 + 1], pixels[index * 4 + 2]] as Rgb) });
       state.raf = requestAnimationFrame(tick);
     }
     // Commits diagnose producer cadence separately and never count as pixel samples.
