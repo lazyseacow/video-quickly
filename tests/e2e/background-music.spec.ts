@@ -13,13 +13,12 @@ async function savedProject(request: APIRequestContext, projectId: string) {
   return (await rpc<{ project: ProjectDocument }>(request, 'project.get', { projectId })).project;
 }
 async function createProject(request: APIRequestContext, title: string) {
-  const project = await rpc<ProjectDocument>(request, 'project.create', { title });
+  const project = await rpc<ProjectDocument>(request, 'project.create', { originalText: '清晨，林夏在书房发现一封未寄出的信。她来到旧城寻找信的主人，与朋友在雨中的城门重逢。两人读完信后决定一起回家。', title });
   return rpc<ProjectDocument>(request, 'project.update', { projectId: project.id, revision: project.revision, patch: { audioMix: { ...DEFAULT_AUDIO_MIX_SETTINGS, loudness: { ...DEFAULT_AUDIO_MIX_SETTINGS.loudness, enabled: false } }, shots: [0, 1].map(index => ({ id: `music-shot-${index}`, title: `音乐验收镜头 ${index + 1}`, narration: '', visualPrompt: '', durationUs: 3_000_000 })) } });
 }
 async function openProject(page: Page, title: string) {
   await page.goto('/'); await expect(page).toHaveTitle(/Video Quickly/);
-  await page.getByRole('button', { name: '我的项目', exact: true }).click();
-  await page.locator('.project-card').filter({ hasText: title }).getByRole('button', { name: /继续创作/ }).click();
+  await openProjectFromList(page, title);
   await expect(page.getByLabel('镜头标题')).toHaveValue('音乐验收镜头 1');
 }
 async function musicEditor(page: Page) {

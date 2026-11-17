@@ -9,7 +9,7 @@ async function rpc<T>(request: APIRequestContext, method: string, params: unknow
   const payload = await response.json(); expect(response.ok()).toBe(true); expect(payload.error).toBeUndefined(); return payload.result;
 }
 async function fixture(request: APIRequestContext, exporting = false) {
-  const created = await rpc<ProjectDocument>(request, 'project.create', { title: `执行范围验收 ${Date.now()}` });
+  const created = await rpc<ProjectDocument>(request, 'project.create', { originalText: '清晨，林夏在书房发现一封未寄出的信。她来到旧城寻找信的主人，与朋友在雨中的城门重逢。两人读完信后决定一起回家。', title: `执行范围验收 ${Date.now()}` });
   return rpc<ProjectDocument>(request, 'project.update', { projectId: created.id, revision: created.revision, patch: {
     shots: [{ id: 'locked', title: '人工确认的镜头', narration: '保留人工旁白', visualPrompt: '', durationUs: 1_000_000, locked: true }],
     workflow: { id: 'scope', name: '局部执行', version: 1,

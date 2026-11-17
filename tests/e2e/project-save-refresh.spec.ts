@@ -1,3 +1,4 @@
+import { openProjectFromList, openStudio } from './workspace-navigation';
 import { writeFile } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
 import { expect, test, type APIRequestContext, type Page } from '@playwright/test';
@@ -9,15 +10,15 @@ async function rpc<T>(request: APIRequestContext, method: string, params: unknow
 }
 function gate() { let release!: () => void; const promise = new Promise<void>(resolve => { release = resolve; }); return { promise, release }; }
 async function fixture(request: APIRequestContext, name: string, count = 2) {
-  const project = await rpc<ProjectDocument>(request, 'project.create', { title: `${name} ${randomUUID().slice(0, 8)}` });
+  const project = await rpc<ProjectDocument>(request, 'project.create', { originalText: '清晨，林夏在书房发现一封未寄出的信。她来到旧城寻找信的主人，与朋友在雨中的城门重逢。两人读完信后决定一起回家。', title: `${name} ${randomUUID().slice(0, 8)}` });
   return rpc<ProjectDocument>(request, 'project.update', { projectId: project.id, revision: project.revision, patch: { shots: Array.from({ length: count }, (_, index) => ({ id: `shot-${index}`, title: `镜头 ${index}`, narration: '', visualPrompt: '', durationUs: 1_000_000 })) } });
 }
 async function openProject(page: Page, project: ProjectDocument) {
   await page.emulateMedia({ reducedMotion: 'reduce' });
   const origin = new Date('2026-01-01T00:00:00Z'); await page.clock.install({ time: origin });
   await page.goto('/'); await expect(page.getByRole('navigation', { name: '主导航', exact: true })).toBeVisible();
-  await page.getByRole('button', { name: '我的项目', exact: true }).click(); await page.getByLabel('搜索项目', { exact: true }).fill(project.title);
-  await page.locator('.project-card').filter({ has: page.getByRole('heading', { name: project.title, exact: true }) }).getByRole('button', { name: /继续创作/ }).click();
+  await openStudio(page); await page.getByLabel('搜索作品', { exact: true }).fill(project.title);
+  await openProjectFromList(page, project.title);
   await expect(page.getByLabel('镜头标题', { exact: true })).toHaveValue(project.shots[0].title);
   await expect(page.locator('.project-heading-copy')).toHaveAttribute('data-revision', String(project.revision));
   // Hold notification debounce timers while exercising the explicit save read.
@@ -86,7 +87,7 @@ test('uses a confirmed save revision without rereading the large project and sti
 test('keeps an older in-flight read and input made during a confirmed save isolated from the next fresh read', async ({ page, request }) => {
   const errors = observe(page), project = await fixture(request, '保存与在途读取交错');
   const notifications = await observeNotifications(page);
-  const unrelated = await rpc<ProjectDocument>(request, 'project.create', { title: `在途通知来源 ${randomUUID().slice(0, 8)}` });
+  const unrelated = await rpc<ProjectDocument>(request, 'project.create', { originalText: '清晨，林夏在书房发现一封未寄出的信。她来到旧城寻找信的主人，与朋友在雨中的城门重逢。两人读完信后决定一起回家。', title: `在途通知来源 ${randomUUID().slice(0, 8)}` });
   const hold = gate(), entered = gate(), committed = gate(); let held = false; const revisions: Array<number | undefined> = [];
   await openProject(page, project);
   await page.route('**/__desktop_rpc', async route => {
@@ -116,7 +117,7 @@ test('keeps an older in-flight read and input made during a confirmed save isola
 
 test('shows an explicit retry for a failed background read while preserving a loaded project and its unsaved history', async ({ page, request }, info) => {
   const errors = observe(page), project = await fixture(request, '已加载项目读取恢复');
-  const unrelated = await rpc<ProjectDocument>(request, 'project.create', { title: `恢复通知来源 ${randomUUID().slice(0, 8)}` });
+  const unrelated = await rpc<ProjectDocument>(request, 'project.create', { originalText: '清晨，林夏在书房发现一封未寄出的信。她来到旧城寻找信的主人，与朋友在雨中的城门重逢。两人读完信后决定一起回家。', title: `恢复通知来源 ${randomUUID().slice(0, 8)}` });
   let reads = 0;
   const notifications = await observeNotifications(page);
   await openProject(page, project);

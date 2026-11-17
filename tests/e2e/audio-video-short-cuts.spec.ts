@@ -35,7 +35,7 @@ async function fixture(request: APIRequestContext, info: TestInfo, sourceFps = 3
   data.write('RIFF'); data.writeUInt32LE(data.length - 8, 4); data.write('WAVEfmt ', 8); data.writeUInt32LE(16, 16); data.writeUInt16LE(1, 20); data.writeUInt16LE(1, 22); data.writeUInt32LE(rate, 24); data.writeUInt32LE(rate * 2, 28); data.writeUInt16LE(2, 32); data.writeUInt16LE(16, 34); data.write('data', 36); data.writeUInt32LE(data.length - 44, 40);
   for (let sample = 0; sample < samples; sample++) data.writeInt16LE(Math.round(Math.sin(sample * Math.PI * 2 * 880 / rate) * 6000), 44 + sample * 2);
   await writeFile(voicePath, data);
-  let project = await rpc<ProjectDocument>(request, 'project.create', { title: `一帧视频跳切与真实混音验收 ${sourceFps}fps ${randomUUID().slice(0, 8)}` });
+  let project = await rpc<ProjectDocument>(request, 'project.create', { originalText: '清晨，林夏在书房发现一封未寄出的信。她来到旧城寻找信的主人，与朋友在雨中的城门重逢。两人读完信后决定一起回家。', title: `一帧视频跳切与真实混音验收 ${sourceFps}fps ${randomUUID().slice(0, 8)}` });
   const video = await rpc<AssetRecord>(request, 'asset.import', { projectId: project.id, path: videoPath, kind: 'video' });
   const voice = await rpc<AssetRecord>(request, 'asset.import', { projectId: project.id, path: voicePath, kind: 'audio' });
   project = (await rpc<{ project: ProjectDocument }>(request, 'project.get', { projectId: project.id })).project;

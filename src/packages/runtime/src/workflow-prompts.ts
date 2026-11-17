@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { createSceneTemplate, creativeCharacterBindings, creativeContextSchema, generationFramePrompt, isVideoGenerationNode, LockedShotChangeError, productionModelSetting, projectCharacterIds, resolvePromptBindings, seedance20DurationRange, shotSchema, stripVisualPromptOutputSpecs, validateCreativeReferences, type CharacterProfile, type JsonValue, type ModelProfile, type ProjectDocument, type SkillPackage, type WorkflowNode } from '@video-quickly/contracts';
+import { createSceneTemplate, creativeCharacterBindings, creativeContextSchema, dramaNarrativeModeLabels, dramaVisualStyleLabels, generationFramePrompt, isVideoGenerationNode, LockedShotChangeError, productionModelSetting, projectCharacterIds, resolvePromptBindings, seedance20DurationRange, shotDramaText, shotSchema, stripVisualPromptOutputSpecs, validateCreativeReferences, type CharacterProfile, type JsonValue, type ModelProfile, type ProjectDocument, type SkillPackage, type WorkflowNode } from '@video-quickly/contracts';
 import { ModelResponseValidationError, parseModelJson, responseIssues } from './model-responses.js';
 import { skillPromptContext } from '@video-quickly/contracts';
 import { legacyStoryboardOutputSchema, productionDocumentContract, storyboardOutputContract, type GeneratedStoryboardShot, type WorkflowOutputVersion } from './workflow-outputs.js';
@@ -12,7 +12,7 @@ export interface WorkflowUpstreamResult {
   output: JsonValue;
 }
 
-type PromptShot = Pick<ProjectDocument['shots'][number], 'id' | 'title' | 'narration' | 'visualPrompt' | 'soundPrompt' | 'durationUs' | 'locked' | 'characterIds' | 'creativeEntityKeys'>;
+type PromptShot = Pick<ProjectDocument['shots'][number], 'id' | 'title' | 'narration' | 'visualPrompt' | 'soundPrompt' | 'durationUs' | 'locked' | 'characterIds' | 'creativeEntityKeys' | 'drama'>;
 export interface StoryboardPromptStage {
   contract: string;
   shots: PromptShot[];
@@ -80,13 +80,20 @@ export function buildWorkflowPrompt(
   const planning = node.kind === 'brief' || node.kind === 'style' || node.kind === 'script';
   const includeProfile = !planning || legacyPlanningProfile;
   const fixedDurations = scriptOutput.structured && node.kind === 'script' ? new Set(project.shots.filter(shot => shot.clipEdit).map(shot => shot.id)) : undefined;
-  const shots = (storyboard?.shots ?? project.shots).map(({ id, title, narration, visualPrompt, soundPrompt, durationUs, locked, characterIds, creativeEntityKeys }) => ({
-    id, title, narration, visualPrompt: includeProfile ? visualPrompt : stripVisualPromptOutputSpecs(visualPrompt), soundPrompt, durationUs, locked, characterIds, creativeEntityKeys,
-    ...(fixedDurations?.has(id) ? { durationFixed: true } : {}),
-  }));
+  const authoredDrama = new Map(project.shots.map(shot => [shot.id, shot.drama]));
+  const shots = (storyboard?.shots ?? project.shots).map(({ id, title, narration, visualPrompt, soundPrompt, durationUs, locked, characterIds, creativeEntityKeys, drama }) => {
+    const context = drama ?? authoredDrama.get(id);
+    return {
+      id, title, narration, visualPrompt: includeProfile ? visualPrompt : stripVisualPromptOutputSpecs(visualPrompt), soundPrompt, durationUs, locked, characterIds, creativeEntityKeys,
+      ...(context ? { dramaContext: shotDramaText(project, { drama: context }, characters) } : {}),
+      ...(fixedDurations?.has(id) ? { durationFixed: true } : {}),
+    };
+  });
   const legacyScript = node.kind === 'script' && !storyboard;
   const sourceText = !singleShot && (node.kind === 'brief' || node.kind === 'script') && originalText?.trim() ? originalText : undefined;
-  const contract = storyboard?.contract ?? (node.kind === 'brief'
+  const contract = storyboard?.contract ?? (node.config.documentRole === 'screenplay'
+    ? '输出规范：只返回 {"text":"完整剧本正文"}。text 是本集完整可阅读的中文剧本，包含场次、地点与时段、可见行动、人物对白或旁白、转折和集尾悬念。遵循作品选题、讲述方式、已有原文及角色连续性，不输出分镜数组或应用管理的库编号。'
+    : node.kind === 'brief'
     ? `输出规范：${documentInstruction}可直接用于后续制作的中文创意简报正文，包含主题、目标观众、核心信息、叙事顺序、预期时长与表达要求。不添加开场解释、待办清单或确认问题。保留输入中的明确约束；未指定的创作细节采用一致的合理方案。`
     : node.kind === 'style'
       ? `输出规范：${documentInstruction}可直接用于分镜与画面生成的中文风格正文，明确画风、色彩、构图、光线、角色外观和场景连续性。以已生成的创意简报为依据，沿用已有角色设定；不创建角色库编号或宣称已生成参考图。`
@@ -121,6 +128,11 @@ export function buildWorkflowPrompt(
       `${originalTextLabel}：\n${sourceText}`,
     ] : []),
     `当前视觉风格：${project.style}`,
+    ...(project.drama ? [
+      `短剧分集：第 ${project.drama.number} 集；画风：${dramaVisualStyleLabels[project.drama.visualStyle]}；讲述方式：${dramaNarrativeModeLabels[project.drama.narrativeMode]}。`,
+      `已保存场次（按剧本顺序）：\n${JSON.stringify(project.drama.scenes.map(({ title, location, timeOfDay, description }) => ({ title, location, timeOfDay, description })))}`,
+    ] : []),
+    ...(project.drama || project.shots.some(shot => shot.drama) ? ['分集、场次及分镜中的 dramaContext 是用户已保存的创作上下文，沿用其人物、台词、场景及表演要求。角色形象、音色和场次绑定由应用管理；不创建或返回这些库编号，不返回 drama 或 dramaContext 字段，最终输出仍严格遵循本步骤的 JSON Schema。'] : []),
     ...(includeProfile ? [`成片规格：${JSON.stringify(project.profile)}`] : []),
     `现有分镜：${JSON.stringify(shots)}`,
     ...(bindings.length ? [`角色白名单文字设定（仅文字，没有发送参考图；只通过 key 引用）：\n${JSON.stringify(bindings.map(({ key, profile }) => ({ key, name: profile.name, description: profile.description })))}`] : []),

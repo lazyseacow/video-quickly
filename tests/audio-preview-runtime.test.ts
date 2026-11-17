@@ -73,7 +73,7 @@ it('observes stale prepare revisions while still rejecting private foreign audio
   const { runtime, project, asset, calls, prepare } = await fixture();
   expect(audioMixPrepareResultSchema.parse(await prepare({ ...project, revision: project.revision - 1 }))).toEqual({ status: 'revision_changed', revision: project.revision });
   const foreign = projectSchema.parse(await runtime.dispatch('project.create', { title: '另一个项目' }));
-  await expect(prepare({ ...project, id: foreign.id, revision: foreign.revision })).rejects.toThrow('不属于');
+  await expect(prepare({ ...project, id: foreign.id, drama: foreign.drama, revision: foreign.revision })).rejects.toThrow('不属于');
   await writeFile(asset.path, 'tampered source bytes'); await expect(prepare()).rejects.toThrow('校验失败');
   await expect(runtime.dispatch('audio.silence', { projectId: project.id, shotId: 'shot', revision: project.revision, thresholdDb: -35, minimumDurationUs: 100_000, paddingUs: 20_000 })).rejects.toThrow('校验失败');
   expect(calls.prepare).toBe(0); expect(calls.silence).toBe(0);

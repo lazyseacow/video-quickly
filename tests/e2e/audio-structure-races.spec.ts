@@ -1,6 +1,7 @@
 import { openProjectFromList } from './workspace-navigation';
 import { writeFile } from 'node:fs/promises';
-import { expect, test, type APIRequestContext, type Page, type TestInfo } from '@playwright/test';
+import { expect, type APIRequestContext, type Page, type TestInfo } from '@playwright/test';
+import { test } from './isolated-workspace';
 import { DEFAULT_AUDIO_MIX_SETTINGS, type AssetRecord, type ProjectDocument } from '@video-quickly/contracts';
 
 async function rpc<T>(request: APIRequestContext, method: string, params: unknown = {}): Promise<T> {
@@ -15,7 +16,7 @@ async function writeVoice(path: string) {
   await writeFile(path, data);
 }
 async function fixture(request: APIRequestContext, info: TestInfo, title: string, third = false) {
-  let project = await rpc<ProjectDocument>(request, 'project.create', { title });
+  let project = await rpc<ProjectDocument>(request, 'project.create', { originalText: '清晨，林夏在书房发现一封未寄出的信。她来到旧城寻找信的主人，与朋友在雨中的城门重逢。两人读完信后决定一起回家。', title });
   const path = info.outputPath('legacy-prefix-voice.wav'); await writeVoice(path);
   const asset = await rpc<AssetRecord>(request, 'asset.import', { projectId: project.id, path, kind: 'audio' }); project = await saved(request, project.id);
   project = await rpc<ProjectDocument>(request, 'project.update', { projectId: project.id, revision: project.revision, patch: {

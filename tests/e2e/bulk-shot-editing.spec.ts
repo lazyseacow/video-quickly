@@ -14,7 +14,7 @@ async function rpc<T>(request: APIRequestContext, method: string, params: unknow
 }
 async function saved(request: APIRequestContext, projectId: string) { return (await rpc<{ project: ProjectDocument }>(request, 'project.get', { projectId })).project; }
 async function fixture(request: APIRequestContext, title: string, lockedLast = false) {
-  const project = await rpc<ProjectDocument>(request, 'project.create', { title, profile: { width: 640, height: 360, frameRate: { numerator: 30, denominator: 1 }, fitMode: 'contain', previewScale: 1 } });
+  const project = await rpc<ProjectDocument>(request, 'project.create', { originalText: '清晨，林夏在书房发现一封未寄出的信。她来到旧城寻找信的主人，与朋友在雨中的城门重逢。两人读完信后决定一起回家。', title, profile: { width: 640, height: 360, frameRate: { numerator: 30, denominator: 1 }, fitMode: 'contain', previewScale: 1 } });
   return rpc<ProjectDocument>(request, 'project.update', { projectId: project.id, revision: project.revision, patch: {
     captionStyle: DEFAULT_CAPTION_STYLE, claims: [{ id: 'bulk-claim', text: '保留的人工资料', source: '原始材料', status: 'pending' }],
     shots: Array.from({ length: 6 }, (_, index) => ({ id: `bulk-${index}`, title: `多选镜头 ${index + 1}`, narration: `独立旁白 ${index + 1}`, visualPrompt: `独立画面 ${index + 1}`, durationUs: 2_000_000, sourceInUs: 500_000, sceneInUs: 500_000, sceneDurationUs: 4_000_000, sceneIndex: index, locked: lockedLast && index === 5, claimIds: index % 2 ? ['bulk-claim'] : [], animation: { panX: index === 0 ? .1 : 0, panY: 0, zoom: index === 0 ? 1.2 : 1.05, transition: 'fade' }, captionStyle: index === 0 ? { ...DEFAULT_CAPTION_STYLE, textColor: '#4455aa', fontWeight: 700 } : null,

@@ -5,6 +5,7 @@ import { ModelResponseValidationError, parseModelJson, responseIssues } from './
 const documentText = z.string().min(1).max(30_000).regex(/\S/);
 const briefOutputSchema = z.strictObject({ text: documentText.describe('完整的中文创意简报正文') });
 const styleOutputSchema = z.strictObject({ text: documentText.describe('完整的中文风格与角色正文') });
+const screenplayOutputSchema = z.strictObject({ text: documentText.describe('完整的本集中文剧本正文，包含场次、行动、对白或旁白') });
 
 export const editingOutputSchema = z.strictObject({ text: z.string().regex(/\S/).describe('剪辑 Agent 的操作摘要') });
 
@@ -31,6 +32,7 @@ function planningJsonSchema(schema: z.ZodType) {
 }
 
 export function productionDocumentContract(node: WorkflowNode, version?: WorkflowOutputVersion) {
+  if (node.config.documentRole === 'screenplay') return { kind: 'brief' as const, label: '剧本正文', name: 'drama_screenplay', schema: screenplayOutputSchema, jsonSchema: z.toJSONSchema(screenplayOutputSchema), fieldOutput: false };
   if (!version || node.config.modelBinding !== 'default' || node.id !== node.kind || (node.kind !== 'brief' && node.kind !== 'style')) return undefined;
   const contract = documentContracts[node.kind];
   if (version === 1) return contract;
@@ -94,6 +96,8 @@ export function storyboardOutputContract(version?: WorkflowOutputVersion) {
 }
 
 export function manualPlanningOutput(project: ProjectDocument, node: WorkflowNode, version?: WorkflowOutputVersion): JsonValue | undefined {
+  if (node.config.documentRole === 'screenplay') return node.config.screenplayDraft === true ? undefined
+    : { ...validateOutput(screenplayOutputSchema, { text: project.originalText ?? '' }, '已保存剧本'), source: 'project' };
   const step = productionPlanningStep(project.workflow, node);
   if (!step || !project.workflow.production.manualPlanningSteps?.includes(step)) return undefined;
   if (step === 'script') {

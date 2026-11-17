@@ -12,13 +12,13 @@ async function expectCleanChrome(page: Page) {
   await expect(page.locator('.topbar, .breadcrumb, .sidebar-local, .avatar')).toHaveCount(0);
   for (const text of ['本地工作区', '已连接本机', '项目与执行进度保存在本机']) await expect(page.getByText(text, { exact: true })).toHaveCount(0);
   await expect(page.getByLabel('本地创作者', { exact: true })).toHaveCount(0);
-  await expect(page.getByRole('navigation', { name: '主导航', exact: true })).toBeVisible(); await expect(page.getByRole('navigation', { name: '资源导航', exact: true })).toBeVisible(); await expect(page.locator('.sidebar').getByRole('button', { name: '新建项目', exact: true })).toBeVisible();
+  await expect(page.getByRole('navigation', { name: '主导航', exact: true })).toBeVisible(); await expect(page.getByRole('navigation', { name: '资源导航', exact: true })).toBeVisible(); await expect(page.locator('.sidebar').getByRole('button', { name: '新建短剧', exact: true })).toBeVisible();
 }
 
 test('keeps one page heading and functional guidance after removing repeated desktop chrome and slogans', async ({ page, request }, info) => {
   const errors = observe(page); await page.goto('/'); await expect(page.getByRole('navigation', { name: '主导航', exact: true })).toBeVisible(); await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark');
   const removed = ['从一个想法开始，把每个镜头打磨成自己的作品。', '收集画面、旁白与参考资料，把值得保留的素材带到下一次创作。', '把熟悉的创作方法带进工作流，让每个步骤遵循你的规范。', '配置文本、图片和视频模型。'];
-  for (const name of ['我的项目', '素材库', 'Skill 工作室', '模型连接']) {
+  for (const name of ['短剧工作室', '素材库', 'Skill 工作室', '模型连接']) {
     await page.getByRole('button', { name, exact: true }).click(); await expect(page.getByRole('heading', { level: 1, name, exact: true })).toBeVisible(); await expect(page.getByRole('heading', { level: 1 })).toHaveCount(1); await expectCleanChrome(page);
     for (const text of removed) await expect(page.getByText(text, { exact: true })).toHaveCount(0);
     if (name === 'Skill 工作室') {
@@ -39,11 +39,11 @@ test('keeps one page heading and functional guidance after removing repeated des
   }
   await expect(page.locator('.statusbar')).toHaveCount(0);
   await page.screenshot({ path: info.outputPath('workspace-cleanup-dark-1536.png') });
-  await page.locator('.sidebar').getByRole('button', { name: '新建项目', exact: true }).click(); const dialog = page.getByRole('dialog', { name: '新建视频项目', exact: true }); await expect(dialog).toBeVisible(); await expect(dialog.getByLabel('项目名称', { exact: true })).toBeFocused(); await expect(dialog.getByLabel('创意简报', { exact: true })).toBeVisible(); await dialog.getByRole('button', { name: '取消', exact: true }).click(); await expect(dialog).toHaveCount(0); expect(errors).toEqual([]);
+  await page.locator('.sidebar').getByRole('button', { name: '新建短剧', exact: true }).click(); const composer = page.getByRole('region', { name: '让故事成为一部短剧', exact: true }); await expect(composer).toBeVisible(); await expect(composer.getByRole('textbox', { name: '短剧名称', exact: true })).toBeFocused(); await expect(composer.getByRole('textbox', { name: '剧本正文', exact: true })).toBeVisible(); await composer.getByRole('tab', { name: '制作剧本', exact: true }).click(); await expect(composer.getByLabel('故事想法', { exact: true })).toBeVisible(); expect(errors).toEqual([]);
 });
 
 test('keeps recovery feedback and editing actions on a compact light workspace without an empty footer', async ({ page, request }, info) => {
-  const errors = observe(page); let project = await rpc<ProjectDocument>(request, 'project.create', { title: '精简工作区恢复验收', profile: { width: 640, height: 360, frameRate: { numerator: 30, denominator: 1 }, fitMode: 'contain', previewScale: .5 } }); project = await rpc<ProjectDocument>(request, 'project.update', { projectId: project.id, revision: project.revision, patch: { shots: [{ id: 'cleanup-shot', title: '原镜头标题', narration: '', visualPrompt: '', durationUs: 1_000_000 }] } });
+  const errors = observe(page); let project = await rpc<ProjectDocument>(request, 'project.create', { originalText: '清晨，林夏在书房发现一封未寄出的信。她来到旧城寻找信的主人，与朋友在雨中的城门重逢。两人读完信后决定一起回家。', title: '精简工作区恢复验收', profile: { width: 640, height: 360, frameRate: { numerator: 30, denominator: 1 }, fitMode: 'contain', previewScale: .5 } }); project = await rpc<ProjectDocument>(request, 'project.update', { projectId: project.id, revision: project.revision, patch: { shots: [{ id: 'cleanup-shot', title: '原镜头标题', narration: '', visualPrompt: '', durationUs: 1_000_000 }] } });
   await page.goto('/'); await openProjectFromList(page, project.title); await expect(page.getByLabel('镜头标题', { exact: true })).toHaveValue('原镜头标题'); await setWorkspaceTheme(page, 'light'); await page.setViewportSize({ width: 600, height: 900 }); await expect(page.locator('html')).toHaveAttribute('data-theme', 'light'); await expectCleanChrome(page);
   await expect(page.locator('.statusbar')).toHaveCount(0); const spacing = await page.locator('.main-shell').evaluate(element => { const body = element.querySelector('.page-body')!; return element.getBoundingClientRect().bottom - parseFloat(getComputedStyle(element).borderBottomWidth) - body.getBoundingClientRect().bottom; }); expect(Math.abs(spacing)).toBeLessThan(1);
   const heading = page.locator('.project-heading-copy'); await expect(heading).toHaveAttribute('data-revision', String(project.revision)); await expect(heading).not.toContainText(/个镜头|修订|640 × 360/);

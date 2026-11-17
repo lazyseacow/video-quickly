@@ -1,3 +1,4 @@
+import { openProjectFromList } from './workspace-navigation';
 import { expect, test } from '@playwright/test';
 import type { ProjectDocument } from '@video-quickly/contracts';
 
@@ -8,14 +9,13 @@ for (const operation of ['split', 'trim', 'reorder'] as const) test(`${operation
     expect(payload.error).toBeUndefined();
     return payload.result;
   }
-  const created = await rpc<ProjectDocument>('project.create', { title: `保存期间编辑验收 ${operation}` });
+  const created = await rpc<ProjectDocument>('project.create', { originalText: '清晨，林夏在书房发现一封未寄出的信。她来到旧城寻找信的主人，与朋友在雨中的城门重逢。两人读完信后决定一起回家。', title: `保存期间编辑验收 ${operation}` });
   const project = await rpc<ProjectDocument>('project.update', {
     projectId: created.id, revision: created.revision,
     patch: { shots: [1, 2].map(index => ({ id: `race-${index}`, title: `并发输入镜头 ${index}`, narration: '', visualPrompt: '', durationUs: 3_000_000 })) },
   });
   await page.goto('/');
-  await page.getByRole('button', { name: '我的项目', exact: true }).click();
-  await page.locator('.project-card').filter({ hasText: project.title }).getByRole('button', { name: /继续创作/ }).click();
+  await openProjectFromList(page, project.title);
   const ruler = page.getByRole('slider', { name: '预览播放位置', exact: true });
   await ruler.press('Home');
   for (let index = 0; index < 3; index++) await ruler.press('Shift+ArrowRight');

@@ -1,10 +1,10 @@
-import { openProjectFromList } from './workspace-navigation';
+import { openProjectFromList, openStudio } from './workspace-navigation';
 import { createServer } from 'node:http';
 import { expect, test, type APIRequestContext, type Page } from '@playwright/test';
 
 test('shows the workspace media requirement once without reserving a page row', async ({ page, request }, info) => {
   const title = `媒体准备提示 ${Date.now()}`;
-  const created = await request.post('/__desktop_rpc', { data: { method: 'project.create', params: { title } } }); expect(created.ok()).toBe(true);
+  const created = await request.post('/__desktop_rpc', { data: { method: 'project.create', params: { originalText: '清晨，林夏在书房发现一封未寄出的信。她来到旧城寻找信的主人，与朋友在雨中的城门重逢。两人读完信后决定一起回家。', title } } }); expect(created.ok()).toBe(true);
   await page.emulateMedia({ reducedMotion: 'reduce' });
   await page.route('**/__desktop_rpc', async route => {
     if (route.request().postDataJSON().method !== 'workspace.summary') { await route.continue(); return; }
@@ -16,12 +16,12 @@ test('shows the workspace media requirement once without reserving a page row', 
   const bounds = await page.locator('.preview-panel').boundingBox();
   await page.screenshot({ path: info.outputPath('workspace-media-notice.png') });
   await expect(toast).not.toBeVisible({ timeout: 4000 }); expect(await page.locator('.preview-panel').boundingBox()).toEqual(bounds);
-  await page.getByRole('button', { name: '我的项目', exact: true }).click(); await openProjectFromList(page, title); await expect(guide).toBeVisible(); await expect(toast).not.toBeVisible();
+  await openStudio(page); await openProjectFromList(page, title); await expect(guide).toBeVisible(); await expect(toast).not.toBeVisible();
   await expect(page.locator('vite-error-overlay')).toHaveCount(0);
 });
 
 async function openModels(page: Page, request: APIRequestContext, title: string) {
-  const created = await request.post('/__desktop_rpc', { data: { method: 'project.create', params: { title } } });
+  const created = await request.post('/__desktop_rpc', { data: { method: 'project.create', params: { originalText: '清晨，林夏在书房发现一封未寄出的信。她来到旧城寻找信的主人，与朋友在雨中的城门重逢。两人读完信后决定一起回家。', title } } });
   expect(created.ok()).toBe(true);
   await page.goto('/'); await openProjectFromList(page, title);
   await expect(page.getByLabel('项目名称', { exact: true })).toHaveValue(title);
@@ -74,7 +74,7 @@ for (const reducedMotion of ['no-preference', 'reduce'] as const) {
       await page.clock.install({ time });
       await openModels(page, request, `${name}项目`);
       await expect(page.getByRole('button', { name: '添加模型', exact: true }).locator('svg')).toHaveCount(1);
-      await expect(page.getByRole('button', { name: '新建项目', exact: true }).locator('svg')).toHaveCount(1);
+      await expect(page.getByRole('button', { name: '新建短剧', exact: true }).locator('svg')).toHaveCount(1);
       await page.clock.pauseAt(new Date(time.getTime() + 2 * test.info().timeout));
       const trigger = page.getByRole('button', { name: `检查“${name}”连接`, exact: true });
       await expect(trigger.locator('svg')).toHaveCount(1);
@@ -109,7 +109,7 @@ for (const reducedMotion of ['no-preference', 'reduce'] as const) {
       await page.getByRole('button', { name: '素材库', exact: true }).click();
       await expect(page.getByRole('button', { name: '回收站', exact: true }).locator('svg')).toHaveCount(1);
       await page.setViewportSize({ width: 390, height: 844 });
-      await expect(page.getByRole('button', { name: '新建项目', exact: true }).locator('svg')).toHaveCount(1);
+      await expect(page.getByRole('button', { name: '新建短剧', exact: true }).locator('svg')).toHaveCount(1);
       expect(errors).toEqual([]);
     } finally { release?.(); server.closeAllConnections(); await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve())); }
   });

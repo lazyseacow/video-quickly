@@ -34,6 +34,7 @@ export function productionPlanningStep(workflow: Pick<WorkflowDefinition, 'id'>,
 }
 
 export function usesManualPlanning(workflow: Pick<WorkflowDefinition, 'id' | 'production'>, node: Pick<WorkflowNode, 'id' | 'kind' | 'config'>): boolean {
+  if (node.config.documentRole === 'screenplay') return node.config.screenplayDraft !== true;
   const step = productionPlanningStep(workflow, node);
   return Boolean(step && workflow.production.manualPlanningSteps?.includes(step));
 }

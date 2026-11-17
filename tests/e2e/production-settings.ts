@@ -13,7 +13,7 @@ export async function productionFixture(request: APIRequestContext, { configureI
   for (const [role, name] of [['text', '统一文本'], ['text', '独立文本'], ['image', '参考图片'], ['video', '视频']] as const) models.push(await rpc<ModelProfile>('model.save', { model: {
     name: `${name} ${suffix}`, provider: 'openai-compatible', connectionType: role, capabilities: [role], model: `fixture-${role}`, baseUrl: 'http://127.0.0.1:1/v1', parameters: {},
   } }));
-  const created = await rpc<ProjectDocument>('project.create', { title: `统一制作 ${suffix}` });
+  const created = await rpc<ProjectDocument>('project.create', { originalText: '清晨，林夏在书房发现一封未寄出的信。她来到旧城寻找信的主人，与朋友在雨中的城门重逢。两人读完信后决定一起回家。', title: `统一制作 ${suffix}` });
   const project = configureImage ? await rpc<ProjectDocument>('project.update', { projectId: created.id, patch: {
     workflow: { ...created.workflow, production: { ...created.workflow.production, imageModelId: models[2].id } },
   } }) : created;

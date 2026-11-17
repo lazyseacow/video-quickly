@@ -23,7 +23,7 @@ async function fixture(request: APIRequestContext, title: string, usage: Record<
   });
   await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
   const address = server.address(); if (!address || typeof address === 'string') throw new Error('夹具服务启动失败');
-  const project = await rpc<ProjectDocument>(request, 'project.create', { title });
+  const project = await rpc<ProjectDocument>(request, 'project.create', { originalText: '清晨，林夏在书房发现一封未寄出的信。她来到旧城寻找信的主人，与朋友在雨中的城门重逢。两人读完信后决定一起回家。', title });
   const model = await rpc<ModelProfile>(request, 'model.save', { model: { name: title + '模型', model: 'archive-model', provider: 'openai-compatible', baseUrl: `http://127.0.0.1:${address.port}/v1`, connectionType: 'text', capabilities: ['text'], parameters: { internal_fixture: 'do-not-expose-parameters' } } });
   async function start(count: number) {
     let run: RunRecord | undefined, succeeded = false;
@@ -68,7 +68,7 @@ async function openCosts(page: Page, projectId: string) {
 for (const width of [1536, 390]) {
   test(`keeps the usage layout and empty state mounted during project filtering at ${width}px`, async ({ page, request }, info) => {
     const projects: ProjectDocument[] = [];
-    for (const suffix of ['A', 'B', 'C']) projects.push(await rpc<ProjectDocument>(request, 'project.create', { title: `稳定用量筛选 ${width} ${suffix}` }));
+    for (const suffix of ['A', 'B', 'C']) projects.push(await rpc<ProjectDocument>(request, 'project.create', { originalText: '清晨，林夏在书房发现一封未寄出的信。她来到旧城寻找信的主人，与朋友在雨中的城门重逢。两人读完信后决定一起回家。', title: `稳定用量筛选 ${width} ${suffix}` }));
     await page.setViewportSize({ width, height: width === 390 ? 844 : 960 }); await openCosts(page, projects[0].id);
     const selector = page.getByLabel('用量项目', { exact: true }); const overview = page.getByRole('region', { name: 'Token 用量汇总', exact: true });
     await expect(overview).toHaveAttribute('aria-busy', 'false'); const empty = page.getByRole('heading', { name: '还没有 Token 用量', exact: true }); await expect(empty).toBeVisible();
@@ -116,7 +116,7 @@ test('retains usage rows and totals until new project results arrive, then repla
 
 test('preserves a known summary after a failed refresh and recovers detail reads without false loading or empty states', async ({ page, request }, info) => {
   const source = await fixture(request, '用量失败反馈');
-  const empty = await rpc<ProjectDocument>(request, 'project.create', { title: '用量读取失败的新筛选' });
+  const empty = await rpc<ProjectDocument>(request, 'project.create', { originalText: '清晨，林夏在书房发现一封未寄出的信。她来到旧城寻找信的主人，与朋友在雨中的城门重逢。两人读完信后决定一起回家。', title: '用量读取失败的新筛选' });
   let failSummary = false, failDetails = true;
   try {
     const run = await source.start(1);
@@ -224,7 +224,7 @@ test('retains a requested detail page when a workspace refresh supersedes its re
     });
     await page.getByRole('button', { name: '加载更多明细', exact: true }).click(); await expect.poll(() => pages).toBe(1);
     await page.clock.resume();
-    await rpc(request, 'project.create', { title: '触发同一列表的新鲜度检查' }); await expect.poll(() => refreshes).toBeGreaterThan(0);
+    await rpc(request, 'project.create', { originalText: '清晨，林夏在书房发现一封未寄出的信。她来到旧城寻找信的主人，与朋友在雨中的城门重逢。两人读完信后决定一起回家。', title: '触发同一列表的新鲜度检查' }); await expect.poll(() => refreshes).toBeGreaterThan(0);
     nextPage.release(); refreshPage.release();
     await expect(page.locator('.cost-record')).toHaveCount(32); await expect(records).toHaveAttribute('aria-busy', 'false');
     await page.screenshot({ path: info.outputPath('detail-page-after-refresh.png') });
@@ -269,7 +269,7 @@ test('keeps a pending task page scoped to its original project when the filter c
     await page.getByLabel('用量项目', { exact: true }).selectOption(target.project.id); await expect.poll(() => filtered).toBeGreaterThan(0);
     await expect(page.locator('.cost-task')).toHaveCount(40); await expect(page.locator('.cost-task').getByRole('button').first()).toBeDisabled();
     await page.clock.resume();
-    await rpc(request, 'project.create', { title: '新筛选读取期间的独立通知' }); await expect.poll(() => filtered).toBeGreaterThan(1);
+    await rpc(request, 'project.create', { originalText: '清晨，林夏在书房发现一封未寄出的信。她来到旧城寻找信的主人，与朋友在雨中的城门重逢。两人读完信后决定一起回家。', title: '新筛选读取期间的独立通知' }); await expect.poll(() => filtered).toBeGreaterThan(1);
     oldPage.release(); newPage.release();
     await expect(page.locator('.cost-task')).toHaveCount(20); await expect(page.locator(`.cost-task[data-task-id="${newer.id}"]`)).toBeVisible();
     expect(newLimits.every(limit => limit === 20)).toBe(true);
@@ -334,7 +334,7 @@ test('keeps task details scoped during delayed reads and distinguishes zero cach
 
 test('waits for the current query range when returning to a retained project before its replacement resolves', async ({ page, request }) => {
   const source = await fixture(request, '快速筛选返回旧项目的分页范围');
-  const other = await rpc<ProjectDocument>(request, 'project.create', { title: '尚未读取完的新筛选' });
+  const other = await rpc<ProjectDocument>(request, 'project.create', { originalText: '清晨，林夏在书房发现一封未寄出的信。她来到旧城寻找信的主人，与朋友在雨中的城门重逢。两人读完信后决定一起回家。', title: '尚未读取完的新筛选' });
   const first = gate(), second = gate(); let returning = false, firstReads = 0, secondReads = 0;
   await page.emulateMedia({ reducedMotion: 'reduce' });
   const clockOrigin = new Date('2026-01-01T00:00:00Z'); await page.clock.install({ time: clockOrigin });

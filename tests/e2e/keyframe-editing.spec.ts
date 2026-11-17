@@ -9,13 +9,12 @@ async function rpc<T>(request: APIRequestContext, method: string, params: unknow
   const data = await response.json(); expect(data.error).toBeUndefined(); return data.result;
 }
 async function fixture(request: APIRequestContext, title: string) {
-  const created = await rpc<ProjectDocument>(request, 'project.create', { title });
+  const created = await rpc<ProjectDocument>(request, 'project.create', { originalText: '清晨，林夏在书房发现一封未寄出的信。她来到旧城寻找信的主人，与朋友在雨中的城门重逢。两人读完信后决定一起回家。', title });
   return rpc<ProjectDocument>(request, 'project.update', { projectId: created.id, revision: created.revision, patch: { shots: [{ id: 'keyframe-shot', title: '源窗口关键帧镜头', narration: '', visualPrompt: '', durationUs: 2_000_000, sourceInUs: 2_000_000, sceneInUs: 2_000_000, sceneDurationUs: 4_000_000 }] } });
 }
 async function saved(request: APIRequestContext, projectId: string) { return (await rpc<{ project: ProjectDocument }>(request, 'project.get', { projectId })).project; }
 async function open(page: Page, project: ProjectDocument) {
-  await page.goto('/'); await expect(page).toHaveTitle(/Video Quickly/); await page.getByRole('button', { name: '我的项目', exact: true }).click();
-  await page.locator('.project-card').filter({ hasText: project.title }).getByRole('button', { name: '继续创作', exact: true }).click();
+  await page.goto('/'); await expect(page).toHaveTitle(/Video Quickly/); await openProjectFromList(page, project.title);
   await expect(page.getByLabel('镜头标题', { exact: true })).toHaveValue('源窗口关键帧镜头');
   await page.getByRole('button', { name: '关键帧与曲线', exact: true }).click(); return page.getByRole('dialog', { name: '关键帧与曲线', exact: true });
 }
@@ -42,7 +41,7 @@ test('edits original-time keyframes and custom curves as one recoverable command
   await expect.poll(async () => (await saved(request, project.id)).shots[0].animation.keyframes?.length).toBe(3);
   const edited = await saved(request, project.id); expect(edited.shots[0].animation.keyframes?.map(frame => frame.timeUs)).toEqual([0, 2_000_000, 4_000_000]);
   expect(edited.shots[0]).toMatchObject({ sourceInUs: 2_000_000, sceneInUs: 2_000_000, sceneDurationUs: 4_000_000 });
-  await page.reload(); await page.getByRole('button', { name: '我的项目', exact: true }).click(); await page.locator('.project-card').filter({ hasText: project.title }).getByRole('button', { name: '继续创作', exact: true }).click();
+  await page.reload(); await openProjectFromList(page, project.title);
   await page.getByRole('button', { name: '撤销', exact: true }).click(); await expect.poll(async () => (await saved(request, project.id)).shots).toEqual(project.shots);
   await page.getByRole('button', { name: '重做', exact: true }).click(); await expect.poll(async () => (await saved(request, project.id)).shots).toEqual(edited.shots);
   expect(errors).toEqual([]);

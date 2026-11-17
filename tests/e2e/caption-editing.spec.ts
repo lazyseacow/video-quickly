@@ -10,7 +10,7 @@ async function rpc<T>(request: APIRequestContext, method: string, params: unknow
   const payload = await response.json(); expect(payload.error).toBeUndefined(); return payload.result;
 }
 async function createProject(request: APIRequestContext, title: string, captionTrack?: CaptionTrack) {
-  const project = await rpc<ProjectDocument>(request, 'project.create', { title });
+  const project = await rpc<ProjectDocument>(request, 'project.create', { originalText: '清晨，林夏在书房发现一封未寄出的信。她来到旧城寻找信的主人，与朋友在雨中的城门重逢。两人读完信后决定一起回家。', title });
   return rpc<ProjectDocument>(request, 'project.update', { projectId: project.id, revision: project.revision, patch: { shots: [
     { id: 'caption-shot', title: '字幕编辑镜头', narration: '第一句旁白。第二句旁白。', visualPrompt: '', durationUs: 4_000_000, ...(captionTrack ? { captionTrack } : {}) },
     { id: 'caption-tail', title: '结尾镜头', narration: '', visualPrompt: '', durationUs: 2_000_000 },
@@ -21,8 +21,7 @@ async function savedProject(request: APIRequestContext, projectId: string) {
 }
 async function openProject(page: Page, title: string) {
   await page.goto('/'); await expect(page).toHaveTitle(/Video Quickly/);
-  await page.getByRole('button', { name: '我的项目', exact: true }).click();
-  await page.locator('.project-card').filter({ hasText: title }).getByRole('button', { name: /继续创作/ }).click();
+  await openProjectFromList(page, title);
   await expect(page.getByLabel('镜头标题')).toHaveValue('字幕编辑镜头');
 }
 async function editor(page: Page) {

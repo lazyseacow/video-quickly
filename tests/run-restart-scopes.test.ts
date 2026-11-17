@@ -184,7 +184,7 @@ it('keeps ordinary canceled workflow restarts as new full runs and rejects cross
     return planningFixtureResponse(request.prompt, '普通工作流文本');
   } });
   const model = await runtime.dispatch('model.save', { model: { name: '本地注入模型', provider: 'openai-compatible', baseUrl: 'http://127.0.0.1:1/v1', model: 'text-fixture', connectionType: 'text', capabilities: ['text'] } }) as ModelProfile;
-  const nodes = project.workflow.nodes.filter(node => node.kind === 'brief' || node.kind === 'style').map(node => ({ ...node, modelId: model.id, requiresReview: false })); expect(nodes).toHaveLength(2);
+  const nodes = project.workflow.nodes.filter(node => node.id === 'brief' || node.id === 'style').map(node => ({ ...node, modelId: model.id, requiresReview: false })); expect(nodes).toHaveLength(2);
   const ready = projectSchema.parse(await runtime.dispatch('project.update', { projectId: project.id, revision: project.revision, patch: { workflow: { ...project.workflow, nodes, edges: [{ id: 'brief-to-style', source: nodes[0].id, target: nodes[1].id }] } } }));
   const parent = runSchema.parse(await runtime.dispatch('run.start', { projectId: project.id })); await entered;
   await runtime.dispatch('run.cancel', { runId: parent.id }); await runtime.waitForIdle(); hold = false;

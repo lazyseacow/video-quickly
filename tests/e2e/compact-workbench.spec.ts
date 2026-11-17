@@ -1,3 +1,4 @@
+import { openStudio, openProjectFromList } from './workspace-navigation';
 
 import { expect, type APIRequestContext } from '@playwright/test';
 import { createSceneTemplate, type ProjectDocument } from '@video-quickly/contracts';
@@ -9,7 +10,7 @@ async function rpc<T>(request: APIRequestContext, method: string, params: unknow
   expect(response.ok()).toBe(true); expect(payload.error).toBeUndefined(); return payload.result;
 }
 
-for (const viewport of [{ width: 1536, height: 960, theme: 'light' }, { width: 1024, height: 720, theme: 'dark' }, { width: 390, height: 844, theme: 'light' }] as const) {
+for (const viewport of [{ width: 1536, height: 960, theme: 'light' }, { width: 1464, height: 900, theme: 'dark' }, { width: 1100, height: 800, theme: 'light' }, { width: 1024, height: 720, theme: 'dark' }, { width: 390, height: 844, theme: 'light' }] as const) {
   test(`keeps project cards and stage settings compact and removes built-in research and review waits at ${viewport.width}px`, async ({ page, request }, info) => {
     const errors: string[] = []; page.on('pageerror', error => errors.push(error.message)); page.on('console', entry => { if (entry.type() === 'error') errors.push(entry.text()); });
     const source = await productionFixture(request), created = source.project;
@@ -17,16 +18,33 @@ for (const viewport of [{ width: 1536, height: 960, theme: 'light' }, { width: 1
       workflow: { ...created.workflow, production: { ...created.workflow.production, textModelId: source.text.id, videoModelId: source.video.id }, nodes: created.workflow.nodes.map(node => node.id === 'style' ? { ...node, prompt: 'style原有提示词', modelId: source.override.id, config: { ...node.config, modelOverride: true } } : node) },
       shots: [{ id: 'compact-shot', title: '保留的镜头', narration: '已有旁白', visualPrompt: '', durationUs: 2_000_000, sceneTemplate: createSceneTemplate('process') }],
     } });
-    expect(project.workflow.nodes.map(node => node.id)).toEqual(['brief', 'style', 'script', 'assets', 'video', 'animation', 'export']);
+    expect(project.workflow.nodes.map(node => node.id)).toEqual(['screenplay', 'brief', 'style', 'script', 'assets', 'video', 'animation', 'export']);
     expect(project.workflow.nodes.every(node => !node.requiresReview)).toBe(true);
     await page.addInitScript(theme => localStorage.setItem('vq-theme', theme), viewport.theme);
     await page.setViewportSize(viewport); await page.emulateMedia({ reducedMotion: 'reduce' }); await page.goto('/'); await expect(page).toHaveTitle(/Video Quickly/);
-    await page.getByRole('button', { name: '我的项目', exact: true }).click(); await page.getByLabel('搜索项目', { exact: true }).fill(project.title);
-    const card = page.locator('.project-card').filter({ has: page.getByRole('heading', { name: project.title, exact: true }) });
-    await expect(card.locator('.project-card-body > p')).toHaveCount(0); await expect(card.locator('.project-card-body')).not.toContainText(/个镜头|1920|1080|00:02/);
-    expect((await card.locator('.project-card-body').boundingBox())!.height).toBeLessThanOrEqual(116);
+    await openStudio(page); await page.getByLabel('搜索作品', { exact: true }).fill(project.title);
+    const card = page.locator('.drama-work-card').filter({ has: page.getByRole('heading', { name: project.title, exact: true }) });
+    await expect(card.getByRole('heading')).toHaveText(project.title); await expect(card).not.toContainText(/个镜头|1920|1080|00:02/); await expect(card.locator('.pill')).toHaveCount(2);
+    expect((await card.boundingBox())!.width).toBeLessThanOrEqual(viewport.width - 52);
     await page.screenshot({ path: info.outputPath(`compact-projects-${viewport.theme}-${viewport.width}.png`) });
-    await card.getByRole('button', { name: '继续创作', exact: true }).click();
+    await openProjectFromList(page, project.title);
+    for (const name of ['分集剧本', '场次与对白', '导出']) {
+      const button = page.locator('.project-heading-actions').getByRole('button', { name, exact: true });
+      await expect(button).toBeVisible(); const bounds = await button.boundingBox();
+      expect(bounds, `${name} must have a rendered box`).not.toBeNull();
+      expect(bounds!.x, `${name} left edge`).toBeGreaterThanOrEqual(52);
+      expect(bounds!.x + bounds!.width, `${name} right edge`).toBeLessThanOrEqual(viewport.width);
+    }
+    if (viewport.width === 1024 || viewport.width === 1100) {
+      const title = await page.locator('.project-heading-copy').boundingBox(), actions = await page.locator('.project-heading-actions').boundingBox();
+      expect(actions!.y).toBeGreaterThanOrEqual(title!.y + title!.height);
+      const actionRows = await page.locator('.project-heading-actions > button, .project-heading-actions > .project-more').evaluateAll(controls => [...new Set(controls.filter(control => control.checkVisibility()).map(control => { const box = control.getBoundingClientRect(); return Math.round(box.y + box.height / 2); }))]);
+      expect(actionRows).toHaveLength(1);
+    } else if (viewport.width >= 1464) {
+      const title = await page.locator('.project-heading-copy').boundingBox(), actions = await page.locator('.project-heading-actions').boundingBox();
+      expect(Math.abs(title!.y + title!.height / 2 - actions!.y - actions!.height / 2)).toBeLessThanOrEqual(1);
+    }
+    await page.screenshot({ path: info.outputPath(`compact-workbench-actions-${viewport.theme}-${viewport.width}.png`) });
     const guide = page.getByRole('region', { name: '制作指引', exact: true }); await expect(guide.locator('.workbench-guide__step')).toHaveCount(4); await expect(guide).not.toContainText('人工审阅'); await expect(guide).not.toContainText('审阅点');
     await page.getByRole('button', { name: '制作设置', exact: true }).click();
     const dialog = page.getByRole('dialog', { name: '制作设置', exact: true }); await expect(dialog).toBeVisible();

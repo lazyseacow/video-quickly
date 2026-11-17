@@ -19,9 +19,9 @@ async function fixture(options: Partial<RuntimeOptions> = {}) {
     return { text: planningFixtureResponse(input.prompt, text), usage: { source: 'provider', inputTokens: 11, outputTokens: 7 } };
   }, ...options }); runtimes.push(runtime);
   const model = modelSchema.parse(await runtime.dispatch('model.save', { model: { name: '实验文本', provider: 'openai-compatible', baseUrl: 'http://127.0.0.1:1/v1', model: 'fixture', connectionType: 'text', capabilities: ['text'] } }));
-  let project = projectSchema.parse(await runtime.dispatch('project.create', { title: '提示词实验项目', brief: '原始简报' }));
+  let project = projectSchema.parse(await runtime.dispatch('project.create', { title: '提示词实验项目', brief: '原始简报', originalText: '第一场，实验者走进工作室，开始测试。' }));
   project = projectSchema.parse(await runtime.dispatch('project.update', { projectId: project.id, revision: project.revision, patch: { workflow: { ...project.workflow, production: { ...project.workflow.production, textModelId: model.id } } } }));
-  const node = project.workflow.nodes.find(node => node.kind === 'brief')!;
+  const node = project.workflow.nodes.find(node => node.id === 'brief')!;
   const draft: PromptDraft = { projectId: project.id, projectRevision: project.revision, node: { ...node, prompt: '主题：{{theme}}', promptBindings: { theme: { projectPath: ['title'] } } }, context: { brief: '尚未保存的实验简报' } };
   return { runtime, directory, model, project, prompts, draft, current: async () => (await runtime.dispatch('project.get', { projectId: project.id }) as { project: ProjectDocument }).project };
 }
@@ -97,12 +97,12 @@ it('recovers a committed trial after a process interruption without another mode
   expect(runSchema.parse(await recovered.dispatch('run.get', { runId: record.id })).status).toBe('succeeded'); expect(source.prompts).toHaveLength(1);
   expect(await recovered.dispatch('promptSession.get', { id: saved.id })).toEqual(saved);
 });
-it('exports prompt bindings in a version-6 project backup', async () => {
+it('exports prompt bindings in a version-10 episode backup', async () => {
   const source = await fixture();
   const project = projectSchema.parse(await source.runtime.dispatch('project.update', { projectId: source.project.id, revision: source.project.revision, patch: { workflow: { ...source.project.workflow, nodes: source.project.workflow.nodes.map(node => node.id === source.draft.node.id ? source.draft.node : node) } } }));
   const backup = await source.runtime.dispatch('project.backup', { projectId: project.id }) as { path: string };
-  const manifest = JSON.parse(await readFile(join(backup.path, 'project.json'), 'utf8')); expect(manifest.schemaVersion).toBe(6);
-  expect(projectSchema.parse(manifest.project).workflow.nodes.find(node => node.kind === 'brief')?.promptBindings).toEqual(source.draft.node.promptBindings);
+  const manifest = JSON.parse(await readFile(join(backup.path, 'project.json'), 'utf8')); expect(manifest.schemaVersion).toBe(10);
+  expect(projectSchema.parse(manifest.project).workflow.nodes.find(node => node.id === 'brief')?.promptBindings).toEqual(source.draft.node.promptBindings);
 });
 
 it('freezes the selected model and Skill version and prevents applying a trial over a newer project', async () => {

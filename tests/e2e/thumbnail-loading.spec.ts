@@ -13,7 +13,7 @@ async function rpc<T>(request: APIRequestContext, method: string, params: unknow
 async function fixture(request: APIRequestContext, info: TestInfo, count = 3) {
   const path = info.outputPath('green-red-blue.mp4');
   await execute(process.env.VIDEO_QUICKLY_FFMPEG ?? 'ffmpeg', ['-hide_banner', '-loglevel', 'error', '-y', '-f', 'lavfi', '-i', 'color=c=0x00ff00:s=320x180:r=30:d=3', '-vf', "drawbox=x=0:y=0:w=iw:h=ih:color=0xff0000:t=fill:enable='gte(t,1)',drawbox=x=0:y=0:w=iw:h=ih:color=0x0000ff:t=fill:enable='gte(t,2)'", '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '12', '-g', '1', '-bf', '0', '-pix_fmt', 'yuv420p', '-an', path]);
-  const project = await rpc<ProjectDocument>(request, 'project.create', { title: `真实缩略图验收 ${randomUUID().slice(0, 8)}` });
+  const project = await rpc<ProjectDocument>(request, 'project.create', { originalText: '清晨，林夏在书房发现一封未寄出的信。她来到旧城寻找信的主人，与朋友在雨中的城门重逢。两人读完信后决定一起回家。', title: `真实缩略图验收 ${randomUUID().slice(0, 8)}` });
   const asset = await rpc<AssetRecord>(request, 'asset.import', { projectId: project.id, path, kind: 'video' });
   const current = (await rpc<{ project: ProjectDocument }>(request, 'project.get', { projectId: project.id })).project;
   const updated = await rpc<ProjectDocument>(request, 'project.update', { projectId: current.id, revision: current.revision, patch: { profile: { ...current.profile, width: 640, height: 360 }, shots: Array.from({ length: count }, (_, index) => ({ id: `color-${index}`, title: `彩色镜头 ${index + 1}`, narration: '', visualPrompt: '', durationUs: 500_000, sourceInUs: 0, videoInUs: Math.round((index % 3 + .5) * 1_000_000), videoAssetId: asset.id, animation: { zoom: 1, panX: 0, panY: 0, transition: 'cut' } })) } });
@@ -151,7 +151,7 @@ test('cancels real frame reads without retaining thumbnail video elements or poi
       { path: asset.path, timeMs: 1500, paused: true, ready: true },
     ]);
     const ownedScenes = await sourcedVideos();
-    const empty = await rpc<ProjectDocument>(request, 'project.create', { title: `缩略图资源释放 ${randomUUID().slice(0, 8)}` }); await openProjectFromList(page, empty.title);
+    const empty = await rpc<ProjectDocument>(request, 'project.create', { originalText: '清晨，林夏在书房发现一封未寄出的信。她来到旧城寻找信的主人，与朋友在雨中的城门重逢。两人读完信后决定一起回家。', title: `缩略图资源释放 ${randomUUID().slice(0, 8)}` }); await openProjectFromList(page, empty.title);
     await expect.poll(sourcedVideos).toEqual([]);
     await info.attach('thumbnail-cancellation-decoder-ownership', { body: JSON.stringify({ ...result, ownedScenes, afterProjectSwitch: await sourcedVideos() }), contentType: 'application/json' });
     expect((await rpc<{ project: ProjectDocument }>(request, 'project.get', { projectId: project.id })).project).toEqual(project);

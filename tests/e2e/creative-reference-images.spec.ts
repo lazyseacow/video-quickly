@@ -19,7 +19,7 @@ async function fixture(request: APIRequestContext) {
     return rpc<AssetRecord>(request, 'asset.import', { path, kind: 'image', projectId });
   }
   const primary = await image('花园原图');
-  let project = await rpc<ProjectDocument>(request, 'project.create', { title: `图片参考 ${suffix}` });
+  let project = await rpc<ProjectDocument>(request, 'project.create', { originalText: '清晨，林夏在书房发现一封未寄出的信。她来到旧城寻找信的主人，与朋友在雨中的城门重逢。两人读完信后决定一起回家。', title: `图片参考 ${suffix}` });
   const privateImage = await image('项目私有图', project.id);
   // Push the selected reference beyond page one, so reopening requires asset.getMany.
   for (let index = 0; index < 31; index++) await image(`公共图片${index}`);

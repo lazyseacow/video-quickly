@@ -45,7 +45,7 @@ type SequenceReceipt = { attempt: number } & (
 function visualPrompt(context: MediaActivityContext, shot: Shot, references: ResolvedCharacterReferences, videoReferences?: VideoReferenceImages): string {
   if (context.promptOverride !== undefined) return context.promptOverride;
   const hasFrame = Boolean(videoReferences ? videoReferences.frame : currentVideoImage(context, shot));
-  return appendSkillContext(buildMediaPrompt(context.project, context.node, shot, references.characters, context.model, hasFrame, context.promptUpstream, videoReferences), context.node, context.skills ?? []);
+  return appendSkillContext(buildMediaPrompt(context.project, context.node, shot, context.characters ?? references.characters, context.model, hasFrame, context.promptUpstream, videoReferences, context.voices), context.node, context.skills ?? []);
 }
 
 type MediaPreflightContext = Pick<MediaActivityContext, 'project' | 'node' | 'assets' | 'model' | 'characters' | 'legacyVideoReferences'> & Partial<Pick<MediaActivityContext, 'operationId' | 'dataDirectory' | 'signal'>> & { pendingVideoInput?: boolean };

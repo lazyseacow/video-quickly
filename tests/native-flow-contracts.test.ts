@@ -61,21 +61,23 @@ it('rejects missing types and audio requests before creating a model or run', as
   expect(await runtime.dispatch('run.list', { projectId: project.id })).toMatchObject({ items: [], nextCursor: null });
 });
 
-it('uses one native workflow for the example and both project categories with subtitles off', async () => {
+it('starts empty and uses one drama workflow for a new work and its later episodes with subtitles off', async () => {
   const runtime = await fixture(true), workspace = await runtime.dispatch('workspace.snapshot') as { projects: unknown[] };
-  const projects = [...workspace.projects];
-  for (const templateId of ['generic', 'history-handdrawn']) projects.push(await runtime.dispatch('project.create', { title: templateId, templateId }));
+  expect(workspace.projects).toEqual([]);
+  const first = projectSchema.parse(await runtime.dispatch('project.create', { title: '第一集' }));
+  const projects = [first, await runtime.dispatch('project.create', { title: '第二集', drama: { workId: first.drama!.workId, number: 2 } })];
   for (const input of projects) {
     const project = projectSchema.parse(input);
     expect(project.workflow.id).toBe('native-video'); expect(project.workflow.production.mode).toBe('native-video');
-    expect(project.workflow.nodes.map(node => node.id)).toEqual(['brief', 'style', 'script', 'assets', 'video', 'animation', 'export']);
+    expect(project.workflow.nodes.map(node => node.id)).toEqual(['screenplay', 'brief', 'style', 'script', 'assets', 'video', 'animation', 'export']);
     expect(project.workflow.stages).toHaveLength(4); expect(captionsEnabled(project)).toBe(false);
   }
 });
 
-it('writes a format-4 project backup with its native production settings', async () => {
+it('writes a format-10 episode backup with its owning work and production settings', async () => {
   const runtime = await fixture(), project = projectSchema.parse(await runtime.dispatch('project.create', { title: '备份契约' }));
   const backup = await runtime.dispatch('project.backup', { projectId: project.id }) as { path: string }, path = join(backup.path, 'project.json');
-  const manifest = JSON.parse(await readFile(path, 'utf8')); expect(manifest.schemaVersion).toBe(4);
+  const manifest = JSON.parse(await readFile(path, 'utf8')); expect(manifest.schemaVersion).toBe(10);
+  expect(manifest.dramaWork.id).toBe(project.drama?.workId); expect(manifest.voices).toEqual([]);
   expect(projectSchema.parse(manifest.project).workflow.production).toEqual(project.workflow.production);
 });

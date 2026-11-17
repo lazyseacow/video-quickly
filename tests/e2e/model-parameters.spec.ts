@@ -1,3 +1,4 @@
+import { openProjectFromList } from './workspace-navigation';
 import { confirmAction } from './confirmation-actions';
 import { selectModel, addModelConnection, settingField } from './settings';
 import { createServer } from 'node:http';
@@ -212,8 +213,8 @@ for (const delayedProgress of [false, true]) test(`uses stored parameters in act
       await form.getByRole('button', { name: '保存连接', exact: true }).click(); await expect(form).toHaveCount(0);
       connections[role === 'text' ? 'script' : role] = await savedModel(request, renamed);
     }
-    let project = await rpc<ProjectDocument>(request, 'project.create', { title: `参数真实请求验收${delayedProgress ? ' 延迟进度' : ''}` }); project = await rpc<ProjectDocument>(request, 'project.update', { projectId: project.id, revision: project.revision, patch: { shots: [{ id: 'parameters-shot', title: '原镜头', narration: '旁白', visualPrompt: '画面', durationUs: 2_000_000 }] } });
-    await page.reload(); await page.getByRole('button', { name: '我的项目', exact: true }).click(); await page.locator('.project-card').filter({ hasText: project.title }).getByRole('button', { name: /继续创作/ }).click(); await page.getByRole('button', { name: 'AI 微调', exact: true }).click();
+    let project = await rpc<ProjectDocument>(request, 'project.create', { originalText: '清晨，林夏在书房发现一封未寄出的信。她来到旧城寻找信的主人，与朋友在雨中的城门重逢。两人读完信后决定一起回家。', title: `参数真实请求验收${delayedProgress ? ' 延迟进度' : ''}` }); project = await rpc<ProjectDocument>(request, 'project.update', { projectId: project.id, revision: project.revision, patch: { shots: [{ id: 'parameters-shot', title: '原镜头', narration: '旁白', visualPrompt: '画面', durationUs: 2_000_000 }] } });
+    await page.reload(); await openProjectFromList(page, project.title); await page.getByRole('button', { name: 'AI 微调', exact: true }).click();
     const dialog = page.getByRole('dialog', { name: '镜头候选', exact: true });
     async function generateAndWait(kind: keyof typeof gates, previousCandidates: number) {
       await (await settingField(dialog, '生成内容')).selectOption(kind); await (await settingField(dialog, '生成模型')).selectOption(connections[kind].id);

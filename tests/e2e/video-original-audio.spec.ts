@@ -22,7 +22,7 @@ async function videoFile(info: TestInfo, name: string, silent = false, color = '
   return path;
 }
 async function fixture(request: APIRequestContext, info: TestInfo, silent = false) {
-  const created = await rpc<ProjectDocument>(request, 'project.create', { title: `视频原声验收 ${randomUUID().slice(0, 8)}`, profile: { width: 640, height: 360, frameRate: { numerator: 30, denominator: 1 }, fitMode: 'contain', previewScale: .5 } });
+  const created = await rpc<ProjectDocument>(request, 'project.create', { originalText: '清晨，林夏在书房发现一封未寄出的信。她来到旧城寻找信的主人，与朋友在雨中的城门重逢。两人读完信后决定一起回家。', title: `视频原声验收 ${randomUUID().slice(0, 8)}`, profile: { width: 640, height: 360, frameRate: { numerator: 30, denominator: 1 }, fitMode: 'contain', previewScale: .5 } });
   const asset = await rpc<AssetRecord>(request, 'asset.import', { projectId: created.id, path: await videoFile(info, 'source.mp4', silent), kind: 'video' });
   const current = await saved(request, created.id);
   const project = await rpc<ProjectDocument>(request, 'project.update', { projectId: created.id, revision: current.revision, patch: {

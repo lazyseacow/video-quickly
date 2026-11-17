@@ -16,7 +16,7 @@ export async function verifyNativeMediaExtensions({ page, rpc, openProject, fixt
   const originalTitle = await page.getByRole('textbox', { name: '项目名称', exact: true }).inputValue();
   await execute(ffmpegPath, ['-v', 'error', '-f', 'lavfi', '-i', 'color=c=red:s=162x92,format=rgba,crop=161:91', '-frames:v', '1', imagePath], { windowsHide: true, env: environment });
   const sourceBytes = await readFile(imagePath), source = await rpc('asset.import', { path: imagePath });
-  let project = await rpc('project.create', { title: `原生媒体扩展 ${randomUUID().slice(0, 6)}`, profile: { width: 160, height: 90, frameRate: { numerator: 30, denominator: 1 } } });
+  let project = await rpc('project.create', { title: `原生媒体扩展 ${randomUUID().slice(0, 6)}`, originalText: '第一场 书桌 日\n木盒置于画面中央，主角查看盒面。\n旁白：原生媒体检查。', profile: { width: 160, height: 90, frameRate: { numerator: 30, denominator: 1 } } });
   project = await rpc('project.update', { projectId: project.id, revision: project.revision, patch: { shots: [{ id: 'native-media-shot', title: '原生改图镜头', narration: '原生媒体检查', visualPrompt: '木盒画面', durationUs: 1_000_000, assetId: source.id, animation: { transition: 'cut' } }] } });
   const current = async () => (await rpc('project.get', { projectId: project.id })).project;
   const calls = { image: [], text: [] };
@@ -85,7 +85,7 @@ export async function verifyNativeMediaExtensions({ page, rpc, openProject, fixt
     assert.equal(calls.image.length, 1); checks.nativeMaskedEditCandidate = true;
 
     const textModel = await rpc('model.save', { model: { name: '原生修改建议夹具', provider: 'openai-compatible', connectionType: 'text', capabilities: ['text'], baseUrl: `http://127.0.0.1:${address.port}/v1`, model: 'fixture-text' } });
-    project = await current(); const baseline = project.workflow.nodes.find(node => node.kind === 'brief'); assert.ok(baseline);
+    project = await current(); const baseline = project.workflow.nodes.find(node => node.id === 'brief' && node.kind === 'brief'); assert.ok(baseline);
     const input = { projectId: project.id, revision: project.revision, node: baseline, modelId: textModel.id, instruction: '请简化为缓慢推近木盒', requestId: randomUUID() };
     const startSuggestion = async () => {
       const prepared = await rpc('billing.prepare', { method: 'workflowAssistant.start', params: input });

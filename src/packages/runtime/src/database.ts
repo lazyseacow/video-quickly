@@ -155,7 +155,7 @@ export function thumbnailShot(value: ProjectDocument): Shot | null {
   if (!shot) return null;
   const mapped = resolveShotTime(shot, value, 0), original = clipEditSource(shot, value)?.original;
   const cue = captionsEnabled(value) ? projectCaptionCues(shot, 0, undefined, value).find(cue => cue.startUs <= 0 && cue.endUs > 0) : undefined;
-  return { ...shot, clipEdit: undefined, audioProcessing: undefined, sourceInUs: mapped.sourceUs, audioInUs: mapped.audioUs, videoInUs: mapped.videoUs, sceneInUs: mapped.sceneUs,
+  return { ...shot, drama: undefined, clipEdit: undefined, audioProcessing: undefined, sourceInUs: mapped.sourceUs, audioInUs: mapped.audioUs, videoInUs: mapped.videoUs, sceneInUs: mapped.sceneUs,
     sceneIndex: shot.sceneIndex ?? original?.sceneIndex, sceneDurationUs: shot.sceneDurationUs ?? original?.sceneDurationUs ?? original?.durationUs ?? shot.durationUs,
     captionTrack: { timeBase: 'scene', alignment: 'manual', cues: cue ? [{ ...cue, startUs: mapped.sceneUs, endUs: mapped.sceneUs + cue.endUs }] : [] } };
 }
@@ -385,6 +385,14 @@ export const WORKSPACE_MIGRATIONS: readonly DatabaseMigration[] = [
   { version: 28, name: 'fixed-media-scheduling', sql: `
     UPDATE documents SET body = json_remove(body, '$.workflow.execution')
     WHERE kind = 'project' AND json_type(body, '$.workflow.execution') IS NOT NULL;
+  ` },
+  { version: 29, name: 'drama-structure-and-casting', sql: CREATIVE_REFERENCE_PROJECTION.replaceAll(clipSummaryBody('new.body'),
+    `json_patch(${clipSummaryBody('new.body')}, json_object('drama', CASE WHEN json_type(new.body, '$.drama') = 'object' THEN json_object(
+      'workId', json_extract(new.body, '$.drama.workId'), 'number', json_extract(new.body, '$.drama.number'),
+      'visualStyle', json_extract(new.body, '$.drama.visualStyle'), 'narrativeMode', json_extract(new.body, '$.drama.narrativeMode')) ELSE NULL END))`) + `
+    CREATE UNIQUE INDEX projects_drama_episode ON documents(json_extract(body, '$.drama.workId'), json_extract(body, '$.drama.number'))
+      WHERE kind = 'project' AND json_type(body, '$.drama') = 'object';
+    INSERT INTO runtime_metadata(key, value) VALUES ('drama-structure-and-casting', '1');
   ` },
 ];
 

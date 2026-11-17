@@ -80,7 +80,7 @@ test('restores a renamed real image through the complete dialog and automaticall
   const source = await mkdtemp(join(tmpdir(), 'vq-recovery-ui-'));
   try {
     const path = join(source, '原始.svg'), bytes = '<svg xmlns="http://www.w3.org/2000/svg" width="160" height="90"><rect width="160" height="90" fill="#379269"/></svg>';
-    await writeFile(path, bytes); const created = await rpc<ProjectDocument>(request, 'project.create', { title: `图片恢复 ${randomUUID().slice(0, 8)}` });
+    await writeFile(path, bytes); const created = await rpc<ProjectDocument>(request, 'project.create', { originalText: '清晨，林夏在书房发现一封未寄出的信。她来到旧城寻找信的主人，与朋友在雨中的城门重逢。两人读完信后决定一起回家。', title: `图片恢复 ${randomUUID().slice(0, 8)}` });
     const asset = await rpc<AssetRecord>(request, 'asset.import', { projectId: created.id, path, kind: 'image' });
     const baseline = await saved(request, created.id), project = await rpc<ProjectDocument>(request, 'project.update', { projectId: created.id, revision: baseline.revision, patch: { shots: [{ id: 'picture', title: '待恢复画面', narration: '', visualPrompt: '', durationUs: 2_000_000, assetId: asset.id }] } });
     await rm(asset.path); missingAssets.add(asset.path); await rename(path, join(source, '改名后的画面.svg')); await writeFile(join(source, '第二个匹配.svg'), bytes); await writeFile(path, bytes.replace('#379269', '#111111'));
@@ -111,7 +111,7 @@ test('restores a renamed real image through the complete dialog and automaticall
 });
 
 test('pages every scoped record with causes and history, changes scope safely and stays usable in a narrow light dialog', async ({ page, request }, info) => {
-  const project = await rpc<ProjectDocument>(request, 'project.create', { title: `完整恢复清单 ${randomUUID().slice(0, 8)}` });
+  const project = await rpc<ProjectDocument>(request, 'project.create', { originalText: '清晨，林夏在书房发现一封未寄出的信。她来到旧城寻找信的主人，与朋友在雨中的城门重逢。两人读完信后决定一起回家。', title: `完整恢复清单 ${randomUUID().slice(0, 8)}` });
   const { system } = await rpc<{ system: { dataDirectory: string } }>(request, 'workspace.summary'), database = openDatabase(system.dataDirectory), store = new DocumentStore(database);
   const base: AssetRecord = { id: '', projectId: project.id, path: '', name: '', sha256: createHash('sha256').update('missing').digest('hex'), size: 7, kind: 'image', mimeType: 'image/png', version: 1, createdAt: '', active: true, retained: false, provenance: '' };
   try {
@@ -143,7 +143,7 @@ test('automatically retries failed real video, source duration, waveform and loc
     const video = join(source, 'video.mp4'), audio = join(source, 'voice.wav');
     await execute(process.env.VIDEO_QUICKLY_FFMPEG ?? 'ffmpeg', ['-hide_banner', '-loglevel', 'error', '-y', '-f', 'lavfi', '-i', 'color=blue:size=320x180:rate=30:duration=2', '-an', '-c:v', 'libx264', '-preset', 'ultrafast', '-pix_fmt', 'yuv420p', video]);
     await execute(process.env.VIDEO_QUICKLY_FFMPEG ?? 'ffmpeg', ['-hide_banner', '-loglevel', 'error', '-y', '-f', 'lavfi', '-i', 'sine=frequency=440:sample_rate=16000:duration=2', audio]);
-    const created = await rpc<ProjectDocument>(request, 'project.create', { title: `真实媒体恢复 ${randomUUID().slice(0, 8)}` });
+    const created = await rpc<ProjectDocument>(request, 'project.create', { originalText: '清晨，林夏在书房发现一封未寄出的信。她来到旧城寻找信的主人，与朋友在雨中的城门重逢。两人读完信后决定一起回家。', title: `真实媒体恢复 ${randomUUID().slice(0, 8)}` });
     const picture = await rpc<AssetRecord>(request, 'asset.import', { projectId: created.id, path: video, kind: 'video' }), voice = await rpc<AssetRecord>(request, 'asset.import', { projectId: created.id, path: audio, kind: 'audio' });
     const missingVoiceError = new RegExp(`^ENOENT: no such file or directory, open '${voice.path.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}'$`);
     expectedRpcFailures = [{ method: 'asset.waveform', error: missingVoiceError, assetId: voice.id, phase: 'missing' }, { method: 'audio.mix.prepare', error: missingVoiceError, projectId: created.id, phase: 'missing' }];
@@ -175,7 +175,7 @@ test('automatically retries failed real video, source duration, waveform and loc
 test('reloads the first page of a new generation after another view rescans the same recovery task', async ({ page, request }) => {
   const source = await mkdtemp(join(tmpdir(), 'vq-recovery-generation-'));
   try {
-    const project = await rpc<ProjectDocument>(request, 'project.create', { title: `恢复清单世代 ${randomUUID().slice(0, 8)}` });
+    const project = await rpc<ProjectDocument>(request, 'project.create', { originalText: '清晨，林夏在书房发现一封未寄出的信。她来到旧城寻找信的主人，与朋友在雨中的城门重逢。两人读完信后决定一起回家。', title: `恢复清单世代 ${randomUUID().slice(0, 8)}` });
     const { system } = await rpc<{ system: { dataDirectory: string } }>(request, 'workspace.summary'), database = openDatabase(system.dataDirectory), store = new DocumentStore(database);
     try {
       database.transaction(() => { for (let index = 0; index < 101; index++) { const id = `${project.id}-${index}`, path = join(system.dataDirectory, 'projects', project.id, 'assets', `${index}.png`); missingAssets.add(path); store.put('asset', id, { id, projectId: project.id, name: `待检查 ${index}`, path, kind: 'image', mimeType: 'image/png', size: 7, sha256: createHash('sha256').update('missing').digest('hex'), version: 1, createdAt: '', active: true, retained: false, provenance: '' }); } })();
@@ -197,7 +197,7 @@ test('reloads the first page of a new generation after another view rescans the 
 test('cancels a real controlled scan and continues after an unreadable source directory', async ({ page, request }, info) => {
   const source = await mkdtemp(join(tmpdir(), 'vq-recovery-cancel-ui-')), path = join(source, 'source.svg');
   await writeFile(path, '<svg xmlns="http://www.w3.org/2000/svg" width="1" height="1"/>');
-  const created = await rpc<ProjectDocument>(request, 'project.create', { title: `素材扫描取消 ${randomUUID().slice(0, 8)}` });
+  const created = await rpc<ProjectDocument>(request, 'project.create', { originalText: '清晨，林夏在书房发现一封未寄出的信。她来到旧城寻找信的主人，与朋友在雨中的城门重逢。两人读完信后决定一起回家。', title: `素材扫描取消 ${randomUUID().slice(0, 8)}` });
   const asset = await rpc<AssetRecord>(request, 'asset.import', { projectId: created.id, path, kind: 'image' }); await rm(asset.path); missingAssets.add(asset.path);
   const project = await attachMissingImage(request, created, asset.id);
   const { system } = await rpc<{ system: { dataDirectory: string } }>(request, 'workspace.summary'), database = openDatabase(system.dataDirectory);
@@ -230,7 +230,7 @@ test('cancels a real controlled scan and continues after an unreadable source di
 test('automatically recovers selected result media while preserving frozen run records', async ({ page, request }, info) => {
   const source = await mkdtemp(join(tmpdir(), 'vq-result-media-recovery-'));
   try {
-    const created = await rpc<ProjectDocument>(request, 'project.create', { title: `结果媒体恢复 ${randomUUID().slice(0, 8)}` });
+    const created = await rpc<ProjectDocument>(request, 'project.create', { originalText: '清晨，林夏在书房发现一封未寄出的信。她来到旧城寻找信的主人，与朋友在雨中的城门重逢。两人读完信后决定一起回家。', title: `结果媒体恢复 ${randomUUID().slice(0, 8)}` });
     await rpc(request, 'project.update', { projectId: created.id, revision: created.revision, patch: {
       shots: ['first', 'selected'].map(id => ({ id, title: id === 'first' ? '第一张' : '保留所选画面', narration: '', visualPrompt: '', durationUs: 1_000_000 })),
       workflow: { ...created.workflow, nodes: [{ id: 'assets', kind: 'assets', label: '沿用本地画面' }], edges: [] },

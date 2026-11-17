@@ -1,4 +1,4 @@
-import { captionStyleSchema, effectiveCaptionStyle, shotSchema, usesVideoAudio, type CaptionStyle, type Shot } from '@video-quickly/contracts';
+import { captionStyleSchema, cloneShotDrama, effectiveCaptionStyle, shotSchema, usesVideoAudio, type CaptionStyle, type Shot } from '@video-quickly/contracts';
 import { commonSourceOutUs } from '@video-quickly/video/audio';
 import { preserveSceneIndices, reorderShotGroup, requireEditableShots, trimShotInContext } from '@video-quickly/video/editing';
 import { clipEditPlan, clipEditSource, type ClipEditContext, type ClipEditIdFactory } from '@video-quickly/video/clip-edits';
@@ -113,5 +113,5 @@ export function bulkDuplicateShots(content: EditContent, ids: readonly string[],
     createdIds.add(id);
   }
   const selectedIds = new Set(ids);
-  return { ...content, shots: preserveSceneIndices(content.shots).flatMap(shot => selectedIds.has(shot.id) ? [shot, { ...structuredClone(shot), id: newIds[shot.id], title: `${shot.title.slice(0, 155)} · 副本` }] : [shot]) };
+  return { ...content, shots: preserveSceneIndices(content.shots).flatMap(shot => selectedIds.has(shot.id) ? [shot, { ...structuredClone(shot), ...(shot.drama ? { drama: cloneShotDrama(shot.drama) } : {}), id: newIds[shot.id], title: `${shot.title.slice(0, 155)} · 副本` }] : [shot]) };
 }

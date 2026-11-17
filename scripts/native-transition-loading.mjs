@@ -63,7 +63,7 @@ export async function verifyNativeTransitionLoading({ page, rpc, openProject, fi
   const seek = async frame => { const ruler = page.getByRole('slider', { name: '预览播放位置', exact: true }); await ruler.press('Home'); for (let i = 0; i < Math.floor(frame / 10); i++) await ruler.press('Shift+ArrowRight'); for (let i = 0; i < frame % 10; i++) await ruler.press('ArrowRight'); await expect(ruler).toHaveAttribute('aria-valuenow', String(Math.round(frame * 1000 / 30))); };
   try {
     for (const scenario of ['fade', 'wipe', 'pause']) {
-      let project = await rpc('project.create', { title: `原生冷加载 ${scenario} ${randomUUID().slice(0, 6)}`, profile: { width: 320, height: 180, frameRate: { numerator: 30, denominator: 1 }, previewScale: 1 } });
+      let project = await rpc('project.create', { title: `原生冷加载 ${scenario} ${randomUUID().slice(0, 6)}`, originalText: '第一场 灯光舞台 日\n灯光从第一处舞台转向第二处，画面在两段场景之间连续过渡。', profile: { width: 320, height: 180, frameRate: { numerator: 30, denominator: 1 }, previewScale: 1 } });
       const assets = []; for (const path of sourcePaths) assets.push(await rpc('asset.import', { projectId: project.id, path, kind: 'video' }));
       assert.notEqual(assets[0].sha256, assets[1].sha256);
       project = (await rpc('project.get', { projectId: project.id })).project;
@@ -127,7 +127,7 @@ export async function verifyNativeTransitionLoading({ page, rpc, openProject, fi
         }
         record.routes = gate.attempts; record.requestEvents = gate.observed; record.routeSetupErrors = gate.errors;
         assert.deepEqual((await rpc('project.get', { projectId: project.id })).project, project);
-        const control = await rpc('project.create', { title: `原生解码释放 ${randomUUID().slice(0, 6)}` }); await openProject(control.title); await expect.poll(async () => (await videos(page, paths)).length).toBe(0); record.resourcesReleased = true;
+        const control = await rpc('project.create', { title: `原生解码释放 ${randomUUID().slice(0, 6)}`, originalText: '第一场 空舞台 夜\n灯光熄灭，舞台保持空镜。' }); await openProject(control.title); await expect.poll(async () => (await videos(page, paths)).length).toBe(0); record.resourcesReleased = true;
         checks.nativeColdTransitionResources = true;
       } finally {
         gate.release(); if (handle) record.samples = await stopCapture(handle); await gate.close(); results.push(record); await writeFile(join(artifacts, 'native-transition-loading.json'), JSON.stringify({ scenarios: results, noSyntheticReadyCallbacks: true }, null, 2));

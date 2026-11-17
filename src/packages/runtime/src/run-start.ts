@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import type Database from 'better-sqlite3';
 import { z } from 'zod';
 import { imageEditInputSchema, runSelectionSchema, shotCandidateKindSchema, subflowThreadId, validateWorkflowComposition, videoProfileSchema, workflowEdgesWithSubflows, workflowNodesWithSubflows,
-  type AssetRecord, type ModelProfile, type ProjectDocument, type RunPlan, type RunRecord, type RunSelection, type WorkflowNode,
+  type AssetRecord, type CharacterProfile, type ModelProfile, type ProjectDocument, type RunPlan, type RunRecord, type RunSelection, type VoiceProfile, type WorkflowNode,
 } from '@video-quickly/contracts';
 import { resolveImageEdit } from '@video-quickly/integrations/image-edit';
 import { selectResearchPassages } from '@video-quickly/integrations/research';
@@ -55,7 +55,7 @@ interface RunStarterOptions {
   videoEditingAgent(project: ProjectDocument, models: ModelProfile[], mcpServers: McpServer[]): WorkflowNode | undefined;
   regenerationNode(project: ProjectDocument, input: z.infer<typeof regenerationInput>): WorkflowNode;
   canExecuteActivities(): boolean;
-  profilesFor: ReturnType<typeof createCharacterLibrary>['profilesFor'];
+  profilesFor: (project: Parameters<ReturnType<typeof createCharacterLibrary>['profilesFor']>[0] & Pick<ProjectDocument, 'drama'>) => { characters: CharacterProfile[]; assets: AssetRecord[]; voices: VoiceProfile[]; voiceAssets: AssetRecord[] };
   prepareSkills: ReturnType<typeof createSkillLibrary>['prepareForNodes'];
   regenerateShot(input: z.input<typeof shotRegenerationInput>): Promise<RunRecord>;
   resumeExportBatch(batchId: string): Promise<unknown>;
@@ -194,8 +194,9 @@ export function createRunStarter({
     const runId = randomUUID();
     const baselineShot = input.regeneration ? runProject.shots.find(shot => shot.id === input.regeneration?.shotId) : undefined;
     const shotsInScope = input.research ? [] : baselineShot ? [baselineShot] : runProject.shots;
-    const bundle = prepared ? { characters: prepared.saved.characters, assets: prepared.saved.characterAssets } : profilesFor({
+    const bundle = prepared ? { characters: prepared.saved.characters, assets: prepared.saved.characterAssets, voices: prepared.saved.voices, voiceAssets: prepared.saved.voiceAssets } : profilesFor({
       id: runProject.id,
+      drama: runProject.drama,
       shots: shotsInScope,
       ...(input.regeneration ? { creativeContext: runProject.creativeContext ? { ...runProject.creativeContext, characterIds: [] } : undefined } : !input.research ? { creativeContext: runProject.creativeContext } : {}),
     });
@@ -205,9 +206,9 @@ export function createRunStarter({
     const snapshot: RunSnapshot = prepared?.saved ?? {
       project: structuredClone(runProject),
       unifiedShotProfile: true,
-      ...(runProject.workflow.production.referenceAudioAssetIds?.length || imageEdit ? {
+      ...(runProject.workflow.production.referenceAudioAssetIds?.length || bundle.voiceAssets?.length || imageEdit ? {
         assets: store.list<AssetRecord>('asset').filter(asset => imageEdit
-          ? [imageEdit.sourceAssetId, imageEdit.maskAssetId].includes(asset.id)
+          ? [imageEdit.sourceAssetId, imageEdit.maskAssetId, ...(bundle.voiceAssets?.map(asset => asset.id) ?? [])].includes(asset.id)
           : !asset.projectId || asset.projectId === runProject.id),
       } : {}),
       models,
@@ -219,6 +220,8 @@ export function createRunStarter({
       handlerVersion: 1,
       characters: bundle.characters,
       characterAssets: bundle.assets,
+      voices: bundle.voices,
+      voiceAssets: bundle.voiceAssets,
       selection: nodeSelection,
       ...(input.research ? { research: { sourceIds: input.research.sourceIds, instruction: input.research.instruction } } : {}),
       ...(input.regeneration && baselineShot ? { regeneration: {

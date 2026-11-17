@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import type { AssetRecord, CharacterProfile, Shot } from './index.js';
+import { dramaCharacterIds } from './drama.js';
 
 const uniqueKeys = (maximum: number) => z.array(z.string().min(1)).max(maximum).refine(values => new Set(values).size === values.length, '创作引用不能重复。');
 export const creativeEntitySchema = z.object({
@@ -15,7 +16,7 @@ export const creativeContextSchema = z.object({
 export const creativeEntityKeysSchema = uniqueKeys(12);
 export type CreativeEntity = z.infer<typeof creativeEntitySchema>;
 export type CreativeContext = z.infer<typeof creativeContextSchema>;
-type CreativeProject = { creativeContext?: CreativeContext | null; shots: ReadonlyArray<Pick<Shot, 'characterIds' | 'creativeEntityKeys'>> };
+type CreativeProject = { creativeContext?: CreativeContext | null; shots: ReadonlyArray<Pick<Shot, 'characterIds' | 'creativeEntityKeys' | 'drama'>> };
 
 /** Omitting a shot collects all authored references for validation, backup and retention. */
 export function creativeReferenceAssetIds(project: Pick<CreativeProject, 'creativeContext'>, shot?: Pick<Shot, 'creativeEntityKeys'>): string[] {
@@ -36,8 +37,8 @@ export function isCreativeReferenceAsset(project: Pick<CreativeProject, 'creativ
 }
 
 /** Pool order is frozen with the project; models use these keys rather than authoring library IDs. */
-export function projectCharacterIds(project: Pick<CreativeProject, 'creativeContext'> & { shots: ReadonlyArray<Pick<Shot, 'characterIds'>> }): string[] {
-  return [...new Set([...(project.creativeContext?.characterIds ?? []), ...project.shots.flatMap(shot => shot.characterIds ?? [])])];
+export function projectCharacterIds(project: Pick<CreativeProject, 'creativeContext'> & { shots: ReadonlyArray<Pick<Shot, 'characterIds' | 'drama'>> }): string[] {
+  return [...new Set([...(project.creativeContext?.characterIds ?? []), ...project.shots.flatMap(shot => shot.characterIds ?? []), ...dramaCharacterIds(project)])];
 }
 
 export function creativeCharacterBindings(project: CreativeProject, characters: readonly CharacterProfile[]) {

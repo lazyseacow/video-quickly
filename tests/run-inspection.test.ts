@@ -21,7 +21,7 @@ async function fixture(options: Partial<RuntimeOptions> = {}) {
   const directory = options.dataDirectory ?? await mkdtemp(join(tmpdir(), 'vq-run-inspection-'));
   if (!directories.includes(directory)) directories.push(directory);
   const runtime = createRuntime({ dataDirectory: directory, seed: false, ...options }); runtimes.push(runtime);
-  const project = projectSchema.parse(await runtime.dispatch('project.create', { title: '执行时的项目', brief: '冻结的创作要求' }));
+  const project = projectSchema.parse(await runtime.dispatch('project.create', { title: '执行时的项目', brief: '冻结的创作要求', originalText: '第一场，人物在车站相遇，展开对话。' }));
   return { runtime, project, directory };
 }
 async function workflow(runtime: ReturnType<typeof createRuntime>, projectId: string, nodes: WorkflowNode[], edges: { id: string; source: string; target: string; condition?: string }[] = [], stages?: WorkflowStage[]) {
@@ -43,7 +43,7 @@ it('projects frozen model generation tasks instead of later configuration or loc
   const before = await inspect(runtime, run.id);
   expect(before.workflowId).toBe('native-video');
   expect(before.steps.filter(step => step.modelGeneration).map(step => step.id)).toEqual(['brief', 'style', 'script', 'video']);
-  expect(before.steps.filter(step => !step.modelGeneration).map(step => step.id)).toEqual(['assets', 'animation', 'export']);
+  expect(before.steps.filter(step => !step.modelGeneration).map(step => step.id)).toEqual(['screenplay', 'assets', 'animation', 'export']);
   await runtime.dispatch('project.update', { projectId: project.id, revision: configured.revision, patch: { workflow: { ...configured.workflow, id: 'later-custom-flow', production: { ...configured.workflow.production, referenceMode: 'none' } } } });
   const after = await inspect(runtime, run.id);
   expect(after.workflowId).toBe('native-video'); expect(after.steps).toEqual(before.steps); expect(calls).toBe(1);

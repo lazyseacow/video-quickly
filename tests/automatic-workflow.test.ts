@@ -211,7 +211,7 @@ it('exports manual source choices with the project backup', async () => {
   const backup = await runtime.dispatch('project.backup', { projectId: project.id }) as { path: string };
   const manifestPath = join(backup.path, 'project.json');
   const manifest = JSON.parse(await readFile(manifestPath, 'utf8'));
-  expect(manifest.schemaVersion).toBe(9);
+  expect(manifest.schemaVersion).toBe(10);
   expect(projectSchema.parse(manifest.project).workflow.production).toMatchObject({ manualPlanningSteps: ['brief'], manualPlanningFields: { brief } });
 });
 

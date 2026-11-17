@@ -1,4 +1,4 @@
-import type { AssetRecord, CharacterProfile, ImageEditInput, ModelProfile, ProjectDocument, PromptPreview, RunSelection, Shot, ShotCandidateKind, SkillPackage, WorkflowAssistantContext, WorkflowDefinition, WorkflowNode } from '@video-quickly/contracts';
+import type { AssetRecord, CharacterProfile, ImageEditInput, ModelProfile, ProjectDocument, PromptPreview, RunSelection, Shot, ShotCandidateKind, SkillPackage, VoiceProfile, WorkflowAssistantContext, WorkflowDefinition, WorkflowNode } from '@video-quickly/contracts';
 import type { McpServer } from './mcp.js';
 import type { WorkflowUpstreamResult } from './workflow-prompts.js';
 import type { WorkflowOutputVersion } from './workflow-outputs.js';
@@ -31,6 +31,8 @@ export interface RunSnapshot {
   assistant?: WorkflowAssistantContext;
   characters?: CharacterProfile[];
   characterAssets?: AssetRecord[];
+  voices?: VoiceProfile[];
+  voiceAssets?: AssetRecord[];
   assets?: AssetRecord[];
   exportBatch?: { batchId: string; targetId: string };
   research?: { sourceIds?: string[]; instruction?: string };

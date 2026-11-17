@@ -16,7 +16,7 @@ for (const platform of [
   await page.addInitScript(value => Object.defineProperty(navigator, 'platform', { get: () => value }), platform.browser);
   await page.emulateMedia({ reducedMotion: 'reduce' });
   const errors: string[] = []; page.on('pageerror', error => errors.push(error.message));
-  const created = await rpc<ProjectDocument>(request, 'project.create', { title: `平台适配 ${platform.browser}` });
+  const created = await rpc<ProjectDocument>(request, 'project.create', { originalText: '清晨，林夏在书房发现一封未寄出的信。她来到旧城寻找信的主人，与朋友在雨中的城门重逢。两人读完信后决定一起回家。', title: `平台适配 ${platform.browser}` });
   const project = await rpc<ProjectDocument>(request, 'project.update', { projectId: created.id, revision: created.revision, patch: { shots: [{ id: 'platform-shot', title: '平台原镜头', narration: '', visualPrompt: '', durationUs: 1_000_000 }] } });
   await page.goto('/');
   await openProjectFromList(page, project.title);
@@ -35,14 +35,14 @@ for (const platform of [
   await expect(redo).toBeEnabled(); await redo.focus(); await expect(redo).toBeFocused(); await page.keyboard.press(`${platform.key}+Shift+z`);
   await expect.poll(async () => (await saved()).shots[0].title).toBe('平台键盘保存');
 
-  const create = page.getByRole('button', { name: '新建项目', exact: true }); await create.click();
-  const dialog = page.getByRole('dialog', { name: '新建视频项目', exact: true });
-  const title = dialog.getByLabel('项目名称', { exact: true });
+  const create = page.getByRole('button', { name: '新建短剧', exact: true }); await create.click();
+  const composer = page.getByRole('region', { name: '让故事成为一部短剧', exact: true });
+  const title = composer.getByRole('textbox', { name: '短剧名称', exact: true });
   await expect(title).toBeFocused(); await title.fill(''); await title.pressSequentially('native input');
   // Chromium's native text editing uses the actual host modifier, even when
   // navigator.platform is emulated for the hint and application-level tests.
   await title.press('ControlOrMeta+z'); await expect(title).not.toHaveValue('native input');
-  await page.keyboard.press('Escape'); await expect(dialog).toHaveCount(0); await expect(create).toBeFocused();
+  await openProjectFromList(page, project.title); await expect(page.getByLabel('项目名称', { exact: true })).toHaveValue(project.title);
 
   await page.getByRole('button', { name: '导出', exact: true }).click();
   const exporter = page.getByRole('dialog', { name: '导出视频', exact: true });

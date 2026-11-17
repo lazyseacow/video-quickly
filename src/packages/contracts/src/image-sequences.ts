@@ -2,6 +2,7 @@ import type { CharacterProfile, JsonValue, ModelProfile, ProjectDocument, Shot, 
 import { creativeReferenceAssetIds } from './creative-context.js';
 import { imageSequenceMode } from './model-parameters.js';
 import { groupsNativeFirstFrames, groupsReferenceImages, openingFrameShots } from './production.js';
+import { selectedCharacterReferenceAssetIds, shotVisualCharacterIds } from './drama.js';
 
 interface ImageSequence {
   batches: Shot[][];
@@ -58,8 +59,8 @@ export function planReferenceImageSequences({ project, node, model, characters =
     if (nativeFirstFrames && shot.locked) { previous = undefined; continue; }
     const keys = [...(shot.creativeEntityKeys ?? [])].sort();
     const bindings = shot.locked ? undefined : JSON.stringify(matchImageInputs
-      ? [shot.characterIds ?? [], keys.filter(key => characterKeys.has(key)), creativeReferenceAssetIds(project, shot)]
-      : [shot.characterIds ?? [], keys]);
+      ? [shotVisualCharacterIds(shot), shot.drama?.appearances ?? [], keys.filter(key => characterKeys.has(key)), creativeReferenceAssetIds(project, shot)]
+      : [shotVisualCharacterIds(shot), shot.drama?.appearances ?? [], keys]);
     if (bindings !== undefined && bindings === previous) groups.at(-1)!.push(shot);
     else groups.push([shot]);
     previous = bindings;
@@ -68,7 +69,7 @@ export function planReferenceImageSequences({ project, node, model, characters =
     if (shots.length === 1) return singleShots(shots);
     const first = shots[0];
     const referenceCount = new Set([
-      ...characters.filter(character => first.characterIds?.includes(character.id)).flatMap(character => character.referenceAssetIds),
+      ...characters.filter(character => shotVisualCharacterIds(first).includes(character.id)).flatMap(character => selectedCharacterReferenceAssetIds(character, first.drama?.appearances.find(binding => binding.characterId === character.id)?.appearanceId)),
       ...creativeReferenceAssetIds(project, first),
     ]).size;
     if (!seedream || referenceCount > MAX_SEEDREAM_IMAGES - 2) {

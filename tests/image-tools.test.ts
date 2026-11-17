@@ -58,7 +58,7 @@ it('reuses a valid mask and restores a missing mask under concurrent requests', 
   await writeFile(asset.path, 'corrupted');
   await expect(runtime.dispatch('image.createMask', input)).rejects.toThrow();
 });
-it('exports grid lineage and its source image using format 8', async () => {
+it('exports grid lineage and its source image in the episode backup', async () => {
   const { runtime, asset, directory } = await setup();
   const tile = await seedLegacyGridAsset(directory, asset);
   const character = characterProfileSchema.parse(await runtime.dispatch('character.save', { character: { name: '已有角色', description: '', referenceAssetIds: [tile.id] } }));
@@ -67,7 +67,7 @@ it('exports grid lineage and its source image using format 8', async () => {
   let project = projectSchema.parse(await runtime.dispatch('project.create', { title: '切图备份' }));
   project = projectSchema.parse(await runtime.dispatch('project.update', { projectId: project.id, revision: project.revision, patch: { shots: [shotSchema.parse({ id: 'one', title: '一', visualPrompt: '画面', narration: '', durationUs: 1000000, assetId: tile.id })] } }));
   const destination = join(directory, 'backup'); await runtime.dispatch('project.backup', { projectId: project.id, destination });
-  const backup = JSON.parse(await readFile(join(destination, 'project.json'), 'utf8')); expect(backup.schemaVersion).toBe(8); expect(backup.assets).toHaveLength(2);
+  const backup = JSON.parse(await readFile(join(destination, 'project.json'), 'utf8')); expect(backup.schemaVersion).toBe(10); expect(backup.assets).toHaveLength(2);
   expect(projectSchema.parse(backup.project).shots[0].assetId).toBe(tile.id);
   const exported = assetSchema.array().parse(backup.assets);
   expect(exported.find(item => item.id === tile.id)?.derivation?.sourceAssetId).toBe(asset.id);

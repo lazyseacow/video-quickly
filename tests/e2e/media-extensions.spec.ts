@@ -21,7 +21,7 @@ async function fixture(request: APIRequestContext) {
   const directory = await mkdtemp(join(tmpdir(), 'vq-media-extensions-')), path = join(directory, `grid-${randomUUID().slice(0, 6)}.png`), bytes = png();
   await writeFile(path, bytes);
   const asset = await rpc<AssetRecord>(request, 'asset.import', { path });
-  let project = await rpc<ProjectDocument>(request, 'project.create', { title: `媒体扩展 ${randomUUID().slice(0, 7)}`, profile: { width: 160, height: 90, frameRate: { numerator: 30, denominator: 1 } } });
+  let project = await rpc<ProjectDocument>(request, 'project.create', { originalText: '清晨，林夏在书房发现一封未寄出的信。她来到旧城寻找信的主人，与朋友在雨中的城门重逢。两人读完信后决定一起回家。', title: `媒体扩展 ${randomUUID().slice(0, 7)}`, profile: { width: 160, height: 90, frameRate: { numerator: 30, denominator: 1 } } });
   project = await rpc<ProjectDocument>(request, 'project.update', { projectId: project.id, revision: project.revision, patch: { shots: [{ id: 'first', title: '木盒画面', narration: '你好，木盒。', visualPrompt: '原始画面', durationUs: 1_000_000, assetId: asset.id, animation: { transition: 'cut' } }] } });
   return { asset, bytes, project, directory, current: async () => (await rpc<{ project: ProjectDocument }>(request, 'project.get', { projectId: project.id })).project, close: () => rm(directory, { recursive: true, force: true }) };
 }

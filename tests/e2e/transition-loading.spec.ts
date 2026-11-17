@@ -20,7 +20,7 @@ async function rpc<T>(request: APIRequestContext, method: string, params: unknow
 }
 
 async function fixture(request: APIRequestContext, info: TestInfo, transition: 'fade' | 'wipe' = 'fade') {
-  const created = await rpc<ProjectDocument>(request, 'project.create', { title: `冷加载转场 ${randomUUID().slice(0, 8)}`, profile: { width: 320, height: 180, frameRate: { numerator: 30, denominator: 1 }, fitMode: 'contain', previewScale: 1 } });
+  const created = await rpc<ProjectDocument>(request, 'project.create', { originalText: '清晨，林夏在书房发现一封未寄出的信。她来到旧城寻找信的主人，与朋友在雨中的城门重逢。两人读完信后决定一起回家。', title: `冷加载转场 ${randomUUID().slice(0, 8)}`, profile: { width: 320, height: 180, frameRate: { numerator: 30, denominator: 1 }, fitMode: 'contain', previewScale: 1 } });
   const videos: AssetRecord[] = [];
   for (const index of [0, 1]) {
     const path = info.outputPath(`independent-long-gop-${index}.mp4`); await writeColdTransitionVideo(path, index);
@@ -166,7 +166,7 @@ for (const transition of ['fade', 'wipe'] as const) test(`holds the visible pict
     expect(samples.filter(sample => sample.frame >= 40 && !sample.visible), 'The previous visible picture must survive the wait.').toEqual([]);
     await page.screenshot({ path: info.outputPath(`cold-${transition}-recovered.png`) });
     const readyVideos = await liveVideos(page, paths); expect(readyVideos.length).toBeLessThanOrEqual(4);
-    const control = await rpc<ProjectDocument>(request, 'project.create', { title: `冷加载资源释放 ${randomUUID().slice(0, 8)}` }); await openProjectFromList(page, control.title);
+    const control = await rpc<ProjectDocument>(request, 'project.create', { originalText: '清晨，林夏在书房发现一封未寄出的信。她来到旧城寻找信的主人，与朋友在雨中的城门重逢。两人读完信后决定一起回家。', title: `冷加载资源释放 ${randomUUID().slice(0, 8)}` }); await openProjectFromList(page, control.title);
     await expect.poll(async () => (await liveVideos(page, paths)).length).toBe(0);
     await info.attach('cold-transition-resources', { body: JSON.stringify({ pendingVideos, readyVideos, afterRelease: await liveVideos(page, paths) }), contentType: 'application/json' });
   } finally {

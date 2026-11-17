@@ -1,3 +1,4 @@
+import { openProjectFromList } from './workspace-navigation';
 import { execFile } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { writeFile } from 'node:fs/promises';
@@ -43,7 +44,7 @@ async function rpc<T>(request: APIRequestContext, method: string, params: unknow
 async function fixture(request: APIRequestContext, info: TestInfo, count: number) {
   const source = info.outputPath('1080p-30fps.mp4');
   await execute(process.env.VIDEO_QUICKLY_FFMPEG ?? 'ffmpeg', ['-hide_banner', '-loglevel', 'error', '-y', '-f', 'lavfi', '-i', 'testsrc2=size=1920x1080:rate=30:duration=5', '-an', '-c:v', 'libx264', '-preset', 'ultrafast', '-crf', '28', '-threads', '2', '-pix_fmt', 'yuv420p', '-movflags', '+faststart', source]);
-  const created = await rpc<ProjectDocument>(request, 'project.create', { title: `真实视频 ${count} 镜头 ${randomUUID().slice(0, 8)}` });
+  const created = await rpc<ProjectDocument>(request, 'project.create', { originalText: '清晨，林夏在书房发现一封未寄出的信。她来到旧城寻找信的主人，与朋友在雨中的城门重逢。两人读完信后决定一起回家。', title: `真实视频 ${count} 镜头 ${randomUUID().slice(0, 8)}` });
   const asset = await rpc<AssetRecord>(request, 'asset.import', { projectId: created.id, path: source, kind: 'video' });
   const current = (await rpc<{ project: ProjectDocument }>(request, 'project.get', { projectId: created.id })).project;
   return rpc<ProjectDocument>(request, 'project.update', { projectId: current.id, revision: current.revision, patch: {
@@ -128,7 +129,7 @@ for (const count of [50, 200]) test(`bounds real 1080p video resources and measu
   page.on('pageerror', error => errors.push(error.message));
   page.on('console', message => { if (message.type() === 'error') errors.push(message.text()); });
   await observeResources(page);
-  await page.goto('/'); await expect(page.getByRole('heading', { name: '我的项目', exact: true })).toBeVisible();
+  await page.goto('/'); await expect(page.getByRole('heading', { name: '短剧工作室', exact: true })).toBeVisible();
   const session = await page.context().newCDPSession(page);
   session.on('Media.playerCreated', ({ player }) => { if (!players.has(player.playerId)) players.set(player.playerId, {}); });
   session.on('Media.playerPropertiesChanged', ({ playerId, properties }) => { const current = players.get(playerId) ?? {}; for (const property of properties) current[property.name] = property.value; players.set(playerId, current); });
@@ -139,9 +140,7 @@ for (const count of [50, 200]) test(`bounds real 1080p video resources and measu
   const project = await fixture(request, info, count);
   const timing: Record<string, unknown> = {};
   try {
-    await page.getByRole('button', { name: '我的项目', exact: true }).click();
-    const trigger = page.locator('.project-card').filter({ has: page.getByRole('heading', { name: project.title, exact: true }) }).getByRole('button', { name: '继续创作', exact: true }); await expect(trigger).toBeVisible();
-    const begin = performance.now(); await trigger.click(); await expect(page.getByLabel('镜头标题', { exact: true })).toHaveValue('真实镜头 1'); await firstFrame(page);
+    const begin = performance.now(); await openProjectFromList(page, project.title); await expect(page.getByLabel('镜头标题', { exact: true })).toHaveValue('真实镜头 1'); await firstFrame(page);
     timing.openToPreviewReadyMs = performance.now() - begin;
     const selections = [], seeks = [];
     for (const index of [Math.floor(count / 2), count - 1, 0]) {

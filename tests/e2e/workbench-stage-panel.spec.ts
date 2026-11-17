@@ -67,7 +67,31 @@ for (const viewport of [{ width: 1536, height: 960, theme: 'dark' }, { width: 10
     await productionStep(dialog, '确认保存');
     await expect(footer.getByRole('button')).toHaveText(['上一步', '保存设置']);
     await expect(dialog.getByRole('button', { name: '保存设置', exact: true })).toBeInViewport({ ratio: 1 });
-    if (viewport.width >= 1024) expect(await content.evaluate(element => element.scrollHeight - element.clientHeight)).toBeLessThanOrEqual(1);
+    const summaryFields = dialog.getByRole('region', { name: '确认保存', exact: true }).locator('dd');
+    const lastVisualField = await summaryFields.evaluateAll(fields => fields.reduce((last, field, index) => field.getBoundingClientRect().bottom > fields[last].getBoundingClientRect().bottom ? index : last, 0));
+    const footerBeforeScroll = await footer.boundingBox();
+    const scrollRange = await content.evaluate(element => element.scrollHeight - element.clientHeight);
+    if (scrollRange > 1) {
+      await content.hover(); await page.mouse.wheel(0, scrollRange + 100);
+      await expect.poll(() => content.evaluate(element => Math.abs(element.scrollTop - (element.scrollHeight - element.clientHeight)) <= 1)).toBe(true);
+    }
+    await expect(summaryFields.nth(lastVisualField)).toBeInViewport({ ratio: 1 });
+    const summaryBounds = await summaryFields.nth(lastVisualField).boundingBox(), contentBounds = await content.boundingBox();
+    expect(summaryBounds!.y).toBeGreaterThanOrEqual(contentBounds!.y);
+    expect(summaryBounds!.y + summaryBounds!.height).toBeLessThanOrEqual(contentBounds!.y + contentBounds!.height);
+    if (viewport.width >= 1024) {
+      const clipped = await content.evaluate(element => {
+        const bounds = element.getBoundingClientRect();
+        return [...element.querySelectorAll('h3, dt, dd, button')].filter(target => target.checkVisibility()).flatMap(target => {
+          const box = target.getBoundingClientRect();
+          return box.left >= bounds.left && box.right <= bounds.right && box.top >= bounds.top && box.bottom <= bounds.bottom ? [] : [target.textContent];
+        });
+      });
+      expect(clipped).toEqual([]);
+    }
+    expect(await footer.boundingBox()).toEqual(footerBeforeScroll);
+    await expect(footer.getByRole('button', { name: '保存设置', exact: true })).toBeInViewport({ ratio: 1 });
+    await expect(footer.getByRole('button', { name: '保存设置', exact: true })).toBeEnabled();
     await page.screenshot({ path: info.outputPath('configuration-review-' + viewport.width + '.png') });
     const close = dialog.getByRole('button', { name: '关闭对话框', exact: true });
     await close.focus(); await close.press('Enter'); await expect(dialog).toHaveCount(0);

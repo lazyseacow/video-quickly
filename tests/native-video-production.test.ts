@@ -150,7 +150,7 @@ async function fixture(audio = true, failpoint?: RuntimeOptions['failpoint'], sh
     executeActivity: afterAsset ? context => execute({ ...context, onAsset: asset => { context.onAsset?.(asset); afterAsset(asset); } }) : execute,
     provider: async ({ prompt }) => { textCalls++; return prompt.includes('自动视频制作步骤：旁白与分镜') ? storyboardFixtureResponse(prompt, storyboard) : planningFixtureResponse(prompt, '连续的蓝色画面与自然声音。'); } };
   const runtime = createRuntime(options); runtimes.add(runtime);
-  const project = projectSchema.parse(await runtime.dispatch('project.create', { title: '视频制作', brief: '讲述雨水', profile: { width: 160, height: 90, frameRate: { numerator: 30, denominator: 1 } } }));
+  const project = projectSchema.parse(await runtime.dispatch('project.create', { title: '视频制作', brief: '讲述雨水', originalText: '雨夜街头，路人撑伞停步，听着雨声等待朋友。', profile: { width: 160, height: 90, frameRate: { numerator: 30, denominator: 1 } } }));
   const text = modelSchema.parse(await runtime.dispatch('model.save', { model: { name: '文本夹具', provider: 'ollama', model: 'text', connectionType: 'text', capabilities: ['text'], baseUrl } }));
   const video = modelSchema.parse(await runtime.dispatch('model.save', { model: { name: '视频夹具', provider: 'seedance', model: 'custom-video-endpoint', connectionType: 'video', capabilities: ['video'], baseUrl } }));
   const configured = projectSchema.parse(await runtime.dispatch('project.update', { projectId: project.id, revision: project.revision, patch: { workflow: resolveProductionWorkflow({ ...project.workflow, production: { ...project.workflow.production!, textModelId: text.id, videoModelId: video.id } }) } }));
@@ -397,7 +397,7 @@ it.skipIf(!mediaAvailable)('submits self-contained shots with one profile and ex
   expect(await probeMedia(payload.value.videoPath, ffprobe)).toMatchObject({ width: 180, height: 320, frameRate: '60/1', audio: true });
   expect(await readFile(payload.value.subtitlePath, 'utf8')).toBe('');
   const backup = await source.runtime.dispatch('project.backup', { projectId: project.id }) as { path: string };
-  expect(JSON.parse(await readFile(join(backup.path, 'project.json'), 'utf8'))).toMatchObject({ schemaVersion: 9, project: { workflow: { production: { manualPlanningFields: { brief: { topic: expect.any(String) } } } } } });
+  expect(JSON.parse(await readFile(join(backup.path, 'project.json'), 'utf8'))).toMatchObject({ schemaVersion: 10, project: { workflow: { production: { manualPlanningFields: { brief: { topic: expect.any(String) } } } } } });
 });
 
 it.skipIf(!mediaAvailable)('recovers a committed native video without submitting or generating its text again', async () => {

@@ -66,7 +66,7 @@ if (requested !== undefined) {
       catch { mixJobs.push({ time: new Date().toISOString(), method, httpStatus: response.status(), unreadableResponse: true }); }
     });
     await page.goto('/'); await expect(page).toHaveTitle(/Video Quickly/); await expect(page.getByRole('navigation', { name: '主导航', exact: true })).toBeVisible();
-    const created = await rpc<ProjectDocument>(request, 'project.create', { title: `多独立素材长时验收 ${randomUUID().slice(0, 8)}` });
+    const created = await rpc<ProjectDocument>(request, 'project.create', { originalText: '清晨，林夏在书房发现一封未寄出的信。她来到旧城寻找信的主人，与朋友在雨中的城门重逢。两人读完信后决定一起回家。', title: `多独立素材长时验收 ${randomUUID().slice(0, 8)}` });
     const assets: AssetRecord[] = [];
     for (let index = 0; index < 12; index++) {
       const path = info.outputPath(`independent-source-${index}.mp4`);

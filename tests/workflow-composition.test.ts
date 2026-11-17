@@ -89,7 +89,7 @@ it('exports and executes fixed composition and keyframes independently of the te
   const configured = projectSchema.parse(await value.dispatch('project.update', { projectId: project.id, revision: project.revision, patch: { shots: [animatedBackupShot()] } }));
   await value.dispatch('workflowTemplate.save', { templateId: template.id, revision: template.revision, name: '后续模板版本', workflow: workflowSchema.parse({ id: 'latest', name: 'latest', version: 1, production: { mode: 'native-video', referenceMode: 'none', soundPrompt: '', subtitleMode: 'off' }, nodes: [node('latest-only')], edges: [] }) });
   const { path } = await value.dispatch('project.backup', { projectId: configured.id }) as { path: string };
-  const manifestPath = join(path, 'project.json'), manifest = JSON.parse(await readFile(manifestPath, 'utf8')); expect(manifest.schemaVersion).toBe(4);
+  const manifestPath = join(path, 'project.json'), manifest = JSON.parse(await readFile(manifestPath, 'utf8')); expect(manifest.schemaVersion).toBe(10);
   const exported = projectSchema.parse(manifest.project);
   expect(exported.workflow).toEqual(configured.workflow);
   expect(exported.shots[0].animation).toEqual(configured.shots[0].animation);
@@ -100,12 +100,12 @@ it('exports and executes fixed composition and keyframes independently of the te
   expect(inspection.steps.map(step => step.id)).toEqual(['call', 'call/subflow/first', 'call/subflow/last', 'after']);
   expect(await value.dispatch('node.result', { runId: run.id, nodeId: 'call' })).toMatchObject({ version: 1, outputs: { brief: configured.brief } });
 });
-it('exports keyframes in format 4 for workflows without subflows', async () => {
+it('exports keyframes in episode backups for workflows without subflows', async () => {
   const { value } = await runtime({ seed: false }), created = projectSchema.parse(await value.dispatch('project.create', { title: '旧流程的关键帧备份' }));
   const configured = projectSchema.parse(await value.dispatch('project.update', { projectId: created.id, revision: created.revision, patch: { shots: [animatedBackupShot()], workflow: { id: 'legacy', version: 1, name: 'legacy', production: { mode: 'native-video', referenceMode: 'none', soundPrompt: '', subtitleMode: 'off' }, nodes: [node('brief')], edges: [] } } }));
   expect(configured.workflow.subflows).toBeUndefined(); expect(configured.workflow.nodes.some(node => node.kind === 'subflow' || node.subflow)).toBe(false);
   const { path } = await value.dispatch('project.backup', { projectId: configured.id }) as { path: string }, manifestPath = join(path, 'project.json'), manifest = JSON.parse(await readFile(manifestPath, 'utf8'));
-  expect(manifest.schemaVersion).toBe(4);
+  expect(manifest.schemaVersion).toBe(10);
   expect(projectSchema.parse(manifest.project).shots[0].animation).toEqual(configured.shots[0].animation);
 });
 it('stores an application receipt atomically and returns it after lost acknowledgement without overwriting later edits', async () => {

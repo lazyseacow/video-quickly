@@ -23,7 +23,7 @@ async function fixture(request: APIRequestContext, hold = false) {
   await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
   const address = server.address(); if (!address || typeof address === 'string') throw new Error('fixture');
   const model = await rpc<{ id: string }>(request, 'model.save', { model: { name: `实验文本 ${randomUUID().slice(0, 6)}`, provider: 'openai-compatible', baseUrl: `http://127.0.0.1:${address.port}/v1`, connectionType: 'text', capabilities: ['text'], model: 'fixture' } });
-  let project = await rpc<ProjectDocument>(request, 'project.create', { title: `提示词花园 ${randomUUID().slice(0, 6)}`, brief: '原始创作简报' });
+  let project = await rpc<ProjectDocument>(request, 'project.create', { originalText: '清晨，林夏在书房发现一封未寄出的信。她来到旧城寻找信的主人，与朋友在雨中的城门重逢。两人读完信后决定一起回家。', title: `提示词花园 ${randomUUID().slice(0, 6)}`, brief: '原始创作简报' });
   project = await rpc<ProjectDocument>(request, 'project.update', { projectId: project.id, revision: project.revision, patch: { workflow: { ...project.workflow, production: { ...project.workflow.production, textModelId: model.id } } } });
   return { project, prompts, release, async close() { release(); await close(server); }, current: () => rpc<{ project: ProjectDocument }>(request, 'project.get', { projectId: project.id }).then(value => value.project) };
 }
@@ -75,7 +75,7 @@ for (const viewport of [{ width: 1536, height: 960, theme: 'dark' }, { width: 39
     expect(await source.current()).toEqual(source.project);
     await dialog.getByRole('button', { name: '应用提示词到设置', exact: true }).click();
     await expect(dialog).toHaveCount(0);
-    const saved = await source.current(), node = saved.workflow.nodes.find(node => node.kind === 'brief')!;
+    const saved = await source.current(), node = saved.workflow.nodes.find(node => node.id === 'brief')!;
     expect(node.prompt).toBe('用 {{theme}} 写一个温柔的故事');
     expect(node.promptBindings).toEqual({ theme: { projectPath: ['title'] } }); expect(node.promptTemplate).toEqual({ id: item.id, version: 1 }); expect(source.prompts).toHaveLength(0); expect(errors).toEqual([]);
   } finally { await source.close(); }
@@ -123,7 +123,7 @@ test('opens the shared workbench from the existing Skill studio and saves prompt
     expect(await source.current()).toEqual(source.project);
     await dialog.getByRole('button', { name: '应用提示词到设置', exact: true }).click();
     await expect(dialog).toHaveCount(0);
-    await expect.poll(async () => (await source.current()).workflow.nodes.find(node => node.kind === 'brief')?.prompt).toBe('工作室保存的提示词');
+    await expect.poll(async () => (await source.current()).workflow.nodes.find(node => node.id === 'brief')?.prompt).toBe('工作室保存的提示词');
     expect(source.prompts).toHaveLength(0);
   } finally { await source.close(); }
 });
@@ -138,7 +138,7 @@ test('opens a reference image trial in the project candidate comparison', async 
   try {
     const address = server.address(); if (!address || typeof address === 'string') throw new Error('fixture');
     const model = await rpc<{ id: string }>(request, 'model.save', { model: { name: '参考图实验', provider: 'openai-compatible', baseUrl: `http://127.0.0.1:${address.port}/v1`, connectionType: 'image', capabilities: ['image'], model: 'fixture-image' } });
-    const created = await rpc<ProjectDocument>(request, 'project.create', { title: '参考素材候选实验' });
+    const created = await rpc<ProjectDocument>(request, 'project.create', { originalText: '清晨，林夏在书房发现一封未寄出的信。她来到旧城寻找信的主人，与朋友在雨中的城门重逢。两人读完信后决定一起回家。', title: '参考素材候选实验' });
     const project = await rpc<ProjectDocument>(request, 'project.update', { projectId: created.id, revision: created.revision, patch: {
       shots: [{ id: 'reference-shot', title: '首帧参考', narration: '', visualPrompt: '蓝色木盒', durationUs: 1_000_000 }],
       workflow: { ...created.workflow, id: 'reference-image-trial', production: { ...created.workflow.production, referenceMode: 'generate', imageModelId: model.id } },
@@ -158,7 +158,7 @@ test('opens a reference image trial in the project candidate comparison', async 
 });
 
 test('retries the selected experiment project after a read failure without reopening the launcher', async ({ page, request }, info) => {
-  const project = await rpc<ProjectDocument>(request, 'project.create', { title: '提示词任务读取恢复' });
+  const project = await rpc<ProjectDocument>(request, 'project.create', { originalText: '清晨，林夏在书房发现一封未寄出的信。她来到旧城寻找信的主人，与朋友在雨中的城门重逢。两人读完信后决定一起回家。', title: '提示词任务读取恢复' });
   await page.emulateMedia({ reducedMotion: 'reduce' });
   await page.setViewportSize({ width: 600, height: 760 });
   await page.goto('/'); await page.getByRole('button', { name: 'Skill 工作室', exact: true }).click();

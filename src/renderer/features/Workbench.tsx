@@ -63,6 +63,8 @@ const AssetRecoveryDialog = lazy(() => import('../components/AssetRecoveryDialog
 const ProductionSettingsDialog = lazy(() => import('../components/ProductionSettingsDialog'));
 const ProductionRecordsDialog = lazy(() => import('./ProductionRecordsDialog'));
 const PlanningResultEditor = lazy(() => import('../components/PlanningResultEditor'));
+const DramaContentEditor = lazy(() => import('../components/DramaContentEditor'));
+const DramaScriptEditor = lazy(() => import('../components/DramaScriptEditor'));
 
 export type WorkbenchRepairDestination = 'projects' | 'models' | 'characters';
 
@@ -125,6 +127,14 @@ export default function Workbench({ project, workspace, action, notify, onRegist
   const selectAll = () => setSelection(selectAllShots(selectionRef.current, session.state.present.shots.map(shot => shot.id)));
   const clearSelection = () => setSelection({ ids: [] });
   const [conflictDialog, setConflictDialog] = useState(false);
+  const [dramaEditing, setDramaEditing] = useState<ProjectDocument>();
+  const [scriptEditing, setScriptEditing] = useState<ProjectDocument>();
+  const offeredScript = useRef(false);
+  useEffect(() => {
+    if (!ready || offeredScript.current) return;
+    offeredScript.current = true;
+    if (content.drama && !content.originalText?.trim() && content.workflow.nodes.some(node => node.id === 'screenplay')) setScriptEditing(structuredClone(authoredProject));
+  }, [ready, content.drama, content.originalText, content.workflow, authoredProject]);
 
   const [settingsSection, setSettingsSection] = useState('planning');
   const { title, profile } = content;
@@ -761,6 +771,7 @@ export default function Workbench({ project, workspace, action, notify, onRegist
   const needsCustomBrief = stageConfiguration.workflow.id !== 'native-video' && !(configuredContent.brief.trim() || configuredContent.originalText?.trim());
   const configurationIncomplete = needsCustomBrief || stageConfiguration.workflow.nodes.some(node => {
     if (!usesManualPlanning(stageConfiguration.workflow, node)) return stepGuidance(node).requiresModel && !matchingStepModels(node, workspace.models).some(model => model.id === node.modelId);
+    if (node.config.documentRole === 'screenplay') return !configuredContent.originalText?.trim();
     if (node.kind === 'brief') return !configuredContent.brief.trim();
     return node.kind === 'style' ? !configuredContent.style.trim() : node.kind === 'script' && content.shots.length === 0;
   });
@@ -819,6 +830,8 @@ export default function Workbench({ project, workspace, action, notify, onRegist
         </IconButton>
         <IconButton label={savingEdits ? '正在保存修改' : '保存修改'} disabled={savingEdits || !(dirtyShot || dirtyProject)} onClick={() => void saveExplicitly()}><Save size={16} /></IconButton>
         <ProjectMoreActions disabled={Boolean(pendingProductionAction)} onCheck={() => setReadinessDialog('manual')} />
+        {content.drama && <Button disabled={savingEdits || Boolean(edits.conflict)} onClick={() => { clock.pause(); setScriptEditing(structuredClone(authoredProject)); }}><FileText size={15} aria-hidden="true" />分集剧本</Button>}
+        {content.drama && <Button disabled={savingEdits || Boolean(edits.conflict)} onClick={() => { clock.pause(); setDramaEditing(structuredClone(authoredProject)); }}><FileText size={15} aria-hidden="true" />场次与对白</Button>}
         {stageConfiguration.workflow.production && <Button
           static
           variant="ghost"
@@ -1092,6 +1105,40 @@ export default function Workbench({ project, workspace, action, notify, onRegist
         onLevels={readAudioLevels}
       />
     </Suspense>}
+    {scriptEditing && <Suspense fallback={null}><DramaScriptEditor project={scriptEditing} models={workspace.models} action={action} disabled={savingEdits || Boolean(edits.conflict)} onClose={() => { session.endGroup(); setScriptEditing(undefined); }} onDraft={text => {
+      if (!session.state.busy && !session.state.conflict && !savingEdits) session.edit({ ...session.state.present, originalText: text }, '编辑分集剧本', 'drama-script-body');
+    }} onSave={async (text, baseline) => {
+      if (session.state.conflict || session.state.busy || savingEdits) throw new Error('本集正在保存或有外部修改，请核对后再保存剧本。');
+      const current = session.state.present;
+      if (current.originalText !== (baseline.originalText ?? '') && current.originalText !== text) throw new Error('剧本已在其他视图修改，当前输入已保留，请重新核对。');
+      session.edit({ ...current, originalText: text }, '编辑分集剧本'); session.endGroup();
+      return await save() ? { ...project, ...session.state.present, revision: session.state.revision } : null;
+    }} onGenerate={async (modelId, instructions, text) => {
+      if (text !== (session.state.present.originalText ?? '')) throw new Error('剧本正文已在其他视图修改，请关闭编辑器并核对最新正文后再生成。');
+      if (!await save()) return null;
+      if (text !== (session.state.present.originalText ?? '')) throw new Error('保存期间剧本正文发生变化，请核对最新正文后再生成。');
+      const node = session.state.present.workflow.nodes.find(item => item.id === 'screenplay');
+      if (!node) throw new Error('本集没有剧本创作任务，请从短剧工作室创建分集。');
+      return action('planning.prefill.start', { requestId: crypto.randomUUID(), projectId: project.id, projectRevision: session.state.revision,
+        node: { ...node, modelId, prompt: [node.prompt, instructions].filter(Boolean).join('\n\n') }, context: { originalText: text } });
+    }} onApply={async runId => {
+      if (!await save()) return null;
+      setSavingEdits(true); session.beginSave();
+      try {
+        const result = await action<ProjectDocument>('node.apply', { runId, nodeId: 'screenplay', revision: session.state.revision, applicationId: crypto.randomUUID() });
+        if (result) { session.applySaved(result, '应用 AI 剧本草稿'); session.endGroup(); }
+        return result;
+      } finally { session.endSave(); setSavingEdits(false); }
+    }} /></Suspense>}
+    {dramaEditing && <Suspense fallback={null}><DramaContentEditor project={dramaEditing} version={workspace.version} disabled={savingEdits || Boolean(edits.conflict)} onClose={() => setDramaEditing(undefined)} onApply={async (next, baseline) => {
+      if (session.state.conflict || session.state.busy || savingEdits) throw new Error('项目正在保存或有外部修改，请核对后再保存短剧内容。');
+      const current = session.state.present;
+      const unchanged = sameContent(current.drama, baseline.drama) && sameContent(current.shots, baseline.shots);
+      const retrying = sameContent(current.drama, next.drama) && sameContent(current.shots, next.shots);
+      if (!unchanged && !retrying) throw new Error('场次或镜头已在其他视图修改，当前输入已保留，请关闭后重新核对。');
+      session.edit({ ...current, ...next }, '编辑短剧场次与台词'); session.endGroup();
+      return save();
+    }} /></Suspense>}
     {bulkEditing && <Suspense fallback={null}>
       <BulkShotDialog
         project={displayedProject}

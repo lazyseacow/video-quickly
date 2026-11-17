@@ -114,7 +114,7 @@ export async function verifyNativeTransitionCache({ page, rpc, openProject, fixt
       assert.equal(video.width, 1920); assert.equal(video.height, 1080); assert.equal(video.avg_frame_rate, '24/1');
       for (const key of ['color_space', 'color_primaries', 'color_transfer']) assert.equal(video[key], 'bt709');
     }
-    let project = await rpc('project.create', { title: `原生原画缓存 1080p24→60 ${randomUUID().slice(0, 6)}`, profile: { width, height, frameRate: { numerator: 60, denominator: 1 }, previewScale: 1 } });
+    let project = await rpc('project.create', { title: `原生原画缓存 1080p24→60 ${randomUUID().slice(0, 6)}`, originalText: '第一场 图纹剧场 日\n画面从第一段场景平稳过渡至第二段，最后渐暗。', profile: { width, height, frameRate: { numerator: 60, denominator: 1 }, previewScale: 1 } });
     const assets = []; for (const path of sourcePaths) assets.push(await rpc('asset.import', { projectId: project.id, path, kind: 'video' }));
     assert.notEqual(assets[0].sha256, assets[1].sha256);
     project = (await rpc('project.get', { projectId: project.id })).project;
@@ -135,7 +135,25 @@ export async function verifyNativeTransitionCache({ page, rpc, openProject, fixt
     await expect(canvas).toHaveAttribute('data-transition-cache-pixels', String(prefixFrames * width * height), { timeout: 30_000 });
     await page.getByRole('button', { name: '播放预览', exact: true }).click();
     await expect.poll(() => probe.handle.evaluate(state => state.samples.some(sample => sample.frame >= 198)), { timeout: 30_000 }).toBe(true);
-    await page.getByRole('button', { name: '暂停预览', exact: true }).click();
+    // The short clip can finish between observing the target and stopping it.
+    // Inspect and click atomically so a natural finish cannot become a replay.
+    const paused = await player.getByRole('button', { name: /^(播放预览|暂停预览)$/ }).evaluate(button => {
+      if (button.getAttribute('aria-pressed') !== 'true') return false;
+      button.click(); return true;
+    });
+    const play = player.getByRole('button', { name: '播放预览', exact: true });
+    await expect(play).toBeVisible(); await expect(play).toHaveAttribute('aria-pressed', 'false');
+    if (!paused) {
+      const durationSeconds = project.shots.reduce((total, shot) => total + shot.durationUs, 0) / 1_000_000;
+      assert.equal(Number(record.outputProbe.format.duration), durationSeconds);
+      const finalFrame = Math.ceil(durationSeconds * record.projectProfile.fps - .0001) - 1;
+      await expect(canvas).toHaveAttribute('data-rendered-frame', String(finalFrame));
+      await expect.poll(() => probe.handle.evaluate(state => state.samples.at(-1)?.audioPaused)).toBe(true);
+      const last = await probe.handle.evaluate(state => state.samples.at(-1));
+      assert.equal(last.frame, finalFrame); assert.ok(Math.abs(last.uiMs - finalFrame * 1000 / record.projectProfile.fps) <= 1);
+      assert.ok(Math.abs(last.audioMs - finalFrame * 1000 / record.projectProfile.fps) <= 1000 / record.projectProfile.fps);
+      record.naturalPlaybackEnd = last;
+    }
     Object.assign(record, await probe.stop()); probe = undefined;
     assert.equal(record.observerError, undefined);
     assert.ok(record.decoderSnapshots.some(snapshot => snapshot.videos.length === 2 && snapshot.videos.every(video => video.width === 1920 && video.height === 1080)), 'Observe the real full-resolution native video decoders');
@@ -165,7 +183,7 @@ export async function verifyNativeTransitionCache({ page, rpc, openProject, fixt
     assert.ok(record.samples.every(sample => sample.cachePixels * 4 <= 48 * 1024 * 1024), 'Native transition cache must stay within 48 MiB');
     assert.deepEqual((await rpc('project.get', { projectId: project.id })).project, project);
     await page.screenshot({ path: join(artifacts, 'desktop-transition-cache-1080p24-60fps.png') });
-    const control = await rpc('project.create', { title: `原画缓存释放 ${randomUUID().slice(0, 6)}` }); await openProject(control.title);
+    const control = await rpc('project.create', { title: `原画缓存释放 ${randomUUID().slice(0, 6)}`, originalText: '第一场 空舞台 夜\n画面渐暗，舞台保持空镜。' }); await openProject(control.title);
     // Detached decoder inspection includes only our paths and has no native-protocol or onReady substitution.
     const session = await page.context().newCDPSession(page);
     try {

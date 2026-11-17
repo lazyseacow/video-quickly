@@ -35,7 +35,7 @@ async function fixture(request: APIRequestContext, hold = false) {
     for (const name of ['小青', '小红']) profiles.push(await rpc<CharacterProfile>(request, 'character.save', { character: { name: `${name} ${suffix}`, description: `${name}的固定服装与外形`, referenceAssetIds: [asset.id] } }));
     const address = server.address(); if (!address || typeof address === 'string') throw new Error('本地文本服务未启动');
     const model = await rpc<{ id: string }>(request, 'model.save', { model: { name: `角色文本 ${suffix}`, provider: 'openai-compatible', connectionType: 'text', capabilities: ['text'], model: 'fixture-text', baseUrl: `http://127.0.0.1:${address.port}/v1` } });
-    let project = await rpc<ProjectDocument>(request, 'project.create', { title: `角色一致性 ${suffix}`, brief: '花园中的相遇' });
+    let project = await rpc<ProjectDocument>(request, 'project.create', { originalText: '清晨，林夏在书房发现一封未寄出的信。她来到旧城寻找信的主人，与朋友在雨中的城门重逢。两人读完信后决定一起回家。', title: `角色一致性 ${suffix}`, brief: '花园中的相遇' });
     project = await rpc<ProjectDocument>(request, 'project.update', { projectId: project.id, revision: project.revision, patch: { workflow: { ...project.workflow, production: { ...project.workflow.production, textModelId: model.id } } } });
     return { project, profiles, prompts, started, release, current: async () => (await rpc<{ project: ProjectDocument }>(request, 'project.get', { projectId: project.id })).project, cleanup: async () => { release(); await close(server); await rm(directory, { recursive: true, force: true }); } };
   } catch (error) { release(); await close(server); await rm(directory, { recursive: true, force: true }); throw error; }
@@ -85,7 +85,7 @@ for (const viewport of [{ width: 1536, height: 960, theme: 'dark' }, { width: 39
       await productionStep(dialog, '确认保存'); await expect(dialog.getByLabel('确认保存', { exact: true })).toContainText('已选择 1 个角色');
       await saveProduction(dialog); await expect(dialog).toHaveCount(0);
       await expect.poll(async () => (await source.current()).creativeContext?.characterIds).toEqual([source.profiles[0].id]);
-      await page.getByRole('button', { name: '撤销', exact: true }).click(); await expect.poll(async () => (await source.current()).creativeContext ?? null).toBeNull();
+      await page.getByRole('button', { name: '撤销', exact: true }).click(); await expect.poll(async () => (await source.current()).creativeContext ?? null).toEqual(source.project.creativeContext ?? null);
       await page.getByRole('button', { name: '重做', exact: true }).click(); await expect.poll(async () => (await source.current()).creativeContext?.continuity).toBe('同一个傍晚，蓝色服装保持不变');
       const saved = await source.current();
       const run = await rpc<RunSummary>(request, 'run.start', { projectId: saved.id, nodeId: 'script' });

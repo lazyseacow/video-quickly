@@ -15,11 +15,11 @@ async function rpc<T>(request: APIRequestContext, method: string, params: unknow
 }
 async function savedProject(request: APIRequestContext, projectId: string) { return (await rpc<{ project: ProjectDocument }>(request, 'project.get', { projectId })).project; }
 async function createProject(request: APIRequestContext, title: string, template = false) {
-  const project = await rpc<ProjectDocument>(request, 'project.create', { title, profile: { width: 320, height: 180, frameRate: { numerator: 24, denominator: 1 }, fitMode: 'contain', previewScale: 1 } });
+  const project = await rpc<ProjectDocument>(request, 'project.create', { originalText: '清晨，林夏在书房发现一封未寄出的信。她来到旧城寻找信的主人，与朋友在雨中的城门重逢。两人读完信后决定一起回家。', title, profile: { width: 320, height: 180, frameRate: { numerator: 24, denominator: 1 }, fitMode: 'contain', previewScale: 1 } });
   return rpc<ProjectDocument>(request, 'project.update', { projectId: project.id, revision: project.revision, patch: { shots: [{ id: 'template-shot', title: '模板镜头', narration: '', visualPrompt: '', durationUs: 1_000_000, ...(template ? { sceneTemplate: { ...createSceneTemplate('bar-chart'), motion: 'none' } } : {}) }] } });
 }
 async function openProject(page: Page, title: string) {
-  await page.goto('/'); await page.getByRole('button', { name: '我的项目', exact: true }).click(); await page.locator('.project-card').filter({ hasText: title }).getByRole('button', { name: /继续创作/ }).click(); await expect(page.getByLabel('镜头标题', { exact: true })).toHaveValue('模板镜头');
+  await page.goto('/'); await openProjectFromList(page, title); await expect(page.getByLabel('镜头标题', { exact: true })).toHaveValue('模板镜头');
 }
 async function save(page: Page) { const button = page.getByRole('button', { name: '保存镜头', exact: true }); await expect(button).not.toHaveAttribute('aria-busy', 'true'); if (await button.isEnabled()) await button.click(); await expect(button).toBeDisabled(); await expect(button).not.toHaveAttribute('aria-busy', 'true'); }
 function observe(page: Page) { const errors: string[] = []; page.on('pageerror', error => errors.push(error.message)); return errors; }

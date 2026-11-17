@@ -2,7 +2,7 @@ import { createServer } from 'node:http';
 import { randomUUID } from 'node:crypto';
 import { expect, test, type APIRequestContext } from '@playwright/test';
 import type { ProjectDocument, RunInspection, RunSummary } from '@video-quickly/contracts';
-import { openProjectFromList } from './workspace-navigation';
+import { openProjectFromList, openStudio } from './workspace-navigation';
 import { test as isolatedTest } from './isolated-workspace';
 import { confirmAction } from './confirmation-actions';
 
@@ -34,7 +34,7 @@ async function fixture(request: APIRequestContext, flat = false, failure: 'downl
   const base = `http://127.0.0.1:${address.port}`;
   const close = async () => { server.closeAllConnections(); await new Promise<void>(resolve => server.close(() => resolve())); };
   try {
-    const created = await rpc<ProjectDocument>(request, 'project.create', { title: `单步骤手动重试 ${randomUUID().slice(0, 8)}` });
+    const created = await rpc<ProjectDocument>(request, 'project.create', { originalText: '清晨，林夏在书房发现一封未寄出的信。她来到旧城寻找信的主人，与朋友在雨中的城门重逢。两人读完信后决定一起回家。', title: `单步骤手动重试 ${randomUUID().slice(0, 8)}` });
     const text = await rpc<{ id: string }>(request, 'model.save', { model: { name: '冻结文本', model: 'retry-text', provider: 'openai-compatible', baseUrl: `${base}/v1`, connectionType: 'text', capabilities: ['text'] } });
     const image = await rpc<{ id: string }>(request, 'model.save', { model: { name: '冻结图片', model: 'retry-image', provider: 'custom-http', baseUrl: base, connectionType: 'image', capabilities: ['image'], parameters: { requestPath: 'generate', requestTemplate: { shot: '{{narration}}' }, resultUrlPath: 'url' } } });
     const project = await rpc<ProjectDocument>(request, 'project.update', { projectId: created.id, revision: created.revision, patch: {
@@ -143,7 +143,7 @@ for (const viewport of [{ width: 1536, height: 960, theme: 'dark' }, { width: 39
     await page.screenshot({ path: info.outputPath('workspace-notice.png') });
     await expect(toast).not.toBeVisible({ timeout: 4000 }); expect(await page.locator('.preview-panel').boundingBox()).toEqual(completedBounds);
     await expect(production.locator('.notice')).toHaveCount(0);
-    await page.getByRole('button', { name: '我的项目', exact: true }).click(); await openProjectFromList(page, source.project.title);
+    await openStudio(page); await openProjectFromList(page, source.project.title);
     await expect(production.getByRole('button', { name: '继续原制作', exact: true })).toBeVisible(); await expect(toast).not.toBeVisible();
     await expect(page).toHaveTitle(/Video Quickly/); await expect(page.locator('vite-error-overlay')).toHaveCount(0);
   } finally { await source.close(); }

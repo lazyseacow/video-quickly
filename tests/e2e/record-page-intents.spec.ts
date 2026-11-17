@@ -48,7 +48,7 @@ async function holdRefresh(page: Page, request: APIRequestContext, name: string,
     }
     await route.continue();
   });
-  await rpc(request, 'project.create', { title: name }); await held.promise;
+  await rpc(request, 'project.create', { originalText: '清晨，林夏在书房发现一封未寄出的信。她来到旧城寻找信的主人，与朋友在雨中的城门重逢。两人读完信后决定一起回家。', title: name }); await held.promise;
   // The page is already validating from a real notification. Freeze further
   // debounce delivery only while this case establishes its owned interleaving.
   await page.clock.pauseAt(new Date(clockOrigin.getTime() + 2 * test.info().timeout));
@@ -76,7 +76,7 @@ test('carries an accepted background pagination intent into the next version and
   try {
     await expect(library.button).toBeEnabled(); await library.button.click(); await expect(library.button).toBeDisabled();
     await page.clock.resume();
-    await rpc(request, 'project.create', { title: '分页意图登记后的真实新版本' });
+    await rpc(request, 'project.create', { originalText: '清晨，林夏在书房发现一封未寄出的信。她来到旧城寻找信的主人，与朋友在雨中的城门重逢。两人读完信后决定一起回家。', title: '分页意图登记后的真实新版本' });
     await expect(library.targetCard).toBeVisible();
     expect(refresh.reads.some(read => !read.archived && !read.before && read.limit === 40)).toBe(true);
     const oldResponse = page.waitForResponse(response => response.url().endsWith('/__desktop_rpc') && response.request().postDataJSON()?.method === 'seriesTemplate.list' && response.request().postDataJSON()?.params.limit === 20);
@@ -96,7 +96,7 @@ test('retains the cursor on a queued pagination error and expands only after an 
     await expect(library.cards).toHaveCount(20); await expect(library.button).toBeEnabled();
     await page.clock.resume();
     const notified = page.waitForResponse(response => response.url().endsWith('/__desktop_rpc') && response.status() === 200 && response.request().postDataJSON()?.method === 'seriesTemplate.list' && response.request().postDataJSON()?.params.archived === false && response.request().postDataJSON()?.params.limit === 20);
-    await rpc(request, 'project.create', { title: '分页错误后的无关通知' });
+    await rpc(request, 'project.create', { originalText: '清晨，林夏在书房发现一封未寄出的信。她来到旧城寻找信的主人，与朋友在雨中的城门重逢。两人读完信后决定一起回家。', title: '分页错误后的无关通知' });
     await (await notified).finished();
     await expect.poll(() => refresh.reads.filter(read => !read.before && read.limit === 20).length).toBeGreaterThan(1);
     await expect(library.cards).toHaveCount(20);
@@ -185,7 +185,7 @@ test('uses the last successful page cursor when a real click precedes its React 
     await expect(page.getByRole('heading', { name: boundary.name, exact: true })).toBeVisible();
     const loaded = await library.cards.count(); expect(loaded).toBeGreaterThan(20);
     const refreshed = page.waitForResponse(value => value.url().endsWith('/__desktop_rpc') && value.request().postDataJSON()?.method === 'seriesTemplate.list' && value.request().postDataJSON()?.params.before === undefined);
-    await rpc(request, 'project.create', { title: '提交间隔翻页后的真实刷新' });
+    await rpc(request, 'project.create', { originalText: '清晨，林夏在书房发现一封未寄出的信。她来到旧城寻找信的主人，与朋友在雨中的城门重逢。两人读完信后决定一起回家。', title: '提交间隔翻页后的真实刷新' });
     const response = await refreshed; expect(response.request().postDataJSON().params.limit).toBe(loaded); await response.finished();
     await page.evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
     await expect(library.cards).toHaveCount(loaded); expect(library.errors).toEqual([]);

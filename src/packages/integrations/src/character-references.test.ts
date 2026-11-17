@@ -33,6 +33,23 @@ describe('character image request preflight', () => {
     expect(await resolveCharacterReferences({ shot: {}, assets: [] })).toEqual({ characters: [], prompt: '', images: [] });
   });
 
+  it('sends only the selected appearance image and preserves its frozen description', async () => {
+    const { directory, asset, profile, bytes } = await fixture();
+    const costumeBytes = Buffer.concat([bytes, Buffer.from('costume')]), path = join(directory, 'costume.png');
+    await writeFile(path, costumeBytes);
+    const costume = { ...asset, id: 'costume', path, size: costumeBytes.length, sha256: createHash('sha256').update(costumeBytes).digest('hex') };
+    const selected = { ...profile, appearances: [{ id: 'coat', name: '黄色雨衣', description: '帽子盖住头发，手持折伞', referenceAssetIds: [costume.id] }] };
+    const shot = { drama: { appearances: [{ characterId: profile.id, appearanceId: 'coat' }], lines: [] } };
+    const resolved = await resolveCharacterReferences({ shot, characters: [selected], assets: [asset, costume] });
+    expect(resolved.characters).toEqual([selected]);
+    expect(resolved.images).toEqual([{ assetId: costume.id, mimeType: costume.mimeType, dataUrl: `data:image/png;base64,${costumeBytes.toString('base64')}` }]);
+    expect(resolved.prompt).toContain('黄色雨衣'); expect(resolved.prompt).toContain(selected.appearances[0].description);
+    expect(resolved.prompt).toContain('图片 1');
+    await expect(resolveCharacterReferences({ shot: { drama: { ...shot.drama, appearances: [{ characterId: profile.id, appearanceId: 'missing' }] } }, characters: [selected], assets: [asset, costume] })).rejects.toThrow('角色形象不存在');
+    const voiceOnly = await resolveCharacterReferences({ shot: { drama: { appearances: [], lines: [{ id: 'offscreen', kind: 'dialogue', speakerId: profile.id, text: '画外的声音' }] } }, characters: [selected], assets: [asset, costume] });
+    expect(voiceOnly.images).toEqual([]); expect(voiceOnly.characters).toEqual([]);
+  });
+
   it('rejects missing or archived snapshots and private, inactive or changed images', async () => {
     const { asset, profile, bytes } = await fixture();
     await expect(resolveCharacterReferences({ shot: { characterIds: [profile.id] }, assets: [asset] })).rejects.toThrow('快照缺少');

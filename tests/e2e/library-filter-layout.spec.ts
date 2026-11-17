@@ -1,7 +1,7 @@
 import { expect, test, type Locator } from '@playwright/test';
 import type { ProjectDocument } from '@video-quickly/contracts';
 import { openCosts } from './workspace-settings';
-import { openAssetLibrary } from './workspace-navigation';
+import { openAssetLibrary, openStudio } from './workspace-navigation';
 
 for (const { width, theme } of [
   { width: 1536, theme: 'dark' }, { width: 1536, theme: 'light' },
@@ -9,7 +9,7 @@ for (const { width, theme } of [
   { width: 600, theme: 'light' }, { width: 390, theme: 'light' }, { width: 360, theme: 'dark' },
 ]) test(`keeps library filters reachable and contained at ${width}px in ${theme}`, async ({ page, request }, info) => {
   test.setTimeout(45_000);
-  const response = await request.post('/__desktop_rpc', { data: { method: 'project.create', params: { title: `筛选栏布局 ${width} ${theme}` } } });
+  const response = await request.post('/__desktop_rpc', { data: { method: 'project.create', params: { originalText: '清晨，林夏在书房发现一封未寄出的信。她来到旧城寻找信的主人，与朋友在雨中的城门重逢。两人读完信后决定一起回家。', title: `筛选栏布局 ${width} ${theme}` } } });
   expect(response.ok()).toBe(true);
   const { result: project } = await response.json() as { result: ProjectDocument };
   const errors: string[] = [];
@@ -36,27 +36,20 @@ for (const { width, theme } of [
     await page.screenshot({ path: info.outputPath(`${name}-${theme}-${width}.png`) });
   }
   const toolbar = () => page.locator('.content-page:visible .page-toolbar:visible');
-  await page.getByRole('button', { name: '我的项目', exact: true }).click();
-  const search = page.getByLabel('搜索项目', { exact: true });
-  await search.fill(project.title); await expect(page.locator('.project-card')).toHaveCount(1);
-  await expect(page.locator('.project-card')).toContainText(project.title);
-  const projectToolbar = toolbar();
-  const projectFilters = projectToolbar.getByRole('group', { name: '项目筛选', exact: true });
-  const projectTrash = projectFilters.getByRole('button', { name: '回收站', exact: true });
-  const projectMultiSelect = projectToolbar.getByRole('button', { name: '多选', exact: true });
-  await expect(projectMultiSelect).toBeEnabled();
-  const filterBounds = await projectFilters.boundingBox();
-  const multiSelectBounds = await projectMultiSelect.boundingBox();
-  await inspect('projects', projectToolbar);
-  await projectTrash.click();
-  await expect(projectTrash).toHaveAttribute('aria-pressed', 'true');
-  await expect(projectMultiSelect).toBeDisabled();
-  await expect(search).toHaveValue(project.title);
-  expect(await projectFilters.boundingBox()).toEqual(filterBounds);
-  expect(await projectMultiSelect.boundingBox()).toEqual(multiSelectBounds);
-  await inspect('projects-trash', projectToolbar);
-  await projectFilters.getByRole('button', { name: '全部项目', exact: true }).click();
-  await search.fill('');
+  await openStudio(page);
+  const search = page.getByLabel('搜索作品', { exact: true });
+  await search.fill(project.title); await expect(page.locator('.drama-work-card')).toHaveCount(1);
+  await expect(page.locator('.drama-work-card')).toContainText(project.title);
+  const workToolbar = page.locator('.drama-library-heading');
+  const workFilters = workToolbar.getByRole('group', { name: '作品筛选', exact: true });
+  const archived = workFilters.getByRole('button', { name: '已归档', exact: true });
+  const filterGeometry = () => workFilters.evaluate(element => { const box = element.getBoundingClientRect(), toolbar = element.closest('.drama-library-heading')!.getBoundingClientRect(); return { x: box.x - toolbar.x, y: box.y - toolbar.y, width: box.width, height: box.height }; });
+  const filterBounds = await filterGeometry();
+  await inspect('drama-works', workToolbar);
+  await archived.click(); await expect(archived).toHaveAttribute('aria-pressed', 'true');
+  await expect(search).toHaveValue(project.title); expect(await filterGeometry()).toEqual(filterBounds);
+  await inspect('drama-works-archived', workToolbar);
+  await workFilters.getByRole('button', { name: '可用', exact: true }).click(); await search.fill('');
   for (const [pageName, buttonName, artifact, view] of [
     ['模型连接', '视频模型', 'models'], ['素材库', '音频', 'assets', '媒体'],
     ['素材库', '已归档', 'characters', '角色'], ['系列模板', '已归档模板', 'templates'],
@@ -68,7 +61,7 @@ for (const { width, theme } of [
     await button.click(); await expect(button).toHaveClass(/active/); await inspect(artifact, toolbar());
   }
   await page.getByRole('button', { name: 'Skill 工作室', exact: true }).click();
-  const skillSearch = page.getByLabel('搜索 Skill 或分组', { exact: true });
+  const skillSearch = page.getByRole('searchbox', { name: '搜索 Skill 或分组', exact: true });
   await skillSearch.fill('没有匹配的 Skill'); await expect(page.locator('.skill-studio-group')).toHaveCount(0);
   await inspect('skills', toolbar()); await skillSearch.fill('');
   const crowdedText = await toolbar().getByRole('button', { name: '提示词实验与模板', exact: true }).evaluate(element => {
@@ -86,18 +79,18 @@ for (const { width, theme } of [
   await expect(page.locator('vite-error-overlay')).toHaveCount(0); expect(errors).toEqual([]);
 });
 
-test('recovers from project search misses and distinguishes loading, failed and empty asset filters', async ({ page, request }) => {
+test('recovers from work search misses and distinguishes loading, failed and empty asset filters', async ({ page, request }) => {
   const title = 'Library Search Fixture';
-  const response = await request.post('/__desktop_rpc', { data: { method: 'project.create', params: { title } } });
+  const response = await request.post('/__desktop_rpc', { data: { method: 'project.create', params: { originalText: '清晨，林夏在书房发现一封未寄出的信。她来到旧城寻找信的主人，与朋友在雨中的城门重逢。两人读完信后决定一起回家。', title } } });
   expect((await response.json()).result.title).toBe(title);
   await page.goto('/');
-  await page.getByRole('button', { name: '我的项目', exact: true }).click();
-  const search = page.getByLabel('搜索项目', { exact: true });
+  await openStudio(page);
+  const search = page.getByLabel('搜索作品', { exact: true });
   await search.fill('  library search fixture  ');
   await expect(page.getByRole('heading', { name: title, exact: true })).toBeVisible();
   await search.fill('不会匹配任何项目的关键词');
-  await expect(page.getByText('没有匹配的项目', { exact: true })).toBeVisible();
-  await page.getByRole('button', { name: '清除搜索', exact: true }).click();
+  await expect(page.getByText('没有匹配的作品', { exact: true })).toBeVisible();
+  await page.getByRole('button', { name: '清除搜索作品', exact: true }).click();
   await expect(search).toHaveValue('');
   await expect(search).toBeFocused();
   await expect(page.getByRole('heading', { name: title, exact: true })).toBeVisible();

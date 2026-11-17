@@ -1,4 +1,4 @@
-import { openProjectFromList } from './workspace-navigation';
+import { openProjectFromList, openStudio } from './workspace-navigation';
 import { setWorkspaceTheme } from './workspace-settings';
 import { randomUUID, createHash } from 'node:crypto';
 import { mkdir, writeFile } from 'node:fs/promises';
@@ -15,7 +15,7 @@ async function rpc<T>(request: APIRequestContext, method: string, params: unknow
   const result = await response.json(); expect(response.ok()).toBe(true); expect(result.error).toBeUndefined(); return result.result;
 }
 async function fixture(request: APIRequestContext, nodes: Array<Pick<WorkflowNode, 'id' | 'kind' | 'label'> & Partial<WorkflowNode>> = [{ id: 'script', kind: 'script', label: '本地脚本' }]) {
-  const created = await rpc<ProjectDocument>(request, 'project.create', { title: `制作检查 ${randomUUID().slice(0, 8)}` });
+  const created = await rpc<ProjectDocument>(request, 'project.create', { originalText: '清晨，林夏在书房发现一封未寄出的信。她来到旧城寻找信的主人，与朋友在雨中的城门重逢。两人读完信后决定一起回家。', title: `制作检查 ${randomUUID().slice(0, 8)}` });
   const project = await rpc<ProjectDocument>(request, 'project.update', { projectId: created.id, revision: created.revision, patch: {
     shots: [{ id: 'shot', title: '检查镜头', narration: '本地旁白', visualPrompt: '', durationUs: 1_000_000 }],
     workflow: { ...created.workflow, nodes, edges: nodes.slice(1).map((node, index) => ({ id: `edge-${index}`, source: nodes[index].id, target: node.id })) },
@@ -182,7 +182,7 @@ test('shows and saves Skills inline in the export step editor', async ({ page, r
   await mkdir(directory, { recursive: true });
   await writeFile(join(directory, 'SKILL.md'), '---\nname: export-checklist\ndescription: 导出前核对画面、声音和字幕。\n---\n按项目规格检查成片。');
   const { group, skills } = await importSkillFixture((method, params) => rpc(request, method, params), { path: directory });
-  const created = await rpc<ProjectDocument>(request, 'project.create', { title: '导出步骤 Skill 验收' });
+  const created = await rpc<ProjectDocument>(request, 'project.create', { originalText: '清晨，林夏在书房发现一封未寄出的信。她来到旧城寻找信的主人，与朋友在雨中的城门重逢。两人读完信后决定一起回家。', title: '导出步骤 Skill 验收' });
   const project = await rpc<ProjectDocument>(request, 'project.update', { projectId: created.id, revision: created.revision, patch: {
     workflow: { ...created.workflow, nodes: [{ id: 'export', kind: 'export', label: '导出成片' }], edges: [], stages: undefined },
   } });
@@ -266,7 +266,7 @@ for (const change of ['edit', 'leave'] as const) test(`discards a pending start 
     await expect(page.getByRole('button', { name: '正在检查', exact: true })).toBeDisabled();
     if (change === 'edit') await title.fill(`${project.title} 检查期间编辑`);
     else {
-      await page.getByRole('button', { name: '我的项目', exact: true }).click();
+      await openStudio(page);
       await expect.poll(() => cancels).toEqual([requestId]);
     }
     const completed = page.waitForResponse(response => response.url().endsWith('/__desktop_rpc') && response.request().postDataJSON()?.method === 'project.readiness' && response.request().postDataJSON()?.params?.requestId === requestId);

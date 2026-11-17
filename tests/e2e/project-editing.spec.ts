@@ -13,13 +13,12 @@ async function rpc(request: APIRequestContext, method: string, params: unknown =
   return payload.result;
 }
 async function createProject(request: APIRequestContext, title: string, shotCount = 2) {
-  const project = await rpc(request, 'project.create', { title });
+  const project = await rpc(request, 'project.create', { originalText: '清晨，林夏在书房发现一封未寄出的信。她来到旧城寻找信的主人，与朋友在雨中的城门重逢。两人读完信后决定一起回家。', title });
   return rpc(request, 'project.update', { projectId: project.id, revision: project.revision, patch: { shots: Array.from({ length: shotCount }, (_, index) => ({ id: `shot-${index}`, title: `测试镜头 ${index + 1}`, narration: '', visualPrompt: '', durationUs: 2_000_000 })) } });
 }
 async function openProject(page: Page, title: string) {
   await page.goto('/');
-  await page.getByRole('button', { name: '我的项目', exact: true }).click();
-  await page.locator('.project-card').filter({ hasText: title }).getByRole('button', { name: /继续创作/ }).click();
+  await openProjectFromList(page, title);
   await expect(page.getByLabel('镜头标题')).toBeVisible();
 }
 
@@ -170,9 +169,9 @@ test('separates adjacent layout controls and keeps both monochrome themes usable
   await expect(page.getByRole('button', { name: '重做', exact: true })).toBeVisible();
   await page.screenshot({ path: info.outputPath('monochrome-light-600.png') });
   await page.emulateMedia({ reducedMotion: 'reduce' });
-  await page.getByRole('button', { name: '新建项目', exact: true }).click();
-  const dialog = page.getByRole('dialog', { name: '新建视频项目', exact: true });
-  await expect(dialog.getByLabel('项目名称', { exact: true })).toBeFocused();
-  await page.keyboard.press('Escape'); await expect(dialog).toHaveCount(0);
+  await page.getByRole('button', { name: '新建短剧', exact: true }).click();
+  const composer = page.getByRole('region', { name: '让故事成为一部短剧', exact: true });
+  await expect(composer.getByRole('textbox', { name: '短剧名称', exact: true })).toBeFocused();
+  await expect(composer.getByRole('tab', { name: '上传剧本', exact: true })).toBeVisible();
   await expect(page.locator('vite-error-overlay')).toHaveCount(0); expect(errors).toEqual([]);
 });

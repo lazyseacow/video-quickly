@@ -50,20 +50,26 @@ it('imports and previews JSON text without rewriting values and bounds reads by 
 });
 
 describe('asset-page character references', () => {
-  it('checks project and character references for a full page with one query per source', async () => {
-    const { database, runtime, assets, save } = await fixture(100);
+  it('checks project, character and voice references for a full page with one query per source', async () => {
+    const { database, runtime, store, assets, save } = await fixture(100);
     await save('当前角色', [assets[0].id]);
     const archived = await save('已归档角色', [assets[99].id]);
     await runtime.dispatch('character.archive', { characterId: archived.id, revision: archived.revision });
+    const audio = { ...assets[50], kind: 'audio', mimeType: 'audio/mpeg' };
+    store.put('asset', audio.id, audio);
+    await runtime.dispatch('voice.save', { voice: { name: '角色声音', description: '', referenceAssetIds: [audio.id] } });
     const prepared = vi.spyOn(Object.getPrototypeOf(database) as Pick<typeof database, 'prepare'>, 'prepare');
     try {
       const page = assetsPageSchema.parse(await runtime.dispatch('asset.list', {}));
       expect(page.items).toHaveLength(100); expect(page.nextCursor).toBeNull();
-      expect(page.items.filter(asset => asset.inUse).map(asset => asset.id)).toEqual([assets[99].id, assets[0].id]);
+      expect(page.items.filter(asset => asset.inUse).map(asset => asset.id)).toEqual([assets[99].id, assets[50].id, assets[0].id]);
       const queries = prepared.mock.calls.map(([sql]) => sql);
       const projectQueries = queries.filter(sql => sql.includes('project_asset_references'));
       expect(projectQueries).toHaveLength(1);
-      expect(queries.filter(sql => sql.includes("json_each(profile.body, '$.referenceAssetIds')"))).toHaveLength(1);
+      const referenceQueries = queries.filter(sql => sql.includes("json_each(profile.body, '$.referenceAssetIds')"));
+      expect(referenceQueries.filter(sql => sql.includes("profile.kind = 'character'"))).toHaveLength(1);
+      expect(referenceQueries.filter(sql => sql.includes("profile.kind = 'voice'"))).toHaveLength(1);
+      expect(referenceQueries).toHaveLength(2);
       const plan = database.prepare(`EXPLAIN QUERY PLAN ${projectQueries[0]}`).all({ limit: 101, legacyTimelineName, localRenderProvenance }) as { detail: string }[];
       expect(plan.some(row => row.detail.includes('USING INDEX documents_active_assets'))).toBe(true);
       expect(plan.some(row => row.detail.includes('USE TEMP B-TREE'))).toBe(false);

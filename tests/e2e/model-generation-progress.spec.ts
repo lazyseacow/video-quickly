@@ -29,7 +29,7 @@ for (const viewport of [{ width: 1536, height: 960, theme: 'dark' }, { width: 39
       }, { timeout: 30_000, message: 'The first real model request must begin before checking generation progress' }).toBe('brief request received');
       const production = page.getByRole('region', { name: '当前制作', exact: true }), progress = production.getByRole('list', { name: '制作阶段进度', exact: true });
       const stageLabels = ['策划与分镜', '素材与配音', '剪辑与动画', '审阅与导出'];
-      const labels = ['简报生成', '风格与角色生成', '分镜生成', '参考素材准备', '镜头视频生成'];
+      const labels = ['剧本正文', '简报生成', '风格与角色生成', '分镜生成', '参考素材准备', '镜头视频生成'];
       await expect(progress.locator('.workbench-guide__step-copy > strong')).toHaveText(stageLabels);
       await expect(progress).not.toContainText('创作要求');
       const stages = [ ['brief', '简报生成', '策划与分镜', '创意简报'], ['style', '风格与角色生成', '策划与分镜', '风格与角色'], ['script', '分镜生成', '策划与分镜', '旁白与分镜'], ['video', '镜头视频生成', '素材与配音', '镜头视频生成'] ] as const;

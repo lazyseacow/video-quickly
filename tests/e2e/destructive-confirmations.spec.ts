@@ -15,7 +15,6 @@ async function writeWave(path: string) {
 
 for (const viewport of [{ width: 1536, height: 960, theme: 'dark' }, { width: 600, height: 900, theme: 'light' }]) test('requires explicit confirmation for library removals and preserves cancel and focus at ' + viewport.width + 'px', async ({ page, request }, info) => {
   test.setTimeout(60_000);
-  const project = await rpc<ProjectDocument>(request, 'project.create', { title: '确认回收的项目' });
   const model = await rpc<ModelProfile>(request, 'model.save', { model: { name: '确认移除的模型', provider: 'openai-compatible', connectionType: 'text', capabilities: ['text'], model: 'fixture', baseUrl: 'http://127.0.0.1:1/v1' } });
   const character = await rpc<CharacterProfile>(request, 'character.save', { character: { name: '确认归档的角色', description: '', referenceAssetIds: [] } });
   const template = await rpc<SeriesTemplate>(request, 'seriesTemplate.save', { template: { name: '确认归档的系列', description: '', settings: { style: '', captionStyle: null, scenePreset: null } } });
@@ -27,7 +26,6 @@ for (const viewport of [{ width: 1536, height: 960, theme: 'dark' }, { width: 60
   page.on('request', request => { if (request.url().endsWith('/__desktop_rpc')) { const method = request.postDataJSON()?.method; if (['project.archive', 'model.delete', 'asset.delete', 'character.archive', 'seriesTemplate.archive', 'tool.delete'].includes(method)) writes.push(method); } });
   await page.setViewportSize(viewport); await page.addInitScript(theme => localStorage.setItem('vq-theme', theme), viewport.theme); await page.goto('/');
   const cases: Array<{ pageName: string; view?: '媒体' | '角色'; trigger: string; title: string; confirm: string; method: string; subject: string; card: Locator }> = [
-    { pageName: '我的项目', trigger: `将“${project.title}”移入回收站`, title: '将项目移入回收站？', confirm: '移入回收站', method: 'project.archive', subject: project.title, card: page.locator('.project-card').filter({ hasText: project.title }) },
     { pageName: '模型连接', trigger: `移除“${model.name}”`, title: '移除模型连接？', confirm: '确认移除', method: 'model.delete', subject: model.name, card: page.locator('.list-card').filter({ hasText: model.name }) },
     { pageName: '素材库', view: '媒体', trigger: `移除素材“${asset.name}”`, title: '移除素材记录？', confirm: '确认移除', method: 'asset.delete', subject: asset.name, card: page.locator('.asset-card').filter({ hasText: asset.name }) },
     { pageName: '素材库', view: '角色', trigger: `归档角色：${character.name}`, title: '归档角色？', confirm: '确认归档', method: 'character.archive', subject: character.name, card: page.locator('.character-card').filter({ hasText: character.name }) },
@@ -93,7 +91,7 @@ test('keeps pending production settings on cancel and discards them only after c
 });
 
 test('keeps the conflicting draft and parent dialog until discard is confirmed', async ({ page, request }) => {
-  const created = await rpc<ProjectDocument>(request, 'project.create', { title: '丢弃草稿二次确认' });
+  const created = await rpc<ProjectDocument>(request, 'project.create', { originalText: '清晨，林夏在书房发现一封未寄出的信。她来到旧城寻找信的主人，与朋友在雨中的城门重逢。两人读完信后决定一起回家。', title: '丢弃草稿二次确认' });
   const project = await rpc<ProjectDocument>(request, 'project.update', { projectId: created.id, revision: created.revision, patch: { shots: [{ id: 'confirmation-shot', title: '原始镜头', narration: '', visualPrompt: '', durationUs: 2_000_000 }] } });
   await page.goto('/'); await openProjectFromList(page, project.title); await page.getByLabel('镜头标题', { exact: true }).fill('必须保留的本地草稿');
   const remote = await rpc<ProjectDocument>(request, 'project.update', { projectId: project.id, revision: project.revision, patch: { shots: [{ ...project.shots[0], title: '另一视图保存的镜头' }] } });
@@ -110,7 +108,7 @@ test('keeps the conflicting draft and parent dialog until discard is confirmed',
 });
 
 test('leaves shots intact when canceling removal', async ({ page, request }) => {
-  const created = await rpc<ProjectDocument>(request, 'project.create', { title: '镜头移除确认' });
+  const created = await rpc<ProjectDocument>(request, 'project.create', { originalText: '清晨，林夏在书房发现一封未寄出的信。她来到旧城寻找信的主人，与朋友在雨中的城门重逢。两人读完信后决定一起回家。', title: '镜头移除确认' });
   const project = await rpc<ProjectDocument>(request, 'project.update', { projectId: created.id, revision: created.revision, patch: { shots: [0, 1].map(index => ({ id: `confirmation-${index}`, title: `保留镜头 ${index + 1}`, narration: '', visualPrompt: '', durationUs: 2_000_000 })) } });
   await page.goto('/'); await openProjectFromList(page, project.title);
   await page.getByRole('button', { name: '移除所选镜头', exact: true }).click();

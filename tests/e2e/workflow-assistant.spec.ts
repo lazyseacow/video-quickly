@@ -27,7 +27,7 @@ async function fixture(request: APIRequestContext, mode: 'complete' | 'hold-firs
   const address = server.address(); if (!address || typeof address === 'string') throw new Error('fixture');
   const model = await rpc<ModelProfile>(request, 'model.save', { model: { name: `建议文本 ${suffix}`, provider: 'openai-compatible', baseUrl: `http://127.0.0.1:${address.port}/v1`, connectionType: 'text', capabilities: ['text'], model: 'fixture', pricing: { currency: 'CNY', inputPerMillionTokens: 1, outputPerMillionTokens: 2 } } });
   const alternative = await rpc<ModelProfile>(request, 'model.save', { model: { name: `替代文本 ${suffix}`, provider: 'openai-compatible', baseUrl: `http://127.0.0.1:${address.port}/alternate`, connectionType: 'text', capabilities: ['text'], model: 'other' } });
-  let project = await rpc<ProjectDocument>(request, 'project.create', { title: `可审阅修改 ${suffix}`, brief: '寻找木盒' });
+  let project = await rpc<ProjectDocument>(request, 'project.create', { originalText: '清晨，林夏在书房发现一封未寄出的信。她来到旧城寻找信的主人，与朋友在雨中的城门重逢。两人读完信后决定一起回家。', title: `可审阅修改 ${suffix}`, brief: '寻找木盒' });
   project = await rpc<ProjectDocument>(request, 'project.update', { projectId: project.id, revision: project.revision, patch: { workflow: { ...project.workflow, id: 'existing-task-settings', production: { ...project.workflow.production, textModelId: model.id } } } });
   return { project, model, alternative, prompts, current: async () => (await rpc<{ project: ProjectDocument }>(request, 'project.get', { projectId: project.id })).project, close: async () => { release(); await close(server); } };
 }
@@ -55,7 +55,7 @@ for (const viewport of [{ width: 1536, height: 960, theme: 'dark' }, { width: 39
     await expect(settings.getByRole('button', { name: '更多操作', exact: true })).toBeFocused();
     await expect(settings.getByRole('textbox', { name: /补充要求$/ })).toHaveValue('缓慢推近木盒，保持人物动作连续。'); expect(await source.current()).toEqual(source.project);
     await saveProduction(settings); await expect(settings).toHaveCount(0);
-    await expect.poll(async () => (await source.current()).workflow.nodes.find(node => node.id === source.project.workflow.nodes.find(node => node.kind === 'brief')!.id)?.prompt).toBe('缓慢推近木盒，保持人物动作连续。');
+    await expect.poll(async () => (await source.current()).workflow.nodes.find(node => node.id === 'brief')?.prompt).toBe('缓慢推近木盒，保持人物动作连续。');
     const runs = await rpc<{ items: Array<{ purpose: string }> }>(request, 'run.list', { projectId: source.project.id, purpose: 'workflow-assistant' }); expect(runs.items).toHaveLength(1);
     await expect(page.locator('vite-error-overlay')).toHaveCount(0); expect(errors).toEqual([]);
   } finally { await source.close(); }
@@ -123,7 +123,7 @@ test('reuses a lost start response and keeps manual model selection as a reversi
     await expect(dialog.getByRole('region', { name: '修改预览', exact: true })).toContainText('缓慢推近木盒');
     expect(source.prompts).toHaveLength(1); expect(await source.current()).toEqual(source.project);
     await dialog.getByRole('button', { name: '关闭', exact: true }).click(); await expect(dialog).toHaveCount(0);
-    const node = source.project.workflow.nodes.find(node => node.kind === 'brief')!;
+    const node = source.project.workflow.nodes.find(node => node.id === 'brief')!;
     await pickProductionModel(settings, `${node.label}模型`, source.alternative);
     expect(await source.current()).toEqual(source.project);
     await saveProduction(settings); await expect(settings).toHaveCount(0);

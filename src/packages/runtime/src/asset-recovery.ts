@@ -36,6 +36,10 @@ const identity = (asset: AssetRecoveryExpected) => JSON.stringify(asset);
 const itemId = (value: string) => createHash('sha256').update(value).digest('hex').slice(0, 32);
 const object = (value: unknown): Record<string, unknown> => value !== null && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {};
 const values = (value: unknown): unknown[] => Array.isArray(value) ? value : [];
+function profileReferences(profile: unknown): string[] {
+  const metadata = object(profile);
+  return [...new Set([...values(metadata.referenceAssetIds), ...values(metadata.appearances).flatMap(appearance => values(object(appearance).referenceAssetIds))].filter((id): id is string => typeof id === 'string'))];
+}
 
 /** Restores identical bytes to recorded managed paths. It never rewrites asset or frozen document identities. */
 export function createAssetRecovery(options: AssetRecoveryOptions) {
@@ -88,10 +92,18 @@ export function createAssetRecovery(options: AssetRecoveryOptions) {
     if (projectId && !options.store.database.prepare("SELECT 1 FROM documents WHERE kind = 'project' AND id = ?").get(projectId)) throw new Error('项目不存在，无法检查其素材。');
     const projectReferences = options.store.database.prepare('SELECT project_id, asset_id FROM project_asset_references WHERE (? IS NULL OR project_id = ?)').all(projectId ?? null, projectId ?? null) as { project_id: string; asset_id: string }[];
     const needed = new Set(projectReferences.map(row => row.asset_id));
-    const characterRows = projectId ? options.store.database.prepare("SELECT character.value AS id FROM documents project, json_each(project.body, '$.shots') shot, json_each(shot.value, '$.characterIds') character WHERE project.kind = 'project' AND project.id = ? UNION SELECT character.value AS id FROM documents project, json_each(project.body, '$.creativeContext.characterIds') character WHERE project.kind = 'project' AND project.id = ?").all(projectId, projectId) as { id: string }[] : [];
+    const characterRows = projectId ? options.store.database.prepare(`SELECT character.value AS id FROM documents project, json_each(project.body, '$.shots') shot, json_each(shot.value, '$.characterIds') character WHERE project.kind = 'project' AND project.id = ?
+      UNION SELECT character.value AS id FROM documents project, json_each(project.body, '$.creativeContext.characterIds') character WHERE project.kind = 'project' AND project.id = ?
+      UNION SELECT json_extract(appearance.value, '$.characterId') AS id FROM documents project, json_each(project.body, '$.shots') shot, json_each(shot.value, '$.drama.appearances') appearance WHERE project.kind = 'project' AND project.id = ?
+      UNION SELECT json_extract(line.value, '$.speakerId') AS id FROM documents project, json_each(project.body, '$.shots') shot, json_each(shot.value, '$.drama.lines') line WHERE project.kind = 'project' AND project.id = ? AND json_type(line.value, '$.speakerId') = 'text'`).all(projectId, projectId, projectId, projectId) as { id: string }[] : [];
     const characterIds = new Set(characterRows.map(row => row.id));
     const profiles = options.store.list<unknown>('character').filter(value => !projectId || characterIds.has(String(object(value).id)));
-    for (const profile of profiles) for (const id of values(object(profile).referenceAssetIds)) if (typeof id === 'string') needed.add(id);
+    for (const profile of profiles) for (const id of profileReferences(profile)) needed.add(id);
+    const voiceRows = projectId ? options.store.database.prepare(`SELECT json_extract(line.value, '$.voiceId') AS id FROM documents project,
+      json_each(project.body, '$.shots') shot, json_each(shot.value, '$.drama.lines') line WHERE project.kind = 'project' AND project.id = ? AND json_type(line.value, '$.voiceId') = 'text'`).all(projectId) as { id: string }[] : [];
+    const voiceIds = new Set([...voiceRows.map(row => row.id), ...profiles.flatMap(profile => typeof object(profile).defaultVoiceId === 'string' ? [String(object(profile).defaultVoiceId)] : [])]);
+    const voices = options.store.list<unknown>('voice').filter(value => !projectId || voiceIds.has(String(object(value).id)));
+    for (const voice of voices) for (const id of profileReferences(voice)) needed.add(id);
     function add(raw: unknown, source: AssetRecoverySource) {
       if (isLegacyTimelineAsset(raw)) return;
       const parsed = assetSchema.safeParse(raw), metadata = object(raw), id = typeof metadata.id === 'string' ? metadata.id : `invalid:${source.kind}:${source.id}`;
@@ -102,7 +114,9 @@ export function createAssetRecovery(options: AssetRecoveryOptions) {
       if (!item.sources.some(previous => JSON.stringify(previous) === JSON.stringify(source))) item.sources.push(source);
     }
     for (const raw of current) { const asset = object(raw); if (!projectId || asset.projectId === projectId || needed.has(String(asset.id))) add(raw, { kind: 'asset', id: String(asset.id), ...(typeof asset.active === 'boolean' ? { active: asset.active } : {}) }); }
-    const rows = options.store.database.prepare("SELECT snapshot.kind, snapshot.id, asset.value AS body FROM documents snapshot, json_each(snapshot.body, '$.assets') asset WHERE snapshot.kind IN ('run-snapshot','export-batch-snapshot','node-result') AND (? IS NULL OR json_extract(snapshot.body, '$.project.id') = ? OR (snapshot.kind = 'node-result' AND json_extract(asset.value, '$.projectId') = ?)) UNION ALL SELECT snapshot.kind, snapshot.id, asset.value AS body FROM documents snapshot, json_each(snapshot.body, '$.characterAssets') asset WHERE snapshot.kind IN ('run-snapshot','export-batch-snapshot') AND (? IS NULL OR json_extract(snapshot.body, '$.project.id') = ?)").all(projectId ?? null, projectId ?? null, projectId ?? null, projectId ?? null, projectId ?? null) as { kind: 'run-snapshot' | 'export-batch-snapshot' | 'node-result'; id: string; body: string }[];
+    const rows = options.store.database.prepare(`SELECT snapshot.kind, snapshot.id, asset.value AS body FROM documents snapshot, json_each(snapshot.body, '$.assets') asset WHERE snapshot.kind IN ('run-snapshot','export-batch-snapshot','node-result') AND (? IS NULL OR json_extract(snapshot.body, '$.project.id') = ? OR (snapshot.kind = 'node-result' AND json_extract(asset.value, '$.projectId') = ?))
+      UNION ALL SELECT snapshot.kind, snapshot.id, asset.value AS body FROM documents snapshot, json_each(snapshot.body, '$.characterAssets') asset WHERE snapshot.kind IN ('run-snapshot','export-batch-snapshot') AND (? IS NULL OR json_extract(snapshot.body, '$.project.id') = ?)
+      UNION ALL SELECT snapshot.kind, snapshot.id, asset.value AS body FROM documents snapshot, json_each(snapshot.body, '$.voiceAssets') asset WHERE snapshot.kind IN ('run-snapshot','export-batch-snapshot') AND (? IS NULL OR json_extract(snapshot.body, '$.project.id') = ?)`).all(projectId ?? null, projectId ?? null, projectId ?? null, projectId ?? null, projectId ?? null, projectId ?? null, projectId ?? null) as { kind: 'run-snapshot' | 'export-batch-snapshot' | 'node-result'; id: string; body: string }[];
     for (const row of rows) add(JSON.parse(row.body), { kind: row.kind, id: row.id });
     for (const id of needed) {
       const matches = [...result.values()].filter(item => item.assetId === id);
@@ -110,7 +124,9 @@ export function createAssetRecovery(options: AssetRecoveryOptions) {
       if (!sources.length) sources.push({ kind: 'character', id: 'reference-library' });
       for (const source of sources) { if (!matches.length) add({ id, name: id }, source); else for (const item of matches) item.sources.push(source); }
     }
-    for (const profile of profiles) for (const id of values(object(profile).referenceAssetIds)) for (const item of result.values()) if (item.assetId === id) item.sources.push({ kind: 'character', id: String(object(profile).id) });
+    for (const profile of profiles) for (const id of profileReferences(profile)) for (const item of result.values()) if (item.assetId === id) item.sources.push({ kind: 'character', id: String(object(profile).id) });
+    // Reuse the library-reference source while keeping voice identities distinguishable.
+    for (const voice of voices) for (const id of profileReferences(voice)) for (const item of result.values()) if (item.assetId === id) item.sources.push({ kind: 'character', id: `voice:${String(object(voice).id)}` });
     return [...result.values()];
   }
   async function inspect(record: SavedJob, signal: AbortSignal) {
@@ -172,7 +188,7 @@ export function createAssetRecovery(options: AssetRecoveryOptions) {
         const key = JSON.stringify([source.kind, source.id]);
         let identities = history.get(key);
         if (!identities) {
-          const rows = options.store.database.prepare("SELECT asset.value AS body FROM documents snapshot, json_each(snapshot.body, '$.assets') asset WHERE snapshot.kind = ? AND snapshot.id = ? UNION ALL SELECT asset.value AS body FROM documents snapshot, json_each(snapshot.body, '$.characterAssets') asset WHERE snapshot.kind = ? AND snapshot.id = ?").all(source.kind, source.id, source.kind, source.id) as { body: string }[];
+          const rows = options.store.database.prepare("SELECT asset.value AS body FROM documents snapshot, json_each(snapshot.body, '$.assets') asset WHERE snapshot.kind = ? AND snapshot.id = ? UNION ALL SELECT asset.value AS body FROM documents snapshot, json_each(snapshot.body, '$.characterAssets') asset WHERE snapshot.kind = ? AND snapshot.id = ? UNION ALL SELECT asset.value AS body FROM documents snapshot, json_each(snapshot.body, '$.voiceAssets') asset WHERE snapshot.kind = ? AND snapshot.id = ?").all(source.kind, source.id, source.kind, source.id, source.kind, source.id) as { body: string }[];
           identities = new Set(rows.flatMap(row => { const parsed = assetSchema.safeParse(JSON.parse(row.body)); return parsed.success ? [identity(expected(parsed.data))] : []; })); history.set(key, identities);
         }
         if (!identities.has(identity(item.expected))) throw new Error('确认期间历史素材身份已变化，请重新检查。');

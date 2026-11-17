@@ -1,3 +1,4 @@
+import { openProjectFromList } from './workspace-navigation';
 import { expect, test, type APIRequestContext, type Page } from '@playwright/test';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -22,14 +23,13 @@ function wav(): Buffer {
 
 async function openProject(page: Page, title: string) {
   await page.goto('/');
-  await page.getByRole('button', { name: '我的项目', exact: true }).click();
-  await page.locator('.project-card').filter({ hasText: title }).getByRole('button', { name: /继续创作/ }).click();
+  await openProjectFromList(page, title);
 }
 
 test('displays real source peaks for split ranges and looping music without changing project state', async ({ page, request }, info) => {
   const directory = await mkdtemp(join(tmpdir(), 'video-quickly-waveform-e2e-'));
   try {
-    const project = await rpc<ProjectDocument>(request, 'project.create', { title: '真实波形与源区间验收' });
+    const project = await rpc<ProjectDocument>(request, 'project.create', { originalText: '清晨，林夏在书房发现一封未寄出的信。她来到旧城寻找信的主人，与朋友在雨中的城门重逢。两人读完信后决定一起回家。', title: '真实波形与源区间验收' });
     const path = join(directory, 'levels.wav'); await writeFile(path, wav());
     const asset = await rpc<AssetRecord>(request, 'asset.import', { projectId: project.id, path, kind: 'audio' });
     const saved = await rpc<ProjectDocument>(request, 'project.update', { projectId: project.id, revision: project.revision, patch: {
@@ -58,7 +58,7 @@ test('displays real source peaks for split ranges and looping music without chan
 test('shows a decode failure without drawing a fabricated waveform', async ({ page, request }, info) => {
   const directory = await mkdtemp(join(tmpdir(), 'video-quickly-waveform-error-'));
   try {
-    const project = await rpc<ProjectDocument>(request, 'project.create', { title: '波形解码失败验收' });
+    const project = await rpc<ProjectDocument>(request, 'project.create', { originalText: '清晨，林夏在书房发现一封未寄出的信。她来到旧城寻找信的主人，与朋友在雨中的城门重逢。两人读完信后决定一起回家。', title: '波形解码失败验收' });
     const path = join(directory, 'broken.wav'); await writeFile(path, 'broken audio');
     const asset = await rpc<AssetRecord>(request, 'asset.import', { projectId: project.id, path, kind: 'audio' });
     await rpc(request, 'project.update', { projectId: project.id, revision: project.revision, patch: { shots: [{ id: 'broken', title: '音频损坏', narration: '', visualPrompt: '', durationUs: 1_000_000, audioAssetId: asset.id }] } });

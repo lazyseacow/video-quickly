@@ -31,6 +31,34 @@ async function fixture() {
 }
 
 describe('managed asset recovery', () => {
+  it('recovers project-selected appearance, offscreen voice and voice-only snapshot files', async () => {
+    const f = await fixture(), appearance = await f.asset('appearance'), audio = await f.asset('voice'), frozenAudio = await f.asset('frozen-voice'), unrelated = await f.asset('unrelated');
+    const image = { ...appearance.value, projectId: undefined };
+    const voiceAudio = { ...audio.value, projectId: undefined, kind: 'audio' as const, mimeType: 'audio/wav' };
+    const frozenVoiceAudio = { ...frozenAudio.value, projectId: undefined, kind: 'audio' as const, mimeType: 'audio/wav' };
+    f.store.put('asset', image.id, image); f.store.put('asset', voiceAudio.id, voiceAudio); f.store.delete('asset', frozenVoiceAudio.id);
+    f.store.put('character', 'offscreen', { id: 'offscreen', referenceAssetIds: [], appearances: [{ id: 'costume', referenceAssetIds: [image.id] }], defaultVoiceId: 'voice' });
+    f.store.put('voice', 'voice', { id: 'voice', referenceAssetIds: [voiceAudio.id] });
+    const project = projectSchema.parse({ id: 'episode', title: '画外对白', brief: '', revision: 1, createdAt: '', updatedAt: '', profile: DEFAULT_VIDEO_PROFILE, workflow: createNativeVideoWorkflow(), shots: [{ id: 'shot', title: '门外声音', narration: '', visualPrompt: '', durationUs: 4_000_000, drama: { appearances: [], lines: [{ id: 'line', kind: 'dialogue', speakerId: 'offscreen', text: '有人在吗？' }] } }] });
+    f.store.put('project', project.id, project);
+    f.store.put('run-snapshot', 'voice-only-history', { project: { id: project.id }, voiceAssets: [frozenVoiceAudio] });
+    const job = assetRecoveryJobSchema.parse(await f.manager().dispatch('asset.recovery.start', { projectId: project.id }));
+    await f.manager().waitForIdle();
+    const checked = await f.page(job.id);
+    expect(checked.items.map(item => item.assetId).sort()).toEqual([image.id, voiceAudio.id, frozenVoiceAudio.id].sort());
+    expect(checked.items.some(item => item.assetId === unrelated.value.id)).toBe(false);
+    expect(checked.items.find(item => item.assetId === image.id)?.sources).toContainEqual({ kind: 'character', id: 'offscreen' });
+    expect(checked.items.find(item => item.assetId === voiceAudio.id)?.sources).toContainEqual({ kind: 'character', id: 'voice:voice' });
+    expect(checked.items.find(item => item.assetId === frozenVoiceAudio.id)?.sources).toEqual([{ kind: 'run-snapshot', id: 'voice-only-history' }]);
+    for (const asset of [appearance, audio, frozenAudio]) await writeFile(join(f.source, asset.value.name), asset.bytes);
+    const scanned = await f.scan(job.id);
+    expect(scanned.items.every(item => item.candidates.length === 1)).toBe(true);
+    expect((await f.confirm(job.id, scanned.items)).job.phase).toBe('succeeded');
+    expect(await readFile(frozenVoiceAudio.path, 'utf8')).toBe(frozenAudio.bytes);
+    expect(f.store.get('asset', frozenVoiceAudio.id)).toBeUndefined();
+    expect(f.store.get('run-snapshot', 'voice-only-history')).toEqual({ project: { id: project.id }, voiceAssets: [frozenVoiceAudio] });
+  });
+
   it('keeps inventory and scan persistence proportional to the complete list while reporting live progress', async () => {
     const f = await fixture();
     for (let index = 0; index < 100; index++) { await f.asset(`persistence-${index}`, 'missing'); await writeFile(join(f.source, `${index}.bin`), 'source!'); }

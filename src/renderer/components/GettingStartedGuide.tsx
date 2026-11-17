@@ -9,7 +9,10 @@ function visible(element: Element | undefined): element is HTMLElement {
   const style = getComputedStyle(element), rect = element.getBoundingClientRect();
   return style.display !== 'none' && style.visibility !== 'hidden' && rect.width > 0 && rect.height > 0;
 }
-function target(name: string) { return [...document.querySelectorAll(`[data-guide="${name}"]`)].find(visible); }
+function target(name: string) {
+  const candidates = [...document.querySelectorAll(`[data-guide="${name}"]`)].filter(visible);
+  return name === 'create-project' ? candidates.find(element => element.classList.contains('drama-composer')) ?? candidates[0] : candidates[0];
+}
 function nativeDialog() { return [...document.querySelectorAll('dialog[open]')].find(visible); }
 function loading() { return [...document.querySelectorAll('[data-guide-loading]')].some(visible); }
 
@@ -17,11 +20,11 @@ interface GuideStep { id: string; action: GuideAction; title: string; descriptio
 interface ResolvedStep { definition: GuideStep; order: number; element: HTMLElement; }
 function definitions(): GuideStep[] {
   return [
-    { id: 'create-project', action: 'project-created', title: '新建创作项目', description: '可以直接点击高亮的“新建项目”，填写主题和创意简报。创建成功并关闭表单后，指引会自动继续；已有项目也可以点“下一步”跳过。', side: 'right' },
+    { id: 'create-project', action: 'project-created', title: '新建短剧', description: '点击高亮的“新建短剧”，上传已有剧本或填写故事想法，选择画风、选题与创作 Skill。创建后会打开第一集工作台；已有作品也可以点“下一步”跳过。', side: 'right' },
     { id: 'models', action: 'models-opened', title: '打开模型连接', description: '点击高亮入口打开模型连接。打开后自动继续；如果准备使用本地图片、视频和配音，也可以手动跳过。', side: 'right' },
     { id: 'model-connection', action: 'model-saved', title: '添加模型连接', description: '点击高亮的添加按钮，选择模型类型，填写服务地址和密钥，再选择型号并保存。保存成功且表单关闭后继续；已有连接可以直接跳过。' },
-    { id: 'projects', action: 'projects-opened', title: '打开我的项目', description: '点击左侧图标打开项目列表，再选择一个项目继续创作。也可以使用上方加号创建新项目。', side: 'right', when: () => !target('project-open') && !target('view') && !target('preview') },
-    { id: 'project-open', action: 'workbench-opened', title: '进入创作工作台', description: '点击项目卡片上的文件夹图标进入工作台。项目加载完成后，指引会继续介绍镜头、预览和制作区域。' },
+    { id: 'projects', action: 'projects-opened', title: '打开短剧工作室', description: '点击左侧图标进入短剧工作室，选择作品后打开分集继续创作。也可以使用上方加号创作新短剧。', side: 'right', when: () => !target('project-open') && !target('view') && !target('preview') },
+    { id: 'project-open', action: 'workbench-opened', title: '进入分集工作台', description: '先点击作品的“查看分集”，再点击“打开分集”进入工作台。分集加载完成后，指引会继续介绍镜头、预览和制作区域。' },
     { id: 'view', action: 'production-settings-opened', title: '制作设置', description: '点击“制作设置”配置创作要求和模型。关闭设置后继续介绍工作台。' },
     { id: 'outline-toggle', action: 'outline-opened', title: '展开镜头导航', description: '左侧镜头导航已收起，点击高亮按钮展开。展开后会接着介绍真实的镜头列表。', when: () => !target('shots') },
     { id: 'shots', action: 'shot-selected', title: '整理镜头', description: '直接点击列表中的镜头，查看它的画面、旁白与时长。成功选择镜头后，指引会自动继续。', side: 'right' },
@@ -180,7 +183,7 @@ export default function GettingStartedGuide({ onClose }: { onClose: () => void }
         tour.setConfig({ ...tour.getConfig(), steps: driverSteps }); tour.moveTo(index);
       } else { updateButtons(); tour.refresh(); }
     }
-    mutations.observe(document.documentElement, { childList: true, subtree: true, attributes: true, attributeFilter: ['hidden', 'open', 'class', 'style', 'aria-hidden'] });
+    mutations.observe(document.documentElement, { childList: true, subtree: true, attributes: true, attributeFilter: ['hidden', 'open', 'class', 'style', 'aria-hidden', 'data-guide-loading'] });
     document.addEventListener('scroll', schedule, true); document.addEventListener('click', schedule, true);
     window.addEventListener('resize', schedule); window.addEventListener('keydown', keyboard, true); schedule();
     return () => { disposed = true; stop(); retireDriver(); restoreFocus(); };

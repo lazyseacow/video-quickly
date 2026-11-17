@@ -18,7 +18,7 @@ async function rpc<T>(request: APIRequestContext, method: string, params: unknow
   const payload = await response.json(); expect(response.ok()).toBe(true); expect(payload.error).toBeUndefined(); return payload.result;
 }
 async function fixture(request: APIRequestContext, title: string, count = 2) {
-  const project = await rpc<ProjectDocument>(request, 'project.create', { title });
+  const project = await rpc<ProjectDocument>(request, 'project.create', { originalText: '清晨，林夏在书房发现一封未寄出的信。她来到旧城寻找信的主人，与朋友在雨中的城门重逢。两人读完信后决定一起回家。', title });
   return rpc<ProjectDocument>(request, 'project.update', { projectId: project.id, revision: project.revision,
     patch: { shots: Array.from({ length: count }, (_, index) => ({ id: `write-shot-${index}`, title: `原始镜头 ${index}`,
       narration: '用于草稿写入测量的固定旁白。'.repeat(8), visualPrompt: '固定画面要求。'.repeat(8), durationUs: 1_000_000 })) } });

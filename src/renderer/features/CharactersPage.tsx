@@ -8,6 +8,7 @@ import { getAssetUrl, rpc } from '../lib/client';
 import { desktopBridge, pathExample } from '../lib/desktop';
 import { useRecordPage } from '../lib/use-record-page';
 import type { Action, WorkspaceView } from '../lib/types';
+import { VoicePicker } from './VoicesPage';
 import './characters.css';
 
 const characterPage = recordPageSchema(characterProfileSchema);
@@ -65,7 +66,7 @@ export default function CharactersPage({ workspace, action }: { workspace: Works
     </div>
     {library.error ? <Notice kind="error">{library.error}<Button aria-label="重试读取角色" onClick={library.refresh}>重试</Button></Notice> : error && <Notice kind="error">{error}</Notice>}
     {loading && <p role="status" className="muted">正在读取角色…</p>}
-    <div className="character-cards">{characters.map(character => <article className="character-card" key={character.id}><CharacterThumbnail character={character} /><div className="character-card__body"><h3>{character.name}</h3><p>{character.description || '尚未填写角色设定'}</p><span className="tiny-meta">{character.referenceAssetIds.length} 张参考图 · 修订 {character.revision}</span><div className="character-card__actions">
+    <div className="character-cards">{characters.map(character => <article className="character-card" key={character.id}><CharacterThumbnail character={character} /><div className="character-card__body"><h3>{character.name}</h3><p>{character.description || '尚未填写角色设定'}</p><span className="tiny-meta">{character.referenceAssetIds.length} 张参考图 · {character.appearances?.length ?? 0} 个形象 · 修订 {character.revision}</span><div className="character-card__actions">
       {!character.archived && <IconButton label="编辑角色" disabled={Boolean(pending)} onClick={() => setEditing(character)}><Pencil size={16} aria-hidden="true" /></IconButton>}
       {(character.archived ? ['restore', 'delete'] as const : ['archive'] as const).map(operation => {
         const { label, icon: Icon } = characterActions[operation];
@@ -113,6 +114,8 @@ export function CharacterEditor({ character, initialReference, version, models, 
 }) {
   const [name, setName] = useState(character?.name ?? '');
   const [description, setDescription] = useState(character?.description ?? '');
+  const [appearances, setAppearances] = useState<NonNullable<CharacterProfile['appearances']>>(character?.appearances ?? []);
+  const [defaultVoiceId, setDefaultVoiceId] = useState(character?.defaultVoiceId);
   const [referenceAssetIds, setReferenceAssetIds] = useState(character?.referenceAssetIds ?? (initialReference ? [initialReference.id] : []));
   const [selectedAssets, setSelectedAssets] = useState<AssetRecord[]>(initialReference ? [initialReference] : []);
   const [referencePickerOpen, setReferencePickerOpen] = useState(Boolean(initialReference));
@@ -190,7 +193,7 @@ export function CharacterEditor({ character, initialReference, version, models, 
   async function save() {
     if (disabled) return;
     setPendingAction('saving'); setError('');
-    try { await rpc('character.save', { character: { id: character?.id, revision: character?.revision, name, description, referenceAssetIds } }); onSaved(); }
+    try { await rpc('character.save', { character: { id: character?.id, revision: character?.revision, name, description, referenceAssetIds, appearances, defaultVoiceId: defaultVoiceId ?? null } }); onSaved(); }
     catch (error) { setError(error instanceof Error ? error.message : String(error)); }
     finally { setPendingAction(undefined); }
   }
@@ -199,6 +202,20 @@ export function CharacterEditor({ character, initialReference, version, models, 
       <div className="dialog__body form-stack">
         <Field label="角色名称"><input required autoFocus maxLength={120} value={name} disabled={disabled} onChange={event => setName(event.target.value)} /></Field>
         <Field label="角色设定"><textarea maxLength={10000} rows={3} value={description} disabled={disabled} onChange={event => setDescription(event.target.value)} placeholder="外形、服饰、性格与需要保持的细节…" /></Field>
+        <details className="form-disclosure">
+          <summary>形象与音色</summary>
+          <div className="form-disclosure__body form-stack">
+            <VoicePicker label="角色默认音色" value={defaultVoiceId} version={version} disabled={disabled} onChange={setDefaultVoiceId} />
+            <p className="field__hint">形象分别记录服装、妆造或剧情状态，在镜头中明确选用。</p>
+            {appearances.map((appearance, index) => <section className="drama-entry" aria-label={`角色形象 ${index + 1}`} key={appearance.id}>
+              <Field label="形象名称" required><input required value={appearance.name} maxLength={120} disabled={disabled} onChange={event => setAppearances(values => values.map(value => value.id === appearance.id ? { ...value, name: event.target.value } : value))} /></Field>
+              <Field label="形象描述"><textarea rows={2} maxLength={10000} value={appearance.description} disabled={disabled} onChange={event => setAppearances(values => values.map(value => value.id === appearance.id ? { ...value, description: event.target.value } : value))} /></Field>
+              <fieldset className="capability-fieldset"><legend>形象参考图（最多 4 张）</legend><div className="drama-reference-options">{assets.map(asset => <label key={asset.id}><input type="checkbox" checked={appearance.referenceAssetIds.includes(asset.id)} disabled={disabled || !appearance.referenceAssetIds.includes(asset.id) && appearance.referenceAssetIds.length >= 4} onChange={event => setAppearances(values => values.map(value => value.id === appearance.id ? { ...value, referenceAssetIds: event.target.checked ? [...value.referenceAssetIds, asset.id] : value.referenceAssetIds.filter(id => id !== asset.id) } : value))} />{asset.name}</label>)}</div></fieldset>
+              <div><Button disabled={disabled} onClick={() => setAppearances(values => values.filter(value => value.id !== appearance.id))}>移除形象</Button></div>
+            </section>)}
+            <div><Button disabled={disabled || appearances.length >= 50} onClick={() => setAppearances(values => [...values, { id: crypto.randomUUID(), name: `形象 ${values.length + 1}`, description: '', referenceAssetIds: [] }])}><Plus size={15} aria-hidden="true" />添加角色形象</Button></div>
+          </div>
+        </details>
 
         <details className="form-disclosure character-reference-disclosure" open={referencePickerOpen}
           onToggle={event => setReferencePickerOpen(event.currentTarget.open)}>
@@ -260,7 +277,7 @@ export function CharacterEditor({ character, initialReference, version, models, 
       </div>
       <div className="dialog__footer">
         <Button disabled={disabled} onClick={onClose}>取消</Button>
-        <Button aria-label="保存角色" variant="primary" type="submit" disabled={disabled || !name.trim()} busy={pendingAction === 'saving'}>保存</Button>
+        <Button aria-label="保存角色" variant="primary" type="submit" disabled={disabled} busy={pendingAction === 'saving'}>保存</Button>
       </div>
     </form>
   </Dialog>;

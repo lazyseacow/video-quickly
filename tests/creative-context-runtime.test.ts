@@ -198,7 +198,7 @@ it('backs up the role pool and reference files before shots exist', async () => 
   const source = await fixture();
   const backup = await source.runtime.dispatch('project.backup', { projectId: source.project.id }) as { path: string };
   const path = join(backup.path, 'project.json'), manifest = JSON.parse(await readFile(path, 'utf8')) as { schemaVersion: number; project: ProjectDocument; characters: CharacterProfile[]; assets: AssetRecord[] };
-  expect(manifest.schemaVersion).toBe(5); expect(manifest.characters).toEqual(source.profiles);
+  expect(manifest.schemaVersion).toBe(10); expect(manifest.characters).toEqual(source.profiles);
   expect(manifest.project.shots).toEqual([]);
   expect(manifest.project.creativeContext).toEqual(source.project.creativeContext);
   for (const [index, profile] of manifest.characters.entries()) {

@@ -1,4 +1,5 @@
-import type { AssetRecord, CharacterProfile, JsonValue, ModelProfile, ProjectDocument, Shot, WorkflowNode } from './index.js';
+import type { AssetRecord, CharacterProfile, JsonValue, ModelProfile, ProjectDocument, Shot, VoiceProfile, WorkflowNode } from './index.js';
+import { selectedCharacterReferenceAssetIds, shotDramaText, shotVisualCharacterIds } from './drama.js';
 import { formatFrameRate, VIDEO_FIT_MODE_LABELS, videoAspectRatioPreset, type VideoProfile } from './video-profile.js';
 import { creativeEntityLabels, creativeReferenceAssetIds, hasCharacterAppearance, shotCreativePrompt } from './creative-context.js';
 import { isVideoGenerationNode, nativeReferenceStep } from './production.js';
@@ -38,11 +39,13 @@ export function stripVisualPromptOutputSpecs(prompt: string): string {
   return remaining;
 }
 
-export function characterReferencePrompt(selected: CharacterProfile[], referenceIds: readonly string[] = [...new Set(selected.flatMap(profile => profile.referenceAssetIds))]): string {
+export function characterReferencePrompt(selected: CharacterProfile[], referenceIds: readonly string[] = [...new Set(selected.flatMap(profile => profile.referenceAssetIds))], shot?: Pick<Shot, 'drama'>): string {
   if (!selected.length) return '';
   return ['角色一致性要求：', ...selected.map(profile => {
-    const images = profile.referenceAssetIds.map(id => referenceIds.indexOf(id) + 1).filter(number => number > 0);
-    return `角色「${profile.name}」：${profile.description || '保持同一角色身份。'}${images.length ? `\n参考图：${images.map(number => `图片 ${number}`).join('、')}。保留参考图中的人物外观、服装和辨识特征。` : ''}`;
+    const appearanceId = shot?.drama?.appearances.find(binding => binding.characterId === profile.id)?.appearanceId;
+    const appearance = profile.appearances?.find(value => value.id === appearanceId);
+    const images = selectedCharacterReferenceAssetIds(profile, appearanceId).map(id => referenceIds.indexOf(id) + 1).filter(number => number > 0);
+    return `角色「${profile.name}」：${profile.description || '保持同一角色身份。'}${appearance ? `\n本镜头形象「${appearance.name}」：${appearance.description}。服装和剧情状态以本镜头形象为准。` : ''}${images.length ? `\n参考图：${images.map(number => `图片 ${number}`).join('、')}。保留参考图中的人物外观、服装和辨识特征。` : ''}`;
   })].join('\n');
 }
 
@@ -81,7 +84,10 @@ export function videoReferenceImages(project: ProjectDocument, node: WorkflowNod
     return { mode, referenceIds: [], frame };
   }
   const groups = [
-    ...(shot.characterIds ?? []).map(id => characters.find(profile => profile.id === id)?.referenceAssetIds ?? []),
+    ...shotVisualCharacterIds(shot).map(id => {
+      const profile = characters.find(value => value.id === id);
+      return profile ? selectedCharacterReferenceAssetIds(profile, shot.drama?.appearances.find(binding => binding.characterId === id)?.appearanceId) : [];
+    }),
     ...(project.creativeContext?.entities ?? []).filter(entity => shot.creativeEntityKeys?.includes(entity.key)).map(entity => entity.referenceAssetIds ?? []),
   ].filter(group => group.length > 0);
   const referenceIds = [...new Set(groups.flat())];
@@ -110,7 +116,7 @@ export function needsComposedSceneFrame(project: ProjectDocument, shot: Shot, ch
   if (hasCharacterAppearance(project, shot)) return true;
   const references = new Set(creativeReferenceAssetIds(project, shot));
   for (const profile of characters) {
-    if (shot.characterIds?.includes(profile.id)) for (const id of profile.referenceAssetIds) references.add(id);
+    if (shotVisualCharacterIds(shot).includes(profile.id)) for (const id of selectedCharacterReferenceAssetIds(profile, shot.drama?.appearances.find(binding => binding.characterId === profile.id)?.appearanceId)) references.add(id);
   }
   return references.size > 1;
 }
@@ -125,7 +131,7 @@ export function usesVideoSceneImage(project: ProjectDocument, node: WorkflowNode
 
 export function characterSceneFirstFrame(project: ProjectDocument, node: WorkflowNode, model: ModelProfile | undefined, shot: Shot, characters: CharacterProfile[] = []): boolean {
   return isVideoGenerationNode(node) && singleFrameVideoModel(model, project) && (creativeReferenceAssetIds(project, shot).length > 0
-    || characters.some(profile => profile.referenceAssetIds.length && shot.characterIds?.includes(profile.id)));
+    || characters.some(profile => shotVisualCharacterIds(shot).includes(profile.id) && selectedCharacterReferenceAssetIds(profile, shot.drama?.appearances.find(binding => binding.characterId === profile.id)?.appearanceId).length));
 }
 
 function videoVisualPrompt(shot: Shot, model?: ModelProfile): string {
@@ -147,8 +153,8 @@ function videoVisualPrompt(shot: Shot, model?: ModelProfile): string {
 }
 
 /** Builds the per-shot prompt for both offline preview and generation. */
-export function buildMediaPrompt(project: ProjectDocument, node: WorkflowNode, shot: Shot, characters: CharacterProfile[] = [], model?: ModelProfile, hasSceneImage = false, upstream: Record<string, JsonValue> = {}, videoReferences?: VideoReferenceImages): string {
-  const selected = (shot.characterIds ?? []).map(id => {
+export function buildMediaPrompt(project: ProjectDocument, node: WorkflowNode, shot: Shot, characters: CharacterProfile[] = [], model?: ModelProfile, hasSceneImage = false, upstream: Record<string, JsonValue> = {}, videoReferences?: VideoReferenceImages, voices: VoiceProfile[] = []): string {
+  const selected = shotVisualCharacterIds(shot).map(id => {
     const profile = characters.find(profile => profile.id === id);
     if (!profile) throw new Error('缺少镜头所选角色的快照。');
     return profile;
@@ -156,7 +162,7 @@ export function buildMediaPrompt(project: ProjectDocument, node: WorkflowNode, s
   const edit = node.config.imageEdit;
   const sourceId = edit && typeof edit === 'object' && !Array.isArray(edit) && typeof edit.sourceAssetId === 'string' ? edit.sourceAssetId : undefined;
   const sceneFirstFrame = videoReferences ? videoReferences.mode === 'single' && Boolean(videoReferences.frame) : hasSceneImage && characterSceneFirstFrame(project, node, model, shot, characters);
-  const references = videoReferences?.referenceIds ?? (sceneFirstFrame ? [] : [...new Set([...(sourceId ? [sourceId] : []), ...selected.flatMap(profile => profile.referenceAssetIds), ...creativeReferenceAssetIds(project, shot)])]);
+  const references = videoReferences?.referenceIds ?? (sceneFirstFrame ? [] : [...new Set([...(sourceId ? [sourceId] : []), ...selected.flatMap(profile => selectedCharacterReferenceAssetIds(profile, shot.drama?.appearances.find(binding => binding.characterId === profile.id)?.appearanceId)), ...creativeReferenceAssetIds(project, shot)])]);
   const multimodal = videoReferences ? videoReferences.mode === 'multiple' : Boolean(project.workflow.production?.referenceAudioAssetIds?.length) || references.length > 0 && model?.parameters.characterReferenceMode === 'reference_image';
   const video = isVideoGenerationNode(node);
   const prompt = [
@@ -165,12 +171,13 @@ export function buildMediaPrompt(project: ProjectDocument, node: WorkflowNode, s
     video ? videoVisualPrompt(shot, model) : shot.visualPrompt,
     shotCreativePrompt(project, shot),
     resolvePromptBindings(node, project, shot, upstream).prompt,
-    characterReferencePrompt(selected, references),
+    characterReferencePrompt(selected, references, shot),
+    shotDramaText(project, shot, characters, voices),
     videoReferences?.frame?.provenance === '上一镜尾帧' ? '从输入画面中的动作、站位和光线接续，保持人物造型，并按本镜头要求继续推进。' : '',
     sceneFirstFrame ? '以镜头首帧中的人物形象和构图为准。' : creativeReferencePrompt(project, shot, references),
     ...(video ? [
       videoReferences && videoReferences.mode !== 'text' ? '全镜头保持参考人物的身份、五官比例、发型和关键辨识特征。动作与运镜按分镜推进。仅在明确要求时改变服装或造型。' : '',
-      shot.narration.trim() ? `实际台词（只朗读以下正文）：${JSON.stringify(shot.narration)}` : '本镜头不需要人声。',
+      shot.drama?.lines.length ? '按上方结构化对白和旁白逐句表演，仅朗读台词正文，不朗读角色名、音色或表演说明。' : shot.narration.trim() ? `实际台词（只朗读以下正文）：${JSON.stringify(shot.narration)}` : '本镜头不需要人声。',
       `声音要求：${[node.config.soundPrompt, shot.soundPrompt].filter(Boolean).join('\n')}`,
       '画面不生成字幕或文字；台词、人声和环境音直接包含在视频音轨中。'] : [generationFramePrompt(project.profile)]),
   ].filter(Boolean).join('\n');

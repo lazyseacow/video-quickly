@@ -1,4 +1,4 @@
-import type { AssetRecord, CharacterProfile, JsonValue, ModelProfile, PreparedAudioMix, ProjectDocument, SkillPackage, WorkflowNode } from '@video-quickly/contracts';
+import type { AssetRecord, CharacterProfile, JsonValue, ModelProfile, PreparedAudioMix, ProjectDocument, SkillPackage, VoiceProfile, WorkflowNode } from '@video-quickly/contracts';
 
 export interface MediaDiagnosticEvent {
   event: `media.${'queued' | 'started' | 'completed' | 'failed' | 'canceled' | 'reused' | 'receipt_loaded' | 'request_started' | 'request_completed' | 'request_failed' | 'status_received' | 'poll_started' | 'poll_completed' | 'poll_retry_scheduled' | 'poll_recovered' | 'download_started' | 'download_completed' | 'validation_started' | 'validation_completed' | 'render_started' | 'render_completed'}`;
@@ -34,6 +34,7 @@ export interface MediaActivityContext {
   dataDirectory: string;
   assets: AssetRecord[];
   characters?: CharacterProfile[];
+  voices?: VoiceProfile[];
   promptOverride?: string;
   promptUpstream?: Record<string, JsonValue>;
   onProgress?: (value: number) => void;

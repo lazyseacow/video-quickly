@@ -1,0 +1,12 @@
+.drama-script-editor form { display: flex; flex-direction: column; min-height: 0; }
+.drama-script-editor__body { display: grid; gap: var(--space-4); }
+.drama-script-editor__fieldset { display: grid; gap: var(--space-3); padding: 0; margin: 0; border: 0; min-width: 0; }
+.drama-script-editor__import, .drama-script-editor__result-heading { display: flex; align-items: center; gap: var(--space-2); flex-wrap: wrap; }
+.drama-script-editor__import .path-picker { flex: 1; min-width: min(100%, 240px); }
+.drama-script-editor__count { justify-self: end; color: var(--text-secondary); font-size: var(--text-size-caption); font-variant-numeric: tabular-nums; }
+.drama-script-editor__generation { border-block-start: 1px solid var(--border); padding-block-start: var(--space-3); }
+.drama-script-editor__generation summary { cursor: pointer; min-height: var(--button-height); }
+.drama-script-editor__generation-fields, .drama-script-editor__result { display: grid; gap: var(--space-3); }
+.drama-script-editor__result { border-block-start: 1px solid var(--border); padding-block-start: var(--space-4); }
+.drama-script-editor__result-heading h3 { flex: 1; margin: 0; font-size: var(--text-size-body); }
+.drama-script-editor textarea { resize: vertical; min-height: 88px; line-height: var(--line-height-prose); }

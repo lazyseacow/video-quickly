@@ -2,7 +2,7 @@ import { openCosts, setWorkspaceTheme } from './workspace-settings';
 import { expect, test, type Page } from '@playwright/test';
 import { writeFile } from 'node:fs/promises';
 import { addModelConnection } from './settings';
-import { openProjectFromList, sampleProjectTitle } from './workspace-navigation';
+import { openProjectFromList, openStudio, sampleProjectTitle } from './workspace-navigation';
 
 test.use({ storageState: async ({ baseURL }, use) => {
   if (!baseURL) throw new Error('Design-system tests require a local application origin');
@@ -53,13 +53,15 @@ test('applies the default and saved color schemes before the renderer loads', as
 test('keeps a modal open when selecting text across its backdrop', async ({ page }) => {
   await page.emulateMedia({ reducedMotion: 'reduce' });
   await openApp(page);
-  const trigger = page.getByRole('button', { name: '新建项目', exact: true });
+  await page.getByRole('button', { name: '新建短剧', exact: true }).click();
+  const composer = page.getByRole('region', { name: '让故事成为一部短剧', exact: true });
+  const trigger = composer.getByRole('button', { name: '打开选题库', exact: true });
   await trigger.click();
-  const dialog = page.getByRole('dialog', { name: '新建视频项目', exact: true });
-  const name = dialog.getByRole('textbox', { name: '项目名称', exact: true });
-  await name.fill('拖选时保留正在编辑的项目名称');
-  const [field, modal] = await Promise.all([name.boundingBox(), dialog.boundingBox()]);
-  if (!field || !modal) throw new Error('Expected a visible modal and project name field');
+  const dialog = page.getByRole('dialog', { name: '选题库', exact: true });
+  const name = dialog.getByRole('searchbox', { name: '搜索选题', exact: true });
+  await name.fill('拖选时保留正在编辑的选题搜索');
+  const [field, modal] = await Promise.all([name.boundingBox(), dialog.locator('.dialog__surface').boundingBox()]);
+  if (!field || !modal) throw new Error('Expected a visible topic library and search field');
   const y = field.y + field.height / 2;
   const backdrop = modal.x / 2;
   await page.mouse.move(field.x + field.width / 4, y);
@@ -67,7 +69,7 @@ test('keeps a modal open when selecting text across its backdrop', async ({ page
   await page.mouse.move(backdrop, y, { steps: 5 });
   await page.mouse.up();
   await expect(dialog).toBeVisible();
-  await expect(name).toHaveValue('拖选时保留正在编辑的项目名称');
+  await expect(name).toHaveValue('拖选时保留正在编辑的选题搜索');
 
   await page.mouse.click(backdrop, y);
   await expect(dialog).toHaveCount(0);
@@ -82,15 +84,15 @@ test('shares typography and spacing roles across the workspace, navigation and d
   });
   for (const theme of ['light', 'dark']) {
     if (theme === 'dark') await setWorkspaceTheme(page, 'dark');
-    await expect(page.getByRole('button', { name: '我的项目', exact: true })).toHaveCSS('font-size', '15px');
+    await expect(page.getByRole('button', { name: '短剧工作室', exact: true })).toHaveCSS('font-size', '15px');
     await expect(page.getByLabel('项目名称', { exact: true })).toHaveCSS('font-size', '26px');
-    const create = page.getByRole('button', { name: '新建项目', exact: true });
+    const create = page.locator('.project-heading-actions').getByRole('button', { name: '制作设置', exact: true });
     await expect(create).toHaveCSS('font-size', '14px');
     await create.click();
-    const dialog = page.getByRole('dialog', { name: '新建视频项目', exact: true });
-    await expect(dialog.getByRole('heading')).toHaveCSS('font-size', '22px');
+    const dialog = page.getByRole('dialog', { name: '制作设置', exact: true });
+    await expect(dialog.getByRole('heading', { name: '制作设置', exact: true })).toHaveCSS('font-size', '22px');
     await expect(dialog.locator('.field__label').first()).toHaveCSS('font-size', '13px');
-    await expect(dialog.getByLabel('项目名称', { exact: true })).toHaveCSS('font-size', '15px');
+    await expect(dialog.getByLabel('项目原文', { exact: true })).toHaveCSS('font-size', '15px');
     await expect(dialog.locator('.dialog__footer')).toHaveCSS('gap', '10px');
     await page.keyboard.press('Escape');
     await expect(dialog).toHaveCount(0);
@@ -105,10 +107,13 @@ test('reads dialog timing from shared CSS roles and responds to reduced motion',
   const clockOrigin = new Date('2026-01-01T00:00:00Z');
   await page.clock.install({ time: clockOrigin });
   await openApp(page);
+  const create = page.locator('.project-heading-actions').getByRole('button', { name: '制作设置', exact: true });
+  const dialog = page.getByRole('dialog', { name: '制作设置', exact: true });
+  // Load the actual production settings chunk before freezing its animation clock.
+  await create.click(); await expect(dialog).toBeVisible(); await page.keyboard.press('Escape'); await expect(dialog).toHaveCount(0);
   // Ten percent speed makes the actual production entrance observable, without
   // exporting a second GSAP instance or replacing its animation implementation.
   await page.evaluate(() => document.documentElement.style.setProperty('--motion-enter', '2400ms'));
-  const create = page.getByRole('button', { name: '新建项目', exact: true });
   // This target exceeds the entire test deadline. A delayed protocol command
   // cannot arrive after it while this test is still allowed to run.
   const pauseTime = new Date(clockOrigin.getTime() + 2 * test.info().timeout);
@@ -116,7 +121,6 @@ test('reads dialog timing from shared CSS roles and responds to reduced motion',
   await new Promise(resolve => setTimeout(resolve, 180));
   await page.clock.pauseAt(pauseTime);
   await create.click();
-  const dialog = page.getByRole('dialog', { name: '新建视频项目', exact: true });
   await expect(dialog.locator('.dialog__surface')).toHaveCSS('opacity', '0');
   await page.clock.runFor(240);
   const opacity = await dialog.locator('.dialog__surface').evaluate(element => Number(getComputedStyle(element).opacity));
@@ -156,8 +160,8 @@ for (const width of [1536, 600]) for (const theme of ['light', 'dark']) {
     await openApp(page);
     await page.screenshot({ path: info.outputPath(`unified-workspace-${theme}-${width}.png`) });
     await expect(page.getByRole('button', { name: '制作记录', exact: true })).toHaveCount(0);
-    for (const name of ['我的项目', '素材库', '系列模板', '模型连接', 'Skill 工作室', 'Token 消耗']) {
-      if (name === 'Token 消耗') await openCosts(page); else await page.getByRole('button', { name, exact: true }).click();
+    for (const name of ['短剧工作室', '素材库', '系列模板', '模型连接', 'Skill 工作室', 'Token 消耗']) {
+      if (name === 'Token 消耗') await openCosts(page); else if (name === '短剧工作室') await openStudio(page); else await page.getByRole('button', { name, exact: true }).click();
       await expect(page.getByRole('heading', { level: 1, name, exact: true })).toBeVisible();
       expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), name).toBe(true);
       await expect(page.getByRole('heading', { level: 1, name, exact: true })).toHaveCSS('font-weight', '650');
@@ -245,18 +249,33 @@ test('keeps long project filter labels synchronized with keyboard and native sel
 });
 
 for (const viewport of [{ width: 1536, height: 960 }, { width: 1024, height: 720 }, { width: 390, height: 844 }]) {
-  test(`keeps creation dialog fields and actions reachable and restores keyboard focus at ${viewport.width}px`, async ({ page }) => {
+  test(`keeps studio creation fields and actions reachable and restores topic library focus at ${viewport.width}px`, async ({ page }, info) => {
     await page.setViewportSize(viewport);
     await page.emulateMedia({ reducedMotion: 'reduce' });
     await openApp(page);
-    const trigger = page.getByRole('button', { name: '新建项目', exact: true });
+    const trigger = page.getByRole('button', { name: '新建短剧', exact: true });
     await trigger.click();
-    const dialog = page.getByRole('dialog', { name: '新建视频项目', exact: true });
-    await expect(dialog.getByLabel('项目名称', { exact: true })).toBeFocused();
-    await expect(dialog.getByRole('button', { name: '创作 Skill（可选）', exact: true })).toBeInViewport({ ratio: .95 });
-    const footer = dialog.locator('.dialog__footer');
+    const composer = page.getByRole('region', { name: '让故事成为一部短剧', exact: true });
+    await expect(composer.getByRole('textbox', { name: '短剧名称', exact: true })).toBeFocused();
+    await page.screenshot({ path: info.outputPath(`studio-creation-${viewport.width}.png`) });
+    await expect(page.getByRole('dialog', { name: '新建视频项目', exact: true })).toHaveCount(0);
+    const modes = composer.getByRole('tablist', { name: '剧本来源', exact: true });
+    await modes.getByRole('tab', { name: '上传剧本', exact: true }).focus();
+    await page.keyboard.press('ArrowRight');
+    await expect(modes.getByRole('tab', { name: '制作剧本', exact: true })).toBeFocused();
+    await expect(modes.getByRole('tab', { name: '制作剧本', exact: true })).toHaveAttribute('aria-selected', 'true');
+    await page.keyboard.press('Home');
+    await expect(modes.getByRole('tab', { name: '上传剧本', exact: true })).toHaveAttribute('aria-selected', 'true');
+    const skills = composer.getByRole('button', { name: '创作 Skill', exact: true });
+    await skills.scrollIntoViewIfNeeded();
+    await expect(skills).toBeInViewport({ ratio: .95 });
+    const footer = composer.locator('.drama-composer-footer');
+    await footer.scrollIntoViewIfNeeded();
     await expect(footer).toBeInViewport({ ratio: 1 });
     for (const button of await footer.getByRole('button').all()) await expect(button).toBeInViewport({ ratio: 1 });
+    const topics = composer.getByRole('button', { name: '打开选题库', exact: true });
+    await topics.scrollIntoViewIfNeeded(); await topics.click();
+    const dialog = page.getByRole('dialog', { name: '选题库', exact: true });
     const layout = await dialog.evaluate(element => {
       const bounds = element.getBoundingClientRect();
       return { left: bounds.left, right: bounds.right, top: bounds.top, bottom: bounds.bottom, viewportWidth: innerWidth, viewportHeight: innerHeight };
@@ -265,9 +284,10 @@ for (const viewport of [{ width: 1536, height: 960 }, { width: 1024, height: 720
     expect(layout.right).toBeLessThanOrEqual(layout.viewportWidth);
     expect(layout.top).toBeGreaterThanOrEqual(0);
     expect(layout.bottom).toBeLessThanOrEqual(layout.viewportHeight);
+    await page.screenshot({ path: info.outputPath(`studio-topic-library-${viewport.width}.png`) });
     await page.keyboard.press('Escape');
     await expect(dialog).toHaveCount(0);
-    await expect(trigger).toBeFocused();
+    await expect(topics).toBeFocused();
     const misplacedIcons = await page.locator('.icon-button').evaluateAll(buttons => buttons.flatMap(button => {
       const target = button.getBoundingClientRect();
       if (!target.width || !target.height) return [];

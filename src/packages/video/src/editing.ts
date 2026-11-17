@@ -1,4 +1,4 @@
-import { frameAtTime, timeAtFrame, type ClipEditPlan, type FrameRate, type Shot } from '@video-quickly/contracts';
+import { cloneShotDrama, frameAtTime, timeAtFrame, type ClipEditPlan, type FrameRate, type Shot } from '@video-quickly/contracts';
 import { clipEditPlan, clipEditTotalUs, resolveShotTime, type ClipEditContext, type ClipEditDocument, type ClipEditIdFactory } from './clip-edits.js';
 
 const MINIMUM_DURATION_US = 500_000;
@@ -38,12 +38,13 @@ export function splitShot(shot: Shot, localTimeUs: number, rate: FrameRate, newI
   if (!newId || newId === shot.id) throw new Error('分割后的镜头需要独立编号。');
   if (!canSplitShot(shot, localTimeUs, rate)) throw new RangeError('分割位置两侧都须保留至少半秒的完整帧。');
   const splitUs = timeAtFrame(frameAtTime(localTimeUs, rate), rate);
+  const rightDrama = shot.drama ? { drama: cloneShotDrama(shot.drama) } : {};
   if (shot.clipEdit) {
     const reference = shot.clipEdit, mapped = resolveShotTime(shot, context, splitUs);
     const end = reference.restoreInUs + reference.restoreDurationUs;
     return [
       { ...shot, durationUs: splitUs, clipEdit: { ...reference, restoreDurationUs: mapped.originUs - reference.restoreInUs } },
-      { ...shot, id: newId, durationUs: shot.durationUs - splitUs, sourceInUs: mapped.sourceUs, audioInUs: mapped.audioUs, videoInUs: mapped.videoUs, sceneInUs: mapped.sceneUs,
+      { ...shot, ...rightDrama, id: newId, durationUs: shot.durationUs - splitUs, sourceInUs: mapped.sourceUs, audioInUs: mapped.audioUs, videoInUs: mapped.videoUs, sceneInUs: mapped.sceneUs,
         clipEdit: { ...reference, inUs: reference.inUs + splitUs, restoreInUs: mapped.originUs, restoreDurationUs: end - mapped.originUs }, animation: { ...shot.animation, transition: 'cut' } },
     ];
   }
@@ -57,7 +58,7 @@ export function splitShot(shot: Shot, localTimeUs: number, rate: FrameRate, newI
   } : shot.captionTrack;
   return [
     { ...shot, durationUs: splitUs, sourceInUs, sceneInUs, sceneDurationUs, captionTrack },
-    { ...shot, id: newId, durationUs: durationUs - splitUs, sourceInUs: sourceInUs + splitUs, sceneInUs: sceneInUs + splitUs, sceneDurationUs, captionTrack,
+    { ...shot, ...rightDrama, id: newId, durationUs: durationUs - splitUs, sourceInUs: sourceInUs + splitUs, sceneInUs: sceneInUs + splitUs, sceneDurationUs, captionTrack,
       ...(shot.audioInUs === undefined ? {} : { audioInUs: shot.audioInUs + splitUs }),
       ...(shot.videoInUs === undefined ? {} : { videoInUs: shot.videoInUs + splitUs }),
       animation: { ...shot.animation, transition: 'cut' } },

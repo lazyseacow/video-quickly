@@ -47,7 +47,7 @@ async function fixture(request: APIRequestContext, protocol: 'chat-completions' 
     const model = await rpc<{ id: string }>(request, 'model.save', { model: { name: `校验文本 ${randomUUID()}`, provider: 'openai-compatible', textProtocol: protocol, baseUrl: `http://127.0.0.1:${address.port}/v1`, model: 'fixture', capabilities: ['text', 'structured-output'], connectionType: 'text',
       ...(options.fixedSchema ? { parameters: { text: { verbosity: 'low', format: { type: 'json_schema', name: 'video_storyboard', schema: { type: 'object' } } } } } : {}),
     } });
-    const created = await rpc<ProjectDocument>(request, 'project.create', { title: `分镜校验 ${randomUUID().slice(0, 8)}`, brief: '生成办公故事' });
+    const created = await rpc<ProjectDocument>(request, 'project.create', { originalText: '清晨，林夏在书房发现一封未寄出的信。她来到旧城寻找信的主人，与朋友在雨中的城门重逢。两人读完信后决定一起回家。', title: `分镜校验 ${randomUUID().slice(0, 8)}`, brief: '生成办公故事' });
     const nodes = [{ id: 'brief', kind: 'brief', label: '创意简报', config: { modelBinding: 'default' } }, { id: 'style', kind: 'style', label: '风格与角色', config: { modelBinding: 'default' } }, { id: 'script', kind: 'script', label: '旁白与分镜', modelId: model.id }, { id: 'tail', kind: 'animation', label: '本地剪辑准备', config: { operation: 'prepare-edit' } }];
     const project = await rpc<ProjectDocument>(request, 'project.update', { projectId: created.id, patch: { workflow: { id: 'native-video', name: '校验验收', version: 1, production: { mode: 'native-video', textModelId: model.id, referenceMode: 'none', soundPrompt: '', subtitleMode: 'off' }, nodes, edges: nodes.slice(1).map((node, i) => ({ id: `edge-${i}`, source: nodes[i].id, target: node.id })) } } });
     const run = await rpc<RunSummary>(request, 'run.start', { projectId: project.id });

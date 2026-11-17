@@ -9,7 +9,7 @@ async function rpc<T>(request: APIRequestContext, method: string, params: unknow
 }
 async function saved(request: APIRequestContext, projectId: string) { return (await rpc<{ project: ProjectDocument }>(request, 'project.get', { projectId })).project; }
 async function fixture(request: APIRequestContext, info: TestInfo, title: string) {
-  let project = await rpc<ProjectDocument>(request, 'project.create', { title });
+  let project = await rpc<ProjectDocument>(request, 'project.create', { originalText: '清晨，林夏在书房发现一封未寄出的信。她来到旧城寻找信的主人，与朋友在雨中的城门重逢。两人读完信后决定一起回家。', title });
   const rate = 16000, samples = rate * 3, data = Buffer.alloc(44 + samples * 2);
   data.write('RIFF'); data.writeUInt32LE(data.length - 8, 4); data.write('WAVEfmt ', 8); data.writeUInt32LE(16, 16); data.writeUInt16LE(1, 20); data.writeUInt16LE(1, 22); data.writeUInt32LE(rate, 24); data.writeUInt32LE(rate * 2, 28); data.writeUInt16LE(2, 32); data.writeUInt16LE(16, 34); data.write('data', 36); data.writeUInt32LE(samples * 2, 40);
   for (let index = 0; index < samples; index++) data.writeInt16LE(Math.round(Math.sin(index * Math.PI * 880 / rate) * 6000), 44 + index * 2);

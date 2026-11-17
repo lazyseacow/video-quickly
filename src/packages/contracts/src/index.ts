@@ -21,6 +21,9 @@ import { captionStyleSchema, scenePresetSchema, seriesSettingsSchema } from './c
 import { audioMixSettingsSchema, audioProcessingSchema } from './audio-processing.js';
 import { motionKeyframesSchema } from './keyframes.js';
 import { creativeContextSchema, creativeEntityKeysSchema } from './creative-context.js';
+import { characterAppearancesSchema, dramaEpisodeSchema, dramaEpisodeSummarySchema, dramaVisualStyleSchema, dramaWorkSchema, shotDramaSchema } from './drama.js';
+export * from './drama.js';
+export * from './drama-catalog.js';
 export { creativeContextSchema, creativeEntitySchema, creativeEntityKeysSchema, creativeCharacterBindings, projectCharacterIds, validateCreativeReferences, shotCreativePrompt, creativeEntityLabels, creativeReferenceAssetIds, hasCharacterAppearance, isCreativeReferenceAsset, type CreativeContext, type CreativeEntity } from './creative-context.js';
 import { productionSettingsSchema, resolveProductionWorkflow } from './production.js';
 export { productionSettingsSchema, resolveProductionWorkflow, nativeReferenceStep, openingFrameShots, groupsReferenceImages, groupsNativeFirstFrames, isVideoGenerationNode, isModelGenerationNode, captionsEnabled, productionEditingStep, productionEditingSkillIds, productionModelSetting, supportsProductionAgent, supportsAutomaticCasting, productionPlanningSteps, productionPlanningStep, usesManualPlanning, MAX_REFERENCE_AUDIO_BYTES, MAX_REFERENCE_AUDIOS, type ProductionPlanningStep, type ProductionSettings } from './production.js';
@@ -58,7 +61,7 @@ export const seriesTemplateSchema = z.object({
   id: z.string().min(1).max(128), name: z.string().trim().min(1).max(120), description: z.string().max(10_000),
   revision: z.number().int().positive(), createdAt: z.string(), updatedAt: z.string(), archived: z.boolean().default(false),
   settings: seriesSettingsSchema,
-  creationDefaults: z.object({ profile: videoProfileSchema, skillIds: z.array(z.string().min(1)).max(500) }).optional(),
+  creationDefaults: z.object({ profile: videoProfileSchema, skillIds: z.array(z.string().min(1)).max(500), visualStyle: dramaVisualStyleSchema.optional() }).optional(),
 });
 export type SeriesTemplate = z.infer<typeof seriesTemplateSchema>;
 export const exportTargetSchema = z.object({
@@ -124,6 +127,7 @@ export type AudioWaveform = z.infer<typeof audioWaveformSchema>;
 export const characterProfileSchema = z.object({
   id: z.string().min(1), name: z.string().trim().min(1).max(120), description: z.string().max(10000),
   referenceAssetIds: z.array(z.string().min(1)).max(4).refine(value => new Set(value).size === value.length, '角色参考图不能重复'),
+  appearances: characterAppearancesSchema.optional(), defaultVoiceId: z.string().min(1).nullable().optional(),
   revision: z.number().int().positive(), createdAt: z.string(), updatedAt: z.string(), archived: z.boolean().default(false),
 });
 export type CharacterProfile = z.infer<typeof characterProfileSchema>;
@@ -136,6 +140,7 @@ export const clipEditReferenceSchema = z.object({
 export const shotSchema = z.object({
   id: z.string().min(1), title: z.string().min(1).max(160), narration: z.string().max(10000), visualPrompt: z.string().max(20000),
   soundPrompt: z.string().max(10000).optional(),
+  drama: shotDramaSchema.optional(),
   durationUs: z.number().int().min(500000).max(600000000),
   sourceInUs: z.number().int().nonnegative().optional(),
   // Independent replacements start at their own source origin; absent overrides retain legacy shared trims.
@@ -199,6 +204,7 @@ export const projectSchema = z.object({
   id: z.string(), title: z.string().min(1).max(160), brief: z.string().max(30000), templateId: z.string().default('history-handdrawn'),
   revision: z.number().int().positive(), profile: videoProfileSchema, shots: z.array(shotSchema), workflow: workflowSchema,
   creativeContext: creativeContextSchema.nullable().optional(),
+  drama: dramaEpisodeSchema.optional(),
   originalText: z.string().max(30000).optional(),
   episode: episodeSchema.optional(), episodeSource: episodeSourceSchema.optional(),
   musicClips: z.array(musicClipSchema).optional(),
@@ -209,6 +215,7 @@ export const projectSchema = z.object({
   createdAt: z.string(), updatedAt: z.string(), archived: z.boolean().default(false),
 });
 export type ProjectDocument = z.infer<typeof projectSchema>;
+export const dramaStudioCreateResultSchema = z.object({ work: dramaWorkSchema, project: projectSchema });
 export function projectOriginalText(project: Pick<ProjectDocument, 'originalText' | 'episode' | 'episodeSource'>): string | undefined {
   return project.originalText ?? (project.episode ?? project.episodeSource)?.originalText;
 }
@@ -447,6 +454,7 @@ export const workspaceSnapshotSchema = z.object({
 export type WorkspaceSnapshot = z.infer<typeof workspaceSnapshotSchema>;
 // Summaries deliberately exclude shot collections, activity results and event history.
 export const projectSummarySchema = projectSchema.pick({ id: true, title: true, brief: true, templateId: true, revision: true, profile: true, captionStyle: true, createdAt: true, updatedAt: true, archived: true }).extend({
+  drama: dramaEpisodeSummarySchema.optional(),
   shotCount: z.number().int().nonnegative(), durationUs: z.number().nonnegative(), workflowNodeCount: z.number().int().nonnegative(),
   thumbnailShot: shotSchema.nullable(), thumbnailAsset: assetSchema.optional(),
 });
@@ -589,5 +597,17 @@ export function createNativeVideoWorkflow(): WorkflowDefinition {
       { id: 'editing', label: '剪辑与动画', description: '安排镜头节奏、运镜、动画与转场。', nodeIds: ['animation'] },
       { id: 'delivery', label: '审阅与导出', description: '检查内容并按规格导出成片。', nodeIds: ['export'] },
     ],
+  });
+}
+
+/** Screenplay is a saved local source; AI drafting uses an explicit preview run. */
+export function createDramaWorkflow(): WorkflowDefinition {
+  const workflow = createNativeVideoWorkflow();
+  const screenplay: WorkflowNode = { id: 'screenplay', kind: 'brief', label: '剧本正文', description: '上传、编写或显式生成剧本草稿，确认正文后再制作分镜。',
+    prompt: '根据作品选题、创作要求、讲述方式和现有剧本，写出本集完整剧本正文。包含场次、地点、时段、人物行动、对白或旁白，以及集尾悬念。若已有正文，按用户要求改写并保留重要事实与角色设定。输出可阅读的剧本，不生成分镜JSON，不输出库编号。',
+    config: { documentRole: 'screenplay', modelBinding: 'default', requiresModel: true }, skillIds: [], position: { x: -270, y: 100 }, requiresReview: false };
+  return resolveProductionWorkflow({ ...workflow, name: '短剧制作', version: 2, nodes: [screenplay, ...workflow.nodes],
+    edges: [{ id: 'screenplay-brief', source: 'screenplay', target: 'brief' }, ...workflow.edges],
+    stages: workflow.stages?.map(stage => stage.id === 'planning' ? { ...stage, nodeIds: ['screenplay', ...stage.nodeIds] } : stage),
   });
 }

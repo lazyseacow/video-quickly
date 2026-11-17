@@ -160,7 +160,7 @@ for (const viewport of [{ width: 1536, height: 960, theme: 'dark' }, { width: 39
         await page.reload(); await page.getByRole('button', { name: '模型连接', exact: true }).click(); await page.getByRole('button', { name: `编辑“${name}”`, exact: true }).click();
         dialog = page.getByRole('dialog', { name: '编辑模型连接', exact: true }); await expect(await settingField(dialog, 'API 协议')).toHaveValue(protocol);
         await dialog.getByRole('button', { name: '取消', exact: true }).click(); await expect(dialog).toHaveCount(0);
-        const project = await rpc<ProjectDocument>(request, 'project.create', { title: name });
+        const project = await rpc<ProjectDocument>(request, 'project.create', { originalText: '清晨，林夏在书房发现一封未寄出的信。她来到旧城寻找信的主人，与朋友在雨中的城门重逢。两人读完信后决定一起回家。', title: name });
         await rpc(request, 'project.update', { projectId: project.id, patch: { workflow: { id: 'protocol', version: 1, name: '协议验收', production: { mode: 'native-video', referenceMode: 'none', soundPrompt: '', subtitleMode: 'off' }, nodes: [{ id: 'brief', kind: 'brief', label: '协议验收', modelId: saved.id }], edges: [] } } });
         const run = await rpc<RunRecord>(request, 'run.start', { projectId: project.id });
         await expect.poll(async () => (await rpc<RunSummary>(request, 'run.get', { runId: run.id })).status, { timeout: 30_000 }).toBe('succeeded');

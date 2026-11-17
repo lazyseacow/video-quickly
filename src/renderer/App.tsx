@@ -1,8 +1,8 @@
 import { Suspense, lazy, startTransition, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { BookOpen, FolderOpen, Layers, Palette, Sparkles, RefreshCw } from 'lucide-react';
-import { DEFAULT_VIDEO_PROFILE, projectSchema, projectDetailSchema, workspaceSummarySchema, type ProjectDocument, type ProjectDetail } from '@video-quickly/contracts';
+import { BookOpen, Clapperboard, Layers, Palette, Sparkles, RefreshCw } from 'lucide-react';
+import { projectSchema, projectDetailSchema, workspaceSummarySchema, type ProjectDocument, type ProjectDetail, type SeriesTemplate } from '@video-quickly/contracts';
 import { createRefreshQueue } from './lib/refresh-queue';
-import { Button, Dialog, Field, Notice, Select } from './components/Primitives';
+import { Button, Notice } from './components/Primitives';
 import WorkspaceSidebar, { type Page, type SidebarNavigationItem } from './components/WorkspaceSidebar';
 import WorkspaceSettings from './components/WorkspaceSettings';
 import BrandMark from './components/BrandMark';
@@ -10,29 +10,26 @@ import RuntimeConnectionNotice from './components/RuntimeConnectionNotice';
 import ToastNotice, { type ToastMessage } from './components/ToastNotice';
 import PageCache from './components/PageCache';
 import { runtimeConnectionSchema, type RuntimeConnection } from '@video-quickly/contracts';
-import SkillPicker from './components/SkillPicker';
 import SkillImportStatus from './components/SkillImportStatus';
 import { ModelsPage } from './features/ModelsPage';
-import { ProjectsPage } from './features/ProjectsPage';
 import SkillsPage from './features/SkillStudio';
 import AssetLibraryPage, { type AssetLibraryTab } from './features/AssetLibraryPage';
 import { rpc, subscribe } from './lib/client';
 import type { Action, StepOutputSelection, WorkspaceView } from './lib/types';
 import { useButtonFocus } from './lib/use-button-focus';
 import CostsPage from './features/CostsPage';
-import { recordPageSchema, seriesTemplateSchema, type SeriesTemplate } from '@video-quickly/contracts';
-import { useRecordPage } from './lib/use-record-page';
+import type { DramaCreationRequest } from './features/DramaCreationComposer';
 import { beginGuideAction } from './lib/guide-actions';
 import { useChargeRpc } from './components/ConfirmationDialog';
 import { isChargeAction } from '@video-quickly/contracts';
 import Workbench, { type WorkbenchRepairDestination } from './features/Workbench';
 
 const SeriesTemplatesPage = lazy(() => import('./features/SeriesTemplatesPage'));
-const seriesTemplatesPageSchema = recordPageSchema(seriesTemplateSchema);
+const DramaWorksPage = lazy(() => import('./features/DramaWorksPage'));
 const GettingStartedGuide = lazy(() => import('./components/GettingStartedGuide'));
 
 const pages: SidebarNavigationItem[] = [
-  { id: 'projects', label: '我的项目', icon: FolderOpen, group: 'main' },
+  { id: 'projects', label: '短剧工作室', icon: Clapperboard, group: 'main' },
   { id: 'assets', label: '素材库', icon: Layers, group: 'resources' },
   { id: 'templates', label: '系列模板', icon: Palette, group: 'resources' },
   { id: 'models', label: '模型连接', icon: Sparkles, group: 'tools' },
@@ -68,7 +65,8 @@ export default function App() {
     return initialTheme === 'dark' ? 'dark' : 'light';
   });
   const [toast, setToast] = useState<ToastMessage>();
-  const [creation, setCreation] = useState<{ template?: SeriesTemplate }>();
+  const [creation, setCreation] = useState<DramaCreationRequest>();
+  const creationSequence = useRef(0);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const settingsAnchor = useRef<HTMLButtonElement>(null);
   const [showGettingStarted, setShowGettingStarted] = useState(() => localStorage.getItem('vq-onboarding-v1') !== 'done');
@@ -243,7 +241,11 @@ export default function App() {
   function registerSave(callback: (() => Promise<boolean>) | null) { saveBeforeLeave.current = callback; }
   async function openProject(id: string) { if (page === 'workbench' && id !== projectId && saveBeforeLeave.current && !await saveBeforeLeave.current()) return false; const complete = beginGuideAction('workbench-opened'); if (page !== 'workbench') navigationGuide.current = { page: 'workbench', complete }; else complete(); const retry = failedProjectReads.current.delete(id); currentProjectId.current = id; setProjectId(id); activatePage('workbench'); if (retry) void refreshProject(id); return true; }
   async function openStepOutput(selection: StepOutputSelection) { if (await openProject(selection.projectId)) setOutputRequest(selection); }
-  async function createProject() { if (page === 'workbench' && saveBeforeLeave.current && !await saveBeforeLeave.current()) return; setCreation({}); }
+  async function createProject(template?: SeriesTemplate) {
+    if (!await navigate('projects')) return;
+    pageScroll.current.delete('projects');
+    setCreation({ sequence: ++creationSequence.current, template });
+  }
   if (!workspace) return <div className="welcome-loading"><BrandMark size={34} /><strong>Video Quickly</strong><RuntimeConnectionNotice connection={connection} onReconnect={() => void reconnectRuntime()} />{connection.state === 'ready' && <p>{loadError || '正在打开本地工作区…'}</p>}{loadError && connection.state === 'ready' && <Button onClick={() => void refresh()}><RefreshCw size={15} />重新连接</Button>}</div>;
   return <div className="app workspace-shell">
     <WorkspaceSidebar page={page} navigation={pages} settingsOpen={settingsOpen} settingsRef={settingsAnchor}
@@ -268,8 +270,8 @@ export default function App() {
               {error ? <><p>{error}</p><Button aria-label="重试项目" onClick={retryProject}>重试</Button></> : '正在读取项目…'}
             </div>;
           }
-          if (cachedPage === 'projects') return <ProjectsPage workspace={workspace} action={action} notify={notify} onOpen={openProject} onCreate={() => setCreation({})} />;
-          if (cachedPage === 'templates') return <SeriesTemplatesPage workspace={workspace} action={action} onCreate={template => setCreation({ template })} />;
+          if (cachedPage === 'projects') return <DramaWorksPage workspace={workspace} action={action} creationRequest={creation} onOpen={openProject} />;
+          if (cachedPage === 'templates') return <SeriesTemplatesPage workspace={workspace} action={action} onCreate={template => void createProject(template)} />;
           if (cachedPage === 'costs') return <CostsPage workspace={workspace} />;
           if (cachedPage === 'models') return <ModelsPage workspace={workspace} action={action} repairModelId={repairModelId} onRepairConsumed={consumeRepairModel} />;
           if (cachedPage === 'skills') return <SkillsPage workspace={workspace} action={action} onOpenOutput={openStepOutput} />;
@@ -283,7 +285,6 @@ export default function App() {
       onCosts={() => { void navigate('costs').then(opened => { if (opened) setSettingsOpen(false); }); }}
       onGuide={() => { setSettingsOpen(false); settingsAnchor.current?.focus({ preventScroll: true }); setShowGettingStarted(true); beginGuideAction('help-used')(); }} />}
     {showGettingStarted && <Suspense fallback={null}><GettingStartedGuide onClose={closeGettingStarted} /></Suspense>}
-    {creation && <CreateProjectDialog action={action} workspace={workspace} initialTemplate={creation.template} onClose={() => setCreation(undefined)} onCreated={project => { setCreation(undefined); openProject(project.id); }} />}
   </div>;
 }
 
@@ -291,65 +292,4 @@ function retainRecords<T extends { id: string }>(previous: T[], next: T[]): T[] 
   const records = new Map(previous.map(record => [record.id, record]));
   const result = next.map(record => { const existing = records.get(record.id); return existing && JSON.stringify(existing) === JSON.stringify(record) ? existing : record; });
   return result.length === previous.length && result.every((record, index) => record === previous[index]) ? previous : result;
-}
-
-function CreateProjectDialog({ action, workspace, initialTemplate, onClose, onCreated }: { action: Action; workspace: WorkspaceView; initialTemplate?: SeriesTemplate; onClose: () => void; onCreated: (project: ProjectDocument) => void }) {
-  const closed = useRef(false);
-  useEffect(() => { closed.current = false; return () => { closed.current = true; }; }, []);
-  function close() { closed.current = true; onClose(); }
-  const [title, setTitle] = useState('');
-  const [brief, setBrief] = useState('');
-  const templates = useRecordPage('seriesTemplate.list', { archived: false, limit: 20 }, 0, seriesTemplatesPageSchema);
-  const [libraryChoice, setLibraryChoice] = useState(initialTemplate);
-  const [seriesTemplateId, setSeriesTemplateId] = useState(initialTemplate?.id ?? '');
-  // The template chosen in the library can be on a later page of the picker.
-  const templateOptions = libraryChoice && !templates.items.some(template => template.id === libraryChoice.id)
-    ? [libraryChoice, ...templates.items] : templates.items;
-  const selectedTemplate = templateOptions.find(template => template.id === seriesTemplateId);
-  const builtInTemplates = templateOptions.filter(template => template.creationDefaults);
-  const defaults = selectedTemplate?.creationDefaults;
-  const missingTemplate = Boolean(seriesTemplateId) && !selectedTemplate;
-  const [busy, setBusy] = useState(false);
-  const [skillOverride, setSkillOverride] = useState<string[]>();
-  const skillIds = skillOverride ?? defaults?.skillIds.filter(id => workspace.skills.some(skill => skill.id === id && skill.enabled)) ?? [];
-  const canCreate = Boolean(title.trim()) && !missingTemplate;
-  return <Dialog title="新建视频项目" className="project-creation-dialog" onClose={close} onDismissStart={() => { closed.current = true; }}>
-    <form onSubmit={event => {
-      event.preventDefault();
-      if (busy || closed.current || !canCreate) return;
-      const complete = beginGuideAction('project-created');
-      setBusy(true);
-      void action<ProjectDocument>('project.create', {
-        title, brief, skillIds,
-        profile: defaults?.profile ?? { ...DEFAULT_VIDEO_PROFILE, frameRate: { numerator: 60, denominator: 1 } },
-        ...(selectedTemplate ? { seriesTemplateId: selectedTemplate.id, seriesTemplateRevision: selectedTemplate.revision } : {}),
-      }, '项目已创建').then(result => {
-        if (closed.current) return;
-        setBusy(false);
-        if (result) { onCreated(result); complete(); }
-        else if (selectedTemplate) {
-          setLibraryChoice(undefined);
-          templates.refresh();
-        }
-      });
-    }}>
-      <div className="dialog__body">
-        <Field label="项目名称"><input autoFocus required maxLength={160} value={title} onChange={event => setTitle(event.target.value)} placeholder="给这段创作起个名字" /></Field>
-        <Field label="创意简报"><textarea value={brief} onChange={event => setBrief(event.target.value)} placeholder="主题、目标观众，以及你想讲清楚的一个问题…" /></Field>
-        <Field label="系列模板（可选）" hint={defaults ? selectedTemplate.description : '选用模板可复用视觉风格、字幕样式和新镜头画面预设。'}>
-          <Select value={seriesTemplateId} disabled={busy || templates.busy} onChange={event => setSeriesTemplateId(event.target.value)}>
-            <option value="">使用项目默认设置</option>
-            {missingTemplate && <option value={seriesTemplateId} disabled>所选模板不可用</option>}
-            {builtInTemplates.length > 0 && <optgroup label="系统内置">{builtInTemplates.map(template => <option key={template.id} value={template.id}>{template.name}</option>)}</optgroup>}
-            {templateOptions.filter(template => !template.creationDefaults).map(template => <option key={template.id} value={template.id}>{template.name}</option>)}
-          </Select>
-        </Field>
-        {templates.error && <Notice kind="error">{templates.error}<Button aria-label="重试系列模板" onClick={templates.refresh}>重试</Button></Notice>}
-        {templates.nextCursor !== null && <Button aria-label="加载更多系列模板" busy={templates.loadingMore} disabled={!templates.canLoadMore} onClick={() => void templates.loadMore()}>加载更多</Button>}
-        {missingTemplate && <p className="field-error">请选择可用模板，或使用项目默认设置。</p>}
-        <SkillPicker label="创作 Skill（可选）" hint="所选 Skill 用于策划与分镜，也供剪辑 Agent 按需使用。" skills={workspace.skills} groups={workspace.skillGroups} value={skillIds} onChange={setSkillOverride} disabled={busy} />
-      </div>
-      <div className="dialog__footer"><Button onClick={close}>取消</Button><Button type="submit" variant="primary" busy={busy} disabled={!canCreate}>创建项目</Button></div>
-    </form>
-  </Dialog>;
 }

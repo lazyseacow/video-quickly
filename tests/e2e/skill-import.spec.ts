@@ -68,17 +68,19 @@ test('continues after closing the import dialog, groups every Skill and applies 
   expect(storedGroup.skillIds).toHaveLength(2);
   expect(snapshot.skillImports!.find(job => job.groupId === storedGroup.id)?.status).toBe('succeeded');
 
-  await page.getByRole('button', { name: '新建项目', exact: true }).click();
-  const creation = page.getByRole('dialog', { name: '新建视频项目', exact: true });
-  await creation.getByLabel('项目名称').fill('Skill 全流程验收');
-  const creationPicker = creation.getByRole('group', { name: '创作 Skill（可选）', exact: true });
-  const trigger = creationPicker.getByRole('button', { name: '创作 Skill（可选）', exact: true });
+  await page.getByRole('button', { name: '新建短剧', exact: true }).click();
+  const creation = page.getByRole('region', { name: '让故事成为一部短剧', exact: true });
+  await creation.getByRole('textbox', { name: '剧本正文', exact: true }).fill('清晨，林夏在书房发现一封旧信，她与朋友在城门重逢，决定一起寻找信的主人。');
+  await creation.getByRole('textbox', { name: '短剧名称', exact: true }).fill('Skill 全流程验收');
+  const creationPicker = creation.getByRole('group', { name: '创作 Skill', exact: true });
+  const trigger = creationPicker.getByRole('button', { name: '创作 Skill', exact: true });
   const search = creationPicker.getByRole('searchbox');
   const groupEntry = creationPicker.getByRole('button', { name: /^短剧方法验收/ });
   const writeSkill = creationPicker.getByRole('checkbox', { name: /^ui-drama-write/ });
   const storyboardSkill = creationPicker.getByRole('checkbox', { name: /^ui-drama-storyboard/ });
   const selectGroup = creationPicker.getByRole('button', { name: '选用整组“短剧方法验收”', exact: true });
   await trigger.press('Enter');
+  await creationPicker.getByRole('button', { name: '清空选择', exact: true }).click();
   await expect(search).toBeFocused();
   await expect(groupEntry).toContainText('0 / 2');
   await expect(writeSkill).toHaveCount(0);
@@ -108,10 +110,10 @@ test('continues after closing the import dialog, groups every Skill and applies 
   await page.keyboard.press('Escape');
   await expect(search).not.toBeVisible();
   await expect(trigger).toBeFocused();
-  await creation.getByRole('button', { name: '创建项目', exact: true }).click();
-  await expect(creation).toHaveCount(0);
+  await creation.getByRole('button', { name: '创建短剧', exact: true }).click();
+  await expect(creation).toBeHidden();
   const after = workspaceSnapshotSchema.parse((await (await request.post('/__desktop_rpc', { data: { method: 'workspace.snapshot', params: {} } })).json()).result);
-  const project = after.projects.find(item => item.title === 'Skill 全流程验收')!;
+  const project = after.projects.find(item => item.title === 'Skill 全流程验收 · 第 1 集')!;
   for (const node of project.workflow.nodes.filter(node => ['brief', 'style', 'script'].includes(node.kind))) expect(node.skillIds).toEqual(storedGroup.skillIds);
   expect(project.workflow.production.agentSkillIds).toEqual(storedGroup.skillIds);
 

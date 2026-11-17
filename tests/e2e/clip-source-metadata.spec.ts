@@ -1,3 +1,4 @@
+import { openProjectFromList } from './workspace-navigation';
 import { expect, test, type APIRequestContext, type Page } from '@playwright/test';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -31,7 +32,7 @@ test.beforeEach(async () => {
 test.afterEach(async () => { await rm(directory, { recursive: true, force: true }); });
 
 async function createProject(request: APIRequestContext, title: string) {
-  const project = await rpc<ProjectDocument>(request, 'project.create', { title });
+  const project = await rpc<ProjectDocument>(request, 'project.create', { originalText: '清晨，林夏在书房发现一封未寄出的信。她来到旧城寻找信的主人，与朋友在雨中的城门重逢。两人读完信后决定一起回家。', title });
   const good = await rpc<AssetRecord>(request, 'asset.import', { projectId: project.id, path: join(directory, 'two-seconds.wav'), kind: 'audio' });
   const bad = await rpc<AssetRecord>(request, 'asset.import', { projectId: project.id, path: join(directory, 'unreadable.wav'), kind: 'audio' });
   const saved = await rpc<ProjectDocument>(request, 'project.update', {
@@ -53,8 +54,7 @@ async function savedProject(request: APIRequestContext, projectId: string) {
 
 async function openProject(page: Page, title: string) {
   await page.goto('/');
-  await page.getByRole('button', { name: '我的项目', exact: true }).click();
-  await page.locator('.project-card').filter({ hasText: title }).getByRole('button', { name: /继续创作/ }).click();
+  await openProjectFromList(page, title);
   await expect(page.getByLabel('镜头标题')).toHaveValue('两秒音频镜头');
 }
 

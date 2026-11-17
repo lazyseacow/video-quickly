@@ -18,7 +18,7 @@ async function rpc<T>(request: APIRequestContext, method: string, params: unknow
 async function fixture(request: APIRequestContext, info: TestInfo, options: { transition?: Transition; rate?: FrameRate; boundaryUs?: number; tailUs?: number; captions?: boolean; video?: boolean; animatedVideo?: boolean; mixed?: boolean } = {}) {
   const width = options.captions || options.mixed ? 640 : 320, height = width * 9 / 16;
   const rate = options.rate ?? rates[0].value, durationUs = options.boundaryUs ?? 1_000_000;
-  const created = await rpc<ProjectDocument>(request, 'project.create', { title: `转场预览 ${randomUUID().slice(0, 8)}` });
+  const created = await rpc<ProjectDocument>(request, 'project.create', { originalText: '清晨，林夏在书房发现一封未寄出的信。她来到旧城寻找信的主人，与朋友在雨中的城门重逢。两人读完信后决定一起回家。', title: `转场预览 ${randomUUID().slice(0, 8)}` });
   const paths = ['previous', 'incoming'].map(name => info.outputPath(`${name}.png`));
   await writeTransitionImage(paths[0], options.captions ? '101820' : 'e02020', width, height);
   await writeTransitionImage(paths[1], options.captions ? '202030' : '2030e0', width, height);
@@ -268,7 +268,7 @@ test('freezes the outgoing last video frame, isolates a reused source and releas
     }
     expect(maximumLive).toBeLessThanOrEqual(4);
     const held = transitionPixels(reference.get(30)!, source.width, points)[0]; expect(held[0]).toBeGreaterThan(200); expect(held[2]).toBeLessThan(60);
-    const control = await rpc<ProjectDocument>(request, 'project.create', { title: `转场资源释放对照 ${randomUUID().slice(0, 8)}` });
+    const control = await rpc<ProjectDocument>(request, 'project.create', { originalText: '清晨，林夏在书房发现一封未寄出的信。她来到旧城寻找信的主人，与朋友在雨中的城门重逢。两人读完信后决定一起回家。', title: `转场资源释放对照 ${randomUUID().slice(0, 8)}` });
     await openProjectFromList(page, control.title);
     await expect.poll(async () => (await sourcedVideos(session, source.video!.path)).length).toBe(0);
     await info.attach('same-source-video-transition-resources', { body: JSON.stringify({ maximumLive, captured, afterRelease: await sourcedVideos(session, source.video!.path) }), contentType: 'application/json' });

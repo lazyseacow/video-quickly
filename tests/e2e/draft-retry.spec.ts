@@ -13,7 +13,7 @@ async function rpc<T>(request: APIRequestContext, method: string, params: unknow
   const payload = await response.json(); expect(response.ok()).toBe(true); expect(payload.error).toBeUndefined(); return payload.result;
 }
 async function fixture(request: APIRequestContext) {
-  const created = await rpc<ProjectDocument>(request, 'project.create', { title: `本机草稿显式重试 ${randomUUID().slice(0, 8)}` });
+  const created = await rpc<ProjectDocument>(request, 'project.create', { originalText: '清晨，林夏在书房发现一封未寄出的信。她来到旧城寻找信的主人，与朋友在雨中的城门重逢。两人读完信后决定一起回家。', title: `本机草稿显式重试 ${randomUUID().slice(0, 8)}` });
   return rpc<ProjectDocument>(request, 'project.update', { projectId: created.id, revision: created.revision, patch: { shots: [0, 1].map(index => ({ id: `retry-${index}`, title: `原始镜头 ${index}`, narration: '', visualPrompt: '', durationUs: 1_000_000 })) } });
 }
 async function openProject(page: Page, project: ProjectDocument, navigate = true) {

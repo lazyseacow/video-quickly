@@ -26,7 +26,7 @@ test('reuses a development RPC connection across bursts and idle periods without
     });
   }
   try {
-    const project = projectSchema.parse(await rpc('project.create', { title: `开发连接生命周期验收 ${randomUUID()}` }));
+    const project = projectSchema.parse(await rpc('project.create', { originalText: '清晨，林夏在书房发现一封未寄出的信。她来到旧城寻找信的主人，与朋友在雨中的城门重逢。两人读完信后决定一起回家。', title: `开发连接生命周期验收 ${randomUUID()}` }));
     expect(projectDetailSchema.parse(await rpc('project.get', { projectId: project.id })).project).toEqual(project);
     const summary = workspaceSummarySchema.parse(await rpc('workspace.summary'));
     expect(summary.projects.filter(item => item.title === project.title)).toHaveLength(1);

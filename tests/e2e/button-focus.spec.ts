@@ -1,3 +1,4 @@
+import { openProjectFromList } from './workspace-navigation';
 import { expect, test, type Locator, type Page } from '@playwright/test';
 import { productionFixture, openProduction } from './production-settings';
 
@@ -20,7 +21,7 @@ for (const viewport of [{ width: 1536, height: 960, theme: 'light' }, { width: 6
     const source = await productionFixture(request), initial = await openProduction(page, source.project);
     await initial.getByRole('button', { name: '关闭对话框', exact: true }).click();
     await expect(initial).toHaveCount(0);
-    for (const [name, title] of [['新建项目', '新建视频项目'], ['制作设置', '制作设置'], ['制作前检查', '制作前检查'], ['导出', '导出视频']]) {
+    for (const [name, title] of [['制作设置', '制作设置'], ['制作前检查', '制作前检查'], ['导出', '导出视频']]) {
       const inMore = name === '制作前检查';
       const button = page.getByRole('button', { name: inMore ? '更多' : name, exact: true }), dialog = page.getByRole('dialog', { name: title, exact: true });
       async function activate(key?: string) {
@@ -37,10 +38,8 @@ for (const viewport of [{ width: 1536, height: 960, theme: 'light' }, { width: 6
       await keyboardFocus(page, button);
       await activate();
       await expect(dialog).toBeVisible();
-      if (name === '新建项目') await dialog.getByLabel('项目名称', { exact: true }).press('Tab');
       await page.keyboard.press('Escape'); await expect(dialog).toHaveCount(0);
       await expect(button).toBeFocused();
-      if (name === '新建项目') await page.screenshot({ path: info.outputPath('pointer-dialog-return.png') });
       await expect(button).toHaveCSS('outline-style', 'none');
       await keyboardFocus(page, button);
       for (const key of ['Enter', 'Space']) {
@@ -49,11 +48,17 @@ for (const viewport of [{ width: 1536, height: 960, theme: 'light' }, { width: 6
       }
       await activate('Enter'); await expect(dialog).toBeVisible(); await dialog.getByRole('button', { name: '关闭对话框', exact: true }).click(); await expect(dialog).toHaveCount(0);
       await expect(button).toBeFocused(); await expect(button).toHaveCSS('outline-style', 'none');
-      if (name === '新建项目') {
-        await keyboardFocus(page, button); await button.press('Enter'); await expect(dialog).toBeVisible();
-        await page.mouse.click(8, 8); await expect(dialog).toHaveCount(0); await expect(button).toBeFocused(); await expect(button).toHaveCSS('outline-style', 'none');
-      }
+
     }
+    const create = page.getByRole('button', { name: '新建短剧', exact: true });
+    await keyboardFocus(page, create); await create.press('Enter');
+    const composer = page.getByRole('region', { name: '让故事成为一部短剧', exact: true });
+    await expect(composer.getByRole('textbox', { name: '短剧名称', exact: true })).toBeFocused();
+    await composer.getByRole('textbox', { name: '短剧名称', exact: true }).fill('键盘打开后保留的短剧');
+    await openProjectFromList(page, source.project.title); await create.click();
+    await expect(composer.getByRole('textbox', { name: '短剧名称', exact: true })).toBeFocused();
+    await expect(composer.getByRole('textbox', { name: '短剧名称', exact: true })).toHaveValue('键盘打开后保留的短剧');
+    await openProjectFromList(page, source.project.title);
     const inspector = page.getByRole('button', { name: '切换属性面板', exact: true });
     await keyboardFocus(page, inspector);
     const expanded = await inspector.getAttribute('aria-pressed');

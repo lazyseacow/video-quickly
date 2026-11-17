@@ -30,7 +30,7 @@ test('shows actual media previews and compact file rows while keeping automatic 
   const audio = await rpc<AssetRecord>(request, 'asset.import', { path: audioPath });
   const notes = await rpc<AssetRecord>(request, 'asset.import', { path: documentPath });
   const subtitle = await rpc<AssetRecord>(request, 'asset.import', { path: subtitlePath });
-  const project = await rpc<ProjectDocument>(request, 'project.create', { title: '素材预览验收', profile: { width: 320, height: 180, frameRate: { numerator: 30, denominator: 1 } } });
+  const project = await rpc<ProjectDocument>(request, 'project.create', { originalText: '清晨，林夏在书房发现一封未寄出的信。她来到旧城寻找信的主人，与朋友在雨中的城门重逢。两人读完信后决定一起回家。', title: '素材预览验收', profile: { width: 320, height: 180, frameRate: { numerator: 30, denominator: 1 } } });
   await rpc(request, 'project.update', { projectId: project.id, revision: project.revision, patch: { shots: [{ id: 'shot', title: '开场', durationUs: 800_000, narration: '', visualPrompt: '', videoAssetId: video.id }] } });
   const { runId } = await rpc<{ runId: string }>(request, 'render.export', { projectId: project.id });
   await expect.poll(async () => (await rpc<RunSummary>(request, 'run.get', { runId })).status, { timeout: 20_000 }).toBe('succeeded');
@@ -105,8 +105,8 @@ test('shows actual media previews and compact file rows while keeping automatic 
 test('opens the exact JSON for same-named assets and identifies their projects in the list and confirmation', async ({ page, request, isolatedWorkspace }, info) => {
   const name = 'timeline.json';
   const path = join(isolatedWorkspace.directory, name);
-  const first = await rpc<ProjectDocument>(request, 'project.create', { title: '东街故事' });
-  const second = await rpc<ProjectDocument>(request, 'project.create', { title: '西街故事' });
+  const first = await rpc<ProjectDocument>(request, 'project.create', { originalText: '清晨，林夏在书房发现一封未寄出的信。她来到旧城寻找信的主人，与朋友在雨中的城门重逢。两人读完信后决定一起回家。', title: '东街故事' });
+  const second = await rpc<ProjectDocument>(request, 'project.create', { originalText: '清晨，林夏在书房发现一封未寄出的信。她来到旧城寻找信的主人，与朋友在雨中的城门重逢。两人读完信后决定一起回家。', title: '西街故事' });
   const firstText = '{\n  "地点": "<b>东街</b>",\n  "identifier": 9007199254740993\n}';
   const secondText = '{"地点":"西街"}';
   await writeFile(path, secondText);
@@ -178,7 +178,7 @@ test('previews assets, moves a filtered selection to the recycle bin and restore
   const used = await importFile('青石巷 · 镜头画面.svg', illustration);
   const document = await importFile('青石巷 · 场景说明.txt', '可移除的场景资料');
   await rpc(request, 'asset.retain', { assetId: retained.id, retained: true });
-  const project = await rpc<ProjectDocument>(request, 'project.create', { title: '青石巷' });
+  const project = await rpc<ProjectDocument>(request, 'project.create', { originalText: '清晨，林夏在书房发现一封未寄出的信。她来到旧城寻找信的主人，与朋友在雨中的城门重逢。两人读完信后决定一起回家。', title: '青石巷' });
   await rpc(request, 'project.update', { projectId: project.id, revision: project.revision, patch: { shots: [{ id: 'used-shot', title: '已用画面', narration: '', visualPrompt: '', durationUs: 2_000_000, assetId: used.id }] } });
   const { items } = await rpc<RecordPage<AssetListItem>>(request, 'asset.list', { kind: 'image' });
   const removableIds = items.filter(asset => !asset.inUse && !asset.retained).map(asset => asset.id);
@@ -310,7 +310,7 @@ test('keeps media and role views in one library and lets two roles reference the
   const notesPath = join(isolatedWorkspace.directory, '场景说明.txt');
   await Promise.all([writeFile(path, portrait), writeFile(projectPath, portrait), writeFile(notesPath, '场景说明')]);
   const shared = await rpc<AssetRecord>(request, 'asset.import', { path });
-  const project = await rpc<ProjectDocument>(request, 'project.create', { title: '素材与角色共用验收' });
+  const project = await rpc<ProjectDocument>(request, 'project.create', { originalText: '清晨，林夏在书房发现一封未寄出的信。她来到旧城寻找信的主人，与朋友在雨中的城门重逢。两人读完信后决定一起回家。', title: '素材与角色共用验收' });
   const projectImage = await rpc<AssetRecord>(request, 'asset.import', { path: projectPath, projectId: project.id });
   const notes = await rpc<AssetRecord>(request, 'asset.import', { path: notesPath });
   const archived = await rpc<CharacterProfile>(request, 'character.save', { character: { name: '归档角色验收', description: '', referenceAssetIds: [] } });
@@ -362,7 +362,7 @@ test('keeps media and role views in one library and lets two roles reference the
   await trigger.press('Enter');
   await expect(editor.getByLabel('角色名称', { exact: true })).toBeFocused();
   await expect(editor.getByRole('checkbox', { name: shared.name })).toBeChecked();
-  await expect(editor.locator('summary').first()).toContainText('已选 1 张');
+  await expect(editor.locator('.character-reference-disclosure > summary')).toContainText('已选 1 张');
   await expect(editor.locator('.dialog__surface')).toHaveCSS('opacity', '1');
   await page.screenshot({ path: info.outputPath('asset-library-use-image-dark-1464.png') });
   await page.keyboard.press('Escape');
@@ -389,7 +389,7 @@ test('keeps media and role views in one library and lets two roles reference the
   await expect(card(shared)).toContainText('使用中');
   await expect(card(shared).getByRole('button', { name: `移除素材“${shared.name}”`, exact: true })).toBeDisabled();
 
-  await media.press('End');
+  await media.press('ArrowRight');
   await expect(archivedFilter).toHaveAttribute('aria-pressed', 'true');
   await rolePanel.getByRole('button', { name: '可用角色', exact: true }).click();
   for (const role of created) await expect(rolePanel.getByRole('heading', { name: role.name, exact: true })).toBeVisible();

@@ -6,6 +6,7 @@
 
 | 范围 | 当前能力 | 契约与验证入口 |
 | --- | --- | --- |
+| 短剧制作 | 统一作品与分集入口；上传／编写／AI 剧本草稿及显式应用；10 画风、14 原创选题、选题库管理与 8 创作 Skill；场次、对白、形象和音色；运行冻结与格式 10 备份 | [短剧制作与视听资产](drama-studio.md)、`drama-studio-runtime.test.ts`、`drama-catalog.test.ts`、`drama-studio-library.test.ts`、`drama-script-creation.spec.ts`、`drama-studio.spec.ts` |
 | 制作设置与进度 | 顶部唯一制作配置入口，逐步填写并最终保存；阶段卡片打开对应步骤记录。运行中独立保存待用配置，失败后从统一入口调整再重做；局部运行保留完整卡片与真实进度，历史分组、模型与提示词按冻结记录展示 | [生成进度](workspace-editing.md#制作指引与生成进度)、`stage-configuration-draft.test.ts`、`workbench-stage-panel.spec.ts`、`workbench-guide-progress.spec.ts`、`workflow-stages.spec.ts` |
 | 导航与设置 | 52px 单列图标栏统一项目、资源与工具入口并提供悬停名称；项目列表进入工作台；左下角设置浮层集中提供胶囊外观切换、Token 消耗与使用指南；首次指南按实际操作推进 | [桌面工作区](electron-desktop.md#工作区与持久化)、`workspace-settings.spec.ts`、`getting-started.spec.ts` |
 | 桌面与交付 | Windows x64、macOS arm64／x64；沙箱预加载、独立 Node 执行器、系统凭据、原生路径选择、媒体协议、进程退出与重连；独立媒体组件和安装数据保留 | [Electron 架构](electron-desktop.md)、[Windows](windows-verification.md)、[macOS](macos-verification.md) |

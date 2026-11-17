@@ -22,16 +22,15 @@ test.afterEach(async ({ page }) => {
 
 test('renders a completed project read while a later notification refresh is still pending', async ({ page, request }, info) => {
   await page.emulateMedia({ reducedMotion: 'reduce' });
-  const created = await rpc<ProjectDocument>(request, 'project.create', { title: `慢读取通知交错 ${randomUUID().slice(0, 8)}` });
+  const created = await rpc<ProjectDocument>(request, 'project.create', { originalText: '清晨，林夏在书房发现一封未寄出的信。她来到旧城寻找信的主人，与朋友在雨中的城门重逢。两人读完信后决定一起回家。', title: `慢读取通知交错 ${randomUUID().slice(0, 8)}` });
   const target = await rpc<ProjectDocument>(request, 'project.update', { projectId: created.id, revision: created.revision, patch: { shots: [{ id: 'target-shot', title: '目标镜头', narration: '', visualPrompt: '', durationUs: 1_000_000 }] } });
-  const unrelated = await rpc<ProjectDocument>(request, 'project.create', { title: '通知来源项目' });
+  const unrelated = await rpc<ProjectDocument>(request, 'project.create', { originalText: '清晨，林夏在书房发现一封未寄出的信。她来到旧城寻找信的主人，与朋友在雨中的城门重逢。两人读完信后决定一起回家。', title: '通知来源项目' });
   let notifications = 0;
   page.on('websocket', socket => socket.on('framereceived', frame => { if (String(frame.payload).includes('workspace.changed')) notifications++; }));
   const network = await page.context().newCDPSession(page); await network.send('Network.enable');
   network.on('Network.eventSourceMessageReceived', event => { if (event.data.includes('workspace.changed')) notifications++; });
-  await page.goto('/'); await expect(page.getByRole('heading', { name: '我的项目', exact: true })).toBeVisible();
-  const card = page.locator('.project-card').filter({ has: page.getByRole('heading', { name: target.title, exact: true }) });
-  await expect(card).toBeVisible(); await page.clock.install();
+  await page.goto('/'); await expect(page.getByRole('heading', { name: '短剧工作室', exact: true })).toBeVisible();
+  await page.clock.install();
   const firstRead = gate(), laterRead = gate(), requested = gate(); let reads = 0;
   await page.route('**/__desktop_rpc', async route => {
     const input = route.request().postDataJSON();
@@ -40,7 +39,7 @@ test('renders a completed project read while a later notification refresh is sti
     await (number === 1 ? firstRead.promise : laterRead.promise); await route.fulfill({ response });
   });
   try {
-    await card.getByRole('button', { name: /继续创作/ }).click(); await requested.promise;
+    await openProjectFromList(page, target.title, { waitForReady: false }); await requested.promise;
     const before = notifications;
     await rpc(request, 'project.update', { projectId: unrelated.id, revision: unrelated.revision, patch: { title: '通知来源项目已更新' } });
     await expect.poll(() => notifications).toBeGreaterThan(before);
@@ -54,21 +53,21 @@ test('renders a completed project read while a later notification refresh is sti
 });
 
 async function targetProject(request: APIRequestContext, shotTitle: string) {
-  const created = await rpc<ProjectDocument>(request, 'project.create', { title: `${shotTitle} ${randomUUID().slice(0, 8)}` });
+  const created = await rpc<ProjectDocument>(request, 'project.create', { originalText: '清晨，林夏在书房发现一封未寄出的信。她来到旧城寻找信的主人，与朋友在雨中的城门重逢。两人读完信后决定一起回家。', title: `${shotTitle} ${randomUUID().slice(0, 8)}` });
   return rpc<ProjectDocument>(request, 'project.update', { projectId: created.id, revision: created.revision, patch: { shots: [{ id: 'shot', title: shotTitle, narration: '', visualPrompt: '', durationUs: 1_000_000 }] } });
 }
 
 test('opens the selected project while unrelated workspace metadata is delayed', async ({ page, request }) => {
   await page.emulateMedia({ reducedMotion: 'reduce' });
   const target = await targetProject(request, '摘要尚未返回的镜头');
-  await page.goto('/'); await expect(page.getByRole('heading', { name: '我的项目', exact: true })).toBeVisible();
+  await page.goto('/'); await expect(page.getByRole('heading', { name: '短剧工作室', exact: true })).toBeVisible();
   const hold = gate(); let summaries = 0;
   await page.route('**/__desktop_rpc', async route => {
     if (route.request().postDataJSON()?.method !== 'workspace.summary') { await route.continue(); return; }
     summaries++; const response = await route.fetch(); await hold.promise; await route.fulfill({ response });
   });
   try {
-    await page.locator('.project-card').filter({ has: page.getByRole('heading', { name: target.title, exact: true }) }).getByRole('button', { name: /继续创作/ }).click();
+    await openProjectFromList(page, target.title);
     await expect(page.getByLabel('镜头标题', { exact: true })).toHaveValue('摘要尚未返回的镜头');
     expect(summaries).toBeGreaterThan(0); await expect(page.locator('vite-error-overlay')).toHaveCount(0);
   } finally { hold.release(); }
@@ -77,7 +76,7 @@ test('opens the selected project while unrelated workspace metadata is delayed',
 test('keeps the newer selection when the previous project response arrives late', async ({ page, request }) => {
   await page.emulateMedia({ reducedMotion: 'reduce' });
   const first = await targetProject(request, '先选择的镜头'), second = await targetProject(request, '后选择的镜头');
-  await page.goto('/'); await expect(page.getByRole('heading', { name: '我的项目', exact: true })).toBeVisible();
+  await page.goto('/'); await expect(page.getByRole('heading', { name: '短剧工作室', exact: true })).toBeVisible();
   const hold = gate(), requested = gate(), finished = gate();
   await page.route('**/__desktop_rpc', async route => {
     const input = route.request().postDataJSON();
@@ -100,7 +99,7 @@ test('shows a failed selected-project read and recovers only after an explicit n
   const target = await targetProject(request, '读取恢复的镜头');
   const clockOrigin = new Date('2026-01-01T00:00:00Z');
   await page.clock.install({ time: clockOrigin });
-  await page.goto('/'); await expect(page.getByRole('heading', { name: '我的项目', exact: true })).toBeVisible();
+  await page.goto('/'); await expect(page.getByRole('heading', { name: '短剧工作室', exact: true })).toBeVisible();
   // Other workers can publish real workspace changes after recovery. Keep
   // their debounce outside this explicit-read count; notifications are tested below.
   await page.clock.pauseAt(new Date(clockOrigin.getTime() + 2 * test.info().timeout));
@@ -127,7 +126,7 @@ test('keeps a failed project read paused through actual workspace notifications 
   let notifications = 0, reads = 0;
   const network = await page.context().newCDPSession(page); await network.send('Network.enable');
   network.on('Network.eventSourceMessageReceived', event => { if (event.data.includes('workspace.changed')) notifications++; });
-  await page.goto('/'); await expect(page.getByRole('heading', { name: '我的项目', exact: true })).toBeVisible();
+  await page.goto('/'); await expect(page.getByRole('heading', { name: '短剧工作室', exact: true })).toBeVisible();
   const clockOrigin = new Date('2026-01-01T00:00:00Z');
   await page.clock.install({ time: clockOrigin }); await page.clock.pauseAt(new Date(clockOrigin.getTime() + 2 * test.info().timeout));
   const retryRequested = gate(), releaseRetry = gate(), conditionalRead = gate();

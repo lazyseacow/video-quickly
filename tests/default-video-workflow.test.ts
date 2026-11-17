@@ -2,7 +2,7 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, expect, it } from 'vitest';
-import { createNativeVideoWorkflow, projectSchema, resolveWorkflowStages, runSchema, validateWorkflowComposition, workflowSchema, type ActivityRecord, type ProjectDocument, type RecordPage } from '@video-quickly/contracts';
+import { createDramaWorkflow, createNativeVideoWorkflow, projectSchema, resolveWorkflowStages, runSchema, validateWorkflowComposition, workflowSchema, type ActivityRecord, type ProjectDocument, type RecordPage } from '@video-quickly/contracts';
 import { createRuntime } from '../src/packages/runtime/src';
 
 const directories: string[] = [], runtimes = new Set<ReturnType<typeof createRuntime>>();
@@ -13,20 +13,21 @@ function open(directory: string) {
 async function fixture() { const directory = await mkdtemp(join(tmpdir(), 'vq-default-workflow-')); directories.push(directory); return { directory, runtime: open(directory) }; }
 async function current(runtime: ReturnType<typeof createRuntime>, projectId: string) { return (await runtime.dispatch('project.get', { projectId }) as { project: ProjectDocument }).project; }
 const leafIds = ['brief', 'style', 'script', 'assets', 'video', 'animation', 'export'];
+const dramaIds = ['screenplay', ...leafIds];
 const stageLayout = [
-  { id: 'planning', label: '策划与分镜', nodeIds: ['brief', 'style', 'script'] },
+  { id: 'planning', label: '策划与分镜', nodeIds: ['screenplay', 'brief', 'style', 'script'] },
   { id: 'materials', label: '素材与配音', nodeIds: ['assets', 'video'] },
   { id: 'editing', label: '剪辑与动画', nodeIds: ['animation'] },
   { id: 'delivery', label: '审阅与导出', nodeIds: ['export'] },
 ];
 
-it('groups the seven independently configurable tasks into four ordered generic production stages', () => {
-  const workflow = workflowSchema.parse(createNativeVideoWorkflow());
-  expect(workflow).toMatchObject({ id: 'native-video', name: '视频制作' });
-  expect(workflow.nodes.map(node => node.id)).toEqual(leafIds); expect(workflow.nodes.filter(node => node.kind === 'animation')).toHaveLength(2);
+it('groups screenplay and the seven production tasks into four ordered drama stages', () => {
+  const workflow = workflowSchema.parse(createDramaWorkflow());
+  expect(workflow).toMatchObject({ id: 'native-video', name: '短剧制作' });
+  expect(workflow.nodes.map(node => node.id)).toEqual(dramaIds); expect(workflow.nodes.filter(node => node.kind === 'animation')).toHaveLength(2);
   expect(workflow.stages?.map(({ id, label, nodeIds }) => ({ id, label, nodeIds }))).toEqual(stageLayout);
   expect(workflow.nodes.filter(node => node.requiresReview).map(node => node.id)).toEqual([]);
-  expect(workflow.edges.map(edge => [edge.source, edge.target])).toEqual(leafIds.slice(1).map((id, index) => [leafIds[index], id]));
+  expect(workflow.edges.map(edge => [edge.source, edge.target])).toEqual(dramaIds.slice(1).map((id, index) => [dramaIds[index], id]));
   expect(() => validateWorkflowComposition(workflow)).not.toThrow();
   const resolved = resolveWorkflowStages(workflow);
   expect(resolved.map(stage => stage.nodes.map(node => node.id))).toEqual(stageLayout.map(stage => stage.nodeIds));
@@ -40,12 +41,12 @@ it('uses the same four-stage tasks without research or review waits for historic
   expect(workflow.stages).toEqual(createNativeVideoWorkflow().stages);
 });
 
-it('creates empty generic projects with the same default workflow when copying series display settings', async () => {
+it('creates empty drama episodes with the same default workflow when copying series display settings', async () => {
   const { runtime } = await fixture();
   const template = await runtime.dispatch('seriesTemplate.save', { template: { name: '显示设置不覆盖流程', description: '', settings: { style: '通用产品演示', captionStyle: null, scenePreset: null } } }) as { id: string; revision: number };
   for (const params of [{ title: '通用新项目' }, { title: '系列新项目', seriesTemplateId: template.id, seriesTemplateRevision: template.revision }]) {
     const project = projectSchema.parse(await runtime.dispatch('project.create', params));
-    expect(project).toMatchObject({ templateId: 'generic', shots: [], claims: [], revision: 1 }); expect(project.workflow).toEqual(createNativeVideoWorkflow());
+    expect(project).toMatchObject({ templateId: 'drama', drama: { number: 1 }, shots: [], claims: [], revision: 1 }); expect(project.workflow).toEqual(createDramaWorkflow());
     expect(project.style).toBe('seriesTemplateId' in params ? '通用产品演示' : '');
     expect(await current(runtime, project.id)).toEqual(project); expect(await runtime.dispatch('run.list', { projectId: project.id })).toMatchObject({ items: [] });
   }
@@ -62,7 +63,7 @@ it('automatically executes an explicit custom workflow with saved review setting
   await runtime.close(); runtimes.delete(runtime); const reopened = open(directory);
   expect(await current(reopened, legacy.id)).toEqual(legacy);
   expect(runSchema.parse(await reopened.dispatch('run.get', { runId: run.id }))).toEqual(before);
-  const fresh = projectSchema.parse(await reopened.dispatch('project.create', { title: '重开后的新项目' })); expect(fresh.workflow).toEqual(createNativeVideoWorkflow()); expect(fresh.templateId).toBe('generic');
+  const fresh = projectSchema.parse(await reopened.dispatch('project.create', { title: '重开后的新项目' })); expect(fresh.workflow).toEqual(createDramaWorkflow()); expect(fresh.templateId).toBe('drama');
   expect(await current(reopened, legacy.id)).toEqual(legacy);
   const finished = runSchema.parse(await reopened.dispatch('run.get', { runId: run.id })); expect(finished.status).toBe('succeeded'); expect(finished.snapshotDigest).toBe(before.snapshotDigest);
   const activities = await reopened.dispatch('run.activities', { runId: run.id }) as RecordPage<ActivityRecord>; expect(activities.items.map(activity => activity.id)).toEqual(['style']);

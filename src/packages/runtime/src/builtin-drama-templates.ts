@@ -1,13 +1,14 @@
 import { createHash } from 'node:crypto';
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { assetSchema, DEFAULT_CAPTION_STYLE, DEFAULT_VIDEO_PROFILE, seriesTemplateSchema, skillGroupSchema, skillSchema, type CaptionStyle } from '@video-quickly/contracts';
+import { assetSchema, DEFAULT_CAPTION_STYLE, DEFAULT_VIDEO_PROFILE, seriesTemplateSchema, skillGroupSchema, skillSchema, type CaptionStyle, type DramaVisualStyle } from '@video-quickly/contracts';
 import type { DocumentStore } from './database.js';
 
 const referencePath = 'references/production-card.md';
 const presets = [
   {
     key: 'live-action-drama',
+    visualStyle: 'live-action',
     name: 'AI 短剧 · 竖屏真人',
     description: '9:16 真人短剧。用行动开场、短对白推进冲突，以反应镜头和集尾悬念收束。',
     source: 'https://github.com/eternityspring/shuohao-skills',
@@ -29,6 +30,7 @@ const presets = [
   },
   {
     key: 'motion-comic',
+    visualStyle: 'animation',
     name: 'AI 漫剧 · 动态条漫',
     description: '9:16 动态漫画。用清晰轮廓、分层构图和逐镜动作保留条漫的节奏。',
     source: 'https://github.com/freestylefly/canghe-skills/tree/master/skills/canghe-manga-drama',
@@ -49,6 +51,7 @@ const presets = [
   },
   {
     key: 'ink-wash-drama',
+    visualStyle: 'animation',
     name: 'AI 漫剧 · 国风水墨',
     description: '9:16 水墨漫剧。用墨色层次、留白、环境声和缓动镜头讲述古风故事。',
     source: 'https://github.com/zenstory-ai/drama-skills',
@@ -68,15 +71,27 @@ const presets = [
     image: { file: 'mountains-and-clouds.jpg', name: '云山隐居图', credit: '传龚贤，《云山隐居图》，馆藏 1983.609' },
   },
 ] satisfies Array<{
-  key: string; name: string; description: string; source: string; style: string; caption: Partial<CaptionStyle>;
+  key: string; visualStyle: DramaVisualStyle; name: string; description: string; source: string; style: string; caption: Partial<CaptionStyle>;
   directions: string[]; card: string[]; image: { file: string; name: string; credit: string };
 }>;
 
 export function seedBuiltInDramaTemplates(directory: string, store: DocumentStore): void {
   const marker = 'builtin-drama-templates';
-  if (store.get('metadata', marker)) return;
+  if ((store.get<{ version: number }>('metadata', marker)?.version ?? 0) >= 2) return;
   store.database.transaction(() => {
-    if (store.get('metadata', marker)) return;
+    const previousVersion = store.get<{ version: number }>('metadata', marker)?.version ?? 0;
+    if (previousVersion >= 2) return;
+    if (previousVersion >= 1) {
+      for (const preset of presets) {
+        const saved = store.get('series-template', `builtin-series-${preset.key}`);
+        if (!saved) continue;
+        const template = seriesTemplateSchema.parse(saved);
+        if (!template.creationDefaults || template.creationDefaults.visualStyle !== undefined) continue;
+        store.put('series-template', template.id, { ...template, revision: template.revision + 1, updatedAt: new Date().toISOString(),
+          creationDefaults: { ...template.creationDefaults, visualStyle: preset.visualStyle } });
+      }
+      store.put('metadata', marker, { version: 2 }); return;
+    }
     const time = new Date().toISOString();
     const profile = { ...DEFAULT_VIDEO_PROFILE, width: 1080, height: 1920, frameRate: { numerator: 60, denominator: 1 } };
     const assetDirectory = join(directory, 'projects', 'library', 'assets');
@@ -104,7 +119,7 @@ export function seedBuiltInDramaTemplates(directory: string, store: DocumentStor
       const template = seriesTemplateSchema.parse({
         id: `builtin-series-${preset.key}`, name: preset.name, description: preset.description, revision: 1, createdAt: time, updatedAt: time,
         settings: { style: preset.style, captionStyle: { ...DEFAULT_CAPTION_STYLE, ...preset.caption }, scenePreset: null },
-        creationDefaults: { profile, skillIds: [skillId] },
+        creationDefaults: { profile, skillIds: [skillId], visualStyle: preset.visualStyle },
       });
       store.put('series-template', template.id, template);
 
@@ -122,6 +137,6 @@ export function seedBuiltInDramaTemplates(directory: string, store: DocumentStor
 
     const group = skillGroupSchema.parse({ id: 'builtin-drama-skills', name: '内置短剧与漫剧', source: '随应用提供', skillIds, createdAt: time, updatedAt: time });
     store.put('skill-group', group.id, group);
-    store.put('metadata', marker, { version: 1 });
+    store.put('metadata', marker, { version: 2 });
   }).immediate();
 }

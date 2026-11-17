@@ -26,7 +26,7 @@ export function StepStatus({ step, overview = false }: { step: RunStepSummary; o
 
 export function CurrentStepResult({ inspection, step, version, onOpenOutput, planning, retry }: StepOutputsProps) {
   const currentPlanning = !inspection.run.selection && inspection.run.stepRetry?.nodeId !== step.id && inspection.steps.filter(item => item.kind !== 'subflow').length > 1 && (!inspection.run.purpose || inspection.run.purpose === 'production') ? planning : undefined;
-  const planningSection = currentPlanning && isPlanningSection(step.kind) ? step.kind : undefined;
+  const planningSection = currentPlanning && step.id !== 'screenplay' && isPlanningSection(step.kind) ? step.kind : undefined;
   // Planning results are saved to the run before downstream work applies them to the project.
   const projectHasNoShots = planningSection === 'script' && currentPlanning?.project.shots.length === 0;
   const showProject = Boolean(planningSection) && (!inspection.snapshotAvailable || (inspection.run.status === 'succeeded' && !(projectHasNoShots && step.outputAvailable)));

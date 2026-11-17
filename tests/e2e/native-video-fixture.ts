@@ -55,7 +55,7 @@ async function fixture(request: APIRequestContext, info: TestInfo, hold = false,
   for (const name of ['文本一', '文本二']) models.push(await rpc<ModelProfile>(request, 'model.save', { model: { name: `${name} ${suffix}`, provider: 'openai-compatible', connectionType: 'text', capabilities: ['text'], model: name, baseUrl } }));
   const video = await rpc<ModelProfile>(request, 'model.save', { model: { name: `视频 ${suffix}`, provider: 'seedance', connectionType: 'video', capabilities: ['video'], model: 'custom-video-endpoint', baseUrl } });
   const image = await rpc<ModelProfile>(request, 'model.save', { model: { name: `图片 ${suffix}`, provider: 'openai-compatible', connectionType: 'image', capabilities: ['image'], model: 'fixture-image', baseUrl } });
-  const created = await rpc<ProjectDocument>(request, 'project.create', { title: `统一制作 ${suffix}`, brief: '用一个镜头介绍蓝色天空', profile: { width: 160, height: 90, frameRate: { numerator: 30, denominator: 1 } } });
+  const created = await rpc<ProjectDocument>(request, 'project.create', { originalText: '清晨，林夏在书房发现一封未寄出的信。她来到旧城寻找信的主人，与朋友在雨中的城门重逢。两人读完信后决定一起回家。', title: `统一制作 ${suffix}`, brief: '用一个镜头介绍蓝色天空', profile: { width: 160, height: 90, frameRate: { numerator: 30, denominator: 1 } } });
   const project = await rpc<ProjectDocument>(request, 'project.update', { projectId: created.id, patch: { workflow: { ...created.workflow, production: { ...created.workflow.production, imageModelId: image.id } } } });
   return { project, models, video, image, requests, pending, release, async close() { release(); server.closeAllConnections(); await new Promise<void>(resolve => server.close(() => resolve())); } };
 }

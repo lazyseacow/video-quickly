@@ -13,6 +13,7 @@ import { promisify } from 'node:util';
 import { _electron, expect } from '@playwright/test';
 import { findElectronRuntime } from './electron-runtime-process.mjs';
 import { verifyNativeMediaExtensions } from './native-media-extensions.mjs';
+import { verifyNativeDramaStudio } from './native-drama-studio.mjs';
 import { verifyNativeTransitions } from './native-transitions.mjs';
 import { verifyNativeTransitionLoading } from './native-transition-loading.mjs';
 import { verifyNativeTransitionCache } from './native-transition-cache.mjs';
@@ -117,9 +118,10 @@ async function launch() {
   await inspectWindow();
   if (!checks.gettingStarted) {
     const project = await verifyGettingStarted();
-    await verifyGenericWorkflow(project);
+    await verifyDramaWorkflow(project);
     if (compact) await verifyNativeCompactDialogs({ page, rpc, openProject, fixture, artifacts, ffmpegPath: fixtureFfmpeg, environment: packaged ? environment : process.env, checks });
     await verifyNativeMediaExtensions({ page, rpc, openProject, fixture, artifacts, ffmpegPath: fixtureFfmpeg, environment: packaged ? environment : process.env, checks });
+    await verifyNativeDramaStudio({ page, rpc, openProject, fixture, artifacts, ffmpegPath: fixtureFfmpeg, environment: packaged ? environment : process.env, checks });
     await verifyNativeTransitions({ page, rpc, openProject, fixture, artifacts, ffmpegPath: fixtureFfmpeg, environment: packaged ? environment : process.env, checks });
     await verifyNativeTransitionLoading({ page, rpc, openProject, fixture, artifacts, ffmpegPath: fixtureFfmpeg, environment: packaged ? environment : process.env, checks });
     await verifyNativeTransitionCache({ page, rpc, openProject, fixture, artifacts, ffmpegPath: fixtureFfmpeg, environment: packaged ? environment : process.env, checks });
@@ -129,13 +131,16 @@ async function launch() {
   }
   return page;
 }
-async function verifyGenericWorkflow(project) {
+async function verifyDramaWorkflow(project) {
   const character = await rpc('character.save', { character: { name: '原生制作角色', description: '固定外形与服装', referenceAssetIds: [] } });
   const snapshot = await rpc('workspace.snapshot');
   assert.equal(project.workflow.id, 'native-video');
   assert.equal(project.workflow.production.subtitleMode, 'off');
   assert.equal(project.workflow.nodes.some(node => ['research', 'review'].includes(node.kind) || node.requiresReview), false);
-  assert.equal(project.workflow.nodes.length, 7);
+  assert.equal(project.workflow.nodes.length, 8);
+  assert.ok(project.drama?.workId);
+  assert.equal(project.workflow.nodes[0].id, 'screenplay');
+  assert.equal(project.workflow.nodes[0].config.documentRole, 'screenplay');
   assert.equal(project.workflow.stages.length, 4);
   const guidance = page.getByRole('region', { name: '制作指引', exact: true });
   const stageLabels = ['策划与分镜', '素材与配音', '剪辑与动画', '审阅与导出'];
@@ -236,7 +241,7 @@ async function verifyGenericWorkflow(project) {
   await openProject(project.title);
   checks.promptOfflinePreview = true; checks.promptSessionPersistence = true; checks.promptTemplateVersions = true; checks.promptConfigurationIsolation = true;
   checks.projectSettings = true;
-  checks.genericWorkflow = true;
+  checks.dramaWorkflow = true;
 }
 async function verifyGettingStarted() {
   const guide = page.getByRole('dialog', { name: '使用指南', exact: true });
@@ -257,7 +262,7 @@ async function verifyGettingStarted() {
     await guide.getByRole('button', { name: '下一步', exact: true }).click();
     await expect(heading).not.toHaveText(previousTitle);
   }
-  await expect(heading).toHaveText('新建创作项目');
+  await expect(heading).toHaveText('新建短剧');
   assert.equal(await activeTarget(), 'create-project');
   assert.equal(await page.evaluate(() => localStorage.getItem('vq-onboarding-v1')), null);
   const empty = await rpc('workspace.snapshot');
@@ -276,33 +281,48 @@ async function verifyGettingStarted() {
     assert.deepEqual(response, { status: 200, bytes: asset.size });
   }
   checks.builtInDramaTemplates = true;
-  await expect(page.getByRole('heading', { name: '我的项目', exact: true })).toBeVisible();
-  await expect(page.getByLabel('搜索项目', { exact: true })).toBeVisible();
+  const topics = await rpc('dramaTopic.list');
+  assert.equal(topics.items.length, 14);
+  assert.ok(topics.items.every(topic => topic.id.startsWith('builtin-topic-') && topic.logline.trim() && !topic.archived));
+  const builtInSkills = empty.skills.filter(skill => skill.id.startsWith('builtin-drama-'));
+  assert.equal(builtInSkills.length, 8);
+  assert.ok(builtInSkills.every(skill => skill.enabled && skill.resources.length && skill.autoDiscover === false));
+  const catalog = await rpc('dramaStudio.catalog.get');
+  assert.equal(catalog.styles.length, 10);
+  for (const style of catalog.styles) assert.ok(style.skillIds.every(id => builtInSkills.some(skill => skill.id === id)));
+  checks.builtInDramaCatalog = true;
+  await expect(page.getByRole('heading', { name: '短剧工作室', exact: true })).toBeVisible();
+  await expect(page.getByLabel('搜索作品', { exact: true })).toBeVisible();
   checks.emptyWorkspaceStartup = true;
   await page.screenshot({ path: join(artifacts, 'desktop-getting-started.png') });
 
-  await highlighted.click();
-  const create = page.getByRole('dialog', { name: '新建视频项目', exact: true });
-  await expect(create).toBeVisible();
-  await expect(guide).toHaveCount(0);
-  await expect(page.locator('.driver-overlay')).toHaveCount(0);
-  await create.getByLabel('项目名称', { exact: true }).fill('取消原生导览中的项目');
-  await create.getByLabel('创意简报', { exact: true }).fill('确认高亮操作打开的表单可以正常输入。');
-  await page.keyboard.press('Escape');
-  await expect(create).toHaveCount(0);
-  await expect(heading).toHaveText('新建创作项目');
+  const create = page.locator('.drama-composer');
+  await expect(create).toHaveClass(/driver-active-element/);
+  await create.getByRole('textbox', { name: '短剧名称', exact: true }).fill('尚未提交的原生导览作品');
+  const upload = create.getByRole('tab', { name: '上传剧本', exact: true });
+  await upload.focus(); await upload.press('ArrowRight');
+  await expect(create.getByRole('tab', { name: '制作剧本', exact: true })).toHaveAttribute('aria-selected', 'true');
+  await create.getByRole('textbox', { name: '故事想法', exact: true }).fill('雨夜车站中，一封迟到的信改变了旅人的决定。');
+  await create.getByRole('tab', { name: '制作剧本', exact: true }).press('Home');
+  await expect(upload).toHaveAttribute('aria-selected', 'true');
+  const scriptText = '第一场 车站 夜\n旅人递出一封信。\n旅人：这封信，应该交给你。';
+  const scriptPath = join(fixture, '导览剧本.md'); await writeFile(scriptPath, scriptText);
+  await create.getByRole('textbox', { name: '剧本文件', exact: true }).fill(scriptPath);
+  await create.getByRole('button', { name: '读取文件', exact: true }).click();
+  await expect(create.getByRole('textbox', { name: '剧本正文', exact: true })).toHaveValue(scriptText);
+  await expect(heading).toHaveText('新建短剧');
   assert.equal(await activeTarget(), 'create-project');
   assert.equal(await page.evaluate(() => localStorage.getItem('vq-onboarding-v1')), null);
   assert.deepEqual((await rpc('workspace.summary')).projects, []);
 
-  const projectTitle = '原生流程验收项目';
-  await highlighted.click();
-  await create.getByLabel('项目名称', { exact: true }).fill(projectTitle);
-  await create.getByRole('button', { name: '创建项目', exact: true }).click();
-  await expect(create).toHaveCount(0);
+  const workTitle = '原生流程验收作品', projectTitle = `${workTitle} · 第 1 集`;
+  await create.getByRole('textbox', { name: '短剧名称', exact: true }).fill(workTitle);
+  await create.getByRole('button', { name: '创建短剧', exact: true }).click();
   await expect(page.getByLabel('项目名称', { exact: true })).toHaveValue(projectTitle);
   const created = (await rpc('workspace.snapshot')).projects[0];
   assert.equal(created.title, projectTitle);
+  assert.equal(created.originalText, scriptText);
+  assert.equal((await rpc('dramaWork.get', { workId: created.drama.workId })).title, workTitle);
   const project = await rpc('project.update', { projectId: created.id, revision: created.revision, patch: {
     shots: [{ id: 'guide-shot', title: '导览首镜头', narration: '原生导览播放验收。', visualPrompt: '固定画面', durationUs: 5_000_000 }],
   } });
@@ -331,7 +351,7 @@ async function verifyGettingStarted() {
   await expect(page.locator('.workspace-shell')).toBeVisible({ timeout: 30_000 });
   await expect.poll(() => rpc('runtime.status'), { timeout: 20_000 }).toMatchObject({ state: 'ready' });
   await expect(guide).toHaveCount(0);
-  await expect(page.getByRole('heading', { name: '我的项目', exact: true })).toBeVisible();
+  await expect(page.getByRole('heading', { name: '短剧工作室', exact: true })).toBeVisible();
   await openProject(projectTitle);
   const help = page.getByRole('button', { name: '设置', exact: true });
   async function reopenGuide() {
@@ -349,7 +369,7 @@ async function verifyGettingStarted() {
   });
   assert.ok(gettingStartedHelpBounds.left >= 0 && gettingStartedHelpBounds.top >= 0 && gettingStartedHelpBounds.right <= gettingStartedHelpBounds.viewportWidth && gettingStartedHelpBounds.bottom <= gettingStartedHelpBounds.viewportHeight, 'The getting started entry must fit inside the native viewport');
   await reopenGuide();
-  await expect(heading).toHaveText('新建创作项目');
+  await expect(heading).toHaveText('新建短剧');
   assert.equal(await activeTarget(), 'create-project');
   let reachedPreview = false;
   for (let step = 0; step < 20; step++) {
@@ -403,13 +423,25 @@ async function inspectWindow() {
   windows.push({ ...native, viewport: await page.evaluate(() => ({ width: innerWidth, height: innerHeight })) });
 }
 async function openProject(title) {
+  const snapshot = await rpc('workspace.snapshot');
+  const project = snapshot.projects.find(value => value.title === title);
+  assert.ok(project?.drama?.workId, `Native fixture episode must belong to a work: ${title}`);
+  const work = await rpc('dramaWork.get', { workId: project.drama.workId });
   const navigation = page.getByRole('complementary', { name: '工作空间导航', exact: true });
-  await navigation.getByRole('button', { name: '我的项目', exact: true }).click();
-  await page.getByLabel('搜索项目', { exact: true }).fill('');
-  await page.getByRole('button', { name: '全部项目', exact: true }).click();
-  const project = page.locator('.project-card').filter({ has: page.getByRole('heading', { name: title, exact: true }) });
-  await expect(project).toBeVisible();
-  await project.getByRole('button', { name: '继续创作', exact: true }).click();
+  await navigation.getByRole('button', { name: '短剧工作室', exact: true }).click();
+  const library = page.locator('.drama-library');
+  await expect(library).toBeVisible();
+  const back = library.getByRole('button', { name: '短剧工作室', exact: true });
+  if (await back.isVisible()) await back.click();
+  const filters = library.getByRole('group', { name: '作品筛选', exact: true });
+  await expect(filters).toBeVisible();
+  await filters.getByRole('button', { name: '可用', exact: true }).click();
+  await library.getByLabel('搜索作品', { exact: true }).fill(work.title);
+  const card = library.locator('.drama-work-card').filter({ has: page.getByRole('heading', { name: work.title, exact: true }) });
+  await expect(card).toBeVisible(); await card.getByRole('button', { name: '查看分集', exact: true }).click();
+  const episode = library.locator('.drama-episode-row').filter({ has: page.getByRole('heading', { name: title, exact: true }) });
+  await expect(episode).toBeVisible(); await episode.getByRole('button', { name: '打开分集', exact: true }).click();
+  await expect(page.getByRole('textbox', { name: '项目名称', exact: true })).toHaveValue(title);
 }
 function rpc(method, params = {}) { return page.evaluate(({ method, params }) => window.videoQuickly.rpc(method, params), { method, params }); }
 async function findRuntime() {
@@ -502,7 +534,7 @@ try {
   assert.equal(credentialRequests, 1);
   checks.nativeCredentialWriteRead = true;
 
-  let project = await rpc('project.create', { title: 'Electron 原生功能验收', profile: { width: 320, height: 180, frameRate: { numerator: 30, denominator: 1 }, fitMode: 'contain', previewScale: .5 } });
+  let project = await rpc('project.create', { title: 'Electron 原生功能验收', originalText: '第一场 工作室 日\n主角停在桌前，查看眼前的木盒，再缓缓抬起目光。', profile: { width: 320, height: 180, frameRate: { numerator: 30, denominator: 1 }, fitMode: 'contain', previewScale: .5 } });
   project = await rpc('project.update', { projectId: project.id, revision: project.revision, patch: { shots: [{ id: 'native-shot', title: '原生镜头', narration: '', visualPrompt: '', durationUs: 1_000_000 }] } });
   await openProject(project.title);
   const title = page.getByLabel('镜头标题', { exact: true });
@@ -719,11 +751,15 @@ try {
       return { canceled: false, filePath: path };
     };
   }, exportedVideo);
-  await page.getByRole('button', { name: '我的项目', exact: true }).click();
-  await page.getByRole('button', { name: `下载“${project.title}”的完整视频`, exact: true }).click();
-  await expect(page.locator('.notice--success')).toContainText(exportedVideo, { timeout: 60_000 });
+  await page.getByRole('button', { name: '导出', exact: true }).click();
+  const exporter = page.getByRole('dialog', { name: '导出视频', exact: true });
+  await expect(exporter).toBeVisible();
+  await exporter.getByRole('button', { name: '选择输出文件路径', exact: true }).click();
+  await expect(exporter.getByLabel('输出文件路径', { exact: true })).toHaveValue(exportedVideo);
+  await exporter.getByRole('button', { name: '导出 MP4', exact: true }).click();
+  await expect(exporter.locator('.notice--success')).toContainText(exportedVideo, { timeout: 60_000 });
   const saveOptions = await application.evaluate(() => globalThis.__vqVideoSaveOptions);
-  assert.equal(saveOptions.title, '保存完整视频');
+  assert.equal(saveOptions.title, '输出文件路径');
   assert.deepEqual(saveOptions.filters[0].extensions, ['mp4']);
   assert.equal((await readFile(exportedVideo)).subarray(4, 8).toString('ascii'), 'ftyp');
   const { items: [exportRun] } = await rpc('run.list', { projectId: project.id, limit: 1 });
@@ -733,6 +769,8 @@ try {
   assert.equal(Object.hasOwn(exportOutput, 'timelinePath'), false);
   assert.equal((await readdir(dirname(exportOutput.coverPath))).includes('timeline.json'), false);
   await page.screenshot({ path: join(artifacts, 'desktop-project-video-download.png') });
+  await exporter.getByRole('button', { name: '关闭对话框', exact: true }).click();
+  await expect(exporter).toHaveCount(0);
   await openProject(project.title);
   checks.actualExport = true;
 
@@ -799,7 +837,7 @@ try {
   await close(1);
   checks.confirmedQuit = true;
   await launch(); runtimePid = await findRuntime();
-  await expect(page.getByRole('heading', { name: '我的项目', exact: true })).toBeVisible();
+  await expect(page.getByRole('heading', { name: '短剧工作室', exact: true })).toBeVisible();
   checks.projectListStartup = true;
   await openProject(project.title);
   await expect(page.getByLabel('旁白', { exact: true })).toHaveValue('Electron 重启后恢复的未保存草稿');

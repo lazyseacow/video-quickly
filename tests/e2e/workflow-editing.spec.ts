@@ -11,7 +11,7 @@ async function rpc<T>(request: APIRequestContext, method: string, params: unknow
   const result = await response.json(); expect(result.error).toBeUndefined(); return result.result;
 }
 async function fixture(request: APIRequestContext, title: string) {
-  const project = await rpc<ProjectDocument>(request, 'project.create', { title: `${title} ${randomUUID().slice(0, 8)}` });
+  const project = await rpc<ProjectDocument>(request, 'project.create', { originalText: '清晨，林夏在书房发现一封未寄出的信。她来到旧城寻找信的主人，与朋友在雨中的城门重逢。两人读完信后决定一起回家。', title: `${title} ${randomUUID().slice(0, 8)}` });
   return rpc<ProjectDocument>(request, 'project.update', { projectId: project.id, revision: project.revision, patch: {
     profile: { ...project.profile, width: 640, height: 360 }, shots: [{ id: 'shot', title: '配置验收镜头', narration: '', visualPrompt: '', durationUs: 1_000_000 }],
     workflow: { id: 'editable-flow', name: '配置验收流程', version: 1, production: { mode: 'native-video', referenceMode: 'none', soundPrompt: '', subtitleMode: 'off' }, nodes: [{ id: 'a', kind: 'brief', label: '简报 A', position: { x: 0, y: 0 } }, { id: 'b', kind: 'brief', label: '提案 B', position: { x: 360, y: 0 } }], edges: [{ id: 'ab', source: 'a', target: 'b' }] },

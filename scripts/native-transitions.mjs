@@ -16,7 +16,7 @@ export async function verifyNativeTransitions({ page, rpc, openProject, fixture,
   const red = join(directory, 'red.png'), green = join(directory, 'green.mp4'), blue = join(directory, 'blue.png');
   for (const [path, color] of [[red, 'red'], [blue, 'blue']]) await execute(ffmpegPath, ['-v', 'error', '-f', 'lavfi', '-i', `color=c=${color}:s=320x180`, '-frames:v', '1', path], { windowsHide: true, env: environment });
   await execute(ffmpegPath, ['-v', 'error', '-f', 'lavfi', '-i', 'color=c=0x00ff00:s=320x180:r=60:d=0.5', '-an', '-c:v', 'libx264', '-pix_fmt', 'yuv420p', green], { windowsHide: true, env: environment });
-  let project = await rpc('project.create', { title: `原生转场验收 ${randomUUID().slice(0, 6)}`, profile: { width: 320, height: 180, frameRate: { numerator: 60, denominator: 1 }, previewScale: 1 } });
+  let project = await rpc('project.create', { title: `原生转场验收 ${randomUUID().slice(0, 6)}`, originalText: '第一场 色彩剧场 日\n红色幕布打开，绿色光扫过舞台，蓝色幕布合拢。', profile: { width: 320, height: 180, frameRate: { numerator: 60, denominator: 1 }, previewScale: 1 } });
   const assets = [];
   for (const [path, kind] of [[red, 'image'], [green, 'video'], [blue, 'image']]) assets.push(await rpc('asset.import', { projectId: project.id, path, kind }));
   project = (await rpc('project.get', { projectId: project.id })).project;

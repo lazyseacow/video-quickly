@@ -54,7 +54,7 @@ for (const surface of [{ width: 1536, height: 960, theme: 'dark' }, { width: 600
     const text = await rpc<ModelProfile>(request, 'model.save', { model: { name: `Agent 进度 ${randomUUID()}`, provider: 'openai-compatible', baseUrl: `${baseUrl}/v1`, model: 'fixture', connectionType: 'text', capabilities: ['text', 'tools'] } });
     const video = await rpc<ModelProfile>(request, 'model.save', { model: { name: `镜头生成 ${randomUUID()}`, provider: 'custom-http', baseUrl, model: 'fixture', connectionType: 'video', capabilities: ['video'], parameters: { requestPath: 'generate-video', requestTemplate: { prompt: '{{prompt}}', images: '{{character_images}}' }, resultUrlPath: 'url' } } });
     await rpc(request, 'tool.register', { server: { name: '剪辑工具', transport: 'http', url: `${baseUrl}/mcp`, enabled: true } });
-    const created = await rpc<ProjectDocument>(request, 'project.create', { title: `Agent 制作进度 ${randomUUID()}`, brief: '制作蓝色天空视频', profile: { width: 160, height: 90, frameRate: { numerator: 30, denominator: 1 } } });
+    const created = await rpc<ProjectDocument>(request, 'project.create', { originalText: '清晨，林夏在书房发现一封未寄出的信。她来到旧城寻找信的主人，与朋友在雨中的城门重逢。两人读完信后决定一起回家。', title: `Agent 制作进度 ${randomUUID()}`, brief: '制作蓝色天空视频', profile: { width: 160, height: 90, frameRate: { numerator: 30, denominator: 1 } } });
     const project = await rpc<ProjectDocument>(request, 'project.update', { projectId: created.id, revision: created.revision, patch: { workflow: { ...created.workflow, production: { ...created.workflow.production, textModelId: text.id, videoModelId: video.id } } } });
     await page.setViewportSize(surface); await page.addInitScript(theme => localStorage.setItem('vq-theme', theme), surface.theme);
     await page.goto('/'); await openProjectFromList(page, project.title);
@@ -73,7 +73,7 @@ for (const surface of [{ width: 1536, height: 960, theme: 'dark' }, { width: 600
     await page.keyboard.press('Escape'); await expect(detail).toHaveCount(0); editing.release();
     await expect.poll(async () => (await latest()).status, { timeout: 30000 }).toBe('succeeded');
     const inspection = await rpc<RunInspection>(request, 'run.inspect', { runId: run.id });
-    expect(inspection.steps.map(step => step.id)).toEqual(['brief', 'style', 'script', 'assets', 'video', 'animation', 'animation/tool/edit', 'export']);
+    expect(inspection.steps.map(step => step.id)).toEqual(['screenplay', 'brief', 'style', 'script', 'assets', 'video', 'animation', 'animation/tool/edit', 'export']);
     expect(inspection.steps.every(step => step.status === 'succeeded')).toBe(true);
     expect(videoRequests).toBe(1);
     const exportResult = await rpc<{ videoPath: string }>(request, 'node.result', { runId: run.id, nodeId: 'export' });
@@ -83,8 +83,8 @@ for (const surface of [{ width: 1536, height: 960, theme: 'dark' }, { width: 600
     await stages.getByRole('button', { name: '打开阶段：审阅与导出', exact: true }).click();
     const steps = detail.getByRole('navigation', { name: '本次制作步骤', exact: true });
     await expect(steps.locator('button[aria-current="step"]')).toContainText('导出成片');
-    await expect(steps.getByRole('button')).toHaveCount(8);
-    await expect(steps.getByRole('img', { name: '已保存产物', exact: true })).toHaveCount(8);
+    await expect(steps.getByRole('button')).toHaveCount(9);
+    await expect(steps.getByRole('img', { name: '已保存产物', exact: true })).toHaveCount(9);
     await expect(detail).not.toContainText('未纳入本次制作');
 
     await expect(steps.getByRole('button', { name: /剪辑与运镜准备/ })).toHaveCount(1);
@@ -122,8 +122,8 @@ for (const surface of [{ width: 1536, height: 960, theme: 'dark' }, { width: 600
     expect(await detail.evaluate(element => element.scrollWidth <= element.clientWidth)).toBe(true);
     await page.screenshot({ path: info.outputPath(`agent-edit-workflow-${surface.width}.png`) });
 
-    await expect(steps.locator('.run-inspector__index')).toHaveText(['01', '02', '03', '04', '05', '06', '07', '08']);
-    for (const [index, label] of ['简报生成', '风格与角色生成', '分镜生成'].entries()) {
+    await expect(steps.locator('.run-inspector__index')).toHaveText(['01', '02', '03', '04', '05', '06', '07', '08', '09']);
+    for (const [index, label] of ['剧本正文', '简报生成', '风格与角色生成', '分镜生成'].entries()) {
       await expect(steps.getByRole('button').nth(index).locator('strong')).toHaveText(label);
     }
     await page.keyboard.press('Escape'); await expect(detail).toHaveCount(0);

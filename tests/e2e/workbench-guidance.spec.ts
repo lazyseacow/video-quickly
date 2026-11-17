@@ -1,3 +1,4 @@
+import { openProjectFromList } from './workspace-navigation';
 import { pickProductionModel, productionStep, saveProduction } from './production-settings';
 import { randomUUID } from 'node:crypto';
 import { expect, test, type APIRequestContext, type Page } from '@playwright/test';
@@ -10,7 +11,7 @@ async function rpc<T>(request: APIRequestContext, method: string, params: unknow
 async function fixture(request: APIRequestContext) {
   const suffix = randomUUID().slice(0, 8), models: ModelProfile[] = [];
   for (const capability of ['text', 'image', 'video']) models.push(await rpc<ModelProfile>(request, 'model.save', { model: { name: `引导 ${capability} ${suffix}`, provider: 'openai-compatible', model: `fixture-${capability}`, baseUrl: 'http://127.0.0.1:1/v1', connectionType: (([capability]) as readonly string[]).includes('text') ? 'text' : (([capability]) as readonly string[]).includes('video') ? 'video' : 'image', capabilities: capability === 'text' ? ['text', 'tools'] : [capability], parameters: {} } }));
-  const created = await rpc<ProjectDocument>(request, 'project.create', { title: `制作指引 ${suffix}` });
+  const created = await rpc<ProjectDocument>(request, 'project.create', { originalText: '清晨，林夏在书房发现一封未寄出的信。她来到旧城寻找信的主人，与朋友在雨中的城门重逢。两人读完信后决定一起回家。', title: `制作指引 ${suffix}` });
   const project = await rpc<ProjectDocument>(request, 'project.update', { projectId: created.id, revision: created.revision, patch: {
     shots: [], brief: '', workflow: { id: 'guide', version: 1, name: '入门流程', production: { mode: 'native-video', referenceMode: 'none', soundPrompt: '', subtitleMode: 'off' }, nodes: [
       { id: 'brief', kind: 'brief', label: '确定主题' }, { id: 'script', kind: 'script', label: '生成分镜', config: { modelBinding: 'default', requiresModel: true } },
@@ -20,9 +21,7 @@ async function fixture(request: APIRequestContext) {
   return { project, models };
 }
 async function open(page: Page, project: ProjectDocument) {
-  await page.goto('/'); await page.getByRole('button', { name: '我的项目', exact: true }).click();
-  await page.getByLabel('搜索项目', { exact: true }).fill(project.title);
-  await page.locator('.project-card').filter({ hasText: project.title }).getByRole('button', { name: '继续创作', exact: true }).click();
+  await page.goto('/'); await openProjectFromList(page, project.title);
 }
 
 for (const viewport of [{ width: 1536, height: 960, theme: 'dark' }, { width: 390, height: 844, theme: 'light' }]) {

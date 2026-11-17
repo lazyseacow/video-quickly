@@ -1,3 +1,4 @@
+import { openStudio } from './workspace-navigation';
 import { expect, test } from '@playwright/test';
 import { productionFixture, openProduction, pickProductionModel, productionStep, saveProduction } from './production-settings';
 
@@ -12,8 +13,8 @@ for (const width of [1536, 390]) test('saves four native stages once at ' + widt
   await saveProduction(dialog); await expect(dialog).toHaveCount(0); expect(writes).toBe(1);
   const saved = await source.saved(); expect(saved.workflow.production).toMatchObject({ textModelId: source.text.id, videoModelId: source.video.id, referenceMode: 'existing', subtitleMode: 'off' });
   expect(saved.workflow.production.imageModelId).toBeUndefined();
-  expect(saved.workflow.stages).toHaveLength(4); expect(saved.workflow.nodes.map(node => node.id)).toEqual(['brief', 'style', 'script', 'assets', 'video', 'animation', 'export']);
-  await page.reload(); await page.getByRole('button', { name: '我的项目', exact: true }).click();
+  expect(saved.workflow.stages).toHaveLength(4); expect(saved.workflow.nodes.map(node => node.id)).toEqual(['screenplay', 'brief', 'style', 'script', 'assets', 'video', 'animation', 'export']);
+  await page.reload(); await openStudio(page);
   const reopened = await openProduction(page, saved); await productionStep(reopened, '模型与素材'); await expect(reopened.getByRole('combobox', { name: '文本模型', exact: true })).toHaveValue(source.text.name);
   await expect(page.locator('vite-error-overlay')).toHaveCount(0); expect(errors).toEqual([]);
   await expect(reopened.getByRole('combobox', { name: '文本模型', exact: true })).toHaveAttribute('aria-expanded', 'false');

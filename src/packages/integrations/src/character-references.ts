@@ -1,16 +1,16 @@
 import { createHash } from 'node:crypto';
 import { readFile, stat } from 'node:fs/promises';
-import { characterProfileSchema, characterReferencePrompt, creativeReferenceAssetIds, isCreativeReferenceAsset, type AssetRecord, type CharacterProfile, type CreativeContext, type Shot } from '@video-quickly/contracts';
+import { characterProfileSchema, characterReferencePrompt, creativeReferenceAssetIds, isCreativeReferenceAsset, selectedCharacterReferenceAssetIds, shotVisualCharacterIds, type AssetRecord, type CharacterProfile, type CreativeContext, type Shot } from '@video-quickly/contracts';
 
 export const MAX_CHARACTER_REFERENCE_BYTES = 20 * 1024 * 1024;
 export const MAX_CHARACTER_REFERENCE_TOTAL_BYTES = 64 * 1024 * 1024;
 interface CharacterReferenceImage { assetId: string; mimeType: string; dataUrl: string }
 export interface ResolvedCharacterReferences { characters: CharacterProfile[]; prompt: string; images: CharacterReferenceImage[] }
-export interface CharacterReferenceInput { shot: Pick<Shot, 'characterIds' | 'creativeEntityKeys'>; project?: { id?: string; creativeContext?: CreativeContext | null }; characters?: CharacterProfile[]; assets: AssetRecord[]; includeImages?: boolean; referenceIds?: readonly string[] }
+export interface CharacterReferenceInput { shot: Pick<Shot, 'characterIds' | 'creativeEntityKeys' | 'drama'>; project?: { id?: string; creativeContext?: CreativeContext | null }; characters?: CharacterProfile[]; assets: AssetRecord[]; includeImages?: boolean; referenceIds?: readonly string[] }
 
 /** Resolve only the frozen profiles selected by this shot, before any provider request is made. */
 export async function resolveCharacterReferences({ shot, project, characters = [], assets, includeImages = true, referenceIds }: CharacterReferenceInput): Promise<ResolvedCharacterReferences> {
-  const selectedIds = [...new Set(shot.characterIds ?? [])];
+  const selectedIds = shotVisualCharacterIds(shot);
   const profiles = new Map(characters.map(profile => [profile.id, profile]));
   const availableAssets = new Map(assets.map(asset => [asset.id, asset]));
   const selected = selectedIds.map(id => {
@@ -20,7 +20,7 @@ export async function resolveCharacterReferences({ shot, project, characters = [
     if (parsed.archived) throw new Error(`角色「${parsed.name}」已归档，请恢复后重新生成。`);
     return parsed;
   });
-  const libraryIds = new Set(selected.flatMap(profile => profile.referenceAssetIds));
+  const libraryIds = new Set(selected.flatMap(profile => selectedCharacterReferenceAssetIds(profile, shot.drama?.appearances.find(binding => binding.characterId === profile.id)?.appearanceId)));
   const imageIds = referenceIds ?? (includeImages ? [...new Set([...libraryIds, ...creativeReferenceAssetIds(project ?? {}, shot)])] : []);
   const references: AssetRecord[] = [];
   let totalBytes = 0;
@@ -40,6 +40,6 @@ export async function resolveCharacterReferences({ shot, project, characters = [
     if (bytes.length !== asset.size || createHash('sha256').update(bytes).digest('hex') !== asset.sha256) throw new Error(`参考图「${asset.name}」校验失败，请重新导入。`);
     images.push({ assetId: asset.id, mimeType: asset.mimeType, dataUrl: `data:${asset.mimeType};base64,${bytes.toString('base64')}` });
   }
-  const prompt = characterReferencePrompt(selected, imageIds);
+  const prompt = characterReferencePrompt(selected, imageIds, shot);
   return { characters: selected, prompt, images };
 }

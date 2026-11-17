@@ -18,7 +18,7 @@ async function checkLayout(dialog, ...controls) {
 }
 
 export async function verifyNativeCompactDialogs({ page, rpc, openProject, fixture, artifacts, ffmpegPath, environment, checks }) {
-  const created = await rpc('project.create', { title: '最小窗口弹窗验收', profile: { width: 320, height: 180, frameRate: { numerator: 30, denominator: 1 }, fitMode: 'contain', previewScale: 1 } });
+  const created = await rpc('project.create', { title: '最小窗口弹窗验收', originalText: '第一场 小剧场 日\n主角停下脚步。\n旁白：本地弹窗验收字幕。', profile: { width: 320, height: 180, frameRate: { numerator: 30, denominator: 1 }, fitMode: 'contain', previewScale: 1 } });
   const project = await rpc('project.update', { projectId: created.id, revision: created.revision, patch: {
     shots: [{ id: 'compact-preview', title: '窄窗口首镜头', narration: '本地弹窗验收字幕', visualPrompt: '', durationUs: 700_000 }],
     workflow: { id: 'compact-dialogs', name: '本地制作验收', version: 1, production: created.workflow.production,

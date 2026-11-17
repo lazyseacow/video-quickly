@@ -489,7 +489,7 @@ test('starts the default workflow, retries only the failed storyboard and finish
     await expect.poll(async () => (await latest(request, source.project.id))?.status).toBe('failed');
     const failed = await latest(request, source.project.id);
     expect(failed.selection).toBeUndefined();
-    expect(failed).toMatchObject({ stepCount: 7, completedNodeIds: ['brief', 'style'] });
+    expect(failed).toMatchObject({ stepCount: 8, completedNodeIds: ['brief', 'screenplay', 'style'] });
     expect(source.requests).toHaveLength(4);
     expect(JSON.stringify(source.requests[0])).toContain(originalText);
     for (const request of source.requests.slice(2, 4)) expect(JSON.stringify(request)).toContain(originalText);
@@ -504,7 +504,7 @@ test('starts the default workflow, retries only the failed storyboard and finish
     await expect(records).toContainText('后续步骤尚未执行');
     const retried = await latest(request, source.project.id);
     expect(retried).toMatchObject({ id: failed.id, stepRetry: { nodeId: 'script', status: 'completed' } });
-    expect([...retried.completedNodeIds].sort()).toEqual(['brief', 'script', 'style']);
+    expect([...retried.completedNodeIds].sort()).toEqual(['brief', 'screenplay', 'script', 'style']);
     expect(source.requests).toHaveLength(5);
     expect(JSON.stringify(source.requests[4])).toContain('自动视频制作步骤：旁白与分镜');
     expect(JSON.stringify(source.requests[4])).toContain('分辨率、画幅比例、帧率和素材适配方式由制作设置管理，不写入镜头画面');

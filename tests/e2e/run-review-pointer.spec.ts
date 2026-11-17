@@ -1,3 +1,4 @@
+import { openProjectFromList } from './workspace-navigation';
 import { randomUUID } from 'node:crypto';
 import { expect, test, type APIRequestContext, type Page } from '@playwright/test';
 import type { ProjectDocument, RunSummary } from '@video-quickly/contracts';
@@ -7,7 +8,7 @@ async function rpc<T>(request: APIRequestContext, method: string, params: unknow
   const payload = await response.json(); expect(response.ok()).toBe(true); expect(payload.error).toBeUndefined(); return payload.result;
 }
 async function fixture(request: APIRequestContext) {
-  const created = await rpc<ProjectDocument>(request, 'project.create', { title: `自动流程展示 ${randomUUID().slice(0, 8)}` });
+  const created = await rpc<ProjectDocument>(request, 'project.create', { originalText: '清晨，林夏在书房发现一封未寄出的信。她来到旧城寻找信的主人，与朋友在雨中的城门重逢。两人读完信后决定一起回家。', title: `自动流程展示 ${randomUUID().slice(0, 8)}` });
   const project = await rpc<ProjectDocument>(request, 'project.update', { projectId: created.id, revision: created.revision, patch: {
     shots: [{ id: 'shot', title: '保留镜头', narration: '', visualPrompt: '', durationUs: 1_000_000 }],
     workflow: { ...created.workflow, id: 'custom-pointer-review', stages: undefined, nodes: [
@@ -22,9 +23,7 @@ async function fixture(request: APIRequestContext) {
 }
 async function open(page: Page, project: ProjectDocument) {
   await page.emulateMedia({ reducedMotion: 'reduce' }); await page.goto('/');
-  await page.getByRole('button', { name: '我的项目', exact: true }).click();
-  await page.getByLabel('搜索项目', { exact: true }).fill(project.title);
-  await page.locator('.project-card').filter({ hasText: project.title }).getByRole('button', { name: '继续创作', exact: true }).click();
+  await openProjectFromList(page, project.title);
   await expect(page.getByLabel('项目名称', { exact: true })).toHaveValue(project.title);
 }
 

@@ -23,7 +23,7 @@ async function probeVideo(path: string, info: TestInfo, label: string, source = 
   }
 }
 async function fixture(request: APIRequestContext, info: TestInfo, transition: 'fade' | 'wipe') {
-  const created = await rpc<ProjectDocument>(request, 'project.create', { title: `1080长GOP闪烁 ${randomUUID().slice(0, 8)}`, profile: { width: 1920, height: 1080, previewScale: 1, fitMode: 'contain', frameRate: { numerator: 60, denominator: 1 } } });
+  const created = await rpc<ProjectDocument>(request, 'project.create', { originalText: '清晨，林夏在书房发现一封未寄出的信。她来到旧城寻找信的主人，与朋友在雨中的城门重逢。两人读完信后决定一起回家。', title: `1080长GOP闪烁 ${randomUUID().slice(0, 8)}`, profile: { width: 1920, height: 1080, previewScale: 1, fitMode: 'contain', frameRate: { numerator: 60, denominator: 1 } } });
   const assets: AssetRecord[] = [];
   for (const index of [0, 1]) {
     const path = info.outputPath(`independent-1080p24-gop48-${index}.mp4`), palette = index ? ['10c0b0', '1020e0', '10b030'] : ['e02010', 'e08010', 'd0c010'];

@@ -1,3 +1,4 @@
+import { openProjectFromList } from './workspace-navigation';
 import { createServer, type Server } from 'node:http';
 import { randomUUID } from 'node:crypto';
 import { expect, test, type APIRequestContext, type Page } from '@playwright/test';
@@ -24,7 +25,7 @@ async function fixture(request: APIRequestContext, holdStyle = false) {
   await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
   const address = server.address(); if (!address || typeof address === 'string') throw new Error('制作夹具未启动');
   try {
-    const created = await rpc<ProjectDocument>(request, 'project.create', { title: `工作台连续制作 ${randomUUID().slice(0, 8)}` });
+    const created = await rpc<ProjectDocument>(request, 'project.create', { originalText: '清晨，林夏在书房发现一封未寄出的信。她来到旧城寻找信的主人，与朋友在雨中的城门重逢。两人读完信后决定一起回家。', title: `工作台连续制作 ${randomUUID().slice(0, 8)}` });
     const model = await rpc<{ id: string }>(request, 'model.save', { model: { name: '制作夹具', provider: 'openai-compatible', baseUrl: `http://127.0.0.1:${address.port}/v1`, model: 'fixture', connectionType: 'text', capabilities: ['text'] } });
     const project = await rpc<ProjectDocument>(request, 'project.update', { projectId: created.id, revision: created.revision, patch: {
       shots: [{ id: 'original', title: '原镜头', narration: '原旁白', visualPrompt: '', durationUs: 2_000_000 }],
@@ -38,9 +39,7 @@ async function fixture(request: APIRequestContext, holdStyle = false) {
   } catch (error) { await close(server); throw error; }
 }
 async function selectProject(page: Page, project: ProjectDocument) {
-  await page.getByRole('button', { name: '我的项目', exact: true }).click();
-  await page.getByLabel('搜索项目', { exact: true }).fill(project.title);
-  await page.locator('.project-card').filter({ hasText: project.title }).getByRole('button', { name: '继续创作', exact: true }).click();
+  await openProjectFromList(page, project.title);
   await expect(page.getByLabel('项目名称', { exact: true })).toHaveValue(project.title);
 }
 async function open(page: Page, project: ProjectDocument) { await page.goto('/'); await selectProject(page, project); }

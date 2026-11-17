@@ -9,7 +9,7 @@ import { openProjectFromList } from './workspace-navigation';
 async function fixture(request: APIRequestContext, info: TestInfo) {
   const path = info.outputPath('player-source.mp4');
   await promisify(execFile)(process.env.VIDEO_QUICKLY_FFMPEG ?? 'ffmpeg', ['-hide_banner', '-loglevel', 'error', '-y', '-f', 'lavfi', '-i', 'testsrc2=size=320x180:rate=30:duration=8', '-f', 'lavfi', '-i', 'sine=frequency=440:sample_rate=48000:duration=8', '-c:v', 'libx264', '-preset', 'ultrafast', '-pix_fmt', 'yuv420p', '-c:a', 'aac', '-shortest', path], { windowsHide: true });
-  const created = await rpc<ProjectDocument>(request, 'project.create', { title: '播放器验收 ' + randomUUID().slice(0, 8), profile: { width: 640, height: 360, frameRate: { numerator: 30, denominator: 1 }, fitMode: 'contain', previewScale: 1 } });
+  const created = await rpc<ProjectDocument>(request, 'project.create', { originalText: '清晨，林夏在书房发现一封未寄出的信。她来到旧城寻找信的主人，与朋友在雨中的城门重逢。两人读完信后决定一起回家。', title: '播放器验收 ' + randomUUID().slice(0, 8), profile: { width: 640, height: 360, frameRate: { numerator: 30, denominator: 1 }, fitMode: 'contain', previewScale: 1 } });
   const asset = await rpc<AssetRecord>(request, 'asset.import', { projectId: created.id, path, kind: 'video' });
   const { project } = await rpc<{ project: ProjectDocument }>(request, 'project.get', { projectId: created.id });
   return rpc<ProjectDocument>(request, 'project.update', { projectId: project.id, revision: project.revision, patch: {

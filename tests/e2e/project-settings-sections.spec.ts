@@ -9,7 +9,7 @@ async function rpc<T>(request: APIRequestContext, method: string, params: unknow
 }
 
 for (const grouped of [true, false]) test('keeps global project settings available for ' + (grouped ? 'grouped' : 'ungrouped') + ' custom workflows', async ({ page, request }) => {
-  const created = await rpc<ProjectDocument>(request, 'project.create', { title: '自定义流程的项目设置 ' + grouped });
+  const created = await rpc<ProjectDocument>(request, 'project.create', { originalText: '清晨，林夏在书房发现一封未寄出的信。她来到旧城寻找信的主人，与朋友在雨中的城门重逢。两人读完信后决定一起回家。', title: '自定义流程的项目设置 ' + grouped });
   const stages = grouped ? [{ id: 'custom', label: '自定义创作阶段', description: '', nodeIds: created.workflow.nodes.map(node => node.id) }] : undefined;
   const project = await rpc<ProjectDocument>(request, 'project.update', { projectId: created.id, revision: created.revision, patch: { workflow: { ...created.workflow, id: 'custom-project-settings', stages } } });
   await page.goto('/'); await openProjectFromList(page, project.title);
@@ -27,7 +27,7 @@ for (const grouped of [true, false]) test('keeps global project settings availab
 });
 
 test('retains the settings form when saving before opening a project tool fails', async ({ page, request }) => {
-  const project = await rpc<ProjectDocument>(request, 'project.create', { title: '工具打开前保存失败' });
+  const project = await rpc<ProjectDocument>(request, 'project.create', { originalText: '清晨，林夏在书房发现一封未寄出的信。她来到旧城寻找信的主人，与朋友在雨中的城门重逢。两人读完信后决定一起回家。', title: '工具打开前保存失败' });
   await page.goto('/'); await openProjectFromList(page, project.title);
   await page.locator('.project-heading-actions').getByRole('button', { name: '制作设置', exact: true }).click();
   const dialog = page.getByRole('dialog', { name: '制作设置', exact: true }); await productionStep(dialog, '创作要求'); await dialog.getByLabel('简报内容', { exact: true }).fill('失败后保留的创作要求');
@@ -44,7 +44,7 @@ test('retains the settings form when saving before opening a project tool fails'
 
 for (const viewport of [{ width: 1536, height: 960, theme: 'dark' }, { width: 1024, height: 720, theme: 'light' }, { width: 390, height: 844, theme: 'light' }]) {
   test('edits project and production configuration through one entry at ' + viewport.width + 'px', async ({ page, request }, info) => {
-    const created = await rpc<ProjectDocument>(request, 'project.create', { title: '统一设置验收 ' + viewport.width, profile: { width: 320, height: 180, frameRate: { numerator: 24, denominator: 1 }, fitMode: 'contain', previewScale: 1 } });
+    const created = await rpc<ProjectDocument>(request, 'project.create', { originalText: '清晨，林夏在书房发现一封未寄出的信。她来到旧城寻找信的主人，与朋友在雨中的城门重逢。两人读完信后决定一起回家。', title: '统一设置验收 ' + viewport.width, profile: { width: 320, height: 180, frameRate: { numerator: 24, denominator: 1 }, fitMode: 'contain', previewScale: 1 } });
     const project = await rpc<ProjectDocument>(request, 'project.update', { projectId: created.id, revision: created.revision, patch: { shots: ['第一镜头', '第二镜头'].map((title, index) => ({ id: 'settings-shot-' + index, title, narration: '保留所有输入与真实预览。', visualPrompt: '', durationUs: 1_000_000 })) } });
     const errors: string[] = [], writes: string[] = []; page.on('pageerror', error => errors.push(error.message));
     page.on('request', value => { if (value.url().endsWith('/__desktop_rpc') && value.postDataJSON()?.method === 'run.start') writes.push('run.start'); });

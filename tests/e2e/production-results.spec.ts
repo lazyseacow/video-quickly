@@ -68,7 +68,7 @@ for (const { width, theme } of [{ width: 1536, theme: 'dark' }, { width: 1024, t
       await expect(document.getByRole('region', { name: '核心信息', exact: true })).toContainText('三个实用方法');
       const sequence = document.getByRole('region', { name: '叙事顺序', exact: true });
       await expect(sequence.locator('ol > li')).toHaveCount(4); await expect(sequence.locator('strong').first()).toHaveText('黄金 3 秒开场（Hook）');
-      await expect(dialog.locator('.stage-run-view__completion')).toHaveText('7/ 7 项任务完成');
+      await expect(dialog.locator('.stage-run-view__completion')).toHaveText('8/ 8 项任务完成');
       await expect(document.locator('details').filter({ has: page.locator('summary', { hasText: '表达要求' }) })).not.toHaveAttribute('open');
       await page.screenshot({ path: info.outputPath(`production-brief-${width}-${theme}.png`) });
 
@@ -100,7 +100,7 @@ for (const { width, theme } of [{ width: 1536, theme: 'dark' }, { width: 1024, t
       await expect(visual).toContainText('最后一段仍然可读。');
       await expect(dialog.getByText(/^(查看完整原文|查看模型原始返回)$/)).toHaveCount(0);
       await page.screenshot({ path: info.outputPath(`production-style-${width}-${theme}.png`) });
-      await expect(navigation.getByRole('button').locator('strong')).toHaveText(['简报生成', '风格与角色生成', '分镜生成', '参考素材准备', '镜头视频生成', '剪辑与运镜准备', '导出成片']);
+      await expect(navigation.getByRole('button').locator('strong')).toHaveText(['剧本正文', '简报生成', '风格与角色生成', '分镜生成', '参考素材准备', '镜头视频生成', '剪辑与运镜准备', '导出成片']);
       await expect(dialog.getByRole('button', { name: '编辑风格与角色', exact: true })).toBeInViewport();
 
       await navigation.getByRole('button', { name: /分镜生成/ }).click();

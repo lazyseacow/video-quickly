@@ -1,16 +1,16 @@
-import { openProjectFromList, sampleProjectTitle } from './workspace-navigation';
+import { ensureSampleProject, openProjectFromList, openStudio, sampleProjectTitle } from './workspace-navigation';
 import { openCosts, openGuide, openWorkspaceSettings } from './workspace-settings';
 import { randomUUID } from 'node:crypto';
 import { createServer } from 'node:http';
 import { stat } from 'node:fs/promises';
 import { expect, test, type APIRequestContext, type Page, type TestInfo } from '@playwright/test';
-import { createSceneTemplate, type ModelProfile, type ProjectDocument, type RunSummary } from '@video-quickly/contracts';
+import { createSceneTemplate, type DramaWork, type ModelProfile, type ProjectDocument, type ProjectSummary, type RunSummary } from '@video-quickly/contracts';
 import { test as isolatedTest } from './isolated-workspace';
 import { selectModel, settingField } from './settings';
 
 const preference = 'vq-onboarding-v1';
 const targets: Record<string, string[]> = {
-  '新建创作项目': ['create-project'], '打开模型连接': ['models'], '添加模型连接': ['model-connection'], '打开我的项目': ['projects'], '进入创作工作台': ['project-open'],
+  '新建短剧': ['create-project'], '打开模型连接': ['models'], '添加模型连接': ['model-connection'], '打开短剧工作室': ['projects'], '进入分集工作台': ['project-open'],
   '制作设置': ['view'], '展开镜头导航': ['outline-toggle'], '整理镜头': ['shots'], '预览画面': ['preview'],
   '安排镜头节奏': ['timeline'], '展开属性面板': ['inspector-toggle'], '编辑属性': ['inspector'],
   '制作前检查': ['check'], '自动制作': ['produce'], '导出成片': ['export'], '随时重开指引': ['help'],
@@ -22,6 +22,7 @@ test.use({ storageState: async ({ baseURL }, use) => {
   if (!baseURL) throw new Error('Getting-started tests require a local application origin');
   await use(freshProfile(baseURL));
 } });
+test.beforeEach(async ({ page }) => { await ensureSampleProject(page); });
 
 function guide(page: Page) { return page.locator('[data-guide-popover]'); }
 function settings(page: Page) { return page.getByRole('button', { name: '设置', exact: true }); }
@@ -32,7 +33,14 @@ async function nextStep(page: Page) {
   await expect(guide(page).getByRole('heading')).not.toHaveText(previous);
 }
 async function openHighlightedProject(page: Page) {
+  const opensWork = await active(page).evaluate(element => Boolean(element.closest('.drama-work-card')));
   await active(page).click();
+  if (opensWork) {
+    await expect(page.locator('.drama-episode-row').getByRole('button', { name: '打开分集', exact: true }).first()).toBeVisible();
+    await expect(guide(page).getByRole('heading')).toHaveText('进入分集工作台');
+    await expect(active(page)).toHaveText('打开分集');
+    await active(page).click();
+  }
   await expect(guide(page).getByRole('heading')).toHaveText('制作设置');
 }
 function observe(page: Page) {
@@ -40,7 +48,7 @@ function observe(page: Page) {
   page.on('request', request => {
     if (!request.url().endsWith('/__desktop_rpc')) return;
     const method: unknown = request.postDataJSON()?.method;
-    if (typeof method === 'string' && /^(?:project\.(?:create|update|saveShot)|workflow\.save|run\.(?:start|review|resume|restart)|node\.apply|shot\.candidate\.(?:generate|apply)|render\.(?:export|batch\.start)|model\.(?:save|test)|asset\.(?:import|select))$/.test(method)) writes.push(method);
+    if (typeof method === 'string' && /^(?:dramaStudio\.create|project\.(?:create|update|saveShot)|workflow\.save|run\.(?:start|review|resume|restart)|node\.apply|shot\.candidate\.(?:generate|apply)|render\.(?:export|batch\.start)|model\.(?:save|test)|asset\.(?:import|select))$/.test(method)) writes.push(method);
   });
   page.on('pageerror', error => errors.push(error.message));
   page.on('console', entry => { if (entry.type() === 'error') errors.push(entry.text()); });
@@ -51,7 +59,7 @@ async function opened(page: Page) {
   await expect(page.getByRole('navigation', { name: '主导航', exact: true })).toBeVisible();
   await expect(guide(page)).toBeVisible(); await expect(guide(page)).toHaveAttribute('role', 'dialog');
   await expect(guide(page)).toHaveAttribute('aria-label', '使用指南');
-  await expect(guide(page).getByRole('heading')).toHaveText('新建创作项目');
+  await expect(guide(page).getByRole('heading')).toHaveText('新建短剧');
   await expect(page.locator('vite-error-overlay')).toHaveCount(0);
 }
 async function anchored(page: Page) {
@@ -98,7 +106,7 @@ async function reach(page: Page, heading: string) {
   for (let index = 0; index < 20; index++) {
     const current = await guide(page).getByRole('heading').innerText();
     if (current === heading) { await anchored(page); return; }
-    if (current === '进入创作工作台') { await openHighlightedProject(page); continue; }
+    if (current === '进入分集工作台') { await openHighlightedProject(page); continue; }
     const next = guide(page).getByRole('button', { name: '下一步', exact: true });
     if (!await next.isVisible()) break;
     await nextStep(page);
@@ -121,7 +129,7 @@ async function atStep(page: Page, heading: string) {
   await expect(guide(page).getByRole('heading')).toHaveText(heading); await anchored(page);
 }
 async function projectFixture(request: APIRequestContext, title: string, count = 2, durationUs = 5_000_000) {
-  const created = await rpc<ProjectDocument>(request, 'project.create', { title: `${title} ${randomUUID().slice(0, 8)}`, profile: { width: 320, height: 180, frameRate: { numerator: 30, denominator: 1 }, fitMode: 'contain', previewScale: 1 } });
+  const created = await rpc<ProjectDocument>(request, 'project.create', { title: `${title} ${randomUUID().slice(0, 8)}`, originalText: '第一场：清晨，值班员推门进入办公室。第二场：他整理桌上的维修记录，决定向同事核对遗漏的信息。', profile: { width: 320, height: 180, frameRate: { numerator: 30, denominator: 1 }, fitMode: 'contain', previewScale: 1 } });
   return rpc<ProjectDocument>(request, 'project.update', { projectId: created.id, revision: created.revision, patch: { shots: Array.from({ length: count }, (_, index) => ({ id: `interactive-guide-${index}`, title: `操作镜头 ${index + 1}`, narration: '', visualPrompt: '', durationUs, sceneTemplate: createSceneTemplate('process') })) } });
 }
 async function openProjectTour(page: Page, project: ProjectDocument) {
@@ -165,7 +173,7 @@ for (const viewport of [{ width: 1536, height: 960, theme: 'dark', reducedMotion
       const previous = guide(page).getByRole('button', { name: '上一步', exact: true }); if (await previous.count()) await expect(previous).toBeDisabled();
       await page.screenshot({ path: info.outputPath(`tour-first-${viewport.theme}-${viewport.width}.png`) });
       await guide(page).getByRole('button', { name: '下一步', exact: true }).click(); await expect(guide(page).getByRole('heading')).toHaveText('打开模型连接'); await anchored(page);
-      await guide(page).getByRole('button', { name: '上一步', exact: true }).click(); await expect(guide(page).getByRole('heading')).toHaveText('新建创作项目');
+      await guide(page).getByRole('button', { name: '上一步', exact: true }).click(); await expect(guide(page).getByRole('heading')).toHaveText('新建短剧');
       const seen = await walk(page, info, `${viewport.theme}-${viewport.width}-`);
       expect(seen).toContain('create-project'); expect(seen).toContain('models'); expect(seen).toContain('preview'); expect(seen).toContain('timeline'); expect(seen.at(-1)).toBe('help');
       await remembered(page); await openGuide(page); await opened(page);
@@ -228,6 +236,33 @@ test('moves away from a target that becomes hidden instead of leaving a stale cu
   expect(observed.writes).toEqual([]); expect(observed.errors).toEqual([]);
 });
 
+test('resumes the same episode guide after an unchanged background refresh completes', async ({ page, request }) => {
+  const sample = await ensureSampleProject(page), observed = observe(page);
+  await page.emulateMedia({ reducedMotion: 'reduce' }); await page.goto('/'); await opened(page); await reach(page, '进入分集工作台');
+  await expect(active(page)).toHaveText('查看分集');
+  expect(await active(page).evaluate(element => element.closest('.drama-work-card')?.getAttribute('data-work-id'))).toBe(sample.drama!.workId);
+  await active(page).click();
+  const openEpisode = page.locator(`.drama-episode-row[data-project-id="${sample.id}"]`).getByRole('button', { name: '打开分集', exact: true });
+  await expect(openEpisode).toBeVisible(); await atStep(page, '进入分集工作台');
+  await expect(active(page)).toHaveText('打开分集');
+  const episodes = await rpc<ProjectSummary[]>(request, 'dramaWork.episodes', { workId: sample.drama!.workId });
+  const held = await holdNextRpc(page, 'dramaWork.episodes');
+  try {
+    await rpc<ProjectDocument>(request, 'project.create', { title: `独立刷新触发 ${randomUUID().slice(0, 8)}`, originalText: '第一场：夜班员在另一间办公室核对独立的值班记录。' });
+    await held.entered;
+    await expect(guide(page)).toHaveCount(0); await expect(openEpisode).toBeVisible();
+    const response = page.waitForResponse(response => response.url().endsWith('/__desktop_rpc') && response.request().postDataJSON()?.method === 'dramaWork.episodes' && response.request().postDataJSON()?.params?.workId === sample.drama!.workId);
+    held.release();
+    const payload = await (await response).json(); expect(payload.error).toBeUndefined(); expect(payload.result).toEqual(episodes);
+    await atStep(page, '进入分集工作台'); await expect(active(page)).toHaveText('打开分集');
+    await active(page).click();
+    await expect(page.locator('.workbench')).toBeVisible(); await expect(page.getByLabel('项目名称', { exact: true })).toHaveValue(sample.title);
+    await atStep(page, '制作设置');
+    expect((await savedProject(request, sample.id)).revision).toBe(sample.revision);
+    expect(observed.writes).toEqual([]); expect(observed.errors).toEqual([]);
+  } finally { held.release(); }
+});
+
 test('targets panel toggles when their actual workbench panels are hidden', async ({ page }) => {
   const observed = observe(page); await page.emulateMedia({ reducedMotion: 'reduce' }); await dismissFirst(page);
   await openProjectFromList(page, sampleProjectTitle);
@@ -261,7 +296,7 @@ test('keeps the consolidated settings and scrollable navigation reachable at the
 });
 
 test('isolates editor shortcuts and preserves an unsaved project draft throughout a multi-step tour', async ({ page, request }) => {
-  const created = await rpc<ProjectDocument>(request, 'project.create', { title: `定位指引保留草稿 ${randomUUID().slice(0, 8)}` });
+  const created = await rpc<ProjectDocument>(request, 'project.create', { title: `定位指引保留草稿 ${randomUUID().slice(0, 8)}`, originalText: '第一场：值班员在清晨整理桌面的维修单。第二场：他看向门外，与赶来的同事确认今天的安排。' });
   const project = await rpc<ProjectDocument>(request, 'project.update', { projectId: created.id, revision: created.revision, patch: { shots: [0, 1].map(index => ({ id: `guide-shot-${index}`, title: `原始镜头 ${index}`, narration: '', visualPrompt: '', durationUs: 5_000_000, sceneTemplate: createSceneTemplate('process') })) } });
   const observed = observe(page); await page.emulateMedia({ reducedMotion: 'reduce' }); await dismissFirst(page);
   await openProjectFromList(page, project.title);
@@ -280,45 +315,30 @@ test('isolates editor shortcuts and preserves an unsaved project draft throughou
   expect(observed.writes).toEqual([]); expect(observed.errors).toEqual([]);
 });
 
-test('continues the same tour only after a real project is created, preserving cancellation and failure', async ({ page, request }) => {
+test('continues the same tour only after a real short drama is created and preserves failed inputs', async ({ page, request }) => {
   const observed = observe(page); await page.emulateMedia({ reducedMotion: 'reduce' }); await page.goto('/'); await opened(page);
-  const dialog = page.getByRole('dialog', { name: '新建视频项目', exact: true });
-  await active(page).click(); await expect(dialog).toBeVisible(); await expect(guide(page)).toHaveCount(0); await expect(page.locator('.driver-overlay')).toHaveCount(0);
+  const composer = page.locator('section.drama-composer[data-guide="create-project"]');
+  await expect(active(page)).toHaveClass(/drama-composer/);
+  const title = composer.getByRole('textbox', { name: '短剧名称', exact: true }), body = composer.getByRole('textbox', { name: '剧本正文', exact: true });
+  const submit = composer.getByRole('button', { name: '创建短剧', exact: true });
+  await submit.click(); await atStep(page, '新建短剧'); expect(observed.writes).toEqual([]);
+  await title.fill('导览失败时保留输入'); await submit.click(); await atStep(page, '新建短剧'); expect(observed.writes).toEqual([]);
+  await body.fill('第一场：夜班员把维修单放在桌上，抬头看见熟悉的签名。');
+  const failed = await holdNextRpc(page, 'dramaStudio.create', '隔离的新建失败');
+  await submit.click(); await failed.entered; await atStep(page, '新建短剧'); await expect(submit).toBeDisabled(); failed.release();
+  await expect(page.getByText('隔离的新建失败', { exact: true })).toBeVisible(); await atStep(page, '新建短剧');
+  await expect(title).toHaveValue('导览失败时保留输入'); await expect(body).toHaveValue(/夜班员/);
   expect(await page.evaluate(key => localStorage.getItem(key), preference)).toBeNull();
-  await expect(dialog.getByLabel('项目名称', { exact: true })).toBeFocused(); await dialog.getByLabel('项目名称', { exact: true }).fill('取消时不创建'); await page.keyboard.press('Escape'); await atStep(page, '新建创作项目');
-  const failed = await holdNextRpc(page, 'project.create', '隔离的新建失败');
-  await active(page).click(); await dialog.getByLabel('项目名称', { exact: true }).fill('失败时不推进'); await dialog.getByRole('button', { name: '创建项目', exact: true }).click();
-  await failed.entered; await expect(guide(page)).toHaveCount(0); failed.release();
-  await expect(page.getByText('隔离的新建失败', { exact: true })).toBeVisible(); await expect(dialog).toBeVisible();
-  await dialog.getByRole('button', { name: '取消', exact: true }).click(); await atStep(page, '新建创作项目');
-  await page.emulateMedia({ reducedMotion: 'no-preference' });
-  const cancelled = await holdNextRpc(page, 'project.create'), cancelledTitle = `关闭动画中的迟到创建 ${randomUUID().slice(0, 8)}`;
-  await active(page).click(); await dialog.getByLabel('项目名称', { exact: true }).fill(cancelledTitle);
-  const cancelledResponse = page.waitForResponse(response => response.url().endsWith('/__desktop_rpc') && response.request().postDataJSON()?.method === 'project.create');
-  await dialog.getByRole('button', { name: '创建项目', exact: true }).click(); await cancelled.entered;
-  const dismissal = await dialog.locator('.dialog__surface').evaluateHandle(element => {
-    const state = { becameInert: false };
-    const observer = new MutationObserver(() => { state.becameInert ||= (element as HTMLElement).inert; });
-    observer.observe(element, { attributes: true, attributeFilter: ['inert'] });
-    return { state, stop: () => observer.disconnect() };
-  });
-  await dialog.getByRole('button', { name: '关闭对话框', exact: true }).click();
-  cancelled.release();
-  try { expect(await dismissal.evaluate(value => { value.stop(); return value.state.becameInert; })).toBe(true); }
-  finally { await dismissal.dispose(); }
-  const cancelledProject: ProjectDocument = (await (await cancelledResponse).json()).result;
-  expect((await savedProject(request, cancelledProject.id)).title).toBe(cancelledTitle); await atStep(page, '新建创作项目');
-  expect(await page.evaluate(key => localStorage.getItem(key), preference)).toBeNull(); await page.emulateMedia({ reducedMotion: 'reduce' });
-  const pending = await holdNextRpc(page, 'project.create'), title = `导览中真实新建 ${randomUUID().slice(0, 8)}`;
-  await active(page).click(); await dialog.getByLabel('项目名称', { exact: true }).fill(title);
-  const response = page.waitForResponse(response => response.url().endsWith('/__desktop_rpc') && response.request().postDataJSON()?.method === 'project.create');
-  await dialog.getByRole('button', { name: '创建项目', exact: true }).click(); await pending.entered;
-  await expect(guide(page)).toHaveCount(0); expect(await page.evaluate(key => localStorage.getItem(key), preference)).toBeNull(); pending.release();
-  const created: ProjectDocument = (await (await response).json()).result;
-  await expect(dialog).toHaveCount(0); await atStep(page, '打开模型连接'); await expect(page.getByLabel('项目名称', { exact: true })).toHaveValue(title);
-  expect((await savedProject(request, created.id)).title).toBe(title); expect(observed.writes).toEqual(['project.create', 'project.create', 'project.create']); expect(observed.errors).toEqual([]);
+  const pending = await holdNextRpc(page, 'dramaStudio.create'), acceptedTitle = `导览中真实短剧 ${randomUUID().slice(0, 8)}`;
+  await title.fill(acceptedTitle);
+  const response = page.waitForResponse(response => response.url().endsWith('/__desktop_rpc') && response.request().postDataJSON()?.method === 'dramaStudio.create');
+  await submit.evaluate((button: HTMLButtonElement) => { button.click(); button.click(); }); await pending.entered;
+  await expect(submit).toBeDisabled(); await atStep(page, '新建短剧'); pending.release();
+  const created: { project: ProjectDocument } = (await (await response).json()).result;
+  await atStep(page, '打开模型连接'); await expect(page.getByLabel('项目名称', { exact: true })).toHaveValue(created.project.title);
+  expect((await savedProject(request, created.project.id)).originalText).toContain('夜班员');
+  expect(observed.writes).toEqual(['dramaStudio.create', 'dramaStudio.create']); expect(observed.errors).toEqual([]);
 });
-
 test('navigates to current model controls, saves a real local connection and returns to the workbench', async ({ page, request }) => {
   const provider = await localProvider(), observed = observe(page);
   try {
@@ -332,9 +352,9 @@ test('navigates to current model controls, saves a real local connection and ret
     await dialog.getByRole('button', { name: '获取模型列表', exact: true }).click();
     const model = dialog.getByLabel('模型 ID', { exact: true }); await expect(model).toBeEnabled(); await selectModel(dialog, 'guide-local-text');
     const pending = await holdNextRpc(page, 'model.save'); await dialog.getByRole('button', { name: '保存连接', exact: true }).click(); await pending.entered;
-    await expect(guide(page)).toHaveCount(0); pending.release(); await expect(dialog).toHaveCount(0); await atStep(page, '打开我的项目');
+    await expect(guide(page)).toHaveCount(0); pending.release(); await expect(dialog).toHaveCount(0); await atStep(page, '打开短剧工作室');
     const summary = await rpc<{ models: ModelProfile[] }>(request, 'workspace.summary'); expect(summary.models.find(model => model.name === name)).toMatchObject({ model: 'guide-local-text', baseUrl: provider.baseUrl });
-    await active(page).click(); await atStep(page, '进入创作工作台'); await active(page).click(); await expect(page.getByLabel('项目名称', { exact: true })).toBeVisible(); await atStep(page, '制作设置');
+    await active(page).click(); await atStep(page, '进入分集工作台'); await openHighlightedProject(page); await expect(page.getByLabel('项目名称', { exact: true })).toBeVisible(); await atStep(page, '制作设置');
     await active(page).click(); await expect(page.getByRole('dialog', { name: '制作设置', exact: true })).toBeVisible();
     await page.getByRole('dialog', { name: '制作设置', exact: true }).getByRole('button', { name: '关闭对话框', exact: true }).click(); await atStep(page, '整理镜头');
     expect(provider.calls.length).toBeGreaterThan(0); expect(provider.calls.every(call => call.method === 'GET')).toBe(true);
@@ -422,38 +442,35 @@ test('keeps export cancellation and failure in place and advances only after a r
   await dialog.getByRole('button', { name: '关闭对话框', exact: true }).click(); await atStep(page, '随时重开指引'); expect(observed.writes).toEqual(['render.export', 'render.export']); expect(observed.errors).toEqual([]);
 });
 
-isolatedTest('guides an empty workspace through the normal project list and preserves its layout through restore and archive', async ({ page, request, isolatedWorkspace }) => {
-  const sample = await rpc<ProjectDocument>(request, 'project.create', { title: '空列表恢复验收' });
-  const before = await rpc<{ projects: ProjectDocument[] }>(request, 'workspace.snapshot');
-  for (const project of before.projects.filter(project => !project.archived)) await rpc(request, 'project.archive', { projectId: project.id, revision: project.revision });
+isolatedTest('guides an empty studio and preserves works and episodes through restore and archive', async ({ page, request, isolatedWorkspace }) => {
+  const sample = await rpc<ProjectDocument>(request, 'project.create', { title: '空工作室恢复验收', originalText: '人物在清晨打开值班室的门。' });
+  const before = await rpc<{ items: DramaWork[] }>(request, 'dramaWork.list');
+  for (const work of before.items) await rpc(request, 'dramaWork.archive', { workId: work.id, revision: work.revision });
   const observed = observe(page); await page.emulateMedia({ reducedMotion: 'reduce' }); await page.goto('/'); await opened(page);
-  const main = page.getByRole('main');
-  const heading = main.getByRole('heading', { name: '我的项目', level: 1, exact: true });
+  const main = page.getByRole('main'), heading = main.getByRole('heading', { name: '短剧工作室', level: 1, exact: true });
   await expect(heading).toBeVisible();
   const seen = await walk(page); expect(seen).toEqual(['create-project', 'models', 'projects', 'help']);
-  const list = main.getByRole('region', { name: '项目列表', exact: true });
-  const empty = list.getByRole('heading', { name: '还没有视频项目', exact: true });
-  await expect(empty).toBeVisible();
-  await expect(main.getByLabel('搜索项目', { exact: true })).toBeVisible();
-  await expect(main.getByRole('button', { name: '全部项目', exact: true })).toHaveText('全部 0');
-  await expect(main.getByRole('button', { name: '新建项目', exact: true })).toBeEnabled();
-  await expect(main.getByRole('button', { name: /作品与分集|导入项目/ })).toHaveCount(0);
-  expect((await rpc<{ projects: ProjectDocument[] }>(request, 'workspace.snapshot')).projects.every(project => project.archived)).toBe(true);
+  await expect(main.getByRole('heading', { name: '创作你的第一部短剧', exact: true })).toBeVisible();
+  await expect(main.getByLabel('搜索作品', { exact: true })).toBeVisible();
+  await expect(main.getByRole('region', { name: '让故事成为一部短剧', exact: true }).getByRole('button', { name: '创建短剧', exact: true })).toBeEnabled();
+  expect((await rpc<{ items: DramaWork[] }>(request, 'dramaWork.list')).items).toEqual([]);
   expect(isolatedWorkspace.origin).toBe(new URL(page.url()).origin); expect(observed.writes).toEqual([]); expect(observed.errors).toEqual([]);
-
   await page.setViewportSize({ width: 360, height: 844 });
-  const listElement = await list.elementHandle();
-  await main.getByRole('button', { name: '回收站', exact: true }).click();
-  const card = list.locator('.project-card').filter({ has: page.getByRole('heading', { name: sample.title, exact: true }) });
-  await card.getByRole('button', { name: '恢复项目', exact: true }).click();
-  await main.getByRole('button', { name: '全部项目', exact: true }).click();
-  await expect(card).toBeVisible();
-  expect(await listElement!.evaluate(element => element.isConnected)).toBe(true);
-  await card.getByRole('button', { name: '继续创作', exact: true }).click();
-  await expect(page.locator('.workbench')).toBeVisible();
-  await rpc(request, 'project.archive', { projectId: sample.id });
-  await expect(heading).toBeVisible();
-  await expect(empty).toBeVisible();
+  const filters = main.getByRole('group', { name: '作品筛选', exact: true });
+  await filters.getByRole('button', { name: '已归档', exact: true }).click();
+  const card = main.locator(`.drama-work-card[data-work-id="${sample.drama!.workId}"]`);
+  await card.getByRole('button', { name: '查看分集', exact: true }).click();
+  await main.getByRole('button', { name: '恢复作品', exact: true }).click();
+  await expect(main.getByRole('button', { name: '新建分集', exact: true })).toBeEnabled();
+  await main.locator(`.drama-episode-row[data-project-id="${sample.id}"]`).getByRole('button', { name: '打开分集', exact: true }).click();
+  await expect(page.locator('.workbench')).toBeVisible(); await expect(page.getByLabel('项目名称', { exact: true })).toHaveValue(sample.title);
+  await openStudio(page);
+  await filters.getByRole('button', { name: '可用', exact: true }).click();
+  await main.getByRole('searchbox', { name: '搜索作品', exact: true }).fill('');
+  const restored = await rpc<DramaWork>(request, 'dramaWork.get', { workId: sample.drama!.workId });
+  await rpc(request, 'dramaWork.archive', { workId: restored.id, revision: restored.revision });
+  await expect(heading).toBeVisible(); await expect(main.getByRole('heading', { name: '创作你的第一部短剧', exact: true })).toBeVisible();
+  expect((await savedProject(request, sample.id)).archived).toBe(false);
   expect(await main.evaluate(element => element.scrollWidth - element.clientWidth)).toBeLessThanOrEqual(1);
   expect(observed.errors).toEqual([]);
 });

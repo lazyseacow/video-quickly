@@ -14,7 +14,7 @@ for (const viewport of [{ width: 1536, height: 960, theme: 'dark' }, { width: 39
   test(`sets MP4 options together and preserves them when downloading other formats at ${viewport.width}px`, async ({ page, request }, info) => {
     // Form setup and downloads precede the separate 30-second native render wait.
     test.setTimeout(60_000);
-    const created = await rpc<ProjectDocument>(request, 'project.create', { title: `分区导出验收 ${viewport.width}`, profile: { width: 320, height: 180, frameRate: { numerator: 30000, denominator: 1001 }, fitMode: 'contain', previewScale: 1 } });
+    const created = await rpc<ProjectDocument>(request, 'project.create', { originalText: '清晨，林夏在书房发现一封未寄出的信。她来到旧城寻找信的主人，与朋友在雨中的城门重逢。两人读完信后决定一起回家。', title: `分区导出验收 ${viewport.width}`, profile: { width: 320, height: 180, frameRate: { numerator: 30000, denominator: 1001 }, fitMode: 'contain', previewScale: 1 } });
     const project = await rpc<ProjectDocument>(request, 'project.update', { projectId: created.id, revision: created.revision, patch: { shots: [{ id: 'export-scene', title: '导出首镜头', narration: '分区导出测试字幕', visualPrompt: '', durationUs: 700_000 }] } });
     const errors: string[] = []; page.on('pageerror', error => errors.push(error.message));
     await page.addInitScript(theme => localStorage.setItem('vq-theme', theme), viewport.theme);

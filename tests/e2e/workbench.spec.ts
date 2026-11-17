@@ -2,7 +2,7 @@ import { confirmAction } from './confirmation-actions';
 import { saveProduction } from './production-settings';
 import { selectModel, closeProjectSettings } from './settings';
 import { createSceneTemplate, type ProjectDocument } from '@video-quickly/contracts';
-import { openProjectFromList, sampleProjectTitle } from './workspace-navigation';
+import { openProjectFromList, sampleProjectTitle, openStudio, ensureSampleProject } from './workspace-navigation';
 import { setWorkspaceTheme } from './workspace-settings';
 import { addModelConnection } from './settings';
 import { projectSettingField } from './settings';
@@ -19,7 +19,7 @@ async function openApp(page: Page) {
 }
 
 async function completedProjectFixture(request: APIRequestContext) {
-  const response = await request.post('/__desktop_rpc', { data: { method: 'project.create', params: { title: `自定义审阅回归 ${Date.now()}` } } });
+  const response = await request.post('/__desktop_rpc', { data: { method: 'project.create', params: { originalText: '清晨，林夏在书房发现一封未寄出的信。她来到旧城寻找信的主人，与朋友在雨中的城门重逢。两人读完信后决定一起回家。', title: `自定义审阅回归 ${Date.now()}` } } });
   const project: ProjectDocument = (await response.json()).result;
   const saved = await request.post('/__desktop_rpc', { data: { method: 'project.update', params: { projectId: project.id, revision: project.revision, patch: {
     workflow: { ...project.workflow, id: `local-script-${project.id}`, stages: undefined, nodes: project.workflow.nodes.filter(node => node.id === 'script').map(node => ({ ...node, config: {} })), edges: [] },
@@ -62,7 +62,7 @@ test('dismisses success and error notifications after two seconds and restarts f
   await page.emulateMedia({ reducedMotion: 'reduce' });
   const time = new Date('2026-01-01T00:00:00Z');
   await page.clock.install({ time });
-  const created = await request.post('/__desktop_rpc', { data: { method: 'project.create', params: { title: '两秒提示验收' } } });
+  const created = await request.post('/__desktop_rpc', { data: { method: 'project.create', params: { originalText: '清晨，林夏在书房发现一封未寄出的信。她来到旧城寻找信的主人，与朋友在雨中的城门重逢。两人读完信后决定一起回家。', title: '两秒提示验收' } } });
   const project = (await created.json()).result;
   await request.post('/__desktop_rpc', { data: { method: 'project.update', params: { projectId: project.id, revision: project.revision, patch: { shots: [{ id: 'timed-toast-shot', title: '计时验收镜头', narration: '', visualPrompt: '', durationUs: 1_000_000 }] } } } });
   await openApp(page);
@@ -118,7 +118,7 @@ for (const reducedMotion of ['no-preference', 'reduce'] as const) {
     });
     await page.emulateMedia({ reducedMotion });
     const title = `动效交互验收 ${reducedMotion}`;
-    const created = await request.post('/__desktop_rpc', { data: { method: 'project.create', params: { title } } });
+    const created = await request.post('/__desktop_rpc', { data: { method: 'project.create', params: { originalText: '清晨，林夏在书房发现一封未寄出的信。她来到旧城寻找信的主人，与朋友在雨中的城门重逢。两人读完信后决定一起回家。', title } } });
     const project = (await created.json()).result;
     await request.post('/__desktop_rpc', { data: { method: 'project.update', params: { projectId: project.id, revision: project.revision, patch: { shots: [{ id: 'motion-shot', title: '动效验收镜头', narration: '', visualPrompt: '', durationUs: 3_000_000 }] } } } });
     await openApp(page);
@@ -153,18 +153,15 @@ for (const reducedMotion of ['no-preference', 'reduce'] as const) {
     await page.getByRole('button', { name: '关闭提示', exact: true }).click();
     await expect(page.locator('.toast-anchor')).toHaveCount(0);
 
-    const create = page.getByRole('button', { name: '新建项目', exact: true });
-    const dialog = page.getByRole('dialog', { name: '新建视频项目', exact: true });
-    for (const close of ['Escape', 'button', 'backdrop']) {
-      await create.click();
-      await expect(dialog).toBeVisible();
-      await expect(dialog.getByLabel('项目名称', { exact: true })).toBeFocused();
-      if (close === 'Escape') await page.keyboard.press('Escape');
-      else if (close === 'button') await dialog.getByRole('button', { name: '关闭对话框', exact: true }).click();
-      else await page.mouse.click(8, 8);
-      await expect(dialog).toHaveCount(0);
-      await expect(create).toBeFocused();
-    }
+    const create = page.getByRole('button', { name: '新建短剧', exact: true });
+    await create.click();
+    const composer = page.getByRole('region', { name: '让故事成为一部短剧', exact: true });
+    await expect(composer.getByRole('textbox', { name: '短剧名称', exact: true })).toBeFocused();
+    await composer.getByRole('textbox', { name: '短剧名称', exact: true }).fill('切换后保留的创作输入');
+    await openProjectFromList(page, project.title);
+    await create.press('Enter');
+    await expect(composer.getByRole('textbox', { name: '短剧名称', exact: true })).toHaveValue('切换后保留的创作输入');
+    await openProjectFromList(page, project.title);
     // Change the preference in an already-mounted app, then unmount animated surfaces.
     await page.locator('.project-heading-actions').getByRole('button', { name: '制作设置', exact: true }).click();
     await page.emulateMedia({ reducedMotion: reducedMotion === 'reduce' ? 'no-preference' : 'reduce' });
@@ -194,7 +191,7 @@ for (const reducedMotion of ['no-preference', 'reduce'] as const) {
 }
 
 test('preserves a draft across disconnect and reconnect without retrying a mutation', async ({ page, request }) => {
-  const created = await request.post('/__desktop_rpc', { data: { method: 'project.create', params: { title: '执行组件重连验收' } } });
+  const created = await request.post('/__desktop_rpc', { data: { method: 'project.create', params: { originalText: '清晨，林夏在书房发现一封未寄出的信。她来到旧城寻找信的主人，与朋友在雨中的城门重逢。两人读完信后决定一起回家。', title: '执行组件重连验收' } } });
   const project = (await created.json()).result;
   await request.post('/__desktop_rpc', { data: { method: 'project.update', params: { projectId: project.id, revision: project.revision, patch: { shots: [{ id: 'reconnect-shot', title: '重连验证', narration: '', visualPrompt: '', durationUs: 1_000_000 }] } } } });
   await openApp(page);
@@ -235,12 +232,11 @@ test('scrubs continuously, steps fractional frames and preserves the editing dra
     expect(payload.error).toBeUndefined();
     return payload.result;
   };
-  const project = await rpc('project.create', { title: '时间轴交互验收', profile: { width: 640, height: 360, frameRate: { numerator: 30000, denominator: 1001 }, fitMode: 'contain', previewScale: .5 } });
+  const project = await rpc('project.create', { originalText: '清晨，林夏在书房发现一封未寄出的信。她来到旧城寻找信的主人，与朋友在雨中的城门重逢。两人读完信后决定一起回家。', title: '时间轴交互验收', profile: { width: 640, height: 360, frameRate: { numerator: 30000, denominator: 1001 }, fitMode: 'contain', previewScale: .5 } });
   const shots = [0, 1].map(index => ({ id: `scrub-${index}`, title: `拖动镜头 ${index + 1}`, narration: `旁白 ${index + 1}`, visualPrompt: '', durationUs: 3_000_000, claimIds: [], locked: false, animation: { panX: 0, panY: 0, zoom: 1.02, transition: 'cut' } }));
   await rpc('project.update', { projectId: project.id, revision: project.revision, patch: { shots } });
   await openApp(page);
-  await page.getByRole('button', { name: '我的项目', exact: true }).click();
-  await page.locator('.project-card').filter({ hasText: '时间轴交互验收' }).getByRole('button', { name: /继续创作/ }).click();
+  await openProjectFromList(page, '时间轴交互验收');
   await page.getByLabel('镜头标题', { exact: true }).fill('尚未保存的标题');
   const ruler = page.getByRole('slider', { name: '预览播放位置' });
   await ruler.focus(); await ruler.press('Home'); await ruler.press('ArrowRight');
@@ -284,8 +280,7 @@ test('scrubs continuously, steps fractional frames and preserves the editing dra
   await page.getByRole('button', { name: '保存镜头', exact: true }).click();
   await expect(page.getByRole('button', { name: '保存镜头', exact: true })).toBeDisabled();
   await page.reload();
-  await page.getByRole('button', { name: '我的项目', exact: true }).click();
-  await page.locator('.project-card').filter({ hasText: '时间轴交互验收' }).getByRole('button', { name: /继续创作/ }).click();
+  await openProjectFromList(page, '时间轴交互验收');
   await expect(page.getByLabel('镜头标题', { exact: true })).toHaveValue('尚未保存的标题');
 });
 
@@ -293,13 +288,14 @@ test('edits real project state, output profiles and theme', async ({ page }) => 
   const errors: string[] = [];
   page.on('pageerror', error => errors.push(error.message));
   await openApp(page);
+  const sample = await ensureSampleProject(page);
   await openProjectFromList(page, sampleProjectTitle);
   await expect(page).toHaveTitle(/Video Quickly/);
   await expect(page.getByRole('button', { name: '模型连接', exact: true })).toBeVisible();
   await expect(page.locator('vite-error-overlay')).toHaveCount(0);
   await expect(page.getByLabel('镜头标题', { exact: true })).toHaveValue('一纸登科，改变了什么？');
   await page.getByLabel('镜头标题', { exact: true }).fill('一纸登科 · 已编辑');
-  const shotSaved = page.waitForResponse(response => response.url().endsWith('/__desktop_rpc') && response.status() === 200 && response.request().postDataJSON()?.method === 'project.update' && response.request().postDataJSON()?.params.projectId === 'example-history');
+  const shotSaved = page.waitForResponse(response => response.url().endsWith('/__desktop_rpc') && response.status() === 200 && response.request().postDataJSON()?.method === 'project.update' && response.request().postDataJSON()?.params.projectId === sample.id);
   await page.getByRole('button', { name: '保存镜头', exact: true }).click();
   await expect(page.getByRole('button', { name: '保存镜头', exact: true })).toBeDisabled();
   expect((await (await shotSaved).json()).error).toBeUndefined();
@@ -313,7 +309,7 @@ test('edits real project state, output profiles and theme', async ({ page }) => 
   const production = page.getByRole('dialog', { name: '制作设置', exact: true });
   await expect(production.getByLabel('视频宽度', { exact: true })).toHaveCount(0);
   await expect(production.getByLabel('视频高度', { exact: true })).toHaveCount(0);
-  const profileSaved = page.waitForResponse(response => response.url().endsWith('/__desktop_rpc') && response.status() === 200 && response.request().postDataJSON()?.method === 'project.update' && response.request().postDataJSON()?.params.projectId === 'example-history');
+  const profileSaved = page.waitForResponse(response => response.url().endsWith('/__desktop_rpc') && response.status() === 200 && response.request().postDataJSON()?.method === 'project.update' && response.request().postDataJSON()?.params.projectId === sample.id);
   await saveProduction(production);
   expect((await (await profileSaved).json()).result.profile).toMatchObject({ width: 1080, height: 1920, frameRate: { numerator: 60, denominator: 1 } });
   await page.reload();
@@ -333,8 +329,7 @@ test('edits real project state, output profiles and theme', async ({ page }) => 
 });
 
 test('resizes and restores editor panels, and saves before opening a recent project', async ({ page, request }) => {
-  const snapshot = await request.post('/__desktop_rpc', { data: { method: 'workspace.snapshot' } });
-  const original = (await snapshot.json()).result.projects.find((project: { id: string }) => project.id === 'example-history');
+  const original = await ensureSampleProject(page);
   await openApp(page);
   await openProjectFromList(page, original.title);
   await expect(page.getByLabel('项目名称', { exact: true })).toHaveValue(original.title);
@@ -355,7 +350,7 @@ test('resizes and restores editor panels, and saves before opening a recent proj
   await expect(page.locator('#project-inspector')).toBeHidden();
   await page.getByRole('button', { name: '退出专注预览', exact: true }).click();
   await expect(page.getByLabel('镜头标题', { exact: true })).toHaveValue('专注模式保留的草稿');
-  const created = await request.post('/__desktop_rpc', { data: { method: 'project.create', params: { title: '侧栏切换验收项目' } } });
+  const created = await request.post('/__desktop_rpc', { data: { method: 'project.create', params: { originalText: '清晨，林夏在书房发现一封未寄出的信。她来到旧城寻找信的主人，与朋友在雨中的城门重逢。两人读完信后决定一起回家。', title: '侧栏切换验收项目' } } });
   const nextProject = (await created.json()).result;
   await openProjectFromList(page, nextProject.title);
   await expect(page.getByLabel('项目名称', { exact: true })).toHaveValue(nextProject.title);
@@ -367,14 +362,14 @@ test('creates a project and connects a model without exposing credentials', asyn
   const catalog = await modelCatalog(['local-fixture']);
   try {
     await openApp(page);
-    await page.getByRole('button', { name: '我的项目', exact: true }).click();
-    await page.getByRole('button', { name: '新建项目', exact: true }).last().click();
-    const dialog = page.getByRole('dialog', { name: '新建视频项目' });
-    await dialog.getByLabel('项目名称', { exact: true }).fill('界面验收项目');
-    await dialog.getByLabel('创意简报').fill('这是隔离数据目录中的编辑与恢复验证项目。');
-    await dialog.getByRole('button', { name: '创建项目', exact: true }).click();
-    await expect(dialog).toHaveCount(0);
-    await expect(page.getByLabel('项目名称', { exact: true })).toHaveValue('界面验收项目');
+    await openStudio(page);
+    await page.getByRole('button', { name: '新建短剧', exact: true }).last().click();
+    const dialog = page.getByRole('region', { name: '让故事成为一部短剧', exact: true });
+    await dialog.getByRole('textbox', { name: '短剧名称', exact: true }).fill('界面验收短剧');
+    await dialog.getByRole('textbox', { name: '剧本正文', exact: true }).fill('林夏在旧城发现一封信，与朋友重逢后决定共同寻找真相。');
+    await dialog.getByRole('button', { name: '创建短剧', exact: true }).click();
+    await expect(dialog).toBeHidden();
+    await expect(page.getByLabel('项目名称', { exact: true })).toHaveValue('界面验收短剧 · 第 1 集');
 
     await page.getByRole('button', { name: '模型连接', exact: true }).click();
     const modelDialog = await addModelConnection(page);
@@ -415,12 +410,11 @@ test('exports an actual local MP4 from the asynchronous export dialog', async ({
     return result.result;
   };
   const profile = { width: 320, height: 180, frameRate: { numerator: 30000, denominator: 1001 }, fitMode: 'contain', previewScale: 1 };
-  const project = await rpc('project.create', { title: '本地导出验收', brief: '静音示例', profile });
+  const project = await rpc('project.create', { originalText: '清晨，林夏在书房发现一封未寄出的信。她来到旧城寻找信的主人，与朋友在雨中的城门重逢。两人读完信后决定一起回家。', title: '本地导出验收', brief: '静音示例', profile });
   await rpc('project.update', { projectId: project.id, revision: project.revision, patch: { shots: [{ id: 'export-shot', title: '本地渲染检查', narration: '这是静音画面小样。', visualPrompt: '示例画面', durationUs: 700000, claimIds: [], locked: false, animation: { panX: 0, panY: 0, zoom: 1.02, transition: 'cut' } }] } });
   await openApp(page);
-  await page.getByRole('button', { name: '我的项目', exact: true }).click();
-  const card = page.locator('.project-card').filter({ hasText: '本地导出验收' });
-  await card.getByRole('button', { name: /继续创作/ }).click();
+  await openStudio(page);
+  await openProjectFromList(page, '本地导出验收');
   await page.getByRole('button', { name: '导出', exact: true }).click();
   const dialog = page.getByRole('dialog', { name: '导出视频' });
   await expect(dialog.getByText(/静音视频/)).toBeVisible();

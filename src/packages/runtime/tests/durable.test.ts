@@ -6,13 +6,24 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { createRuntime, SimulatedProcessExit } from '../src/index.js';
 import { ActivityJournal, AmbiguousActivityError } from '../src/activities.js';
 import { openDatabase, DocumentStore } from '../src/database.js';
-import { workflowNodeSchema, type ProjectDocument, type RunRecord, type WorkspaceSnapshot } from '@video-quickly/contracts';
+import { createNativeVideoWorkflow, workflowNodeSchema, type AssetRecord, type ProjectDocument, type RunRecord, type WorkspaceSnapshot } from '@video-quickly/contracts';
 
 const directories: string[] = [];
 const runtimes: ReturnType<typeof createRuntime>[] = [];
 async function location() { const directory = await mkdtemp(join(tmpdir(), 'video-quickly-runtime-')); directories.push(directory); return directory; }
 async function runtime(options: Partial<Parameters<typeof createRuntime>[0]> = {}) {
-  const value = createRuntime({ dataDirectory: await location(), seed: true, ...options }); runtimes.push(value); return value;
+  const value = createRuntime({ dataDirectory: await location(), seed: false, ...options }); runtimes.push(value);
+  const existing = await value.dispatch('workspace.snapshot') as WorkspaceSnapshot;
+  if (!existing.projects.length) {
+    const { project } = await value.dispatch('dramaStudio.create', { mode: 'upload', originalText: '夜班员推开值班室的门，将维修单放在桌上。',
+      work: { title: '持久执行测试作品', visualStyle: 'live-action', narrativeMode: 'mixed' } }) as { project: ProjectDocument };
+    const path = join(existing.system.dataDirectory, 'fixture-reference.png');
+    await writeFile(path, Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScLbtAAAAABJRU5ErkJggg==', 'base64'));
+    const image = await value.dispatch('asset.import', { path, kind: 'image', projectId: project.id }) as AssetRecord;
+    await value.dispatch('project.update', { projectId: project.id, revision: project.revision, patch: { workflow: createNativeVideoWorkflow(),
+      shots: [{ id: 'fixture-shot', title: '值班室', narration: '他把维修单放在桌上。', visualPrompt: '室内中景，人物将纸张放在桌上。', durationUs: 4_000_000, assetId: image.id }] } });
+  }
+  return value;
 }
 afterEach(async () => {
   await Promise.allSettled(runtimes.splice(0).map(value => value.close()));
@@ -120,7 +131,7 @@ describe('native LangGraph persistence and project behavior', () => {
     expect(JSON.stringify(snapshot)).not.toContain('test-only-value');
     const backup = await instance.dispatch('project.backup', { projectId: snapshot.projects[0].id }) as { path: string };
     const payload = JSON.parse(await readFile(join(backup.path, 'project.json'), 'utf8')) as { project: ProjectDocument; assets: Array<{ path: string }> };
-    expect(payload.assets).toHaveLength(4);
+    expect(payload.assets).toHaveLength(1);
     expect(payload.assets.every(asset => asset.path.startsWith('assets/'))).toBe(true);
     const bytes = await readFile(join(snapshot.system.dataDirectory, 'workspace.sqlite'));
     expect(bytes.includes('test-only-value')).toBe(false);

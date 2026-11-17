@@ -29,14 +29,20 @@ import { createRunProgress } from './run-progress.js';
 import { creativeContextSchema, MediaRequestRejectedError, projectCharacterIds, shotCreativePrompt, validateCreativeReferences } from '@video-quickly/contracts';
 import { executeMediaGraph } from './media-graph.js';
 import { discoverModels, generateText, shouldRetryWithPromptFormat, testModelConnection, textIncompleteMessage, textModelWithTaskSchema, TextRequestRejectedError, type ModelRequestPhase, type TextProvider } from './providers.js';
-import { seedExampleProject } from './seed.js';
 import { seedBuiltInDramaTemplates } from './builtin-drama-templates.js';
-import { createNativeVideoWorkflow, resolveProductionWorkflow, nativeReferenceStep, openingFrameShots, groupsNativeFirstFrames, groupsReferenceImages, isVideoGenerationNode, DEFAULT_AUDIO_PROCESSING, planReferenceImageSequences, planningDocumentSchemas, productionEditingSkillIds, productionEditingStep, productionPlanningStep, productionSettingsSchema, sameJsonContent, singleImageRequestModel, supportsProductionAgent, usesManualPlanning } from '@video-quickly/contracts';
+import { seedBuiltInDramaStudio } from './builtin-drama-studio.js';
+import { createDramaTopicLibrary } from './drama-topics.js';
+import { readDramaScript } from './drama-scripts.js';
+import { createDramaWorkflow, dramaStudioCreateInputSchema, dramaStylePresets } from '@video-quickly/contracts';
+import { resolveProductionWorkflow, nativeReferenceStep, openingFrameShots, groupsNativeFirstFrames, groupsReferenceImages, isVideoGenerationNode, DEFAULT_AUDIO_PROCESSING, planReferenceImageSequences, planningDocumentSchemas, productionEditingSkillIds, productionEditingStep, productionPlanningStep, productionSettingsSchema, sameJsonContent, singleImageRequestModel, supportsProductionAgent, usesManualPlanning } from '@video-quickly/contracts';
 import { createSkillLibrary } from './skill-library.js';
 import { appendSkillContext, supportsSkillScript } from '@video-quickly/contracts';
 import { connectMcp, mcpServerSchema, type McpServer } from './mcp.js';
 import { createCostLedger, requestCostMetrics } from './costs.js';
 import { createCharacterLibrary } from './characters.js';
+import { createVoiceLibrary } from './voices.js';
+import { createDramaWorkLibrary, createDramaEpisodeInput } from './drama-works.js';
+import { characterReferenceAssetIds, dramaVoiceIds, selectedCharacterReferenceAssetIds, shotDramaText, shotVisualCharacterIds, validateDramaProject, voiceProfileSchema, type VoiceProfile } from '@video-quickly/contracts';
 import { createCharacterImageGenerator } from './character-image.js';
 import { createExportBatchManager, verifyBatchRenderResult, type ExportBatchSnapshot } from './export-batches.js';
 import { isLegacyTimelineAsset, omitLegacyExportTimeline } from './legacy-export-timeline.js';
@@ -104,6 +110,7 @@ export interface ActivityExecutionContext {
   unifiedShotProfile?: boolean;
   legacyVideoReferences?: boolean;
   characters?: CharacterProfile[];
+  voices?: VoiceProfile[];
   promptOverride?: string;
   promptUpstream?: Record<string, JsonValue>;
   onProgress?: (value: number) => void;
@@ -142,6 +149,7 @@ const projectUpdateInput = entityId.extend({
     title: z.string().min(1).max(160).optional(),
     brief: z.string().max(30000).optional(),
     originalText: projectSchema.shape.originalText,
+    drama: projectSchema.shape.drama,
     profile: videoProfileSchema.optional(),
     style: z.string().optional(),
     creativeContext: projectSchema.shape.creativeContext,
@@ -162,6 +170,7 @@ const chargeStartInput = entityId.extend({
   nodeId: z.string().optional(), parentRunId: z.string().optional(), selection: runSelectionSchema.optional(),
   regeneration: regenerationInput.optional(), research: researchInput.optional(),
 });
+const projectCreateInput = z.object({ title: z.string().min(1).max(160), brief: z.string().max(30000).default(''), originalText: projectSchema.shape.originalText, drama: createDramaEpisodeInput.optional(), profile: videoProfileSchema.optional(), skillIds: z.array(z.string().min(1)).max(500).optional(), templateId: z.string().optional(), seriesTemplateId: z.string().min(1).optional(), seriesTemplateRevision: z.number().int().positive().optional() }).refine(value => Boolean(value.seriesTemplateId) === (value.seriesTemplateRevision !== undefined), '请选择系列模板及其当前修订。');
 const now = () => new Date().toISOString();
 
 function rpcIdentifiers(value: unknown): Record<string, string> {
@@ -197,7 +206,7 @@ export function createRuntime(options: RuntimeOptions) {
   catch (error) { logger.error('runtime.initialization_failed', { error: logError(error) }); throw error; }
   const store = new DocumentStore(database);
   if (options.seedBuiltInTemplates) {
-    try { seedBuiltInDramaTemplates(directory, store); }
+    try { seedBuiltInDramaTemplates(directory, store); seedBuiltInDramaStudio(directory, store); }
     catch (error) { database.close(); throw error; }
   }
   const reads = createReadModels(database, store);
@@ -239,13 +248,22 @@ export function createRuntime(options: RuntimeOptions) {
   const runProgress = createRunProgress(store, changed);
   const costs = createCostLedger({ database, store, onChanged: changed });
   const characters = createCharacterLibrary({ database, store, onChanged: changed });
+  const voices = createVoiceLibrary({ database, store, onChanged: changed });
+  const dramaWorks = createDramaWorkLibrary({ database, store, changed });
+  const dramaTopics = createDramaTopicLibrary({ database, store, changed });
+  function projectProfiles(value: Parameters<typeof characters.profilesFor>[0] & Pick<ProjectDocument, 'drama'>) {
+    const bundle = characters.profilesFor(value);
+    const sound = voices.profilesFor(value, bundle.characters);
+    validateDramaProject(value, bundle.characters, sound.voices);
+    return { ...bundle, voices: sound.voices, voiceAssets: sound.assets };
+  }
   const seriesTemplates = createSeriesTemplateLibrary({ database, store, onChanged: changed });
   const workflowTemplates = createWorkflowTemplateLibrary({ database, store, onChanged: changed });
   const promptLibrary = createPromptLibrary(database, store, changed);
   const imageTools = createImageTools({ store, directory, changed });
   const assetLibrary = createAssetLibrary({
     directory, database, store, reads, project, readAudioWaveform: options.readAudioWaveform?.bind(options), trackWork, changed,
-    characterAssetsInUse: characters.assetsInUse,
+    characterAssetsInUse: ids => new Set([...characters.assetsInUse(ids), ...voices.assetsInUse(ids)]),
     imageToolAssetsInUse: imageTools.assetsInUse,
     bindImportedAsset(projectId, shotId, asset) {
       const currentProject = project(projectId);
@@ -256,7 +274,7 @@ export function createRuntime(options: RuntimeOptions) {
   const characterImages = createCharacterImageGenerator({ directory, store, journal, costs, execute: options.executeActivity, preflight: options.preflightActivity,
     async secret(model) { return model.credentialRef ? rememberSecret(await options.secretStore?.get(model.credentialRef)) : undefined; } });
   const promptWorkbench = createPromptWorkbench({ database, store, prepare: preparePromptDraft, changed, start: (session, saved) => startPromptRun(session.draft, saved, session), schedule });
-  const audioPreview = createAudioPreview({ directory, store, callbacks: options.audioMix, project, validate: value => { validateEdits(value, project(value.id)); validateResearchProject(value, project(value.id)); characters.profilesFor(value); } });
+  const audioPreview = createAudioPreview({ directory, store, callbacks: options.audioMix, project, validate: value => { validateEdits(value, project(value.id)); validateResearchProject(value, project(value.id)); projectProfiles(value); } });
   const runInspector = createRunInspector({ database, store, dataDirectory: directory, run,
     async secrets(models) {
       const references = [...new Set(models.flatMap(model => model.credentialRef ? [model.credentialRef] : []))];
@@ -267,12 +285,7 @@ export function createRuntime(options: RuntimeOptions) {
   });
 
   if (options.seed === true && !store.get('metadata', 'initialized')) {
-    database.transaction(() => {
-      const seed = seedExampleProject(directory);
-      store.put('project', seed.project.id, seed.project);
-      for (const asset of seed.assets) store.put('asset', asset.id, asset);
-      store.put('metadata', 'initialized', { version: 1 });
-    })();
+    store.put('metadata', 'initialized', { version: 1 });
   }
   // The graph checkpoint remains authoritative. A previous process's transient
   // running label only needs a presentation reset to expose the resume action.
@@ -331,8 +344,15 @@ export function createRuntime(options: RuntimeOptions) {
     }
   }
 
+  async function validateVoiceAssets(assets: AssetRecord[]) {
+    for (const asset of assets) {
+      const info = await stat(asset.path).catch(() => undefined);
+      if (!asset.active || asset.kind !== 'audio' || asset.projectId || !info?.isFile() || info.size !== asset.size || await hashFileSha256(asset.path) !== asset.sha256) throw new Error('音色参考音频缺失或损坏，请恢复素材后继续。');
+    }
+  }
+
   async function validateCharacterAssets(profiles: CharacterProfile[], references: AssetRecord[], project: Pick<ProjectDocument, 'id' | 'creativeContext'>, shot?: Shot) {
-    const libraryIds = new Set(profiles.flatMap(profile => profile.referenceAssetIds));
+    const libraryIds = new Set(profiles.flatMap(characterReferenceAssetIds));
     const ids = new Set([...libraryIds, ...creativeReferenceAssetIds(project, shot)]);
     if (ids.size !== references.length || references.some(asset => !ids.has(asset.id) || !isCreativeReferenceAsset(project, asset) || libraryIds.has(asset.id) && asset.projectId !== undefined)) throw new Error('角色参考图快照无效。');
     for (const reference of references) {
@@ -345,6 +365,12 @@ export function createRuntime(options: RuntimeOptions) {
   function requireCurrentCharacters(profiles: CharacterProfile[]) {
     const current = characters.profilesFor({ shots: [{ characterIds: profiles.map(profile => profile.id) }] }).characters;
     if (fingerprint(current) !== fingerprint(profiles)) throw new Error('生成后角色设定或参考图已修改，请重新生成后应用。');
+  }
+
+  function requireCurrentVoices(profiles: VoiceProfile[]) {
+    if (!profiles.length) return;
+    const current = profiles.map(profile => voiceProfileSchema.parse(store.get('voice', profile.id)));
+    if (fingerprint(current) !== fingerprint(profiles)) throw new Error('生成后音色资料已修改，请重新生成后应用。');
   }
 
   function requireCandidateResearch(value: ProjectDocument, candidate: ShotCandidate) {
@@ -367,6 +393,8 @@ export function createRuntime(options: RuntimeOptions) {
     const stored = store.get('shot-candidate', candidateId);
     if (!stored) throw new Error('候选不存在。');
     const candidate = shotCandidateSchema.parse(stored);
+    const frozenVoiceAssets = store.get<RunSnapshot>('run-snapshot', candidate.runId)?.voiceAssets ?? [];
+    await validateVoiceAssets(frozenVoiceAssets);
     const record = store.get<RunRecord>('run', candidate.runId);
     const row = database.prepare("SELECT json_extract(body, '$.regeneration') AS regeneration, json_extract(body, '$.characters') AS characters, json_extract(body, '$.characterAssets') AS characterAssets, json_extract(body, '$.sourceGeneration.inputProject.shots[0]') AS sourceShot, CASE WHEN json_type(body, '$.sourceGeneration') = 'object' THEN json_extract(body, '$.sourceGeneration.inputProject.creativeContext') WHEN json_type(body, '$.trial') = 'object' THEN json_extract(body, '$.trial.inputProject.creativeContext') ELSE json_extract(body, '$.project.creativeContext') END AS creativeContext FROM documents WHERE kind = 'run-snapshot' AND id = ?").get(candidate.runId) as { regeneration: string | null; characters: string | null; characterAssets: string | null; creativeContext: string | null; sourceShot: string | null } | undefined;
     const metadata = row?.regeneration ? z.object({ shotId: z.string(), kind: shotCandidateKindSchema, baseline: shotSchema, imageEdit: imageEditInputSchema.optional() }).parse(JSON.parse(row.regeneration)) : undefined;
@@ -404,6 +432,8 @@ export function createRuntime(options: RuntimeOptions) {
 
   function validateEdits(value: ProjectDocument, previous?: ProjectDocument) {
     validateCreativeReferences(value);
+    validateDramaProject(value);
+    dramaWorks.validateProject(value, previous);
     const ids = new Set((value.clipEditSources ?? []).flatMap(clipSourceAssetIds));
     const assets = [...ids].map(id => {
       const asset = store.get<AssetRecord>('asset', id);
@@ -442,7 +472,7 @@ export function createRuntime(options: RuntimeOptions) {
     }
     validateResearchProject(saved, baseline);
     validateEdits(saved, baseline);
-    characters.profilesFor(saved);
+    projectProfiles(saved);
     store.put('project', saved.id, saved);
     return saved;
   }
@@ -485,9 +515,9 @@ export function createRuntime(options: RuntimeOptions) {
     });
   }
 
-  function productionOutput({ brief, style, creativeContext, shots, clipEditSources, clipEditPlans, musicClips, workflow }: ProjectDocument, includePlanningFields = false, includeTimelineEdits = false) {
+  function productionOutput({ brief, style, originalText, creativeContext, shots, clipEditSources, clipEditPlans, musicClips, workflow }: ProjectDocument, includePlanningFields = false, includeTimelineEdits = false) {
     const manualPlanningFields = includePlanningFields ? workflow.production.manualPlanningFields : undefined;
-    return { brief, style, creativeContext, shots, clipEditSources, clipEditPlans, ...(manualPlanningFields ? { manualPlanningFields } : {}),
+    return { brief, style, originalText, creativeContext, shots, clipEditSources, clipEditPlans, ...(manualPlanningFields ? { manualPlanningFields } : {}),
       ...(includeTimelineEdits ? { musicClips, subtitleMode: workflow.production.subtitleMode } : {}) };
   }
 
@@ -561,6 +591,7 @@ export function createRuntime(options: RuntimeOptions) {
       return;
     }
     requireCurrentCharacters(saved.characters ?? []);
+    requireCurrentVoices(saved.voices ?? []);
     database.transaction(() => {
       if (output.musicClips && !sameJsonContent(output.musicClips, current.musicClips)) validateMusicAssets(current.id, output.musicClips);
       const applied = saveProject(projectWithProductionOutput(current, output), current);
@@ -574,6 +605,7 @@ export function createRuntime(options: RuntimeOptions) {
     const baseline = project(draft.projectId); requireRevision(baseline, draft.projectRevision);
     if (baseline.archived) throw new Error('请先恢复项目。');
     const original = baseline.workflow.nodes.find(node => node.id === draft.node.id && node.kind === draft.node.kind);
+    if (original && original.config.documentRole !== draft.node.config.documentRole) throw new Error('不能通过提示词草稿更改步骤的文档类型。');
     if (draft.node.config.imageEdit !== undefined) throw new Error('局部改图请从镜头候选选择原图与区域后生成。');
     if (!original || !supportsPromptExperiment(original)) throw new Error('提示词实验支持简报、风格、分镜、参考图和镜头视频任务。');
     const media = ['assets', 'animation'].includes(original.kind);
@@ -612,9 +644,12 @@ export function createRuntime(options: RuntimeOptions) {
     }
     const kind = media ? original.kind === 'assets' ? 'image' : 'video' : 'script';
     const candidate = baselineShot && (media || original.kind === 'script');
-    const node: WorkflowNode = { ...draft.node, requiresReview: false, ...(candidate ? { id: 'regenerate', config: { ...draft.node.config, operation: 'regenerate', shotId: baselineShot.id, regenerationKind: kind, instruction: '' } } : {}) };
-    const bundle = characters.profilesFor(inputProject);
+    const node: WorkflowNode = { ...draft.node, requiresReview: false,
+      ...(original.config.documentRole === 'screenplay' ? { config: { ...draft.node.config, documentRole: 'screenplay', screenplayDraft: true, requiresModel: true } } : {}),
+      ...(candidate ? { id: 'regenerate', config: { ...draft.node.config, operation: 'regenerate', shotId: baselineShot.id, regenerationKind: kind, instruction: '' } } : {}) };
+    const bundle = projectProfiles(inputProject);
     await validateCharacterAssets(bundle.characters, bundle.assets, inputProject);
+    await validateVoiceAssets(bundle.voiceAssets);
     const models = availableModels(), model = models.find(model => model.id === node.modelId);
     const videoModel = node.kind === 'script' ? storyboardVideoModel(inputProject, models) : undefined;
     const videoInputs = model && isVideoGenerationNode(node) ? inputProject.shots.map(shot => videoReferenceImages(inputProject, node, model, shot, bundle.characters, assets)) : undefined;
@@ -641,13 +676,13 @@ export function createRuntime(options: RuntimeOptions) {
     const outputContractVersion = baseline.workflow.id === 'native-video' ? WORKFLOW_OUTPUT_VERSION : undefined;
     const batchedStoryboard = prefill && node.kind === 'script' && !baselineShot;
     const originalText = baselineShot ? undefined : projectOriginalText(inputProject);
-    const prompt = media ? appendSkillContext(buildMediaPrompt(inputProject, node, shot!, bundle.characters, model, hasImage, values, videoInputs?.[0]), node, skills)
+    const prompt = media ? appendSkillContext(buildMediaPrompt(inputProject, node, shot!, bundle.characters, model, hasImage, values, videoInputs?.[0], bundle.voices), node, skills)
       : buildWorkflowPrompt(inputProject, node, skills, Boolean(baselineShot), bundle.characters, upstream, outputContractVersion,
         batchedStoryboard ? storyboardOutlineStage(inputProject, false) : undefined, { originalText });
     const references = frozenAssets.map(({ id, name, kind }) => ({ id, name, kind }));
     const preview: PromptPreview = { digest: '', prompt: withStoryboardGuidance(prompt, node.kind, outputContractVersion, videoModel), node, model, skills, projectRevision: baseline.revision, variables: resolved.variables, references, upstream: upstream.map(({ nodeId, label, kind }) => ({ nodeId, label, kind })) };
     const frozenModels = [...(model ? [model] : []), ...(videoModel && videoModel.id !== model?.id ? [videoModel] : [])];
-    const saved: RunSnapshot = { project: baseline, models: frozenModels, skills, mcpServers: [], nodes: [node], handlerVersion: 1, unifiedShotProfile: true, characters: bundle.characters, characterAssets: bundle.assets, assets: frozenAssets,
+    const saved: RunSnapshot = { project: baseline, models: frozenModels, skills, mcpServers: [], nodes: [node], handlerVersion: 1, unifiedShotProfile: true, characters: bundle.characters, characterAssets: bundle.assets, voices: bundle.voices, voiceAssets: bundle.voiceAssets, assets: [...new Map([...frozenAssets, ...bundle.voiceAssets].map(asset => [asset.id, asset])).values()],
       includeProjectOriginalText: true, useOriginalVideoReferences: true,
       ...(outputContractVersion ? { outputContractVersion } : {}), ...(batchedStoryboard ? { storyboardBatchSize: STORYBOARD_BATCH_SIZE } : {}), selection: { nodeId: node.id, mode: 'node' }, ...(candidate ? { regeneration: { shotId: baselineShot.id, baseline: baselineShot, kind } } : {}), trial: { inputProject, upstream, preview } };
     preview.digest = fingerprint(saved);
@@ -673,9 +708,10 @@ export function createRuntime(options: RuntimeOptions) {
     let working = value;
     if (result && typeof result === 'object' && !Array.isArray(result)) {
       if ((node.kind === 'brief' || node.kind === 'style') && typeof result.text === 'string') {
-        working = { ...working, [node.kind]: result.text };
+        if (node.config.documentRole === 'screenplay') working = { ...working, originalText: projectSchema.shape.originalText.parse(result.text) };
+        else working = { ...working, [node.kind]: result.text };
         const fields = planningDocumentSchemas[node.kind].safeParse(result.fields);
-        if (fields.success) {
+        if (node.config.documentRole !== 'screenplay' && fields.success) {
           const workflow = working.workflow, production = workflow.production;
           working = { ...working, workflow: { ...workflow, production: { ...production, manualPlanningFields: { ...production.manualPlanningFields, [node.kind]: fields.data } } } };
         }
@@ -844,7 +880,7 @@ export function createRuntime(options: RuntimeOptions) {
     const models = availableModels();
     const videoModel = nodes.some(node => node.kind === 'script') ? storyboardVideoModel(value, models) : undefined;
     if (videoModel) modelIds.add(videoModel.id);
-    const bundle = characters.profilesFor(value);
+    const bundle = projectProfiles(value);
     const saved: RunSnapshot = {
       project: structuredClone(value), nodes, selection, handlerVersion: nodes.some(node => node.kind === 'subflow') ? 3 : 2,
       unifiedShotProfile: true,
@@ -854,7 +890,7 @@ export function createRuntime(options: RuntimeOptions) {
       ...(value.workflow.id === 'native-video' && nodes.some(node => node.kind === 'script' && node.modelId) ? { storyboardBatchSize: STORYBOARD_BATCH_SIZE } : {}),
       models: models.filter(model => composedNodes.some(node => node.kind === 'agent') || modelIds.has(model.id)),
       ...await skillLibrary.prepareForNodes(composedNodes, { allowUnavailable: true }),
-      mcpServers: store.list<McpServer>('mcp-server'), characters: bundle.characters, characterAssets: bundle.assets,
+      mcpServers: store.list<McpServer>('mcp-server'), characters: bundle.characters, characterAssets: bundle.assets, voices: bundle.voices, voiceAssets: bundle.voiceAssets,
       assets: store.list<AssetRecord>('asset').filter(asset => !asset.projectId || asset.projectId === value.id),
     };
     const missingModel = composedNodes.find(node => node.modelId && !saved.models.some(model => model.id === node.modelId && model.enabled));
@@ -892,10 +928,13 @@ export function createRuntime(options: RuntimeOptions) {
       const expanded = workflowNodesWithSubflows({ ...value.workflow, nodes, subflows });
       const modelIds = new Set(expanded.flatMap(node => node.modelId ? [node.modelId] : [])), skillIds = new Set(expanded.flatMap(node => node.skillIds));
       const characterIds = projectCharacterIds(value);
+      const selectedCharacters = [...characterIds].flatMap(id => { const parsed = characterProfileSchema.safeParse(store.get('character', id)); return parsed.success ? [parsed.data] : []; });
+      const selectedVoiceIds = dramaVoiceIds(value, selectedCharacters);
       return { project: value, nodes: expanded, selection, blockedIssue: productionBlockIssue(value, nodes),
         models: models.filter(model => modelIds.has(model.id)),
         skills: store.list<SkillPackage>('skill').filter(skill => skillIds.has(skill.id)),
-        characters: [...characterIds].flatMap(id => { const parsed = characterProfileSchema.safeParse(store.get('character', id)); return parsed.success ? [parsed.data] : []; }),
+        characters: selectedCharacters,
+        voices: selectedVoiceIds.flatMap(id => { const parsed = voiceProfileSchema.safeParse(store.get('voice', id)); return parsed.success ? [parsed.data] : []; }),
         assets: store.list<AssetRecord>('asset').filter(asset => !asset.projectId || asset.projectId === value.id) };
     },
   });
@@ -1105,7 +1144,7 @@ export function createRuntime(options: RuntimeOptions) {
       const frames = mode !== 'generate' ? prepared.shots.filter(shot => needsSceneFrame(prepared, shot)
         && (mode === 'none' || !assets.some(asset => asset.id === shot.assetId && asset.active && asset.kind === 'image'))) : [];
       const frameReferences = new Set(frames.flatMap(shot => [...creativeReferenceAssetIds(prepared, shot),
-        ...profiles.filter(profile => shot.characterIds?.includes(profile.id)).flatMap(profile => profile.referenceAssetIds)]));
+        ...profiles.filter(profile => shotVisualCharacterIds(shot).includes(profile.id)).flatMap(profile => selectedCharacterReferenceAssetIds(profile, shot.drama?.appearances.find(binding => binding.characterId === profile.id)?.appearanceId))]));
       const frameAssets = canGenerate && frames.length ? await generate('frames', { ...prepared, shots: frames }, [...assets, ...appearances].filter(asset => frameReferences.has(asset.id))) : [];
       const firstFrames = new Map(frameAssets.map(asset => [asset.shotId, asset.id]));
       const shots = prepared.shots.map(shot => firstFrames.has(shot.id) ? { ...shot, assetId: firstFrames.get(shot.id) } : shot);
@@ -1170,12 +1209,13 @@ export function createRuntime(options: RuntimeOptions) {
     const secret = selectedModel?.credentialRef ? rememberSecret(await options.secretStore?.get(selectedModel.credentialRef)) : undefined;
     if (selectedModel?.hasSecret && !secret) throw new Error('模型凭据不可用，请重新保存密钥后创建新的运行。');
     const media = ['assets', 'animation', 'export'].includes(node.kind);
+    if (media && saved.voiceAssets?.length) await validateVoiceAssets(saved.voiceAssets);
     const safety = options.activitySafety?.(node) ?? (usesProvider || (media && !!selectedModel) ? 'external' : 'local');
     const cached = journal.get(runId, node.id);
-    const selectedCharacterIds = new Set(saved.assistant || node.kind === 'research' || node.kind === 'export' && !selectedModel ? [] : usesProvider ? projectCharacterIds(executionProject) : executionProject.shots.flatMap(shot => shot.characterIds ?? []));
+    const selectedCharacterIds = new Set(saved.assistant || node.kind === 'research' || node.kind === 'export' && !selectedModel ? [] : projectCharacterIds({ ...executionProject, ...(usesProvider ? {} : { creativeContext: undefined }) }));
     const executionCharacters = (saved.characters ?? []).filter(profile => selectedCharacterIds.has(profile.id));
     if (executionCharacters.length !== selectedCharacterIds.size) throw new Error('运行快照缺少镜头角色，请基于当前角色新建运行。');
-    const referenceIds = new Set([...executionCharacters.flatMap(profile => profile.referenceAssetIds), ...executionProject.shots.flatMap(shot => creativeReferenceAssetIds(executionProject, shot))]);
+    const referenceIds = new Set([...executionCharacters.flatMap(characterReferenceAssetIds), ...executionProject.shots.flatMap(shot => creativeReferenceAssetIds(executionProject, shot))]);
     const characterAssets = (saved.characterAssets ?? []).filter(asset => referenceIds.has(asset.id));
     const assetIds = saved.regeneration ? new Set(executionProject.shots.flatMap(shot => [shot.assetId, shot.audioAssetId, shot.videoAssetId]).filter((id): id is string => Boolean(id))) : undefined;
     const generatedAssets = media ? database.prepare("SELECT asset.value AS body FROM documents result, json_each(result.body, '$.assets') asset WHERE result.kind = 'node-result' AND json_type(result.body, '$.assets') = 'array' AND result.id IN (SELECT value FROM json_each(?))").all(JSON.stringify((saved.inspectionNodes ?? saved.nodes).map(node => `${runId}:${node.id}`))).map(row => assetSchema.parse(JSON.parse((row as { body: string }).body))) : [];
@@ -1387,7 +1427,7 @@ export function createRuntime(options: RuntimeOptions) {
           if (!outputKind && (asset.projectId !== project.id || !project.shots.some(shot => shot.id === asset.shotId))) throw new Error('生成进度素材不属于本次镜头。');
           runProgress.asset(context.operationId, asset);
         };
-        const activityContext: ActivityExecutionContext = { project: mediaInputProject, node, skills: saved.skills.filter(skill => node.skillIds.includes(skill.id)), runId, operationId: context.operationId, signal: controller.signal, remoteTaskId: context.remoteId, persistRemoteTask: context.recordRemoteId, dataDirectory: directory, assets: activityAssets, model: selectedModel, apiKey: secret, characters: executionCharacters, promptUpstream: Object.fromEntries(upstreamResults(runId, node, saved).map(result => [result.nodeId, result.output])),
+        const activityContext: ActivityExecutionContext = { project: mediaInputProject, node, skills: saved.skills.filter(skill => node.skillIds.includes(skill.id)), runId, operationId: context.operationId, signal: controller.signal, remoteTaskId: context.remoteId, persistRemoteTask: context.recordRemoteId, dataDirectory: directory, assets: activityAssets, model: selectedModel, apiKey: secret, characters: executionCharacters, voices: saved.voices, promptUpstream: Object.fromEntries(upstreamResults(runId, node, saved).map(result => [result.nodeId, result.output])),
           unifiedShotProfile: saved.unifiedShotProfile, legacyVideoReferences: !saved.useOriginalVideoReferences,
           onDiagnostic: event => {
             const { event: name, level, ...fields } = event;
@@ -1906,7 +1946,7 @@ export function createRuntime(options: RuntimeOptions) {
     videoEditingAgent, regenerationNode, hydrateRun,
     projectOccupied: projectId => batches.blocked(projectId) || projectBusy(projectId),
     canExecuteActivities: () => Boolean(options.executeActivity),
-    profilesFor: characters.profilesFor,
+    profilesFor: projectProfiles,
     prepareSkills: skillLibrary.prepareForNodes,
     regenerateShot(request) {
       requireOpenRuntime();
@@ -1962,8 +2002,12 @@ export function createRuntime(options: RuntimeOptions) {
     const continuation = sourceContinuationFrame(sourceProject, originalNode, original.id, sourceShot);
     const inputProject = { ...sourceProject, workflow, shots: [{ ...sourceShot, ...(continuation ? { assetId: continuation } : {}), locked: false }] };
     const upstream = upstreamResults(original.id, originalNode, frozen);
-    const selectedCharacters = (frozen.characters ?? []).filter(profile => sourceShot.characterIds?.includes(profile.id));
-    const referenceIds = new Set([...selectedCharacters.flatMap(profile => profile.referenceAssetIds), ...creativeReferenceAssetIds(inputProject, sourceShot)]);
+    const selectedCharacters = (frozen.characters ?? []).filter(profile => projectCharacterIds({ shots: [sourceShot] }).includes(profile.id));
+    const referenceIds = new Set([...selectedCharacters.flatMap(characterReferenceAssetIds), ...creativeReferenceAssetIds(inputProject, sourceShot)]);
+    const voiceIds = new Set(dramaVoiceIds({ shots: [sourceShot] }, selectedCharacters));
+    const selectedVoices = (frozen.voices ?? []).filter(voice => voiceIds.has(voice.id));
+    const voiceReferenceIds = new Set(selectedVoices.flatMap(voice => voice.referenceAssetIds));
+    const selectedVoiceAssets = (frozen.voiceAssets ?? []).filter(asset => voiceReferenceIds.has(asset.id));
     const ids = new Set([...inputProject.shots.flatMap(shot => [shot.assetId, shot.videoAssetId, shot.audioAssetId]), ...(inputProject.workflow.production.referenceAudioAssetIds ?? []), ...referenceIds].filter((id): id is string => Boolean(id)));
     const knownAssets = new Map([...(frozen.assets ?? []), ...(frozen.characterAssets ?? []), ...upstream.flatMap(item => nodeResultAssets(item.output)), ...casting?.assets ?? [], ...casting?.libraryAssets ?? []].map(asset => [asset.id, asset]));
     const assets = [...ids].map(id => knownAssets.get(id) ?? store.get<AssetRecord>('asset', id));
@@ -1976,12 +2020,35 @@ export function createRuntime(options: RuntimeOptions) {
     if (batches.blocked(value.id) || projectBusy(value.id) || [...active.keys()].some(runId => run(runId).projectId === value.id)) throw new Error('该项目已有未完成的制作，请先处理现有任务。');
     const id = randomUUID(), instruction = input.instruction?.trim();
     const node: WorkflowNode = { ...originalNode, id: 'regenerate', modelId: model.id, requiresReview: false, label: `重新生成镜头${regenerationKinds[input.kind].label}`, prompt: [originalNode.prompt, instruction].filter(Boolean).join('\n\n'), config: { ...originalNode.config, ...(continuation ? { requiresShotFirstFrame: true } : {}), ...(generatedFrameModel ? { referenceMode: 'generate' } : {}), shotId: baseline.id, regenerationKind: input.kind, ...(instruction ? { instruction } : {}) } };
-    const saved: RunSnapshot = { project: structuredClone(value), models: frozen.models, skills: frozen.skills, mcpServers: frozen.mcpServers, nodes: [node], handlerVersion: 4, unifiedShotProfile: true, characters: selectedCharacters, characterAssets, assets: frozenAssets,
+    const saved: RunSnapshot = { project: structuredClone(value), models: frozen.models, skills: frozen.skills, mcpServers: frozen.mcpServers, nodes: [node], handlerVersion: 4, unifiedShotProfile: true, characters: selectedCharacters, characterAssets, voices: selectedVoices, voiceAssets: selectedVoiceAssets, assets: [...new Map([...frozenAssets, ...selectedVoiceAssets].map(asset => [asset.id, asset])).values()],
       ...(frozen.outputContractVersion ? { outputContractVersion: frozen.outputContractVersion } : {}), ...(frozen.useOriginalVideoReferences ? { useOriginalVideoReferences: true } : {}), regeneration: { shotId: baseline.id, kind: input.kind, baseline: structuredClone(baseline), instruction }, sourceGeneration: { inputProject: structuredClone(inputProject), upstream: structuredClone(upstream), requestHash } };
     const createdAt = now();
     const record: RunRecord = { id, projectId: value.id, projectRevision: value.revision, workflowVersion: frozen.project.workflow.version, snapshotDigest: fingerprint(saved), parentRunId: original.id, status: 'queued', stepCount: 1, createdAt, updatedAt: createdAt, events: [], activities: [], regenerationSource: { ...source, shotId: baseline.id } };
     database.transaction(() => { store.put('run-snapshot', id, saved); store.put('run', id, record); })();
     recordEvent(id, 'run.created', `沿用本次制作，单独重新生成：${sourceShot.title}`, node.id); schedule(id); return hydrateRun(record);
+  }
+
+  function createProjectRecord(input: z.infer<typeof projectCreateInput>): ProjectDocument {
+    const template = input.seriesTemplateId ? seriesTemplates.forCreation(input.seriesTemplateId, input.seriesTemplateRevision) : undefined;
+    const defaults = template?.creationDefaults;
+    const drama = input.drama ?? { workId: dramaWorks.create({ title: input.title, description: input.brief, visualStyle: defaults?.visualStyle ?? 'live-action', narrativeMode: 'mixed', skillIds: input.skillIds ?? defaults?.skillIds.filter(id => store.get<SkillPackage>('skill', id)?.enabled) ?? [] }).id, number: 1 };
+    const episode = dramaWorks.forCreation(drama);
+    const selectedSkills = input.skillIds ?? episode.skillIds;
+    const skillIds = skillLibrary.resolveSkills(selectedSkills).map(skill => skill.id);
+    const workflow = createDramaWorkflow();
+    const brief = input.drama ? [episode.brief, input.brief].filter(Boolean).join('\n\n') : input.brief;
+    if (brief.length > 30000) throw new Error('本集创作要求合计超过 30000 个字符，请精简后再创建。');
+    const timestamp = now();
+    const value = projectSchema.parse({ id: randomUUID(), title: input.title, brief, originalText: input.originalText,
+      drama: episode.drama, creativeContext: { characterIds: episode.characterIds, entities: [], continuity: '' },
+      templateId: input.templateId ?? 'drama', revision: 1,
+      profile: input.profile ?? defaults?.profile ?? { ...DEFAULT_VIDEO_PROFILE, width: 1080, height: 1920 },
+      style: '', ...template?.settings,
+      ...(episode.style ? { style: episode.style } : {}), shots: [], claims: [], workflow: {
+        ...workflow, production: { ...workflow.production, agentSkillIds: skillIds },
+        nodes: workflow.nodes.map(node => ['brief', 'style', 'script', 'agent'].includes(node.kind) ? { ...node, skillIds } : node),
+      }, createdAt: timestamp, updatedAt: timestamp, archived: false });
+    validateEdits(value); projectProfiles(value); store.put('project', value.id, value); return value;
   }
 
   function dispatch(method: string, rawParams: unknown = {}, context?: { requestId?: string | number }): Promise<unknown> {
@@ -2049,20 +2116,24 @@ export function createRuntime(options: RuntimeOptions) {
       case 'project.planning.outputs':
       case 'run.diagnostics': return runInspector.dispatch(method, rawParams);
       case 'project.create': {
-        const input = z.object({ title: z.string().min(1).max(160), brief: z.string().max(30000).default(''), originalText: projectSchema.shape.originalText, profile: videoProfileSchema.optional(), skillIds: z.array(z.string().min(1)).max(500).optional(), templateId: z.string().optional(), seriesTemplateId: z.string().min(1).optional(), seriesTemplateRevision: z.number().int().positive().optional() }).refine(value => Boolean(value.seriesTemplateId) === (value.seriesTemplateRevision !== undefined), '请选择系列模板及其当前修订。').parse(rawParams);
-        const template = input.seriesTemplateId ? seriesTemplates.forCreation(input.seriesTemplateId, input.seriesTemplateRevision) : undefined;
-        const defaults = template?.creationDefaults;
-        const selectedSkills = input.skillIds ?? defaults?.skillIds.filter(id => store.get<SkillPackage>('skill', id)?.enabled) ?? [];
-        const skillIds = skillLibrary.resolveSkills(selectedSkills).map(skill => skill.id);
-        const workflow = createNativeVideoWorkflow();
-        const timestamp = now();
-        const value = projectSchema.parse({ id: randomUUID(), title: input.title, brief: input.brief, originalText: input.originalText, templateId: input.templateId ?? 'generic', revision: 1, profile: input.profile ?? defaults?.profile ?? DEFAULT_VIDEO_PROFILE, ...(input.templateId === 'history-handdrawn' ? {} : { style: '' }), ...template?.settings, shots: [], claims: [], workflow: {
-          ...workflow,
-          production: { ...workflow.production, agentSkillIds: skillIds },
-          nodes: workflow.nodes.map(node => ['brief', 'style', 'script', 'agent'].includes(node.kind) ? { ...node, skillIds } : node),
-        }, createdAt: timestamp, updatedAt: timestamp, archived: false });
-        store.put('project', value.id, value); changed(); return value;
+        const input = projectCreateInput.parse(rawParams);
+        const value = database.transaction(() => createProjectRecord(input)).immediate();
+        changed(); return value;
       }
+      case 'dramaStudio.create': {
+        const input = dramaStudioCreateInputSchema.parse(rawParams);
+        const result = database.transaction(() => {
+          const template = input.seriesTemplateId ? seriesTemplates.forCreation(input.seriesTemplateId, input.seriesTemplateRevision) : undefined;
+          const work = dramaWorks.create({ ...input.work, skillIds: input.work.skillIds ?? template?.creationDefaults?.skillIds.filter(id => store.get<SkillPackage>('skill', id)?.enabled) ?? [] });
+          const suffix = ' · 第 1 集', prefix = work.title.slice(0, 160 - suffix.length).replace(/[\uD800-\uDBFF]$/, '');
+          const value = createProjectRecord(projectCreateInput.parse({ title: prefix + suffix, originalText: input.originalText,
+            drama: { workId: work.id, number: 1 }, seriesTemplateId: input.seriesTemplateId, seriesTemplateRevision: input.seriesTemplateRevision }));
+          return { work, project: value };
+        }).immediate();
+        changed(); return result;
+      }
+      case 'dramaScript.read': return readDramaScript(rawParams);
+      case 'dramaStudio.catalog.get': return { styles: dramaStylePresets };
       case 'project.update': {
         const input = projectUpdateInput.parse(rawParams);
         const value = project(input.projectId); requireRevision(value, input.revision);
@@ -2199,7 +2270,9 @@ export function createRuntime(options: RuntimeOptions) {
         requireCandidateResearch(value, candidate);
         const candidateSnapshot = store.get<RunSnapshot>('run-snapshot', candidate.runId);
         const frozenContext = candidateSnapshot?.sourceGeneration?.inputProject ?? candidateSnapshot?.project;
+        requireCurrentVoices(candidateSnapshot?.voices ?? []);
         if (frozenContext && (shotCreativePrompt(frozenContext, candidate.baseline) !== shotCreativePrompt(value, current) || fingerprint(creativeReferenceAssetIds(frozenContext, candidate.baseline)) !== fingerprint(creativeReferenceAssetIds(value, current)))) throw new Error('生成后镜头的创作设定或连续性要求已修改，请重新生成候选。');
+        if (frozenContext && shotDramaText(frozenContext, candidate.baseline, candidateSnapshot?.characters, candidateSnapshot?.voices) !== shotDramaText(value, current, currentCharacters, candidateSnapshot?.voices)) throw new Error('生成后短剧场次、画风或讲述方式已修改，请重新生成候选。');
         if (candidate.baseline.clipEdit) {
           const oldPlanRow = database.prepare("SELECT p.value AS body FROM documents s, json_each(s.body, '$.project.clipEditPlans') p WHERE s.kind = 'run-snapshot' AND s.id = ? AND json_extract(p.value, '$.id') = ?").get(candidate.runId, candidate.baseline.clipEdit.planId) as { body: string } | undefined;
           const oldPlan = oldPlanRow ? JSON.parse(oldPlanRow.body) as NonNullable<ProjectDocument['clipEditPlans']>[number] : undefined;
@@ -2316,7 +2389,7 @@ export function createRuntime(options: RuntimeOptions) {
         };
         const previous = replay();
         if (previous) return reads.runSummary(previous);
-        if (!productionPlanningStep(project(draft.projectId).workflow, draft.node)) throw new Error('AI 填写支持内置制作的简报、风格和分镜。');
+        if (!productionPlanningStep(project(draft.projectId).workflow, draft.node) && draft.node.config.documentRole !== 'screenplay') throw new Error('AI 填写支持内置制作的剧本、简报、风格和分镜。');
         const { saved } = await preparePromptDraft(draft, true);
         const repeated = replay();
         if (repeated) return reads.runSummary(repeated);
@@ -2332,6 +2405,9 @@ export function createRuntime(options: RuntimeOptions) {
       case 'character.generateImage': return trackWork(() => characterImages.generate(rawParams));
       case 'character.list': case 'character.get': case 'character.getMany': case 'character.references':
       case 'character.save': case 'character.archive': case 'character.restore': case 'character.delete': return characters.dispatch(method, rawParams);
+      case 'voice.list': case 'voice.get': case 'voice.getMany': case 'voice.references': case 'voice.save': case 'voice.archive': case 'voice.restore': case 'voice.delete': return voices.dispatch(method, rawParams);
+      case 'dramaWork.list': case 'dramaWork.get': case 'dramaWork.save': case 'dramaWork.archive': case 'dramaWork.restore': case 'dramaWork.episodes': return dramaWorks.dispatch(method, rawParams);
+      case 'dramaTopic.list': case 'dramaTopic.get': case 'dramaTopic.save': case 'dramaTopic.archive': case 'dramaTopic.restore': return dramaTopics.dispatch(method, rawParams);
       case 'workflowTemplate.list': case 'workflowTemplate.get': case 'workflowTemplate.save': case 'workflowTemplate.archive': case 'workflowTemplate.restore': return workflowTemplates.dispatch(method, rawParams);
       case 'seriesTemplate.list': case 'seriesTemplate.get': case 'seriesTemplate.save': case 'seriesTemplate.archive': case 'seriesTemplate.restore': return seriesTemplates.dispatch(method, rawParams);
       case 'model.test': {
@@ -2428,8 +2504,8 @@ export function createRuntime(options: RuntimeOptions) {
           const value = project(projectId);
           validateResearchProject(value, value);
           validateEdits(value, value);
-          const bundle = characters.profilesFor(value);
-          const referenced = new Set([...value.shots.flatMap(shot => [shot.assetId, shot.videoAssetId, shot.audioAssetId, shot.captionTrack?.sourceAssetId]), ...(value.clipEditSources ?? []).flatMap(clipSourceAssetIds), ...(value.musicClips ?? []).map(clip => clip.assetId), ...(value.workflow.production.referenceAudioAssetIds ?? []), ...creativeReferenceAssetIds(value), ...bundle.assets.map(asset => asset.id)]);
+          const bundle = projectProfiles(value);
+          const referenced = new Set([...value.shots.flatMap(shot => [shot.assetId, shot.videoAssetId, shot.audioAssetId, shot.captionTrack?.sourceAssetId]), ...(value.clipEditSources ?? []).flatMap(clipSourceAssetIds), ...(value.musicClips ?? []).map(clip => clip.assetId), ...(value.workflow.production.referenceAudioAssetIds ?? []), ...creativeReferenceAssetIds(value), ...bundle.assets.map(asset => asset.id), ...bundle.voiceAssets.map(asset => asset.id)]);
           const availableAssets = store.list<AssetRecord>('asset').filter(asset => !isLegacyTimelineAsset(asset));
           for (const asset of availableAssets.filter(asset => asset.projectId === projectId)) referenced.add(asset.id);
           let added = true;
@@ -2444,8 +2520,8 @@ export function createRuntime(options: RuntimeOptions) {
           }
           const hasPromptBindings = workflowNodesWithSubflows(value.workflow).some(node => node.promptBindings !== undefined || node.promptTemplate !== undefined);
           const { manualPlanningSteps, manualPlanningFields } = value.workflow.production;
-          const schemaVersion = manualPlanningSteps?.length || manualPlanningFields ? 9 : creativeReferenceAssetIds(value).length || assets.some(asset => asset.derivation) ? 8 : value.episode || value.episodeSource ? 7 : hasPromptBindings ? 6 : value.creativeContext || value.shots.some(shot => shot.creativeEntityKeys?.length) ? 5 : 4;
-          await writeFile(join(backupDirectory, 'project.json'), JSON.stringify({ schemaVersion, project: { ...value, originalText: projectOriginalText(value) }, assets: portable, characters: bundle.characters }, null, 2), { encoding: 'utf8', flag: 'wx' });
+          const schemaVersion = value.drama || value.shots.some(shot => shot.drama) || bundle.voices.length || bundle.characters.some(character => character.appearances?.length || character.defaultVoiceId) ? 10 : manualPlanningSteps?.length || manualPlanningFields ? 9 : creativeReferenceAssetIds(value).length || assets.some(asset => asset.derivation) ? 8 : value.episode || value.episodeSource ? 7 : hasPromptBindings ? 6 : value.creativeContext || value.shots.some(shot => shot.creativeEntityKeys?.length) ? 5 : 4;
+          await writeFile(join(backupDirectory, 'project.json'), JSON.stringify({ schemaVersion, project: { ...value, originalText: projectOriginalText(value) }, assets: portable, characters: bundle.characters, ...(schemaVersion === 10 ? { voices: bundle.voices, ...(value.drama ? { dramaWork: dramaWorks.get(value.drama.workId) } : {}) } : {}) }, null, 2), { encoding: 'utf8', flag: 'wx' });
           return { path: backupDirectory, assets: portable.length };
         }, projectId);
       }
@@ -2494,7 +2570,7 @@ export function createRuntime(options: RuntimeOptions) {
         const verifiedProject = () => {
           const current = project(record.projectId); requireRevision(current, revision ?? value.revision);
           if (!media && current.revision !== saved.project.revision) throw new Error('项目已在生成后修改，请基于当前内容重新生成建议。');
-          requireCurrentCharacters(frozenCharacters); requireCandidateAssets(frozenReferences);
+          requireCurrentCharacters(frozenCharacters); requireCurrentVoices(saved.voices ?? []); requireCandidateAssets(frozenReferences);
           return current;
         };
         const currentValue = verifiedProject();

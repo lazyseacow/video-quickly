@@ -3,11 +3,16 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, expect, it } from 'vitest';
-import { modelSchema, workflowNodeSchema, type ModelProfile, type RunRecord, type TextProtocol, type WorkspaceSnapshot } from '@video-quickly/contracts';
+import { modelSchema, workflowNodeSchema, type ModelProfile, type ProjectDocument, type RunRecord, type TextProtocol, type WorkspaceSnapshot } from '@video-quickly/contracts';
 import { discoverModels, generateText, modelHeaders, shouldRetryWithPromptFormat, testModelConnection, textRequestParameters, TextRequestRejectedError } from '../src/providers.js';
 import { createRuntime } from '../src/index.js';
 
 const servers: Server[] = [], directories: string[] = [], runtimes: ReturnType<typeof createRuntime>[] = [];
+async function createEpisode(runtime: ReturnType<typeof createRuntime>) {
+  const { project } = await runtime.dispatch('dramaStudio.create', { mode: 'upload', originalText: '一名值班员整理桌上的维修单。',
+    work: { title: '文本协议测试作品', visualStyle: 'live-action', narrativeMode: 'mixed' } }) as { project: ProjectDocument };
+  return project;
+}
 afterEach(async () => {
   await Promise.all(runtimes.splice(0).map(runtime => runtime.close()));
   await Promise.all(servers.splice(0).map(server => new Promise<void>((resolve, reject) => { server.closeAllConnections(); server.close(error => error ? reject(error) : resolve()); })));
@@ -243,10 +248,11 @@ it('uses the configured Messages authentication for discovery, checks, direct re
 
   const directory = await mkdtemp(join(tmpdir(), 'vq-full-relay-')); directories.push(directory);
   const secrets = new Map<string, string>();
-  const runtime = createRuntime({ dataDirectory: directory, seed: true, secretStore: {
+  const runtime = createRuntime({ dataDirectory: directory, seed: false, secretStore: {
     async get(key) { return secrets.get(key); }, async set(key, value) { secrets.set(key, value); }, async delete(key) { secrets.delete(key); },
   } });
   runtimes.push(runtime);
+  await createEpisode(runtime);
   const { projects: [project] } = await runtime.dispatch('workspace.snapshot') as WorkspaceSnapshot;
   const selected = modelSchema.parse(await runtime.dispatch('model.save', { model: endpoint, secret }));
   await runtime.dispatch('project.update', { projectId: project.id, patch: { workflow: {
@@ -286,7 +292,8 @@ for (const { protocol, reportUsage } of [{ protocol: 'responses', reportUsage: t
       return { id: `msg-${calls.length}`, type: 'message', role: 'assistant', model: 'fixture', content: first ? [{ type: 'tool_use', id: 'call-project', name: 'read_project_snapshot', input: {} }] : [{ type: 'text', text: '已读取固定项目快照。' }], stop_reason: first ? 'tool_use' : 'end_turn', stop_sequence: null, usage: anthropicUsage };
     });
     const directory = await mkdtemp(join(tmpdir(), 'vq-text-protocol-')); directories.push(directory);
-    const runtime = createRuntime({ dataDirectory: directory, seed: true }); runtimes.push(runtime);
+    const runtime = createRuntime({ dataDirectory: directory, seed: false }); runtimes.push(runtime);
+    await createEpisode(runtime);
     const initial = await runtime.dispatch('workspace.snapshot') as WorkspaceSnapshot;
     const selected = await runtime.dispatch('model.save', { model: { name: `Agent ${protocol}`, connectionType: 'text', provider: 'openai-compatible', textProtocol: protocol, baseUrl, model: 'fixture', capabilities: ['text', 'tools'] } }) as ModelProfile;
     await runtime.dispatch('project.update', { projectId: initial.projects[0].id, patch: { workflow: { id: 'native-api', version: 1, name: 'native API', production: { mode: 'native-video', referenceMode: 'none', soundPrompt: '', subtitleMode: 'off' }, nodes: [workflowNodeSchema.parse({ id: 'agent', kind: 'agent', label: 'Agent', modelId: selected.id })], edges: [] } } });
@@ -319,7 +326,8 @@ it.each([{ modelId: 'gpt-5.6-terra', reasoning: false }, { modelId: 'deepseek-v4
     return { id: `chat-${turn}`, object: 'chat.completion', created: 1, model: modelId, choices: [{ index: 0, message, finish_reason: turn <= 2 ? 'tool_calls' : 'stop' }] };
   });
   const directory = await mkdtemp(join(tmpdir(), 'vq-agent-chat-')); directories.push(directory);
-  const runtime = createRuntime({ dataDirectory: directory, seed: true }); runtimes.push(runtime);
+  const runtime = createRuntime({ dataDirectory: directory, seed: false }); runtimes.push(runtime);
+  await createEpisode(runtime);
   const { projects: [project] } = await runtime.dispatch('workspace.snapshot') as WorkspaceSnapshot;
   const selected = modelSchema.parse(await runtime.dispatch('model.save', { model: {
     name: modelId, connectionType: 'text', provider: 'openai-compatible', platform: reasoning ? 'deepseek' : 'custom',
@@ -340,7 +348,8 @@ it.each([{ modelId: 'gpt-5.6-terra', reasoning: false }, { modelId: 'deepseek-v4
 
 it('persists declared capabilities and rejects an Agent binding or protocol the model cannot use', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'vq-agent-capability-')); directories.push(directory);
-  const runtime = createRuntime({ dataDirectory: directory, seed: true }); runtimes.push(runtime);
+  const runtime = createRuntime({ dataDirectory: directory, seed: false }); runtimes.push(runtime);
+  await createEpisode(runtime);
   const { projects: [project] } = await runtime.dispatch('workspace.snapshot') as WorkspaceSnapshot;
   const profile = { name: 'OpenAI fixture', connectionType: 'text', provider: 'openai-compatible', platform: 'openai', model: 'gpt-6-astra', baseUrl: 'https://api.openai.com/v1' };
   await expect(runtime.dispatch('model.save', { model: { ...profile, capabilities: ['text', 'tools'], textProtocol: 'chat-completions' } })).rejects.toThrow('需要 Responses API');

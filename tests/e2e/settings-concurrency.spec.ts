@@ -9,7 +9,7 @@ async function rpc<T>(request: APIRequestContext, method: string, params: unknow
 }
 
 for (const conflict of [false, true]) test('preserves concurrent project settings with ' + (conflict ? 'a field conflict' : 'independent fields'), async ({ page, request }) => {
-  const project = await rpc<ProjectDocument>(request, 'project.create', { title: '统一设置并发 ' + conflict, brief: '打开设置前的简报' });
+  const project = await rpc<ProjectDocument>(request, 'project.create', { originalText: '清晨，林夏在书房发现一封未寄出的信。她来到旧城寻找信的主人，与朋友在雨中的城门重逢。两人读完信后决定一起回家。', title: '统一设置并发 ' + conflict, brief: '打开设置前的简报' });
   await page.goto('/'); await openProjectFromList(page, project.title);
   await page.locator('.project-heading-actions').getByRole('button', { name: '制作设置', exact: true }).click();
   const dialog = page.getByRole('dialog', { name: '制作设置', exact: true });

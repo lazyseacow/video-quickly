@@ -31,6 +31,7 @@ export default function ProjectExportDialog({ project, workspace, action, onClos
   const [editorOpen, setEditorOpen] = useState(false);
   const [outputPath, setOutputPath] = useState('');
   const [busy, setBusy] = useState(false);
+  const exportInFlight = useRef(false);
   const [runId, setRunId] = useState<string>();
   const [exportedPath, setExportedPath] = useState<string>();
   const validProfile = videoProfileSchema.safeParse(exportProfile);
@@ -54,17 +55,19 @@ export default function ProjectExportDialog({ project, workspace, action, onClos
     return () => { mounted = false; };
   }, [run?.id, run?.status, notify]);
   function exportMp4() {
+    if (exportInFlight.current || active || closed.current || !validProfile.success || !project.shots.length) return;
+    exportInFlight.current = true;
     const attempt: { runId?: string; complete: () => void } = { complete: beginGuideAction('export-completed') };
     exportGuide.current = attempt;
     setBusy(true); setExportedPath(undefined);
     void action<{ runId?: string; id?: string; path?: string; outputPath?: string }>('render.export', { projectId: project.id, profile: exportProfile, ...(outputPath ? { destination: outputPath } : {}) }).then(value => {
       if (closed.current) return;
-      setBusy(false);
       if (!value) return;
       const id = value.runId ?? value.id;
       if (id) { attempt.runId = id; setRunId(id); }
       else if (value.path || value.outputPath) { setExportedPath(value.path ?? value.outputPath); attempt.complete(); }
-    });
+    }).catch(error => { if (!closed.current) notify(error instanceof Error ? error.message : String(error), true); })
+      .finally(() => { exportInFlight.current = false; if (!closed.current) setBusy(false); });
   }
   const preview = project.shots[0] ? <figure className="export-dialog__preview"><div className="export-dialog__frame" style={{ '--export-aspect': previewProfile.width / previewProfile.height } as CSSProperties}><ScenePreview project={previewProject} shot={project.shots[0]} shotIndex={0} assets={workspace.assets} /></div><figcaption>{previewProfile.width} × {previewProfile.height} · {formatFrameRate(previewProfile.frameRate)} fps</figcaption></figure> : <EmptyState icon={<Film size={24} />} title="暂无镜头" description="添加镜头后可预览导出画面。" />;
   return <Dialog title="导出视频" onClose={close} onDismissStart={() => { closed.current = true; }} className="export-dialog settings-dialog">

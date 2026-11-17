@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { stat } from 'node:fs/promises';
-import { creativeReferenceAssetIds, isCreativeReferenceAsset, isVideoGenerationNode, projectCharacterIds, projectReadinessSchema, usesManualPlanning, usesVideoAudio, type AssetRecord, type CharacterProfile, type ModelProfile, type ProjectDocument, type ReadinessIssue, type RunSelection, type RuntimeSystem, type SkillPackage, type WorkflowNode } from '@video-quickly/contracts';
+import { characterReferenceAssetIds, creativeReferenceAssetIds, dramaVoiceIds, isCreativeReferenceAsset, isVideoGenerationNode, MAX_REFERENCE_AUDIO_BYTES, projectCharacterIds, projectReadinessSchema, usesManualPlanning, usesVideoAudio, validateDramaProject, type AssetRecord, type CharacterProfile, type ModelProfile, type ProjectDocument, type ReadinessIssue, type RunSelection, type RuntimeSystem, type SkillPackage, type VoiceProfile, type WorkflowNode } from '@video-quickly/contracts';
 import { fingerprint } from './activities.js';
 import { hashFileSha256 } from './file-hash.js';
 import { ExecutionModelError, validateExecutionModel } from './execution-model.js';
@@ -10,7 +10,7 @@ import type { RuntimeOptions } from './index.js';
 
 export interface ReadinessSnapshot {
   project: ProjectDocument; nodes: WorkflowNode[]; models: ModelProfile[]; assets: AssetRecord[];
-  characters: CharacterProfile[]; skills: SkillPackage[]; selection?: RunSelection;
+  characters: CharacterProfile[]; voices?: VoiceProfile[]; skills: SkillPackage[]; selection?: RunSelection;
   blockedIssue?: Pick<ReadinessIssue, 'category' | 'message' | 'fix' | 'nodeId'>;
 }
 
@@ -60,12 +60,27 @@ export function createProjectReadiness(options: {
       if (!character || character.archived) {
         add({ severity: 'error', category: 'media', message: character ? `角色「${character.name}」已归档。` : '镜头引用的角色不存在。', hint: '请恢复角色或修改镜头绑定。', fix: 'characters' }, `character:${id}`); continue;
       }
-      for (const assetId of character.referenceAssetIds) {
+      for (const assetId of characterReferenceAssetIds(character)) {
         const asset = assets.get(assetId);
         if (!asset?.active || asset.kind !== 'image' || asset.projectId !== undefined) add({ severity: 'error', category: 'media', assetId, message: `角色「${character.name}」的参考图不再是有效公共图片。`, fix: 'characters' }, `character-asset:${assetId}`);
         else requireAsset(assetId, nodes[0]);
       }
     }
+    const voices = new Map((saved.voices ?? []).map(voice => [voice.id, voice]));
+    for (const id of dramaVoiceIds(project, saved.characters)) {
+      const voice = voices.get(id);
+      if (!voice || voice.archived) {
+        add({ severity: 'error', category: 'media', message: voice ? `音色「${voice.name}」已归档。` : '角色或台词引用的音色不存在。', hint: '请在音色库恢复音色，或修改角色及台词的音色关联。', fix: 'assets' }, `voice:${id}`); continue;
+      }
+      for (const assetId of voice.referenceAssetIds) {
+        const asset = assets.get(assetId);
+        if (!asset?.active || asset.kind !== 'audio' || asset.projectId !== undefined || !['audio/wav', 'audio/x-wav', 'audio/mpeg'].includes(asset.mimeType) || asset.size <= 0 || asset.size > MAX_REFERENCE_AUDIO_BYTES) {
+          add({ severity: 'error', category: 'media', assetId, message: `音色「${voice.name}」的参考音频须为公共素材库中不超过 15 MB 的有效 WAV 或 MP3。`, fix: 'assets' }, `voice-asset:${assetId}`);
+        } else requireAsset(assetId, nodes[0]);
+      }
+    }
+    try { validateDramaProject(project, saved.characters, saved.voices ?? []); }
+    catch (error) { add({ severity: 'error', category: 'workflow', message: error instanceof Error ? error.message : '短剧结构或关联无效。', hint: '请检查场次、角色形象、对白和音色关联。', fix: 'step' }, 'drama-content'); }
     for (const assetId of creativeReferenceAssetIds(project)) {
       const asset = assets.get(assetId);
       if (!isCreativeReferenceAsset(project, asset)) add({ severity: 'error', category: 'media', assetId, message: '创作设定的参考图缺失或不属于当前项目。', hint: '请恢复图片或重新选择参考素材。', fix: 'assets' }, `creative-asset:${assetId}`);

@@ -25,7 +25,7 @@ async function rpc(request: APIRequestContext, method: string, params: unknown =
 }
 function gate() { let release!: () => void; const promise = new Promise<void>(resolve => { release = resolve; }); return { promise, release }; }
 async function createProject(request: APIRequestContext, title: string, shotCount = 2) {
-  const project = await rpc(request, 'project.create', { title });
+  const project = await rpc(request, 'project.create', { originalText: '清晨，林夏在书房发现一封未寄出的信。她来到旧城寻找信的主人，与朋友在雨中的城门重逢。两人读完信后决定一起回家。', title });
   return rpc(request, 'project.update', { projectId: project.id, revision: project.revision, patch: { shots: Array.from({ length: shotCount }, (_, index) => ({ id: `shot-${index}`, title: `测试镜头 ${index + 1}`, narration: '', visualPrompt: '', durationUs: 2_000_000 })) } });
 }
 async function waitForEditor(page: Page, project: Pick<ProjectDocument, 'title' | 'shots'>) {
@@ -36,8 +36,7 @@ async function waitForEditor(page: Page, project: Pick<ProjectDocument, 'title' 
 }
 async function openProject(page: Page, project: Pick<ProjectDocument, 'title' | 'shots'>) {
   await page.goto('/');
-  await page.getByRole('button', { name: '我的项目', exact: true }).click();
-  await page.locator('.project-card').filter({ hasText: project.title }).getByRole('button', { name: /继续创作/ }).click();
+  await openProjectFromList(page, project.title);
   await waitForEditor(page, project);
 }
 
