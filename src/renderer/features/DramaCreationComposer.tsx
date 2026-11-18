@@ -98,7 +98,14 @@ export default function DramaCreationComposer({ workspace, action, request, onCr
           <div className="drama-composer-script form-stack">
             <Field label="短剧名称" required>{field => <input {...field} ref={titleInput} name="title" required maxLength={160} value={title} disabled={busy || readBusy} onChange={event => setTitle(event.target.value)} placeholder="给你的短剧起个名字" />}</Field>
             <div id={`${id}-upload`} role="tabpanel" aria-labelledby={`${id}-upload-tab`} hidden={mode !== 'upload'} className="form-stack">
-              <div className="drama-script-import"><Field label="剧本文件" hint="支持 TXT、MD、DOCX 和含文本的 PDF。正文最多 30000 字符。">{field => <PathPicker field={field} label="剧本文件" value={path} onChange={setPath} extensions={['txt', 'md', 'docx', 'pdf']} disabled={busy || readBusy} placeholder="选择文件，或填写完整路径" />}</Field><Button disabled={busy || !path.trim()} busy={readBusy} onClick={() => void readScript()}><FolderOpen size={15} aria-hidden="true" />读取文件</Button></div>
+              <Field label="剧本文件" hint="支持 TXT、MD、DOCX 和含文本的 PDF。正文最多 30000 字符。">{field => (
+                <div className="drama-script-import">
+                  <div className="drama-script-path">
+                    <PathPicker field={field} label="剧本文件" value={path} onChange={setPath} extensions={['txt', 'md', 'docx', 'pdf']} disabled={busy || readBusy} placeholder="选择文件，或填写完整路径" />
+                  </div>
+                  <Button disabled={busy || !path.trim()} busy={readBusy} onClick={() => void readScript()}><FolderOpen size={15} aria-hidden="true" />读取文件</Button>
+                </div>
+              )}</Field>
               <Field label="剧本正文" required hint={fileName ? `已读取 ${fileName}，可继续编辑。` : '也可以直接粘贴剧本、小说章节或分集故事。'}>{field => <textarea {...field} name="originalText" required={mode === 'upload'} rows={8} maxLength={30000} value={originalText} disabled={busy || readBusy} onChange={event => { setOriginalText(event.target.value); setFileName(''); }} placeholder="人物、场景、对白与故事情节…" />}</Field>
               <span className="tiny-meta drama-character-count">{originalText.length.toLocaleString()} / 30,000</span>
             </div>
@@ -122,7 +129,7 @@ export default function DramaCreationComposer({ workspace, action, request, onCr
           </div>
         </div>
         {error && <Notice kind="error">{error}</Notice>}
-        <div className="drama-composer-footer"><span className="field__hint">创建作品与第 1 集，进入工作台后继续制作。</span><Button type="submit" variant="primary" busy={busy} disabled={readBusy}>创建短剧<ArrowRight size={16} aria-hidden="true" /></Button></div>
+        <div className="drama-composer-footer"><Button type="submit" variant="primary" busy={busy} disabled={readBusy}>创建短剧<ArrowRight size={16} aria-hidden="true" /></Button></div>
       </form>
     </section>
     {topicsOpen && <DramaTopicsDialog value={topics} action={action} version={workspace.version} onChange={setTopics} onClose={() => setTopicsOpen(false)} />}

@@ -69,7 +69,16 @@ export default function DramaWorksPage({ workspace, action, onOpen, creationRequ
       <div className="drama-episode-list">{episodes.data?.map(episode => <article className="drama-episode-row" data-project-id={episode.id} key={episode.id}><div>{episode.drama && <span className="tiny-meta">第 {episode.drama.number} 集</span>}<h3>{episode.title}</h3><p>{episode.brief || '尚未填写本集故事'}</p>{episode.drama && <div className="pill-row"><span className="pill">{dramaVisualStyleLabels[episode.drama.visualStyle]}</span><span className="pill">{dramaNarrativeModeLabels[episode.drama.narrativeMode]}</span></div>}{episode.archived && <span className="tiny-meta">已归档</span>}</div><Button data-guide="project-open" disabled={episode.archived} onClick={() => onOpen(episode.id)}>打开分集</Button></article>)}</div>
       {episodes.data?.length === 0 && <EmptyState icon={<Clapperboard size={25} />} title="还没有分集" description="创建第一集，继续编辑场次、镜头和对白。" />}
     </> : <>
-      <div className="drama-library-heading"><h2>我的作品</h2><Field label="搜索作品"><input ref={searchInput} type="search" maxLength={200} value={search} onChange={event => setSearch(event.target.value)} placeholder="作品名称或故事设定" /></Field><div className="tabs" role="group" aria-label="作品筛选"><button type="button" aria-pressed={!archived} className={!archived ? 'active' : ''} onClick={() => setArchived(false)}>可用</button><button type="button" aria-pressed={archived} className={archived ? 'active' : ''} onClick={() => setArchived(true)}>已归档</button></div></div>
+      <div className="drama-library-heading">
+        <h2>我的作品</h2>
+        <div className="drama-library-controls">
+          <Field label="搜索作品"><input ref={searchInput} type="search" maxLength={200} value={search} onChange={event => setSearch(event.target.value)} placeholder="作品名称或故事设定" /></Field>
+          <div className="tabs" role="group" aria-label="作品筛选">
+            <button type="button" aria-pressed={!archived} className={!archived ? 'active' : ''} onClick={() => setArchived(false)}>可用</button>
+            <button type="button" aria-pressed={archived} className={archived ? 'active' : ''} onClick={() => setArchived(true)}>已归档</button>
+          </div>
+        </div>
+      </div>
       {library.error && <Notice kind="error">{library.error}<Button onClick={library.refresh}>重试读取作品</Button></Notice>}
       {library.busy && !library.hasLoaded && <p role="status">正在读取作品…</p>}
       <div className="drama-work-list">{values.map(value => <article className="drama-work-card" data-work-id={value.id} key={value.id}><Clapperboard size={21} aria-hidden="true" /><h2>{value.title}</h2><p>{value.description || '尚未填写故事设定'}</p><div className="pill-row"><span className="pill">{dramaVisualStyleLabels[value.visualStyle]}</span><span className="pill">{dramaNarrativeModeLabels[value.narrativeMode]}</span></div><Button data-guide="project-open" onClick={() => setSelected(value)}>查看分集</Button></article>)}</div>
