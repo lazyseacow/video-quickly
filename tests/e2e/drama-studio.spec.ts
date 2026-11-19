@@ -15,7 +15,7 @@ test('creates a short drama from combined library topics and preserves both scri
   await expect(page.getByRole('button', { name: '短剧工作室', exact: true })).toHaveAttribute('aria-current', 'page');
   await expect(page.getByRole('button', { name: '我的项目', exact: true })).toHaveCount(0);
   await expect(page.getByRole('button', { name: '短剧作品', exact: true })).toHaveCount(0);
-  const composer = page.getByRole('region', { name: '让故事成为一部短剧', exact: true });
+  const composer = page.getByRole('region', { name: '新建短剧', exact: true });
   await composer.getByRole('button', { name: '创建短剧', exact: true }).click();
   await expect(composer.getByRole('textbox', { name: '短剧名称', exact: true })).toBeFocused();
   await composer.getByRole('textbox', { name: '短剧名称', exact: true }).fill(title);
@@ -42,7 +42,9 @@ test('creates a short drama from combined library topics and preserves both scri
   await expect(editor).toHaveCount(0);
   await library.getByRole('searchbox', { name: '搜索选题', exact: true }).fill(topicTitle);
   const topic = library.locator('.drama-topic-card').filter({ hasText: topicTitle });
-  await topic.getByRole('checkbox').check();
+  const topicChoice = topic.getByRole('checkbox', { name: topicTitle, exact: true });
+  await expect(topicChoice).toHaveAccessibleDescription('修表师与旧友从一封未寄出的信中发现共同的秘密。');
+  await topicChoice.check();
   await library.getByRole('searchbox', { name: '搜索选题', exact: true }).fill('');
   await library.locator('.drama-topic-card').filter({ hasNotText: topicTitle }).first().getByRole('checkbox').check();
   await library.getByRole('button', { name: '使用所选选题', exact: true }).click();
@@ -109,7 +111,7 @@ for (const scenario of [{ width: 1536, height: 960, theme: 'dark', visualStyle: 
     const voices = await rpc<{ items: VoiceProfile[] }>(request, 'voice.list', { limit: 100 }); const voice = voices.items.find(value => value.name === voiceName)!;
     expect(character.defaultVoiceId).toBe(voice.id); expect(character.appearances?.[0].name).toBe('雨夜风衣');
     await page.getByRole('button', { name: '短剧工作室', exact: true }).click();
-    const composer = page.getByRole('region', { name: '让故事成为一部短剧', exact: true });
+    const composer = page.getByRole('region', { name: '新建短剧', exact: true });
     await composer.getByRole('textbox', { name: '短剧名称', exact: true }).fill(workTitle);
     await composer.getByRole('textbox', { name: '剧本正文', exact: true }).fill('雨夜，林夏在旧书房找到一封信。她推开门，问同伴：“这封信是谁留下的？”门外响起脚步声。');
     await composer.getByRole('combobox', { name: '画风', exact: true }).selectOption(scenario.visualStyle === 'animation' ? 'cel-animation' : 'natural-live-action');

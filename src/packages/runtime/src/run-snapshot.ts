@@ -1,10 +1,17 @@
-import type { AssetRecord, CharacterProfile, ImageEditInput, ModelProfile, ProjectDocument, PromptPreview, RunSelection, Shot, ShotCandidateKind, SkillPackage, VoiceProfile, WorkflowAssistantContext, WorkflowDefinition, WorkflowNode } from '@video-quickly/contracts';
-import type { McpServer } from './mcp.js';
+import type { AssetRecord, CharacterProfile, CreativeObjectiveExecution, CreativeRevisionScope, CreativeStyleCard, ImageEditInput, MCPServer, ModelProfile, ProjectDocument, PromptPreview, RunSelection, Shot, ShotCandidateKind, SkillPackage, VoiceProfile, WorkflowAssistantContext, WorkflowDefinition, WorkflowNode } from '@video-quickly/contracts';
 import type { WorkflowUpstreamResult } from './workflow-prompts.js';
 import type { WorkflowOutputVersion } from './workflow-outputs.js';
 
 // Existing media checkpoints use the scheduling width frozen at creation.
 export type FrozenProjectDocument = ProjectDocument & { workflow: { execution?: { maxConcurrentShots: number } } };
+
+export interface CreativePlanningSnapshot {
+  goal: string;
+  reference?: AssetRecord;
+  styleCard?: CreativeStyleCard;
+  plan?: CreativeObjectiveExecution;
+  revision?: { instruction: string; shots: Shot[]; scope?: CreativeRevisionScope; applyDraft?: boolean; projectStyle?: string };
+}
 
 export interface RunSnapshot {
   project: FrozenProjectDocument;
@@ -13,7 +20,8 @@ export interface RunSnapshot {
   automaticSkillIds?: string[];
   autonomousVideo?: boolean;
   videoEditingAgentId?: string;
-  mcpServers: McpServer[];
+  // Historical connection metadata is readable but never executed.
+  mcpServers?: MCPServer[];
   nodes: WorkflowNode[];
   handlerVersion: number;
   outputContractVersion?: WorkflowOutputVersion;
@@ -29,6 +37,7 @@ export interface RunSnapshot {
   inspectionEdges?: WorkflowDefinition['edges'];
   regeneration?: { shotId: string; kind: ShotCandidateKind; baseline: Shot; instruction?: string; imageEdit?: ImageEditInput };
   assistant?: WorkflowAssistantContext;
+  creativePlanning?: CreativePlanningSnapshot;
   characters?: CharacterProfile[];
   characterAssets?: AssetRecord[];
   voices?: VoiceProfile[];

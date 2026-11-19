@@ -54,7 +54,7 @@ test('keeps a modal open when selecting text across its backdrop', async ({ page
   await page.emulateMedia({ reducedMotion: 'reduce' });
   await openApp(page);
   await page.getByRole('button', { name: '新建短剧', exact: true }).click();
-  const composer = page.getByRole('region', { name: '让故事成为一部短剧', exact: true });
+  const composer = page.getByRole('region', { name: '新建短剧', exact: true });
   const trigger = composer.getByRole('button', { name: '打开选题库', exact: true });
   await trigger.click();
   const dialog = page.getByRole('dialog', { name: '选题库', exact: true });
@@ -255,7 +255,7 @@ for (const viewport of [{ width: 1536, height: 960 }, { width: 1024, height: 720
     await openApp(page);
     const trigger = page.getByRole('button', { name: '新建短剧', exact: true });
     await trigger.click();
-    const composer = page.getByRole('region', { name: '让故事成为一部短剧', exact: true });
+    const composer = page.getByRole('region', { name: '新建短剧', exact: true });
     await expect(composer.getByRole('textbox', { name: '短剧名称', exact: true })).toBeFocused();
     await page.screenshot({ path: info.outputPath(`studio-creation-${viewport.width}.png`) });
     await expect(page.getByRole('dialog', { name: '新建视频项目', exact: true })).toHaveCount(0);

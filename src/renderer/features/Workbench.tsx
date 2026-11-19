@@ -22,7 +22,6 @@ import { PanelResizeHandle } from '../components/PanelResizeHandle';
 import ProjectExportDialog from '../components/ProjectExportDialog';
 import type { ProjectSettingsAction } from '../components/ProjectSettingsPanel';
 import { useContentMotion } from '../lib/motion';
-import ToolBindings from '../components/ToolBindings';
 import SkillPicker from '../components/SkillPicker';
 import PathPicker from '../components/PathPicker';
 import { rpc } from '../lib/client';
@@ -58,6 +57,7 @@ const CaptionStyleDialog = lazy(() => import('../components/CaptionStyleEditor')
 const BulkShotDialog = lazy(() => import('../components/BulkShotDialog'));
 const StepResultView = lazy(() => import('../components/StepResultView'));
 const ShotRegenerationDialog = lazy(() => import('../components/ShotRegenerationDialog'));
+const CreativePlanningDialog = lazy(() => import('./CreativePlanningDialog'));
 const ProjectReadinessDialog = lazy(() => import('../components/ProjectReadinessDialog'));
 const AssetRecoveryDialog = lazy(() => import('../components/AssetRecoveryDialog'));
 const ProductionSettingsDialog = lazy(() => import('../components/ProductionSettingsDialog'));
@@ -77,10 +77,12 @@ type WorkbenchProps = {
   outputRequest?: StepOutputSelection;
   onOutputConsumed: () => void;
   onOpenOutput: (selection: StepOutputSelection) => void;
+  openStoryboard?: boolean;
+  onStoryboardOpened?: () => void;
   onNavigate: (destination: WorkbenchRepairDestination, modelId?: string) => Promise<boolean>;
 };
 
-export default function Workbench({ project, workspace, action, notify, onRegisterSave, outputRequest, onOutputConsumed, onOpenOutput, onNavigate }: WorkbenchProps) {
+export default function Workbench({ project, workspace, action, notify, onRegisterSave, outputRequest, onOutputConsumed, onOpenOutput, openStoryboard, onStoryboardOpened, onNavigate }: WorkbenchProps) {
   const confirm = useConfirmation();
   const { session, state: edits, ready, storageError, canPersistDraft, checkpoint } = useProjectEdits(project, workspace.system.dataDirectory);
   const [retryingDraft, setRetryingDraft] = useState(false);
@@ -265,6 +267,7 @@ export default function Workbench({ project, workspace, action, notify, onRegist
   const captionShotId = captionShot?.id;
   const [musicEditing, setMusicEditing] = useState(false);
   const [regenerationShotId, setRegenerationShotId] = useState<string>();
+  const [revisionShotId, setRevisionShotId] = useState<string>();
   const [regenerationSource, setRegenerationSource] = useState<{ runId: string; nodeId: string; kind: 'image' | 'video'; modelName: string }>();
   const regenerationRequestId = useRef<string | undefined>(undefined);
   const regenerationShot = content.shots.find(shot => shot.id === regenerationShotId);
@@ -599,6 +602,21 @@ export default function Workbench({ project, workspace, action, notify, onRegist
       return true;
     } finally { session.endSave(); }
   }
+  async function saveBeforeShotRevision() {
+    if (isProductionActive || savingEdits || session.state.busy || session.state.conflict || !await save()) return null;
+    return session.state.revision;
+  }
+  async function applyShotRevision(runId: string) {
+    if (await saveBeforeShotRevision() === null) return false;
+    session.beginSave();
+    try {
+      const result = await action<ProjectDocument>('creativePlanning.apply', { runId });
+      if (!result) return false;
+      session.applySaved(result, '应用镜头改稿');
+      notify('镜头改稿已应用');
+      return true;
+    } finally { session.endSave(); }
+  }
   async function applyCaptionStyle(value: CaptionStyle | null, baseline: ProjectDocument) {
     if (!captionStyleTarget || session.state.conflict || session.state.busy) return false;
     if (baseline.id !== project.id) throw new Error('字幕样式不属于当前项目。');
@@ -655,6 +673,12 @@ export default function Workbench({ project, workspace, action, notify, onRegist
     const structuredDocument = section !== 'script' && Boolean(manualPlanningFields?.[section]);
     setPlanningEditor({ section, options, structuredDocument, baseline: structuredClone({ title: current.title, brief: current.brief, style: current.style, profile: options?.profile ?? current.profile, manualPlanningFields, creativeContext: current.creativeContext ?? undefined, shots: current.shots }) });
   }
+  useEffect(() => {
+    if (!openStoryboard || !ready || savingEdits || edits.busy || isProductionActive) return;
+    if (edits.conflict) notify('项目已有外部修改，请比较合并后编辑分镜。', true);
+    else openPlanningEditor('script');
+    onStoryboardOpened?.();
+  }, [openStoryboard, ready, savingEdits, edits.busy, isProductionActive, edits.conflict, notify, onStoryboardOpened]);
   async function savePlanning(change: PlanningChange) {
     if (!planningEditor) return false;
     if (isProductionActive) throw new Error('制作正在进行，完成或停止后再修改策划内容。');
@@ -974,6 +998,7 @@ export default function Workbench({ project, workspace, action, notify, onRegist
               <div className="inspector-actions">
                 <Button aria-label="保存镜头" variant="primary" busy={savingEdits} disabled={!dirtyShot} onClick={() => void saveExplicitly()}><Save size={13} />保存</Button>
                 <Button disabled={draft.locked} onClick={() => setRegenerationShotId(draft.id)}><WandSparkles size={13} />AI 微调</Button>
+                <Button aria-haspopup="dialog" disabled={draft.locked || isProductionActive || savingEdits || edits.busy || Boolean(edits.conflict)} onClick={() => setRevisionShotId(draft.id)}>修改镜头</Button>
               </div>
             </section>
             <section className="inspector-section">
@@ -1051,7 +1076,7 @@ export default function Workbench({ project, workspace, action, notify, onRegist
                 <Button disabled={draft.locked} onClick={() => openCaptionStyle({ mode: 'shot', shotId: draft.id })}>镜头字幕样式</Button>
               </div>
             </section>
-          </> : <EmptyState icon={<Settings2 size={20} />} title="暂无镜头属性" description="添加镜头后，即可编辑画面与旁白。" />}
+          </> : <EmptyState icon={<Settings2 size={20} />} title="添加镜头开始编辑" />}
         </div>
       </aside>
       <Timeline
@@ -1174,6 +1199,10 @@ export default function Workbench({ project, workspace, action, notify, onRegist
         onGenerate={generateShotCandidate}
         onApply={applyCandidate}
       />
+    </Suspense>}
+    {revisionShotId && <Suspense fallback={null}>
+      <CreativePlanningDialog workspace={workspace} action={action} onClose={() => setRevisionShotId(undefined)}
+        projectRevision={{ project: authoredProject, initialShotId: revisionShotId, saveBeforeRevision: saveBeforeShotRevision, applyRevision: applyShotRevision }} />
     </Suspense>}
     {musicEditing && <MusicEditor
       clips={content.musicClips}
@@ -1344,6 +1373,6 @@ function StepEditor({ node, workspace, onSave, onClose, hint }: { node: Workflow
     {(help.capability || draft.modelId) && <Field label="使用模型" hint={help.requiresModel ? '此步骤需要选择匹配的模型才能执行。' : undefined}><Select value={draft.modelId ?? ''} disabled={!models.length && !invalidModel} aria-invalid={invalidModel || undefined} onChange={event => setDraft({ ...draft, modelId: event.target.value || undefined })}><option value="">{stepModelPlaceholder(draft, models)}</option>{invalidModel && <option value={draft.modelId} disabled>{models.length ? `当前：${stepModelLabel(draft, workspace.models)}` : '无可用模型'}</option>}{models.map(model => <option key={model.id} value={model.id}>{model.name}</option>)}</Select></Field>}
     {invalidModel && <Notice kind="error">{help.requiresModel ? '当前模型不可用于此步骤，请选择匹配的模型。' : '当前模型不可用于此步骤，请选择匹配的模型，或改用本地内容。'}</Notice>}
     <SkillPicker inline skills={workspace.skills} groups={workspace.skillGroups} value={draft.skillIds} onChange={skillIds => setDraft({ ...draft, skillIds })} />
-    {draft.kind === 'subflow' && <SubflowInputBindings node={draft} onChange={setDraft} />}{draft.kind === 'agent' && <ToolBindings node={draft} onChange={setDraft} />}
+    {draft.kind === 'subflow' && <SubflowInputBindings node={draft} onChange={setDraft} />}
   </div><div className="dialog__footer"><Button onClick={onClose}>取消</Button><Button variant="primary" busy={busy} onClick={() => void save()}>保存</Button></div></Dialog>;
 }

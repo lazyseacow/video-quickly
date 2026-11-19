@@ -176,7 +176,14 @@ export function createReadModels(database: Database.Database, store: DocumentSto
   function generationAssets(): Set<string> {
     const rows = database.prepare(`SELECT json_extract(shot.value, '$.assetId') AS assetId, json_extract(shot.value, '$.referenceAssetId') AS referenceAssetId
       FROM documents r JOIN documents p ON p.kind = 'run-step-progress' AND substr(p.id, 1, length(r.id) + 1) = r.id || ':', json_each(p.body, '$.shots') shot
-      WHERE r.kind = 'run' AND json_extract(r.body, '$.status') IN ('queued','running','waiting_review','waiting_external','retry_scheduled')`).all() as { assetId: string | null; referenceAssetId: string | null }[];
+      WHERE r.kind = 'run' AND json_extract(r.body, '$.status') IN ('queued','running','waiting_review','waiting_external','retry_scheduled')
+      UNION ALL
+      SELECT NULL, json_extract(body, '$.reference.assetId') FROM documents WHERE kind = 'creative-style-card'
+      UNION ALL
+      SELECT NULL, json_extract(snapshot.body, '$.creativePlanning.reference.id')
+      FROM documents r JOIN documents snapshot ON snapshot.kind = 'run-snapshot' AND snapshot.id = r.id
+      WHERE r.kind = 'run' AND json_extract(r.body, '$.purpose') = 'creative-planning'
+      AND json_extract(r.body, '$.status') IN ('queued','running','waiting_external','retry_scheduled','needs_attention','failed')`).all() as { assetId: string | null; referenceAssetId: string | null }[];
     return new Set(rows.flatMap(row => [row.assetId, row.referenceAssetId]).filter((id): id is string => id !== null));
   }
   return { assetsVersion, projects, projectDetail, runSummary, runs, events, activities, assets, assetsInUse, nodeIds };

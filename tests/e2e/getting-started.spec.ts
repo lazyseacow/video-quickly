@@ -450,9 +450,9 @@ isolatedTest('guides an empty studio and preserves works and episodes through re
   const main = page.getByRole('main'), heading = main.getByRole('heading', { name: '短剧工作室', level: 1, exact: true });
   await expect(heading).toBeVisible();
   const seen = await walk(page); expect(seen).toEqual(['create-project', 'models', 'projects', 'help']);
-  await expect(main.getByRole('heading', { name: '创作你的第一部短剧', exact: true })).toBeVisible();
+  await expect(main.getByRole('heading', { name: '还没有作品', exact: true })).toBeVisible();
   await expect(main.getByLabel('搜索作品', { exact: true })).toBeVisible();
-  await expect(main.getByRole('region', { name: '让故事成为一部短剧', exact: true }).getByRole('button', { name: '创建短剧', exact: true })).toBeEnabled();
+  await expect(main.getByRole('region', { name: '新建短剧', exact: true }).getByRole('button', { name: '创建短剧', exact: true })).toBeEnabled();
   expect((await rpc<{ items: DramaWork[] }>(request, 'dramaWork.list')).items).toEqual([]);
   expect(isolatedWorkspace.origin).toBe(new URL(page.url()).origin); expect(observed.writes).toEqual([]); expect(observed.errors).toEqual([]);
   await page.setViewportSize({ width: 360, height: 844 });
@@ -469,7 +469,7 @@ isolatedTest('guides an empty studio and preserves works and episodes through re
   await main.getByRole('searchbox', { name: '搜索作品', exact: true }).fill('');
   const restored = await rpc<DramaWork>(request, 'dramaWork.get', { workId: sample.drama!.workId });
   await rpc(request, 'dramaWork.archive', { workId: restored.id, revision: restored.revision });
-  await expect(heading).toBeVisible(); await expect(main.getByRole('heading', { name: '创作你的第一部短剧', exact: true })).toBeVisible();
+  await expect(heading).toBeVisible(); await expect(main.getByRole('heading', { name: '还没有作品', exact: true })).toBeVisible();
   expect((await savedProject(request, sample.id)).archived).toBe(false);
   expect(await main.evaluate(element => element.scrollWidth - element.clientWidth)).toBeLessThanOrEqual(1);
   expect(observed.errors).toEqual([]);

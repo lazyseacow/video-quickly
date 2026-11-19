@@ -62,7 +62,7 @@ test('saves the tail-frame setting per project and can re-enable it after reload
     await expect(continuation).toBeChecked();
     await continuation.press('Space');
     await expect(continuation).not.toBeChecked();
-    await expect(continuation).toHaveAccessibleDescription('每个镜头使用自己的已有画面、角色参考图或文字独立生成。可并行处理。');
+    await expect(continuation).toHaveAccessibleDescription('各镜头独立生成，可并行处理。');
     await page.screenshot({ path: info.outputPath('tail-frame-continuation-disabled.png') });
     await productionStep(dialog, '确认保存');
     await expect(dialog.getByText('各镜头独立生成', { exact: true })).toBeVisible();
@@ -342,7 +342,7 @@ test('fills planning content and generates video using the manual storyboard and
     const text = dialog.getByRole('combobox', { name: '文本模型', exact: true });
     await expect(text).not.toHaveAttribute('aria-required', 'true');
     await expect(text.locator('xpath=ancestor::label[1]').locator('.field__required')).toHaveCount(0);
-    await expect(dialog.getByText('文本模型可选，供剪辑 Agent 使用。', { exact: true })).toBeVisible();
+    await expect(dialog.getByText(/供剪辑 Agent 使用/)).toHaveCount(0);
     await next.click();
     await expect(dialog.getByRole('alert')).toContainText('请选择可用的视频模型');
     await pick(dialog, '视频模型', source.video);

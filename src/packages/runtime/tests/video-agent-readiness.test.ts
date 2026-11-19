@@ -20,16 +20,15 @@ it.each(['openai-compatible', 'ollama'] as const)('checks the unified workflow w
   const model = modelSchema.parse(await runtime.dispatch('model.save', { model: {
     name: 'Agent fixture', provider: providerType, baseUrl: 'http://127.0.0.1:1/v1', model: 'fixture', connectionType: 'text', capabilities: providerType === 'openai-compatible' ? ['text', 'tools'] : ['text'],
   } }));
-  await runtime.dispatch('tool.register', { server: { name: '剪辑工具', transport: 'http', url: 'http://127.0.0.1:1/mcp', enabled: true } });
   const configured = projectSchema.parse(await runtime.dispatch('project.update', { projectId: project.id, revision: project.revision,
-    patch: { workflow: { ...project.workflow, production: { ...project.workflow.production, textModelId: model.id, agentSkillIds: ['unavailable'] } } },
+    patch: { workflow: { ...project.workflow, production: { ...project.workflow.production, textModelId: model.id, agentSkillIds: ['unavailable'], agentMcpServerIds: ['retired-service'] } } },
   }));
   const noExecutor = projectReadinessSchema.parse(await runtime.dispatch('project.readiness', { projectId: configured.id }));
   expect(noExecutor.ready).toBe(false);
   expect(noExecutor.issues).toContainEqual(expect.objectContaining({ category: 'environment', fix: 'runtime' }));
   expect(noExecutor.issues).toContainEqual(expect.objectContaining({ category: 'model', nodeId: 'video' }));
   expect(noExecutor.stepCount).toBe(8);
-  expect(noExecutor.issues.some(issue => issue.category === 'skill' && issue.nodeId === 'animation')).toBe(providerType === 'openai-compatible');
+  expect(noExecutor.issues.some(issue => issue.category === 'skill' && issue.nodeId === 'animation')).toBe(false);
   const scoped = projectReadinessSchema.parse(await runtime.dispatch('project.readiness', { projectId: configured.id, selection: { nodeId: 'animation', mode: 'node' } }));
   expect(scoped).toMatchObject({ ready: true, stepCount: 1, modelCount: 0, issues: [] });
   expect(provider).not.toHaveBeenCalled();

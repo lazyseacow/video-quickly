@@ -213,7 +213,9 @@ for (const viewport of [{ width: 1536, height: 960, theme: 'light' }, { width: 6
     for (const label of stageLabels.slice(1)) await expect(card(page, label)).toHaveAttribute('data-state', 'pending');
     expect(await saved(request, project.id)).toEqual(project); expect(await rpc(request, 'run.replay', { runId: run.id })).toMatchObject({ externalCalls: 0, matchesSnapshot: true });
     expect(observed.writes).toEqual([]); expect(observed.errors).toEqual([]); await expect(page.locator('html')).toHaveAttribute('data-theme', viewport.theme);
-    expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(viewport.width + 1); await production(page).scrollIntoViewIfNeeded(); await list.getByRole('button', { name: '策划与分镜说明', exact: true }).press('Shift+Tab'); await expect(planning).toBeFocused();
+    expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(viewport.width + 1); await production(page).scrollIntoViewIfNeeded();
+    await list.getByRole('button', { name: '打开阶段：素材与配音', exact: true }).press('Shift+Tab'); await expect(planning).toBeFocused();
+    await expect(planning).toHaveAccessibleDescription(/已完成/);
     await page.screenshot({ path: info.outputPath(`native-generation-completed-${viewport.theme}-${viewport.width}.png`) }); await production(page).screenshot({ path: info.outputPath(`generation-card-focus-${viewport.theme}-${viewport.width}.png`) });
     } finally { server.closeAllConnections(); await new Promise<void>(resolve => server.close(() => resolve())); }
   });

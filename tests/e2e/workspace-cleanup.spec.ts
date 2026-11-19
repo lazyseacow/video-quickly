@@ -24,9 +24,9 @@ test('keeps one page heading and functional guidance after removing repeated des
     if (name === 'Skill 工作室') {
       await expect(page.getByRole('heading', { name: '一个 Skill，一套创作方法', exact: true })).toHaveCount(0);
       await expect(page.getByText(/任务固定所选指令和已展开的引用资源/)).toHaveCount(0);
-      await expect(page.getByRole('heading', { level: 2, name: '工具连接', exact: true })).toBeVisible();
+      await expect(page.getByRole('heading', { level: 2, name: '工具连接', exact: true })).toHaveCount(0);
       await expect(page.getByRole('button', { name: '导入 Skill', exact: true })).toHaveCount(1);
-      await expect(page.getByRole('button', { name: '添加工具连接', exact: true })).toHaveCount(1);
+      await expect(page.getByRole('button', { name: '添加工具连接', exact: true })).toHaveCount(0);
     }
     if (name === '模型连接') {
       const types = page.getByRole('group', { name: '模型类型筛选', exact: true });
@@ -39,7 +39,7 @@ test('keeps one page heading and functional guidance after removing repeated des
   }
   await expect(page.locator('.statusbar')).toHaveCount(0);
   await page.screenshot({ path: info.outputPath('workspace-cleanup-dark-1536.png') });
-  await page.locator('.sidebar').getByRole('button', { name: '新建短剧', exact: true }).click(); const composer = page.getByRole('region', { name: '让故事成为一部短剧', exact: true }); await expect(composer).toBeVisible(); await expect(composer.getByRole('textbox', { name: '短剧名称', exact: true })).toBeFocused(); await expect(composer.getByRole('textbox', { name: '剧本正文', exact: true })).toBeVisible(); await composer.getByRole('tab', { name: '制作剧本', exact: true }).click(); await expect(composer.getByLabel('故事想法', { exact: true })).toBeVisible(); expect(errors).toEqual([]);
+  await page.locator('.sidebar').getByRole('button', { name: '新建短剧', exact: true }).click(); const composer = page.getByRole('region', { name: '新建短剧', exact: true }); await expect(composer).toBeVisible(); await expect(composer.getByRole('textbox', { name: '短剧名称', exact: true })).toBeFocused(); await expect(composer.getByRole('textbox', { name: '剧本正文', exact: true })).toBeVisible(); await composer.getByRole('tab', { name: '制作剧本', exact: true }).click(); await expect(composer.getByLabel('故事想法', { exact: true })).toBeVisible(); expect(errors).toEqual([]);
 });
 
 test('keeps recovery feedback and editing actions on a compact light workspace without an empty footer', async ({ page, request }, info) => {

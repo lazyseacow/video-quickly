@@ -52,7 +52,7 @@ for (const viewport of [{ width: 1536, height: 960, theme: 'light' }, { width: 6
     }
     const create = page.getByRole('button', { name: '新建短剧', exact: true });
     await keyboardFocus(page, create); await create.press('Enter');
-    const composer = page.getByRole('region', { name: '让故事成为一部短剧', exact: true });
+    const composer = page.getByRole('region', { name: '新建短剧', exact: true });
     await expect(composer.getByRole('textbox', { name: '短剧名称', exact: true })).toBeFocused();
     await composer.getByRole('textbox', { name: '短剧名称', exact: true }).fill('键盘打开后保留的短剧');
     await openProjectFromList(page, source.project.title); await create.click();
@@ -86,7 +86,7 @@ for (const viewport of [{ width: 1536, height: 960, theme: 'light' }, { width: 6
     await page.screenshot({ path: info.outputPath('keyboard-settings-return.png') });
   });
 
-  test('preserves step navigation, combobox editing, sliders and help while switching input methods', async ({ page, request }, info) => {
+  test('preserves step navigation, combobox editing, sliders and stage focus while switching input methods', async ({ page, request }, info) => {
     const source = await productionFixture(request), dialog = await openProduction(page, source.project);
     const navigation = dialog.getByRole('navigation', { name: '制作设置步骤', exact: true });
     const materials = navigation.getByRole('button', { name: '模型与素材', exact: true }), delivery = navigation.getByRole('button', { name: '声音与成片', exact: true });
@@ -103,11 +103,18 @@ for (const viewport of [{ width: 1536, height: 960, theme: 'light' }, { width: 6
     await dialog.getByRole('button', { name: '关闭对话框', exact: true }).click(); await expect(dialog).toHaveCount(0);
     const zoom = page.getByRole('slider', { name: '时间轴缩放', exact: true });
     await zoom.focus(); await zoom.press('Home'); await zoom.press('ArrowRight'); await expect(zoom).toHaveValue('1.1'); await expect(zoom).toBeFocused();
-    const help = page.getByRole('button', { name: '素材与配音说明', exact: true });
-    await keyboardFocus(page, help); await help.click(); await expect(page.getByRole('tooltip')).toBeVisible();
-    await page.keyboard.press('Escape'); await expect(page.getByRole('tooltip')).toHaveCount(0); await expect(help).toBeFocused(); await expect(help).toHaveCSS('outline-style', 'none');
-    await keyboardFocus(page, help); await expect(page.getByRole('tooltip')).toBeVisible();
-    await page.screenshot({ path: info.outputPath('keyboard-help-focus.png') });
+    const stages = page.getByRole('list', { name: '制作阶段进度', exact: true });
+    const stage = stages.getByRole('button', { name: '打开阶段：素材与配音', exact: true });
+    const nextStage = stages.getByRole('button', { name: '打开阶段：剪辑与动画', exact: true });
+    await expect(stage).toHaveAccessibleDescription('尚未制作');
+    await stage.focus(); await stage.press('Tab'); await expect(nextStage).toBeFocused();
+    await nextStage.press('Shift+Tab'); await expect(stage).toBeFocused();
+    const stageDialog = page.getByRole('dialog', { name: '本次制作', exact: true });
+    await stage.press('Enter'); await expect(stageDialog).toBeVisible();
+    await page.keyboard.press('Escape'); await expect(stageDialog).toHaveCount(0);
+    await expect(stage).toBeFocused();
+    await expect(stage.locator('..')).toHaveCSS('outline-style', 'solid');
+    await page.screenshot({ path: info.outputPath('keyboard-stage-focus.png') });
     expect((await source.saved()).revision).toBe(source.project.revision);
   });
 });

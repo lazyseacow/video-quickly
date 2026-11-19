@@ -170,7 +170,7 @@ test('separates adjacent layout controls and keeps both monochrome themes usable
   await page.screenshot({ path: info.outputPath('monochrome-light-600.png') });
   await page.emulateMedia({ reducedMotion: 'reduce' });
   await page.getByRole('button', { name: '新建短剧', exact: true }).click();
-  const composer = page.getByRole('region', { name: '让故事成为一部短剧', exact: true });
+  const composer = page.getByRole('region', { name: '新建短剧', exact: true });
   await expect(composer.getByRole('textbox', { name: '短剧名称', exact: true })).toBeFocused();
   await expect(composer.getByRole('tab', { name: '上传剧本', exact: true })).toBeVisible();
   await expect(page.locator('vite-error-overlay')).toHaveCount(0); expect(errors).toEqual([]);

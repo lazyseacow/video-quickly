@@ -26,8 +26,10 @@ export * from './drama.js';
 export * from './drama-catalog.js';
 export { creativeContextSchema, creativeEntitySchema, creativeEntityKeysSchema, creativeCharacterBindings, projectCharacterIds, validateCreativeReferences, shotCreativePrompt, creativeEntityLabels, creativeReferenceAssetIds, hasCharacterAppearance, isCreativeReferenceAsset, type CreativeContext, type CreativeEntity } from './creative-context.js';
 import { productionSettingsSchema, resolveProductionWorkflow } from './production.js';
-export { productionSettingsSchema, resolveProductionWorkflow, nativeReferenceStep, openingFrameShots, groupsReferenceImages, groupsNativeFirstFrames, isVideoGenerationNode, isModelGenerationNode, captionsEnabled, productionEditingStep, productionEditingSkillIds, productionModelSetting, supportsProductionAgent, supportsAutomaticCasting, productionPlanningSteps, productionPlanningStep, usesManualPlanning, MAX_REFERENCE_AUDIO_BYTES, MAX_REFERENCE_AUDIOS, type ProductionPlanningStep, type ProductionSettings } from './production.js';
+export { productionSettingsSchema, resolveProductionWorkflow, nativeReferenceStep, openingFrameShots, groupsReferenceImages, groupsNativeFirstFrames, isVideoGenerationNode, isModelGenerationNode, captionsEnabled, productionModelSetting, supportsProductionAgent, supportsAutomaticCasting, productionPlanningSteps, productionPlanningStep, usesManualPlanning, MAX_REFERENCE_AUDIO_BYTES, MAX_REFERENCE_AUDIOS, type ProductionPlanningStep, type ProductionSettings } from './production.js';
 export { MAX_STORYBOARD_SHOTS, planningDocumentSchemas, planningDocumentSections, formatPlanningDocument, type ManualPlanningFields, type PlanningDocumentKind } from './planning-fields.js';
+import { creativeObjectiveRouteSchema, creativeRevisionChangeSchema, creativeRevisionTargetSchema, creativeStyleCardSchema } from './creative-planning.js';
+export * from './creative-planning.js';
 export * from './asset-recovery.js';
 export { skillPromptContext, appendSkillContext, supportsSkillScript } from './skill-context.js';
 export { motionKeyframesSchema, type MotionKeyframe, type MotionEasing } from './keyframes.js';
@@ -410,7 +412,7 @@ export const runSchema = z.object({
   stepRetry: z.object({ nodeId: z.string().min(1), status: z.enum(['pending', 'completed']) }).optional(),
   regenerationSource: z.object({ runId: z.string().min(1), nodeId: z.string().min(1), shotId: z.string().min(1), requestId: z.string().uuid() }).optional(),
   events: z.array(runEventSchema).default([]), activities: z.array(activitySchema).default([]),
-  purpose: z.enum(['production', 'prompt-trial', 'workflow-assistant']).optional(), promptSessionId: z.string().optional(), promptSessionRevision: z.number().int().positive().optional(),
+  purpose: z.enum(['production', 'prompt-trial', 'workflow-assistant', 'creative-planning']).optional(), promptSessionId: z.string().optional(), promptSessionRevision: z.number().int().positive().optional(),
 });
 export type StepRun = z.infer<typeof runSchema>;
 export type RunRecord = StepRun;
@@ -461,6 +463,20 @@ export const projectSummarySchema = projectSchema.pick({ id: true, title: true, 
 export type ProjectSummary = z.infer<typeof projectSummarySchema>;
 export const runSummarySchema = runSchema.omit({ events: true, activities: true }).extend({ completedNodeIds: z.array(z.string()) });
 export type RunSummary = z.infer<typeof runSummarySchema>;
+export const creativePlanningEntrySchema = z.object({
+  id: z.string(), projectId: z.string(), title: z.string(), goal: z.string(), status: runStatusSchema,
+  error: z.string().optional(), createdAt: z.string(), parentRunId: z.string().optional(),
+});
+export type CreativePlanningEntry = z.infer<typeof creativePlanningEntrySchema>;
+export const creativePlanningResultSchema = creativePlanningEntrySchema.extend({
+  currentNodeId: z.string().optional(), failedNodeId: z.string().optional(), retryCompleted: z.boolean().optional(),
+  resumeAllowed: z.boolean().optional(), recoveryReason: z.string().optional(),
+  reference: assetSchema.optional(), styleCard: creativeStyleCardSchema.optional(),
+  shots: z.array(shotSchema).min(1).optional(), appliedRevision: z.number().int().positive().optional(),
+  target: creativeRevisionTargetSchema.optional(), changes: z.array(creativeRevisionChangeSchema).optional(),
+  route: creativeObjectiveRouteSchema.optional(), keyframes: z.array(assetSchema).optional(),
+});
+export type CreativePlanningResult = z.infer<typeof creativePlanningResultSchema>;
 export const promptDraftSchema = z.object({
   projectId: z.string().min(1), projectRevision: z.number().int().positive(), node: workflowNodeSchema,
   context: projectSchema.pick({ brief: true, originalText: true, style: true, creativeContext: true, profile: true }).partial().extend({ production: productionSettingsSchema.optional() }).optional(),

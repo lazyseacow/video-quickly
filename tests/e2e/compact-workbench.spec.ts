@@ -53,10 +53,10 @@ for (const viewport of [{ width: 1536, height: 960, theme: 'light' }, { width: 1
     await expect(dialog.getByText(/本步产出|前置步骤|后续步骤|一次确定创作方向|完成后等待人工审阅|资料与史实/)).toHaveCount(0);
     await expect(dialog.getByRole('checkbox', { name: /人工审核|人工审阅/ })).toHaveCount(0); expect((await dialog.locator('.dialog__surface').boundingBox())!.height).toBeLessThanOrEqual(viewport.height);
     await expect(dialog.getByText('高级设置', { exact: true })).toHaveCount(0);
-    await expect(dialog.getByText('剪辑 Agent 设置', { exact: true })).toBeVisible();
+    const creativeSkills = dialog.getByRole('button', { name: '创作 Skill', exact: true });
+    await expect(creativeSkills).toBeVisible();
     await dialog.getByLabel('简报内容', { exact: true }).fill('精简弹窗也保留可编辑的配置');
-    const agent = dialog.getByText('剪辑 Agent 设置', { exact: true });
-    await agent.scrollIntoViewIfNeeded();
+    await creativeSkills.scrollIntoViewIfNeeded();
     await page.screenshot({ path: info.outputPath(`planning-settings-${viewport.theme}-${viewport.width}.png`) });
     await productionStep(dialog, '模型与素材');
     await expect(dialog.getByText('高级设置', { exact: true })).toHaveCount(0);

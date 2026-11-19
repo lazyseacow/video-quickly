@@ -3,10 +3,16 @@ import { z } from 'zod';
 
 export type ModelRequestPhase = 'prepare' | 'send' | 'headers' | 'read' | 'parse' | 'validate';
 
+export interface TextGenerationImage {
+  mimeType: 'image/png' | 'image/jpeg' | 'image/webp';
+  data: string;
+}
+
 export interface TextGenerationRequest {
   model: ModelProfile;
   secret?: string;
   prompt: string;
+  image?: TextGenerationImage;
   operationId: string;
   signal?: AbortSignal;
   onRequestPhase?: (phase: ModelRequestPhase) => void;
@@ -265,16 +271,32 @@ async function textRateLimitError(response: Response) {
   return new TextRequestRejectedError(429, false, { kind, retryAt });
 }
 
-export const generateText: TextProvider = async ({ model, secret, prompt, operationId, signal, onRequestPhase, outputSchema, outputSchemaName, promptOutputFormat, onOutputFormatFallback }) => {
+function textMessage(model: ModelProfile, prompt: string, image?: TextGenerationImage): Record<string, JsonValue> {
+  const role = 'user';
+  if (!image) return { role, content: prompt };
+  if (!model.capabilities.includes('vision')) throw new Error('当前模型不支持参考图分析，请选择支持视觉输入的文本模型。');
+  if (model.provider === 'ollama') return { role, content: prompt, images: [image.data] };
+  if (model.textProtocol === 'messages') {
+    return { role, content: [{ type: 'image', source: { type: 'base64', media_type: image.mimeType, data: image.data } }, { type: 'text', text: prompt }] };
+  }
+  const url = `data:${image.mimeType};base64,${image.data}`;
+  if (model.textProtocol === 'responses') {
+    return { role, content: [{ type: 'input_text', text: prompt }, { type: 'input_image', image_url: url, detail: 'auto' }] };
+  }
+  return { role, content: [{ type: 'text', text: prompt }, { type: 'image_url', image_url: { url } }] };
+}
+
+export const generateText: TextProvider = async ({ model, secret, prompt, image, operationId, signal, onRequestPhase, outputSchema, outputSchemaName, promptOutputFormat, onOutputFormatFallback }) => {
   onRequestPhase?.('prepare');
   const ollama = model.provider === 'ollama';
   const protocol = model.textProtocol ?? 'chat-completions';
   const requestUrl = textModelEndpoint(model);
   const parameters = textRequestParameters(model, promptOutputFormat ? undefined : outputSchema, outputSchemaName);
   const automaticFormat = Boolean(outputSchema && !promptOutputFormat && usesAutomaticOutputFormat(model));
+  const userMessage = textMessage(model, prompt, image);
   const body = {
     ...(!ollama && protocol === 'responses' ? { store: false } : {}), model: model.model,
-    ...(!ollama && protocol === 'responses' ? { input: [{ role: 'user', content: prompt }] } : { messages: [{ role: 'user', content: prompt }] }), stream: false,
+    ...(!ollama && protocol === 'responses' ? { input: [userMessage] } : { messages: [userMessage] }), stream: false,
   };
   const request = {
     method: 'POST',

@@ -34,14 +34,14 @@ export default function SeriesTemplatesPage({ workspace, action, onCreate }: { w
     catch (reason) { if (request === readingGeneration.current) setError(reason instanceof Error ? reason.message : String(reason)); }
     finally { if (request === readingGeneration.current) setReadingId(''); }
   }
-  return <div className="content-page"><div className="page-heading"><h1>系列模板</h1><Button variant="primary" onClick={() => setEditing('new')}><Plus size={15} />新建系列模板</Button></div><div className="page-toolbar"><div className="tabs"><button aria-label="可用模板" aria-pressed={!archived} type="button" className={!archived ? 'active' : ''} onClick={() => setArchived(false)}>可用</button><button aria-label="已归档模板" aria-pressed={archived} type="button" className={archived ? 'active' : ''} onClick={() => setArchived(true)}>已归档</button></div></div>
+  return <div className="content-page"><div className="page-heading"><h1>系列模板</h1><Button aria-label="新建系列模板" variant="primary" onClick={() => setEditing('new')}><Plus size={15} />新建</Button></div><div className="page-toolbar"><div className="tabs"><button aria-label="可用模板" aria-pressed={!archived} type="button" className={!archived ? 'active' : ''} onClick={() => setArchived(false)}>可用</button><button aria-label="已归档模板" aria-pressed={archived} type="button" className={archived ? 'active' : ''} onClick={() => setArchived(true)}>已归档</button></div></div>
     {library.error ? <Notice kind="error">{library.error}<Button aria-label="重试读取模板" onClick={library.refresh}>重试</Button></Notice> : error && <Notice kind="error">{error}</Notice>}
     {loading && <p role="status" className="muted">正在读取系列模板…</p>}
     <div className="series-template-cards">{templates.map(template => <article className="series-template-card" key={template.id}>
       <h3>{template.name}</h3>
-      <p>{template.description || '尚未填写说明'}</p>
+      {template.description && <p>{template.description}</p>}
       <span className="tiny-meta">{template.creationDefaults ? '系统内置' : new Date(template.updatedAt).toLocaleDateString('zh-CN')}</span>
-      <div className="pill-row"><span className="pill">{template.settings.captionStyle ? '自定义字幕' : '默认字幕'}</span><span className="pill">{template.settings.scenePreset ? scenePresetLabels[template.settings.scenePreset.kind] : '无画面预设'}</span></div>
+      <p className="series-template-card__settings">{template.settings.captionStyle ? '自定义字幕' : '默认字幕'} · {template.settings.scenePreset ? scenePresetLabels[template.settings.scenePreset.kind] : '无画面预设'}</p>
       <div className="series-template-card__actions">
         {!archived && <IconButton label="用此模板新建" disabled={Boolean(readingId)} onClick={() => onCreate(template)}><FilePlus size={16} aria-hidden="true" /></IconButton>}
         <IconButton label="编辑系列模板" busy={readingId === template.id} disabled={Boolean(readingId)} onClick={() => void edit(template.id)}>
@@ -50,7 +50,7 @@ export default function SeriesTemplatesPage({ workspace, action, onCreate }: { w
         <IconButton label={`${archived ? '恢复' : '归档'}系列模板：${template.name}`} disabled={Boolean(readingId)} onClick={() => void archive(template)}>{archived ? <RotateCcw size={15} /> : <Trash2 size={15} />}</IconButton>
       </div>
     </article>)}</div>
-    {!templates.length && !loading && !library.error && <EmptyState icon={<Pencil size={24} />} title={archived ? '没有归档的系列模板' : '还没有系列模板'} description={archived ? '归档的模板可在这里恢复。' : '保存风格、字幕和新镜头预设，供其他项目复用。'} />}
+    {!templates.length && !loading && !library.error && <EmptyState icon={<Pencil size={24} />} title={archived ? '没有归档的系列模板' : '还没有系列模板'} />}
     {!library.stale && library.nextCursor !== null && <Button aria-label="加载更多系列模板" busy={library.loadingMore} disabled={!library.canLoadMore} onClick={() => void library.loadMore()}><ChevronDown size={14} />加载更多</Button>}
     {editing && <SeriesTemplateDialog template={editing === 'new' ? undefined : editing} action={action} onClose={() => setEditing(undefined)} onSaved={() => { setEditing(undefined); library.refresh(); }} />}
   </div>;
@@ -77,8 +77,8 @@ export function SeriesTemplateDialog({ template, initialSettings, action, onClos
   }
   const changeSettings = (value: SeriesSettings) => { setSettings(value); setFailure(''); };
   return <Dialog title={template ? '编辑系列模板' : '保存系列模板'} onClose={onClose} className="series-template-dialog settings-dialog"><div className="dialog__body"><SettingsSections label="系列模板设置" sections={[
-    { id: 'basic', label: '基本信息', icon: FileText, content: <><h3>基本信息</h3><Field label="系列模板名称"><input autoFocus value={name} maxLength={120} disabled={busy} onChange={event => setName(event.target.value)} /></Field><Field label="模板说明"><textarea rows={2} value={description} maxLength={10000} disabled={busy} onChange={event => setDescription(event.target.value)} /></Field><SeriesSettingsEditor section="style" value={settings} disabled={busy} onChange={changeSettings} /></> },
+    { id: 'basic', label: '基本信息', icon: FileText, content: <><Field label="系列模板名称"><input autoFocus value={name} maxLength={120} disabled={busy} onChange={event => setName(event.target.value)} /></Field><Field label="模板说明"><textarea rows={2} value={description} maxLength={10000} disabled={busy} onChange={event => setDescription(event.target.value)} /></Field><SeriesSettingsEditor section="style" value={settings} disabled={busy} onChange={changeSettings} /></> },
     { id: 'caption', label: '字幕样式', icon: Captions, content: <SeriesSettingsEditor section="caption" value={settings} disabled={busy} onChange={changeSettings} /> },
     { id: 'scene', label: '画面预设', icon: Image, content: <SeriesSettingsEditor section="scene" value={settings} disabled={busy} onChange={changeSettings} /> },
-  ]} preview={<SeriesSettingsPreview settings={settings} />} notice={<>{!validation.success && <Notice kind="error">{validation.error.issues[0]?.message}</Notice>}{failure && <Notice kind="error">{failure}</Notice>}</>} /></div><div className="dialog__footer"><Button onClick={onClose}>取消</Button><Button aria-label="保存系列模板" variant="primary" busy={busy} disabled={!name.trim() || !validation.success} onClick={() => void save()}>保存</Button></div></Dialog>;
+  ]} preview={<SeriesSettingsPreview settings={settings} />} previewLabel="样式预览" notice={<>{!validation.success && <Notice kind="error">{validation.error.issues[0]?.message}</Notice>}{failure && <Notice kind="error">{failure}</Notice>}</>} /></div><div className="dialog__footer"><Button onClick={onClose}>取消</Button><Button aria-label="保存系列模板" variant="primary" busy={busy} disabled={!name.trim() || !validation.success} onClick={() => void save()}>保存</Button></div></Dialog>;
 }

@@ -112,11 +112,11 @@ function RecordedStageRun({ runId, stageId, nodeIds, configurableNodeIds = nodeI
           {selected && <CurrentStepResult key={`${runId}:${selected.id}`} inspection={data} step={selected} version={version} onOpenOutput={onOpenOutput} planning={planning} retry={{ busy: pending === 'run.step.retry', disabled: blocked, onRetry: () => retryStep(selected.id), footerDescriptionId: footerRetry ? retryDescriptionId : undefined }} />}
           {!selected && selectedEntry && <div className="run-inspector__detail stage-run-view__empty"><h3>{selectedEntry.label}</h3><p>这次制作未包含此步骤。</p></div>}
         </div>
-      </> : data.snapshotAvailable && <div className="stage-run-view__empty"><h3>{flat ? '这次制作没有步骤记录' : '这次制作未包含本阶段'}</h3><p>{flat ? '尚未保存可查看的执行记录。' : '本阶段没有执行记录。'}</p>{configureId && <Button onClick={() => onConfigure?.(configureId)}>查看制作设置</Button>}</div>}
+      </> : data.snapshotAvailable && <div className="stage-run-view__empty"><h3>{flat ? '这次制作没有步骤记录' : '这次制作未包含本阶段'}</h3>{configureId && <Button onClick={() => onConfigure?.(configureId)}>查看制作设置</Button>}</div>}
       {actionsTarget && (canResume || data.recovery.cancel || footerRetry || repairNodeId && ['failed', 'needs_attention', 'canceled'].includes(data.run.status)) && createPortal(
         <div className="stage-run-view__actions" role="group" aria-label="本次制作操作">
           {data.recovery.cancel && <Button busy={pending === 'run.cancel'} disabled={blocked} onClick={() => void perform('run.cancel')}>停止</Button>}
-          {repairNodeId && ['failed', 'needs_attention', 'canceled'].includes(data.run.status) && <Button disabled={blocked} onClick={() => onConfigure?.(repairNodeId)}>调整设置并重新制作</Button>}
+          {repairNodeId && ['failed', 'needs_attention', 'canceled'].includes(data.run.status) && <Button disabled={blocked} onClick={() => onConfigure?.(repairNodeId)}>调整制作设置</Button>}
           {footerRetry && <Button variant="primary" aria-describedby={retryDescriptionId} busy={pending === 'run.step.retry'} disabled={blocked} onClick={() => retryStep(footerRetry.id)}>{stepRetryLabel(footerRetry)}</Button>}
           {canResume && <Button variant="primary" title="沿用本次保存的配置与已完成产物，继续剩余制作" busy={pending === 'run.resume'} disabled={blocked} onClick={() => void perform('run.resume')}>继续原制作</Button>}
         </div>, actionsTarget,

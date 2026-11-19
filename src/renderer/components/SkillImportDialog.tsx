@@ -37,11 +37,11 @@ export default function SkillImportDialog({ onClose }: { onClose(): void }) {
 
   return <Dialog title="导入 Skill" onClose={onClose} onDismissStart={() => { closed.current = true; }}><form onSubmit={event => void submit(event)}>
     <div className="dialog__body">
-      <Field label="目录路径或 GitHub 链接" hint="支持本地目录、ZIP 文件和 GitHub 仓库，自动导入其中的全部 Skill。">
-        <PathPicker label="目录路径或 GitHub 链接" mode="directory" autoFocus required disabled={busy} value={source} onChange={value => { setSource(value); setError(''); }} placeholder={pathExample('skill')} />
+      <Field label="目录路径或 GitHub 链接" required hint="支持本地目录、ZIP 文件和 GitHub 仓库。">
+        {field => <PathPicker field={field} label="目录路径或 GitHub 链接" mode="directory" autoFocus required disabled={busy} value={source} onChange={value => { setSource(value); setError(''); }} placeholder={pathExample('skill')} />}
       </Field>
       <Field label="分组名称（可选）" hint="留空使用仓库或文件夹名称。"><input disabled={busy} maxLength={120} value={groupName} onChange={event => setGroupName(event.target.value)} placeholder="例如：短剧创作" /></Field>
-      <p className="field__hint">提交后在后台继续导入，可关闭窗口或切换页面。在 Skill 工作室查看进度与结果。</p>
+      <p className="field__hint">导入在后台进行，进度显示在 Skill 工作室。</p>
       {error && <Notice kind="error">{error}</Notice>}
     </div>
     <div className="dialog__footer"><Button onClick={onClose}>关闭</Button><Button variant="primary" type="submit" busy={busy} disabled={!source.trim()}><Download size={15} />导入</Button></div>

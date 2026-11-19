@@ -23,15 +23,15 @@ export function shortcutLabel(key: string, shift = false, platform = interfacePl
   return `${primaryModifier(platform).label}${shift ? ' Shift' : ''} ${key}`;
 }
 
-type PathExample = 'image' | 'video' | 'export' | 'backup' | 'skill' | 'tool';
+type PathExample = 'image' | 'video' | 'export' | 'backup' | 'skill';
 export function pathExample(kind: PathExample, platform = interfacePlatform()) {
   if (platform === 'win32') return {
     image: 'D:\\materials\\scene.png', video: 'D:\\materials\\scene.mp4', export: 'D:\\Videos\\我的视频.mp4',
-    backup: 'D:\\Backups\\我的视频项目', skill: 'D:\\skills\\history-handdrawn-video', tool: 'D:\\tools\\my-tool.exe',
+    backup: 'D:\\Backups\\我的视频项目', skill: 'D:\\skills\\history-handdrawn-video',
   }[kind];
   const home = platform === 'darwin' ? '/Users/you' : '/home/you';
   return {
     image: `${home}/Pictures/scene.png`, video: `${home}/Movies/scene.mp4`, export: `${home}/Movies/我的视频.mp4`,
-    backup: `${home}/Documents/我的视频项目`, skill: `${home}/Documents/skills/history-handdrawn-video`, tool: `${home}/tools/my-tool`,
+    backup: `${home}/Documents/我的视频项目`, skill: `${home}/Documents/skills/history-handdrawn-video`,
   }[kind];
 }

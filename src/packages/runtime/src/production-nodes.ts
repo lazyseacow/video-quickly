@@ -33,20 +33,17 @@ function selectNodes(workflow: WorkflowDefinition, nodeId?: string, selection?: 
 interface ProductionNodeOptions {
   nodeId?: string;
   selection?: RunSelection;
-  editingAgent?: () => WorkflowNode | undefined;
   automaticCasting?: boolean;
   exportDestination?: string;
 }
 
 export function resolveProductionNodes(project: ProjectDocument, options: ProductionNodeOptions = {}) {
-  const { nodeId, selection, editingAgent, automaticCasting, exportDestination } = options;
+  const { nodeId, selection, automaticCasting, exportDestination } = options;
   const fullProduction = !nodeId && !selection;
   const selected = selectNodes(project.workflow, nodeId, selection);
-  const agent = fullProduction ? editingAgent?.() : undefined;
   const nodes = selected.map(node => {
-    if (agent && node.id === agent.id) return agent;
     if (exportDestination && node.kind === 'export') return { ...node, config: { ...node.config, destination: exportDestination } };
     return node;
   });
-  return { nodes: fullProduction && automaticCasting ? withAutomaticCasting(project, nodes) : nodes, agent };
+  return { nodes: fullProduction && automaticCasting ? withAutomaticCasting(project, nodes) : nodes };
 }

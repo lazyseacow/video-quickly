@@ -41,19 +41,19 @@ export function ModelsPage({ workspace, action, repairModelId, onRepairConsumed 
   }
   return <div className="content-page">
     <div className="page-heading"><h1>模型连接</h1><Button data-guide="model-connection" variant="primary" onClick={addModel}><Plus size={16} />添加模型</Button></div>
-    <div className="page-toolbar"><div className="tabs model-type-tabs" role="group" aria-label="模型类型筛选">
+    <search className="page-toolbar" aria-label="筛选模型连接"><div className="tabs model-type-tabs" role="group" aria-label="模型类型筛选">
       <button type="button" className={filter === 'all' ? 'active' : ''} aria-pressed={filter === 'all'} onClick={() => setFilter('all')}>全部</button>
       {modelConnectionTypes.map(type => <button type="button" key={type.id} className={filter === type.id ? 'active' : ''} aria-pressed={filter === type.id} onClick={() => setFilter(type.id)}>{type.label}</button>)}
-    </div><span className="tiny-meta">{models.length} 个连接</span></div>
+    </div></search>
     {repairError && <Notice kind="error">{repairError}</Notice>}
     <div className="model-connections-list">{models.length ? models.map(model => {
       const category = getModelConnectionType(model);
       const label = modelConnectionTypes.find(type => type.id === category)!.label;
       return <article className="list-card" key={model.id}><div className="list-card__icon"><PlatformIcon platform={getModelPlatform(model).id} /></div><div className="list-card__body"><h3>{model.name}</h3><p>{getModelPlatform(model).label} · {model.model}</p><div className="pill-row"><span className="pill">{label}</span>{model.capabilities.map(capability => <span className="pill" key={capability}>{capabilityLabels[capability]}</span>)}</div></div><div className="list-card__actions"><IconButton label={`检查“${model.name}”连接`} onClick={() => void action('model.test', { modelId: model.id }, '连接检查完成')}><RefreshCw size={16} /></IconButton><IconButton label={`编辑“${model.name}”`} onClick={() => setEditing(model)}><Pencil size={16} /></IconButton><IconButton label={`移除“${model.name}”`} onClick={() => void removeModel(model)}><Trash2 size={16} /></IconButton></div></article>;
-    }) : <EmptyState icon={<Server size={25} />} title={filter === 'all' ? '还没有模型连接' : '还没有此类模型'} description={filter === 'all' ? '添加文本、图片或视频模型，用于后续制作。' : '可添加此类模型，或切换类型查看已有连接。'} />}</div>
+    }) : <EmptyState icon={<Server size={25} />} title={filter === 'all' ? '还没有模型连接' : '还没有此类模型'} />}</div>
     {choosingType && <Dialog title="选择模型类型" onClose={() => setChoosingType(false)} className="model-type-picker"><div className="dialog__body model-type-grid">{modelConnectionTypes.map(type => {
       const Icon = type.id === 'text' ? Server : type.id === 'image' ? Image : Video;
-      return <Button static variant="ghost" className="model-type-choice" key={type.id} onClick={() => { setChoosingType(false); setEditing(type.id); }}><Icon size={22} /><span><strong>{type.label}</strong><small>{type.description}</small></span></Button>;
+      return <Button static variant="ghost" className="model-type-choice" key={type.id} onClick={() => { setChoosingType(false); setEditing(type.id); }}><Icon size={16} aria-hidden="true" />{type.label}</Button>;
     })}</div></Dialog>}
     {editing && <ModelDialog key={typeof editing === 'string' ? editing : editing.id} model={typeof editing === 'string' ? undefined : editing} connectionType={typeof editing === 'string' ? editing : undefined} action={action} onClose={() => setEditing(null)} />}
   </div>;
@@ -185,7 +185,7 @@ function ModelDialog({ model, connectionType: addingType = 'text', action, onClo
   return <Dialog title={model ? '编辑模型连接' : `添加${definition.label}`} onClose={close} onDismissStart={() => { closed.current = true; }} className="model-connection-dialog dialog--wide">
     <form onSubmit={event => void save(event)}>
       <div className="dialog__body">
-        {model && <div className="model-connection-type"><span className="pill">{definition.label}</span><span>{definition.description}</span></div>}
+        {model && <div className="model-connection-type"><span className="pill">{definition.label}</span></div>}
         <div className="model-connection-fields">
           <Field label="连接名称"><input required autoFocus value={name} onChange={event => setName(event.target.value)} placeholder="例如：本地分镜助手" /></Field>
           <Field label="模型平台"><Select value={platform} disabled={busy} onChange={event => {

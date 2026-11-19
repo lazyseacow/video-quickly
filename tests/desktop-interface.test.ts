@@ -20,8 +20,6 @@ describe('desktop interface platform roles', () => {
   it('keeps path examples on the selected platform without rewriting user values', () => {
     expect(pathExample('image', 'win32')).toBe('D:\\materials\\scene.png');
     expect(pathExample('export', 'darwin')).toBe('/Users/you/Movies/我的视频.mp4');
-    expect(pathExample('tool', 'win32')).toBe('D:\\tools\\my-tool.exe');
-    expect(pathExample('tool', 'darwin')).toBe('/Users/you/tools/my-tool');
     expect(pathExample('backup', 'darwin')).not.toContain('D:');
     expect(pathExample('skill', 'darwin')).not.toContain('\\');
   });

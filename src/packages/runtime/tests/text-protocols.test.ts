@@ -222,6 +222,40 @@ it('uses the selected Chat Completions protocol for a Claude gateway and the Oll
   expect(paths).toEqual(['/gateway/v1/chat/completions', '/gateway/v1/api/chat']);
 });
 
+const referenceImage = {
+  mimeType: 'image/png',
+  data: 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScLbtAAAAABJRU5ErkJggg==',
+} as const;
+const referenceUrl = `data:${referenceImage.mimeType};base64,${referenceImage.data}`;
+const visionPrompt = '从参考图提取配色。';
+
+it.each([
+  { protocol: 'chat-completions', route: 'chat/completions', response: { choices: [{ message: { content: '冷色调' } }] },
+    request: { messages: [{ role: 'user', content: [{ type: 'text', text: visionPrompt }, { type: 'image_url', image_url: { url: referenceUrl } }] }] } },
+  { protocol: 'responses', route: 'responses', response: { status: 'completed', output: [{ type: 'message', content: [{ type: 'output_text', text: '冷色调' }] }] },
+    request: { input: [{ role: 'user', content: [{ type: 'input_text', text: visionPrompt }, { type: 'input_image', image_url: referenceUrl, detail: 'auto' }] }], store: false } },
+  { protocol: 'messages', route: 'messages', response: { content: [{ type: 'text', text: '冷色调' }] },
+    request: { messages: [{ role: 'user', content: [{ type: 'image', source: { type: 'base64', media_type: referenceImage.mimeType, data: referenceImage.data } }, { type: 'text', text: visionPrompt }] }] } },
+  { protocol: 'ollama', route: 'api/chat', response: { message: { content: '冷色调' } },
+    request: { messages: [{ role: 'user', content: visionPrompt, images: [referenceImage.data] }] } },
+] as const)('sends the reference image alongside text over $protocol', async fixture => {
+  const requests: Array<{ path: string; body: Record<string, unknown> }> = [];
+  const baseUrl = await service((path, body) => { requests.push({ path, body }); return fixture.response; });
+  const vision = fixture.protocol === 'ollama'
+    ? { ...model(baseUrl), provider: 'ollama' as const, parameters: { options: { num_predict: 128 } } }
+    : model(baseUrl, fixture.protocol);
+  await expect(generateText({ model: { ...vision, capabilities: ['text', 'vision'] },
+    prompt: visionPrompt, image: referenceImage, operationId: 'style-from-image' })).resolves.toMatchObject({ text: '冷色调' });
+  expect(requests).toEqual([{ path: `/gateway/v1/${fixture.route}`, body: expect.objectContaining({ ...fixture.request, model: 'fixture', stream: false }) }]);
+});
+
+it('rejects a reference image for a text-only model before sending the request', async () => {
+  let calls = 0;
+  const baseUrl = await service(() => { calls++; return { choices: [{ message: { content: 'unexpected' } }] }; });
+  await expect(generateText({ model: model(baseUrl), prompt: visionPrompt, image: referenceImage, operationId: 'missing-vision' })).rejects.toThrow('请选择支持视觉输入的文本模型');
+  expect(calls).toBe(0);
+});
+
 it('uses the configured Messages authentication for discovery, checks, direct requests and Agent calls at a full endpoint', async () => {
   const calls: Array<{ path: string; method: string | undefined; headers: IncomingHttpHeaders }> = [];
   let agentTurns = 0;

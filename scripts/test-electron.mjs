@@ -187,7 +187,7 @@ async function verifyDramaWorkflow(project) {
   await page.keyboard.press('Escape');
   await expect(roles).toBeFocused();
   await expect(dialog.getByText('高级设置', { exact: true })).toHaveCount(0);
-  await expect(dialog.getByText('剪辑 Agent 设置', { exact: true })).toBeVisible();
+  await expect(dialog.getByRole('button', { name: '创作 Skill', exact: true })).toBeVisible();
   await dialog.getByLabel('风格内容', { exact: true }).fill('未提交的项目风格');
   await steps.getByRole('button', { name: '模型与素材', exact: true }).click();
   await expect(dialog.getByRole('combobox', { name: '文本模型', exact: true })).toHaveValue('');

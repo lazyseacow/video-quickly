@@ -7,7 +7,6 @@ import { rpc } from '../lib/client';
 import { Button, Dialog, EmptyState, Field, IconButton, Notice, Select } from '../components/Primitives';
 import SkillImportDialog from '../components/SkillImportDialog';
 import { useConfirmation } from '../components/ConfirmationDialog';
-import ToolConnections from './ToolConnections';
 import '../components/skill-library.css';
 
 const PromptStudioLauncher = lazy(() => import('../components/PromptStudioLauncher'));
@@ -66,10 +65,10 @@ export default function SkillStudio({ workspace, action, onOpenOutput }: { works
       <Button variant="primary" onClick={() => setImporting(true)}><Plus size={16} aria-hidden="true" />导入 Skill</Button>
     </div>
     <div className="page-toolbar skill-studio__toolbar">
-      <div className="search-field skill-studio__search">
+      <search className="search-field skill-studio__search" aria-label="Skill 搜索">
         <Search size={16} strokeWidth={1.5} aria-hidden="true" />
         <input ref={searchInput} type="search" aria-label="搜索 Skill 或分组" placeholder="搜索 Skill 或分组" value={search} onChange={event => changeSearch(event.target.value)} />
-      </div>
+      </search>
       <Button onClick={() => setPromptStudio(true)}><FlaskConical size={16} aria-hidden="true" />提示词实验与模板</Button>
     </div>
     {operationError && <Notice kind="error">{operationError}</Notice>}
@@ -85,12 +84,12 @@ export default function SkillStudio({ workspace, action, onOpenOutput }: { works
           <div className="skill-studio-group__heading">
             <h2 className="skill-studio-group__identity">
               <Button variant="ghost" static className="skill-studio-group__toggle" aria-expanded={expanded} aria-controls={panelId}
-                aria-labelledby={`${panelId}-label`} aria-describedby={source ? `${panelId}-source` : undefined} onClick={() => toggleGroup(id)}>
+                aria-labelledby={`${panelId}-label`} aria-describedby={source ? `${panelId}-count ${panelId}-source` : `${panelId}-count`} onClick={() => toggleGroup(id)}>
                 <ChevronRight size={16} aria-hidden="true" />
                 <span className="skill-studio-group__copy">
-                  <span id={`${panelId}-label`} className="skill-studio-group__label">
-                    <span>{name}</span>
-                    <span className="skill-studio-group__count">{skills.length} 个 Skill · 已启用 {enabledCount} 个</span>
+                  <span className="skill-studio-group__label">
+                    <span id={`${panelId}-label`}>{name}</span>
+                    <span id={`${panelId}-count`} className="skill-studio-group__count">{skills.length} 个 Skill · 已启用 {enabledCount} 个</span>
                   </span>
                   {source && <span id={`${panelId}-source`} className="skill-studio-group__source">{source}</span>}
                 </span>
@@ -125,12 +124,11 @@ export default function SkillStudio({ workspace, action, onOpenOutput }: { works
             </article>)}
           </div>
         </section>;
-      }) : <EmptyState icon={<BookOpen size={25} />} title="还没有 Skill" description="导入后可在新建项目和制作设置中选用。" />}
-      {workspace.skills.length > 0 && query && matches.length === 0 && <EmptyState icon={<Search size={24} />} title="没有匹配的 Skill" description="试试其他关键词。">
+      }) : <EmptyState icon={<BookOpen size={25} />} title="还没有 Skill" />}
+      {workspace.skills.length > 0 && query && matches.length === 0 && <EmptyState icon={<Search size={24} />} title="没有匹配的 Skill">
         <Button onClick={() => { changeSearch(''); searchInput.current?.focus(); }}>清空搜索</Button>
       </EmptyState>}
     </div>
-    <ToolConnections action={action} version={workspace.version} />
     {importing && <SkillImportDialog onClose={() => setImporting(false)} />}
     {selected && <SkillDetails key={selected.id} initial={selected} action={action} onClose={() => setSelected(undefined)} />}
     {editingGroup && <GroupDetails group={editingGroup} action={action} onClose={() => setEditingGroup(undefined)} />}
@@ -155,5 +153,7 @@ function SkillDetails({ initial, action, onClose }: { initial: SkillPackage; act
   }, [skill.id, resource]);
   return <Dialog title={skill.name} onClose={onClose} className="dialog--wide"><div className="dialog__body"><p>{skill.description}</p><Field label="Skill 指令"><textarea className="skill-editor" value={instructions} onChange={event => setInstructions(event.target.value)} spellCheck={false} /></Field>
     {skill.resources.length > 0 && <><Field label="查看引用资源"><Select value={resource} onChange={event => setResource(event.target.value)}><option value="">选择资源</option>{skill.resources.map(path => <option key={path} value={path}>{path}</option>)}</Select></Field>{loading && <p role="status">正在读取资源…</p>}{error && <Notice kind="error">{error}</Notice>}{content && <pre className="skill-resource-preview" tabIndex={0} aria-label={resource}>{content}</pre>}</>}
-    <p className="tiny-meta">来源：{skill.source} · <span title={skill.version}>版本 {skill.version.slice(0, 12)}</span></p>{skill.tools.length > 0 && <div className="skill-tools"><h3>工具权限</h3>{skill.tools.map(tool => <label key={tool.id} className="field-inline"><input type="checkbox" checked={tool.enabled} disabled={!supportsSkillScript(tool.id) && !tool.enabled} onChange={event => { const enabled = event.target.checked; void action<SkillPackage>('skill.tool.toggle', { skillId: skill.id, toolId: tool.id, enabled }, '工具权限已更新').then(value => { if (value) setSkill(value); }); }} />{tool.label} <span className="tiny-meta">{supportsSkillScript(tool.id) ? tool.permissions.join('、') : '需通过工具连接运行'}</span></label>)}</div>}</div><div className="dialog__footer"><Button onClick={onClose}>关闭</Button><Button aria-label="保存新版本" variant="primary" busy={saving} onClick={() => { setSaving(true); void action('skill.update', { skillId: skill.id, instructions }, 'Skill 已保存为新版本').then(result => { if (result !== null) onClose(); }).finally(() => setSaving(false)); }}><Check size={15} />保存</Button></div></Dialog>;
+    <p className="tiny-meta">来源：{skill.source} · <span title={skill.version}>版本 {skill.version.slice(0, 12)}</span></p>{skill.tools.length > 0 && <div className="skill-tools"><h3>工具权限</h3>{skill.tools.map(tool => supportsSkillScript(tool.id)
+      ? <label key={tool.id} className="field-inline"><input type="checkbox" checked={tool.enabled} onChange={event => { const enabled = event.target.checked; void action<SkillPackage>('skill.tool.toggle', { skillId: skill.id, toolId: tool.id, enabled }, '工具权限已更新').then(value => { if (value) setSkill(value); }); }} />{tool.label} <span className="tiny-meta">{tool.permissions.join('、')}</span></label>
+      : <div key={tool.id} className="field-inline"><span>{tool.label}</span><span className="tiny-meta">暂不支持</span></div>)}</div>}</div><div className="dialog__footer"><Button onClick={onClose}>关闭</Button><Button aria-label="保存新版本" variant="primary" busy={saving} onClick={() => { setSaving(true); void action('skill.update', { skillId: skill.id, instructions }, 'Skill 已保存为新版本').then(result => { if (result !== null) onClose(); }).finally(() => setSaving(false)); }}><Check size={15} />保存</Button></div></Dialog>;
 }

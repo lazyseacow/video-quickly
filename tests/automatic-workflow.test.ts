@@ -1,12 +1,13 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, expect, it, vi } from 'vitest';
-import { createNativeVideoWorkflow, assetSchema, projectSchema, promptPreviewSchema, runInspectionSchema, runSchema, runStepPayloadSchema, shotSchema, type ProjectDocument } from '@video-quickly/contracts';
+import { createNativeVideoWorkflow, assetSchema, chargeConfirmationSchema, modelSchema, projectReadinessSchema, projectSchema, promptPreviewSchema, runInspectionSchema, runPlanSchema, runSchema, runStepPayloadSchema, shotSchema, type ProjectDocument } from '@video-quickly/contracts';
 import { createRuntime, SimulatedProcessExit, type ActivityExecutionContext, type RuntimeOptions } from '../src/packages/runtime/src';
 import { DocumentStore, openDatabase } from '../src/packages/runtime/src/database';
 import { planningFixtureFields, planningFixtureResponse, storyboardFixtureResponse } from './fixtures/planning-response';
+import { importSkillFixture } from './fixtures/import-skill';
 
 const directories: string[] = [], runtimes = new Set<ReturnType<typeof createRuntime>>();
 afterEach(async () => {
@@ -70,6 +71,59 @@ it('automatically chains all seven tasks, forwards generated text and media, and
     shots: [{ videoAssetId: 'generated-video' }] });
   expect(saved.workflow.production.manualPlanningFields).toMatchObject({ brief: { topic: expect.stringContaining('三幕叙事') }, style: { artStyle: expect.stringContaining('蓝绿色水彩') } });
   expect((await runtime.dispatch('run.get', { runId: run.id }) as { events?: { type: string }[] }).events?.some(event => event.type === 'review.waiting')).not.toBe(true);
+});
+
+it.each(['historical MCP', 'historical bindings and Skill', 'planning Skill'] as const)('keeps new production, previews and restarts on local editing with %s', async capability => {
+  const { runtime, directory, project: original, provider, media } = await fixture();
+  const controller = modelSchema.parse(await runtime.dispatch('model.save', { model: { name: '文本与工具模型', provider: 'openai-compatible',
+    baseUrl: 'http://127.0.0.1:1/v1', model: 'fixture', connectionType: 'text', capabilities: ['text', 'tools'] } }));
+  const skillDirectory = join(directory, 'creation-skill'); await mkdir(skillDirectory);
+  await writeFile(join(skillDirectory, 'SKILL.md'), '---\nname: creation-skill\ndescription: 创作方法\n---\n保持水彩叙事连贯。');
+  const skill = (await importSkillFixture(runtime.dispatch, { path: skillDirectory })).skills[0];
+  const connection = { id: 'retired-connection', name: '历史工具', transport: 'http', url: 'http://127.0.0.1:1/mcp', enabled: true, args: [], hasSecret: false };
+  if (capability !== 'planning Skill') {
+    const database = openDatabase(directory);
+    try { new DocumentStore(database).put('mcp-server', connection.id, connection); }
+    finally { database.close(); }
+  }
+  const project = projectSchema.parse(await runtime.dispatch('project.update', { projectId: original.id, revision: original.revision, patch: { workflow: {
+    ...original.workflow,
+    production: { ...original.workflow.production, textModelId: controller.id,
+      agentSkillIds: capability === 'historical bindings and Skill' ? [skill.id] : [],
+      agentMcpServerIds: capability === 'historical bindings and Skill' ? [connection.id] : [] },
+    nodes: original.workflow.nodes.map(node => ['brief', 'style', 'script'].includes(node.kind) ? { ...node, skillIds: [skill.id] } : node),
+  } } }));
+
+  const readiness = projectReadinessSchema.parse(await runtime.dispatch('project.readiness', { projectId: project.id }));
+  expect(readiness.stepCount).toBe(7);
+  expect(readiness.issues.filter(issue => issue.nodeId === 'animation')).toEqual([]);
+  const preview = runPlanSchema.parse(await runtime.dispatch('run.plan', { projectId: project.id, selection: { nodeId: 'brief', mode: 'downstream' } }));
+  expect(preview.steps.find(step => step.id === 'animation')).toMatchObject({ kind: 'animation' });
+  expect(preview.chargeEstimate?.items.find(item => item.kind === 'text')?.count).toBe(3);
+  const editingPreview = runPlanSchema.parse(await runtime.dispatch('run.plan', { projectId: project.id, selection: { nodeId: 'animation', mode: 'node' } }));
+  expect(editingPreview.chargeEstimate?.items ?? []).toEqual([]);
+  expect(await runtime.dispatch('billing.prepare', { method: 'run.start', params: { projectId: project.id, nodeId: 'animation' } })).toBeNull();
+  const charge = chargeConfirmationSchema.parse(await runtime.dispatch('billing.prepare', { method: 'run.start', params: { projectId: project.id } }));
+  expect(charge.estimate?.items.find(item => item.kind === 'text')?.count).toBe(3);
+
+  const started = runSchema.parse(await runtime.dispatch('run.start', { projectId: project.id })); await runtime.waitForIdle();
+  const restarted = runSchema.parse(await runtime.dispatch('run.start', { projectId: project.id, parentRunId: started.id })); await runtime.waitForIdle();
+  for (const run of [started, restarted]) {
+    const inspection = runInspectionSchema.parse(await runtime.dispatch('run.inspect', { runId: run.id, nodeId: 'animation' }));
+    expect(inspection.run.status, inspection.run.error).toBe('succeeded');
+    expect(inspection.steps.map(step => step.id)).toEqual(['brief', 'style', 'script', 'assets', 'video', 'animation', 'export']);
+    expect(inspection.selected?.node).toMatchObject({ kind: 'animation', skillIds: [], config: { operation: 'prepare-edit' } });
+    expect(inspection.selected?.node.config.requiresModel).toBeUndefined();
+    expect(inspection.selected?.node.modelId).toBeUndefined();
+    const database = openDatabase(directory);
+    try {
+      const saved = new DocumentStore(database).get('run-snapshot', run.id);
+      expect(saved).not.toHaveProperty('videoEditingAgentId'); expect(saved).not.toHaveProperty('mcpServers');
+    }
+    finally { database.close(); }
+  }
+  expect(provider).toHaveBeenCalledTimes(8);
+  expect(media.mock.calls.filter(([context]) => context.node.config.operation === 'prepare-edit')).toHaveLength(2);
 });
 
 it('preserves legacy original text and uses the latest project original in a production storyboard', async () => {

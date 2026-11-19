@@ -86,7 +86,7 @@ function StepDetail({ inspection, step, version, onOpenOutput, retry }: StepOutp
   const help = stepGuidance(detail?.node ?? { kind: step.kind, config: {} });
   const tabs = [{ id: 'output', label: '步骤产物' }, { id: 'status', label: '制作信息' }] as const;
   return <section className="run-inspector__detail" aria-label={`步骤详情：${label}`}>
-    <header className="run-inspector__step-heading"><div><h3>{label}</h3>{tab === 'status' && <p>{step.description || help.purpose}</p>}</div>{tab === 'status' && <StepStatus step={step} />}</header>
+    <header className="run-inspector__step-heading"><div><h3>{label}</h3>{tab === 'status' && inspection.workflowId !== 'native-video' && step.description && <p>{step.description}</p>}</div>{tab === 'status' && <StepStatus step={step} />}</header>
     <StepRetryAction step={step} controls={retry} />
     <div className="run-inspector__tabs" role="tablist" aria-label="步骤详情视图">{tabs.map(item => <button key={item.id} id={`${id}-${item.id}`} type="button" role="tab" aria-selected={tab === item.id} aria-controls={`${id}-panel`} tabIndex={tab === item.id ? 0 : -1} onClick={() => setTab(item.id)} onKeyDown={event => {
       const index = tabs.findIndex(item => item.id === tab);
@@ -111,12 +111,11 @@ function StepExecutionPrompt({ runId, step, version, configuredPrompt }: { runId
   const value = input.data?.value;
   const resolvedPrompt = value && typeof value === 'object' && !Array.isArray(value) && typeof value.resolvedPrompt === 'string' ? value.resolvedPrompt : undefined;
   return <section className="run-inspector__execution-prompt" aria-label="本次提示词记录">
-    <h4>{resolvedPrompt !== undefined ? '本次使用的提示词' : '本次冻结的提示词与补充要求'}</h4>
     {input.error && <Notice kind="error">{input.error}<Button aria-label="重试读取本次提示词" onClick={input.refresh}>重试</Button></Notice>}
     {!input.data && !input.error && <p role="status">正在读取本次提示词…</p>}
     {input.data && <>
       {resolvedPrompt !== undefined ? <pre className="run-inspector__json">{resolvedPrompt || '本步骤没有记录提示词内容。'}</pre> : configuredPrompt ? <pre className="run-inspector__json">{configuredPrompt}</pre> : <p>本步骤没有补充提示词。</p>}
-      <p className="run-inspector__muted">{!step.inputAvailable ? '尚未执行，未记录实际使用的提示词。' : resolvedPrompt !== undefined ? '执行时记录的提示词，只读。配置修改会用于新的制作。' : '这里显示本次保存的步骤配置，未记录完整执行提示词。'}</p>
+      {(!step.inputAvailable || resolvedPrompt === undefined) && <p className="run-inspector__muted">{!step.inputAvailable ? '尚未执行，未记录实际使用的提示词。' : '未记录完整执行提示词，以上为本次保存的配置。'}</p>}
     </>}
   </section>;
 }

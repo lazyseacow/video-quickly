@@ -25,8 +25,8 @@ for (const viewport of [{ width: 1536, height: 960, theme: 'dark' }, { width: 10
     const rolePanel = dialog.getByRole('region', { name: '角色与连续性', exact: true }), entityPanel = dialog.getByRole('region', { name: '人物、场景与道具', exact: true });
     const next = dialog.getByRole('button', { name: '下一步', exact: true });
     await expect(dialog.getByRole('button', { name: '应用系列模板', exact: true })).toHaveCount(0);
-    const agent = dialog.getByText('剪辑 Agent 设置', { exact: true });
-    const positions = () => Promise.all([roles, entities, agent, next].map(control => control.evaluate(element => {
+    const creativeSkills = dialog.getByRole('button', { name: '创作 Skill', exact: true });
+    const positions = () => Promise.all([roles, entities, creativeSkills, next].map(control => control.evaluate(element => {
       const { x, y, width, height } = element.getBoundingClientRect();
       const scrollTop = element.closest('.production-settings__content')?.scrollTop ?? 0;
       return { x, y: y + scrollTop, width, height };

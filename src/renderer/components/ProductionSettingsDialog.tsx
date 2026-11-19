@@ -1,6 +1,6 @@
 import { lazy, Suspense, useCallback, useId, useLayoutEffect, useRef, useState } from 'react';
 import { ChevronDown, ChevronLeft, ChevronRight, Ellipsis, Pencil, Plus, Trash2 } from 'lucide-react';
-import { MAX_STORYBOARD_SHOTS, VIDEO_FIT_MODE_LABELS, applyWorkflowProposal, formatFrameRate, formatPlanningDocument, generatedPlanningSchema, getMediaAdapters, nativeReferenceStep, productionEditingSkillIds, productionEditingStep, productionModelSetting, productionPlanningStep, productionPlanningSteps, productionSettingsSchema, resolveProductionWorkflow, supportsAutomaticCasting, supportsProductionAgent, usesManualPlanning, videoAspectRatioPreset, videoProfileSchema, type AssetRecord, type PlanningDocumentKind, type ProductionSettings, type RunSummary, type WorkflowDefinition, type WorkflowNode } from '@video-quickly/contracts';
+import { MAX_STORYBOARD_SHOTS, VIDEO_FIT_MODE_LABELS, applyWorkflowProposal, formatFrameRate, formatPlanningDocument, generatedPlanningSchema, getMediaAdapters, nativeReferenceStep, productionModelSetting, productionPlanningStep, productionPlanningSteps, productionSettingsSchema, resolveProductionWorkflow, supportsAutomaticCasting, usesManualPlanning, videoAspectRatioPreset, videoProfileSchema, type AssetRecord, type PlanningDocumentKind, type ProductionSettings, type RunSummary, type WorkflowDefinition, type WorkflowNode } from '@video-quickly/contracts';
 import type { WorkspaceView } from '../lib/types';
 import type { PlanningControls } from '../lib/planning-edits';
 import type { ProductionProjectSettings } from '../lib/stage-configuration-draft';
@@ -12,8 +12,6 @@ import { ProjectSettingsActions, type ProjectSettingsAction } from './ProjectSet
 import ReferenceAudioPicker from './ReferenceAudioPicker';
 import CreativeContextEditor from './CreativeContextEditor';
 import SkillPicker from './SkillPicker';
-import ToolConnectionPicker from './ToolConnectionPicker';
-import ToolBindings from './ToolBindings';
 import './production-settings.css';
 
 const WorkflowAssistant = lazy(() => import('./WorkflowAssistant'));
@@ -59,7 +57,6 @@ export default function ProductionSettingsDialog({ project, projectId, projectRe
   const [step, setStep] = useState<ConfigurationStep>(initialStep);
   const [selectedTasks, setSelectedTasks] = useState<Record<string, string>>(initialNodeId ? { [initialStep]: initialNodeId } : {});
   const [advancedStage, setAdvancedStage] = useState<string | undefined>(initialNodeId ? initialStep : undefined);
-  const [showAgentControls, setShowAgentControls] = useState(false);
   const [requestedTool, setRequestedTool] = useState<ProjectSettingsAction>();
   const [error, setError] = useState('');
   const [pending, setPending] = useState<'save' | 'discard' | 'import'>();
@@ -107,10 +104,11 @@ export default function ProductionSettingsDialog({ project, projectId, projectRe
   const assistantNode = resolved.nodes.find(node => node.id === assistantNodeId);
   const stepIndex = steps.findIndex(item => item.id === step);
   const modelName = (modelId?: string) => workspace.models.find(model => model.id === modelId)?.name ?? '未选择';
-  const textModel = workspace.models.find(model => model.id === settings.textModelId);
-  const hasEditingStep = Boolean(productionEditingStep(resolved));
-  const agentSkillIds = productionEditingSkillIds(resolved);
-  const inheritedAgentSkills = agentSkillIds.length > 0 && settings.agentSkillIds.length === 0;
+  const creationTasks = (value: WorkflowNode[]) => workflow.id === 'native-video' ? value.filter(node => node.config.documentRole === 'screenplay' || productionPlanningStep(workflow, node)) : [];
+  const creationNodes = creationTasks(nodes);
+  const creationSkillIds = [...new Set(creationNodes.flatMap(node => node.skillIds))];
+  const firstCreationSkills = new Set(creationNodes[0]?.skillIds);
+  const mixedCreationSkills = creationNodes.some(node => new Set(node.skillIds).size !== firstCreationSkills.size || node.skillIds.some(id => !firstCreationSkills.has(id)));
   const toolNames = { music: '背景音乐', caption: '字幕样式' };
   const planningDisabled = active || Boolean(configurationError || planning?.disabledReason);
   function generatedText(kind: PlanningDocumentKind) {
@@ -131,6 +129,16 @@ export default function ProductionSettingsDialog({ project, projectId, projectRe
     setError('');
   }
   function updateNode(node: WorkflowNode, patch: Partial<WorkflowNode>) { setNodes(current => current.map(item => item.id === node.id ? { ...item, ...patch } : item)); setError(''); }
+  function updateCreationSkills(ids: string[]) {
+    setNodes(current => {
+      const tasks = creationTasks(current), taskIds = new Set(tasks.map(node => node.id));
+      const previous = new Set(tasks.flatMap(node => node.skillIds)), next = new Set(ids);
+      const added = ids.filter(id => !previous.has(id)), removed = new Set([...previous].filter(id => !next.has(id)));
+      if (!added.length && !removed.size) return current;
+      return current.map(node => taskIds.has(node.id) ? { ...node, skillIds: [...node.skillIds.filter(id => !removed.has(id)), ...added] } : node);
+    });
+    setError('');
+  }
   function selectStep(value: ConfigurationStep, focus = false) {
     if (value !== step) content.current?.querySelector<HTMLElement>('[popover]:popover-open')?.hidePopover();
     focusTarget.current = focus ? value : undefined;
@@ -212,7 +220,6 @@ export default function ProductionSettingsDialog({ project, projectId, projectRe
         </div>
         <TaskMoreActions key={node.id} node={node} workspace={workspace} onSkillsChange={skillIds => updateNode(node, { skillIds })}
           onOpenAssistant={projectId && projectRevision ? () => setAssistantNodeId(node.id) : undefined} />
-        {node.kind === 'agent' && <ToolBindings node={node} onChange={value => updateNode(node, { config: value.config })} />}
       </div>
     </details>;
   }
@@ -294,7 +301,7 @@ export default function ProductionSettingsDialog({ project, projectId, projectRe
             <div className="production-settings__storyboard" role="group" aria-label="分镜全局参数">
               <VideoSettings mode="generation" profile={fields.profile} onChange={profile => setFields(current => ({ ...current, profile }))} />
             </div>
-            <textarea className="production-settings__original-text" aria-label="项目原文" rows={3} maxLength={30000} placeholder="可粘贴小说或剧本正文，供 AI 简报和分镜使用" value={fields.originalText ?? ''} onChange={event => setFields(current => ({ ...current, originalText: event.target.value }))} />
+            <Field label="项目原文"><textarea className="production-settings__original-text" rows={3} maxLength={30000} placeholder="粘贴小说或剧本正文" value={fields.originalText ?? ''} onChange={event => setFields(current => ({ ...current, originalText: event.target.value }))} /></Field>
             {planningSteps.length > 0 && <div role="group" aria-label="策划内容" className="production-settings__planning-content">
               {planningSteps.map(kind => kind === 'script' ? <div key={kind} role="group" aria-labelledby={`${id}-storyboard-heading`} className="production-settings__planning-entry production-settings__storyboard-card">
                 <header className="production-settings__storyboard-header">
@@ -345,37 +352,21 @@ export default function ProductionSettingsDialog({ project, projectId, projectRe
               <Field label="视觉风格"><textarea rows={3} value={fields.style} onChange={event => setFields(current => ({ ...current, style: event.target.value }))} placeholder="画面风格、色调与光线" /></Field>
             </div>}
             <CreativeContextEditor floatingSections value={fields.creativeContext} version={version} usedEntityKeys={usedEntityKeys} onChange={creativeContext => setFields(current => ({ ...current, creativeContext }))} />
+            {creationNodes.length > 0 && <SkillPicker inline className="production-settings__creation-skills"
+              label="创作 Skill" skills={workspace.skills} groups={workspace.skillGroups} value={creationSkillIds}
+              selectionSummary={mixedCreationSkills ? `分步骤设置 · 共 ${creationSkillIds.length} 个` : undefined}
+              hint={mixedCreationSkills ? '各步骤选择不同。勾选会加入全部创作步骤，取消会从全部创作步骤移除。' : undefined}
+              onChange={updateCreationSkills}
+            />}
             {advanced({ id: 'planning', label: '创作要求', nodeIds: resolved.nodes.filter(node => stepGuidance(node).capability === 'text').map(node => node.id) })}
-            {hasEditingStep && <details className="form-disclosure form-disclosure--divided production-settings__agent-capabilities" onToggle={event => {
-              if (event.target === event.currentTarget && event.currentTarget.open) setShowAgentControls(true);
-            }}>
-              <summary>剪辑 Agent 设置</summary>
-              {showAgentControls && <div className="form-disclosure__body production-settings__agent-options">
-                {textModel && !supportsProductionAgent(textModel) && <p className="production-settings__agent-help">当前文本模型使用常规剪辑步骤。支持工具调用的文本模型可在剪辑阶段使用 Agent。</p>}
-                <SkillPicker inline
-                  label="剪辑 Agent 的 Skill"
-                  selectionSummary={agentSkillIds.length ? `${inheritedAgentSkills ? '沿用' : '已选'} ${new Set(agentSkillIds).size} 个` : '自动选择'}
-                  skills={workspace.skills} groups={workspace.skillGroups} value={agentSkillIds}
-                  onChange={ids => updateSettings({ agentSkillIds: ids, agentInheritsPlanningSkills: false })}
-                />
-                <div className="production-settings__agent-tools">
-                  <div className="production-settings__agent-tools-heading">
-                    <h3>工具连接</h3>
-                    <span className="production-settings__agent-selection" aria-live="polite">{settings.agentMcpServerIds.length ? `已选 ${settings.agentMcpServerIds.length} 个` : '自动选择'}</span>
-                  </div>
-                  <ToolConnectionPicker embedded label="剪辑 Agent 的工具连接" value={settings.agentMcpServerIds} onChange={agentMcpServerIds => updateSettings({ agentMcpServerIds })} />
-                </div>
-              </div>}
-            </details>}
           </section>
           <section className="form-stack" data-production-step="materials" hidden={step !== 'materials'} aria-label="模型与素材" tabIndex={-1}>
             {modelField(textField)}
             {modelField(videoField)}
-            {!textField.required && hasEditingStep && <p className="production-settings__agent-help">文本模型可选，供剪辑 Agent 使用。</p>}
             {!nativeReferences && <div className="production-settings__models production-settings__reference-models">
-              <Field label="参考素材" hint="直接生成时沿用镜头绑定的角色参考图。使用已有参考图时，采用镜头中选定的画面。"><Select value={settings.referenceMode} onChange={event => updateSettings({ referenceMode: event.target.value as ProductionSettings['referenceMode'] })}><option value="none">直接生成视频</option><option value="existing">使用已有参考图</option><option value="generate">先生成参考图</option></Select></Field>
+              <Field label="参考素材" hint="直接生成使用角色参考图；已有参考图使用镜头画面。"><Select value={settings.referenceMode} onChange={event => updateSettings({ referenceMode: event.target.value as ProductionSettings['referenceMode'] })}><option value="none">直接生成视频</option><option value="existing">使用已有参考图</option><option value="generate">先生成参考图</option></Select></Field>
               {showImageModel && modelField(imageField)}
-              {settings.referenceMode === 'generate' && <Field label="首帧生成" hint="按相邻镜头的角色和场景绑定归组。根据图片接口能力使用原生组图、首镜续图或逐镜生成。">
+              {settings.referenceMode === 'generate' && <Field label="首帧生成" hint="自动按角色和场景分组，生成方式取决于模型。">
                 <Select value={groupReferenceImages ? 'auto' : 'individual'} onChange={event => updateSettings({ groupReferenceImages: event.target.value === 'auto' ? undefined : false })}>
                   <option value="auto">自动组图</option><option value="individual">逐镜生成</option>
                 </Select>
@@ -388,8 +379,8 @@ export default function ProductionSettingsDialog({ project, projectId, projectRe
                 <span className="field__label">尾帧续镜</span>
               </label>
               <p className="field__hint" id={`${id}-continuation-hint`}>{continues
-                ? '首镜使用已有画面、角色参考图或文字生成。后续镜头依次使用上一镜尾帧。'
-                : '每个镜头使用自己的已有画面、角色参考图或文字独立生成。可并行处理。'}</p>
+                ? '后续镜头依次使用上一镜尾帧。'
+                : '各镜头独立生成，可并行处理。'}</p>
             </div>
               : automaticCasting && <p className="field__hint">反复出镜的人物缺少参考图时，使用图片模型自动定妆。留空时使用唯一可用的图片模型。</p>}
             <ReferenceAudioPicker assets={workspace.assets} value={settings.referenceAudioAssetIds ?? []} onChange={referenceAudioAssetIds => updateSettings({ referenceAudioAssetIds })} onImport={importReferenceAudio} disabled={Boolean(pending)} />
@@ -414,9 +405,6 @@ export default function ProductionSettingsDialog({ project, projectId, projectRe
                 <div><dt>项目角色池</dt><dd>{fields.creativeContext?.characterIds.length ? `已选择 ${fields.creativeContext.characterIds.length} 个角色` : '未选择'}</dd></div>
                 {fields.creativeContext?.continuity && <div><dt>连续性要求</dt><dd>{fields.creativeContext.continuity}</dd></div>}
                 {Boolean(fields.creativeContext?.entities.length) && <div><dt>文字设定</dt><dd>{fields.creativeContext?.entities.map(entity => entity.name).join('、')}</dd></div>}
-                {hasEditingStep && (agentSkillIds.length > 0 || settings.agentMcpServerIds.length > 0) && <div>
-                  <dt>剪辑 Agent</dt><dd>{agentSkillIds.length ? `${inheritedAgentSkills ? '沿用 ' : ''}${agentSkillIds.length} 个 Skill` : 'Skill 自动选择'} · {settings.agentMcpServerIds.length ? `${settings.agentMcpServerIds.length} 个工具连接` : '工具自动选择'}</dd>
-                </div>}
               </dl>
             </section>
             <section>

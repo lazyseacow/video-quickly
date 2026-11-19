@@ -33,6 +33,7 @@ it('creates one work and its first episode atomically, expanding selected topics
   expect(created.project.profile).toEqual(template.creationDefaults!.profile);
   const expectedSkills = style.skillIds;
   for (const node of created.project.workflow.nodes.filter(node => ['brief', 'style', 'script'].includes(node.kind))) expect(node.skillIds).toEqual(expectedSkills);
+  expect(created.project.workflow.production.agentSkillIds).toEqual([]);
   expect(created.project.workflow.nodes[0]).toMatchObject({ id: 'screenplay', kind: 'brief', config: { documentRole: 'screenplay' } });
   expect(created.project.workflow.stages?.map(stage => stage.label)).toEqual(['策划与分镜', '素材与配音', '剪辑与动画', '审阅与导出']);
   expect((await runtime.dispatch('dramaWork.list', { search: '失约' }) as RecordPage<DramaWork>).items.map(work => work.id)).toEqual([created.work.id]);

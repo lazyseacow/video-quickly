@@ -69,7 +69,7 @@ export default function ProjectExportDialog({ project, workspace, action, onClos
     }).catch(error => { if (!closed.current) notify(error instanceof Error ? error.message : String(error), true); })
       .finally(() => { exportInFlight.current = false; if (!closed.current) setBusy(false); });
   }
-  const preview = project.shots[0] ? <figure className="export-dialog__preview"><div className="export-dialog__frame" style={{ '--export-aspect': previewProfile.width / previewProfile.height } as CSSProperties}><ScenePreview project={previewProject} shot={project.shots[0]} shotIndex={0} assets={workspace.assets} /></div><figcaption>{previewProfile.width} × {previewProfile.height} · {formatFrameRate(previewProfile.frameRate)} fps</figcaption></figure> : <EmptyState icon={<Film size={24} />} title="暂无镜头" description="添加镜头后可预览导出画面。" />;
+  const preview = project.shots[0] ? <figure className="export-dialog__preview"><div className="export-dialog__frame" style={{ '--export-aspect': previewProfile.width / previewProfile.height } as CSSProperties}><ScenePreview project={previewProject} shot={project.shots[0]} shotIndex={0} assets={workspace.assets} /></div><figcaption>{previewProfile.width} × {previewProfile.height} · {formatFrameRate(previewProfile.frameRate)} fps</figcaption></figure> : <EmptyState icon={<Film size={24} />} title="暂无镜头可导出" />;
   return <Dialog title="导出视频" onClose={close} onDismissStart={() => { closed.current = true; }} className="export-dialog settings-dialog">
     <div className="dialog__body"><SettingsSections layout="tabs" label="导出类型" value={section} onValueChange={setSection} sections={[
       { id: 'video', label: 'MP4', content: <>

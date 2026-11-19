@@ -11,6 +11,7 @@ const textModelTasks = new Set<WorkflowNode['kind']>(['brief', 'style', 'script'
 
 export const productionSettingsSchema = z.object({
   mode: z.literal('native-video'),
+  // Retained for historical projects and frozen runs; new built-in runs do not consume these bindings.
   agentSkillIds: z.array(z.string().min(1)).default([]),
   agentInheritsPlanningSkills: z.boolean().optional(),
   agentMcpServerIds: z.array(z.string().min(1)).default([]),
@@ -41,22 +42,6 @@ export function usesManualPlanning(workflow: Pick<WorkflowDefinition, 'id' | 'pr
 
 export function supportsProductionAgent(model: ModelProfile | undefined): boolean {
   return Boolean(model?.enabled && model.capabilities.includes('text') && model.capabilities.includes('tools') && !modelToolProtocolIssue(model));
-}
-
-export function productionEditingStep(workflow: WorkflowDefinition): WorkflowNode | undefined {
-  return workflow.id === 'native-video' ? workflow.nodes.find(node => node.id === 'animation' && node.kind === 'animation' && node.config.operation === 'prepare-edit') : undefined;
-}
-
-export function productionEditingSkillIds(workflow: WorkflowDefinition): string[] {
-  const { agentSkillIds, agentInheritsPlanningSkills } = workflow.production;
-  if (agentSkillIds.length || agentInheritsPlanningSkills === false || !productionEditingStep(workflow)) return agentSkillIds;
-
-  // Older projects stored the creation selection separately on each of these tasks.
-  const [brief, style, script] = ['brief', 'style', 'script'].map(kind =>
-    new Set(workflow.nodes.find(node => node.id === kind && node.kind === kind)?.skillIds));
-  const selection = [...brief];
-  return selection.length && [style, script].every(ids => ids.size === brief.size && selection.every(id => ids.has(id)))
-    ? selection : agentSkillIds;
 }
 
 export function productionModelSetting(node: Pick<WorkflowNode, 'kind' | 'config'>): 'textModelId' | 'videoModelId' | 'imageModelId' | undefined {

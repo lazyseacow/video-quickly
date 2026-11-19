@@ -53,6 +53,8 @@ export default function App() {
   const [connection, setConnection] = useState<RuntimeConnection>({ state: 'ready', generation: 0 });
   const [outputRequest, setOutputRequest] = useState<StepOutputSelection>();
   const consumeOutputRequest = useCallback(() => setOutputRequest(undefined), []);
+  const [storyboardRequest, setStoryboardRequest] = useState<string>();
+  const consumeStoryboardRequest = useCallback(() => setStoryboardRequest(undefined), []);
   const [repairModelId, setRepairModelId] = useState<string>();
   const consumeRepairModel = useCallback(() => setRepairModelId(undefined), []);
   const [{ page, visited, assetTab }, setNavigation] = useState<NavigationState>({ page: 'projects', visited: ['projects'], assetTab: 'media' });
@@ -239,7 +241,14 @@ export default function App() {
     return true;
   }
   function registerSave(callback: (() => Promise<boolean>) | null) { saveBeforeLeave.current = callback; }
-  async function openProject(id: string) { if (page === 'workbench' && id !== projectId && saveBeforeLeave.current && !await saveBeforeLeave.current()) return false; const complete = beginGuideAction('workbench-opened'); if (page !== 'workbench') navigationGuide.current = { page: 'workbench', complete }; else complete(); const retry = failedProjectReads.current.delete(id); currentProjectId.current = id; setProjectId(id); activatePage('workbench'); if (retry) void refreshProject(id); return true; }
+  async function openProject(id: string, editStoryboard = false) {
+    if (page === 'workbench' && id !== projectId && saveBeforeLeave.current && !await saveBeforeLeave.current()) return false;
+    const complete = beginGuideAction('workbench-opened');
+    if (page !== 'workbench') navigationGuide.current = { page: 'workbench', complete }; else complete();
+    const retry = failedProjectReads.current.delete(id);
+    currentProjectId.current = id; setProjectId(id); setStoryboardRequest(editStoryboard ? id : undefined);
+    activatePage('workbench'); if (retry) void refreshProject(id); return true;
+  }
   async function openStepOutput(selection: StepOutputSelection) { if (await openProject(selection.projectId)) setOutputRequest(selection); }
   async function createProject(template?: SeriesTemplate) {
     if (!await navigate('projects')) return;
@@ -263,6 +272,7 @@ export default function App() {
           if (cachedPage === 'workbench') {
             if (project && project.id === projectId) return <Workbench key={project.id} project={project} workspace={workspace}
               outputRequest={outputRequest} onOutputConsumed={consumeOutputRequest} onOpenOutput={selection => void openStepOutput(selection)}
+              openStoryboard={storyboardRequest === project.id} onStoryboardOpened={consumeStoryboardRequest}
               action={action} notify={notify} onRegisterSave={registerSave} onNavigate={navigateToRepair} />;
             if (!projectId) return null;
             const error = projectLoadError || loadError;

@@ -45,7 +45,8 @@ export function createRunControl({
     const step = inspection.steps.find(step => step.id === nodeId);
     if (!step?.retry?.allowed) throw new Error(step?.retry?.reason || '只能重试本次制作中选中的失败步骤。');
     value = run(runId);
-    project(value.projectId);
+    const saved = store.get<RunSnapshot>('run-snapshot', runId);
+    if (saved?.creativePlanning?.plan?.route !== 'style-only') project(value.projectId);
     const concurrentRetry = pendingRetry(value, runId, nodeId);
     if (concurrentRetry) return concurrentRetry;
     if (value.updatedAt !== inspection.run.updatedAt || value.status !== inspection.run.status || value.currentNodeId !== nodeId) throw new Error('步骤状态已变化，请刷新后重试。');
@@ -69,8 +70,8 @@ export function createRunControl({
 
   async function resume(rawParams: unknown): Promise<RunRecord> {
     const { runId } = runIdInput.parse(rawParams); const value = run(runId);
-    project(value.projectId);
     const saved = store.get<RunSnapshot>('run-snapshot', runId);
+    if (saved?.creativePlanning?.plan?.route !== 'style-only') project(value.projectId);
     if (saved?.exportBatch) { await batches.dispatch('render.batch.resume', { batchId: saved.exportBatch.batchId }); return hydrateRun(run(runId)); }
     if (batches.blocked(value.projectId)) throw new Error('请先继续或取消当前批量导出，再恢复其他运行。');
     if (['succeeded', 'canceled'].includes(value.status)) throw new Error('该运行已经结束，请创建新的运行。');

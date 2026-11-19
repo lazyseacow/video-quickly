@@ -105,7 +105,7 @@ export default function BatchExportDialog({ project, initialSection, onClose, no
     finally { if (alive.current) setBusy(undefined); }
   }
   return <Dialog title="多比例批量导出" onClose={onClose} className="batch-export-dialog settings-dialog">
-    <div className="dialog__body"><SettingsSections label="批量导出设置" value={section} onValueChange={setSection} intro={<p className="batch-export__intro">{baseline.title} · 保存的修订 {baseline.revision}。各规格独立导出，不改变项目画面规格，也不会调用生成模型。</p>} sections={[
+    <div className="dialog__body"><SettingsSections label="批量导出设置" value={section} onValueChange={setSection} intro={<p className="batch-export__intro">{baseline.title} · 修订 {baseline.revision}</p>} sections={[
       { id: 'targets', label: '导出规格', icon: Layers, content: <fieldset className="batch-export__configuration" disabled={Boolean(busy)}><legend>导出规格</legend>
         <div className="batch-export__targets">{targets.map((target, index) => <section className={`batch-export__target form-stack form-stack--compact ${target.selected ? 'is-selected' : ''}`} key={target.id} aria-label={`导出规格 ${target.label}`}>
           <div className="batch-export__target-heading"><label className="field-inline"><input type="checkbox" checked={target.selected} onChange={event => setTargets(values => values.map(item => item.id === target.id ? { ...item, selected: event.target.checked } : item))} />{target.label}</label>{index >= 3 && <IconButton label={`删除规格 ${target.label}`} onClick={() => setTargets(values => values.filter(item => item.id !== target.id))}><Trash2 size={13} /></IconButton>}</div>
@@ -125,7 +125,7 @@ export default function BatchExportDialog({ project, initialSection, onClose, no
         {nextCursor !== null && <Button aria-label="加载更多导出" busy={listBusy} onClick={() => void loadHistory(nextCursor)}>加载更多</Button>}
         {readError && <Notice kind="error">{readError}<Button aria-label="重试批量进度" onClick={() => setRefresh(count => count + 1)}>重试</Button></Notice>}
         {current ? <><div className="batch-export__summary" role="status"><span className={`status status--${current.status}`}><span />{labels[current.status]}</span><span>源修订 {current.projectRevision} · {current.targets.filter(target => target.status === 'succeeded').length}/{current.targets.length} 个规格完成</span><code>{current.id}</code></div>
-          <p className="tiny-meta">{current.status === 'interrupted' ? '上次执行已中断，点击“继续未完成导出”后恢复。' : running ? '导出在后台继续；关闭窗口后可重新打开查看。' : '每个规格的文件与状态分别保留，继续执行会校验并复用完整产物。'}</p>
+          <p className="tiny-meta">{running ? '关闭窗口后继续导出。' : '继续时会校验并复用已完成的文件。'}</p>
           {current.error && <Notice kind="error">{current.error}</Notice>}
           <div className="batch-export__results">{current.targets.map(target => <article key={target.id} className="batch-export__result" aria-label={`导出结果 ${target.label}`}>
             <header><strong>{target.label}</strong><span className={`status status--${target.status}`}><span />{targetLabels[target.status]}</span></header>

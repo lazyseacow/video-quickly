@@ -125,8 +125,7 @@ export function AssetsPanel({ workspace, action, project, onCreateCharacter }: {
       {fileAssets.length > 0 && <section className="asset-file-list" aria-label="音频与资料">{fileAssets.map(renderAsset)}</section>}
     </div>}
     {!loading && !library.error && assets.length === 0 && <EmptyState icon={trashed ? <Trash2 size={25} /> : <Image size={25} />}
-      title={filter !== 'all' ? '没有此类素材' : trashed ? '回收站为空' : '还没有素材'}
-      description={trashed ? '移入回收站的素材可在此恢复。' : filter === 'all' ? '导入自有或已授权的图片、视频、音频和资料。' : '查看全部素材，或导入此类型的文件。'}>
+      title={filter !== 'all' ? '没有此类素材' : trashed ? '回收站为空' : '还没有素材'}>
       {filter !== 'all' && <Button onClick={showAllAssets}>{trashed ? '查看全部回收素材' : '查看全部素材'}</Button>}
     </EmptyState>}
     {!library.stale && library.nextCursor !== null && <Button aria-label="加载更多素材" className="button-full" busy={library.loadingMore} disabled={!library.canLoadMore} onClick={() => void library.loadMore()}>加载更多</Button>}
@@ -139,7 +138,6 @@ export function AssetsPanel({ workspace, action, project, onCreateCharacter }: {
       }}>
         <div className="dialog__body">
           <Field label="文件路径"><PathPicker label="文件路径" autoFocus required value={source} onChange={setSource} placeholder={pathExample('image')} /></Field>
-          <p className="tiny-meta">请使用自己创作或已获授权的素材。源文件会保留。</p>
         </div>
         <div className="dialog__footer">
           <Button onClick={() => setImporting(false)}>取消</Button>

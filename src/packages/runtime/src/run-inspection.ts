@@ -33,7 +33,7 @@ interface Snapshot {
   project: ProjectDocument; nodes: WorkflowNode[]; inspectionNodes?: WorkflowNode[]; inspectionThreads?: Record<string, string>; models: ModelProfile[]; skills: SkillPackage[]; handlerVersion: number;
   regeneration?: JsonValue; research?: JsonValue; exportBatch?: JsonValue;
 }
-interface SnapshotRow { title: string; workflowId: string | null; autonomousVideo: number | null; nodes: string; models: string; skills: string; edges: string; stages: string | null; handlerVersion: number; inspectionThreads: string | null; exportBatch: string | null }
+interface SnapshotRow { title: string; workflowId: string | null; autonomousVideo: number | null; nodes: string; models: string; skills: string; edges: string; stages: string | null; handlerVersion: number; inspectionThreads: string | null; exportBatch: string | null; creativeRoute: string | null }
 interface ActivitySummaryRow {
   node_id: string; count: number; unknown_count: number; started_at: string; completed_at: string | null; error: string | null;
 }
@@ -67,9 +67,9 @@ export function createRunInspector(options: {
   const { database, store } = options, reads = createReadModels(database, store), responses = createModelResponses(store);
   const progress = createRunProgress(store);
   function metadata(runId: string) {
-    const row = database.prepare("SELECT json_extract(body, '$.project.title') AS title, json_extract(body, '$.project.workflow.id') AS workflowId, json_extract(body, '$.autonomousVideo') AS autonomousVideo, coalesce(json_extract(body, '$.inspectionNodes'), json_extract(body, '$.nodes')) AS nodes, json_extract(body, '$.models') AS models, json_extract(body, '$.skills') AS skills, coalesce(json_extract(body, '$.inspectionEdges'), json_extract(body, '$.project.workflow.edges')) AS edges, json_extract(body, '$.project.workflow.stages') AS stages, json_extract(body, '$.handlerVersion') AS handlerVersion, json_extract(body, '$.inspectionThreads') AS inspectionThreads, json_type(body, '$.exportBatch') AS exportBatch FROM documents WHERE kind = 'run-snapshot' AND id = ?").get(runId) as SnapshotRow | undefined;
+    const row = database.prepare("SELECT json_extract(body, '$.project.title') AS title, json_extract(body, '$.project.workflow.id') AS workflowId, json_extract(body, '$.autonomousVideo') AS autonomousVideo, coalesce(json_extract(body, '$.inspectionNodes'), json_extract(body, '$.nodes')) AS nodes, json_extract(body, '$.models') AS models, json_extract(body, '$.skills') AS skills, coalesce(json_extract(body, '$.inspectionEdges'), json_extract(body, '$.project.workflow.edges')) AS edges, json_extract(body, '$.project.workflow.stages') AS stages, json_extract(body, '$.handlerVersion') AS handlerVersion, json_extract(body, '$.inspectionThreads') AS inspectionThreads, json_type(body, '$.exportBatch') AS exportBatch, json_extract(body, '$.creativePlanning.plan.route') AS creativeRoute FROM documents WHERE kind = 'run-snapshot' AND id = ?").get(runId) as SnapshotRow | undefined;
     if (!row) return undefined;
-    return { title: row.title, workflowId: row.workflowId, autonomousVideo: row.autonomousVideo === null ? undefined : Boolean(row.autonomousVideo), nodes: z.array(workflowNodeSchema).parse(JSON.parse(row.nodes)), models: z.array(modelSchema).parse(JSON.parse(row.models)), skills: z.array(skillSchema).parse(JSON.parse(row.skills)), edges: z.array(z.object({ source: z.string(), target: z.string() })).parse(JSON.parse(row.edges)), stages: row.stages ? workflowSchema.shape.stages.parse(JSON.parse(row.stages)) : undefined, handlerVersion: row.handlerVersion, inspectionThreads: row.inspectionThreads ? z.record(z.string(), z.string()).parse(JSON.parse(row.inspectionThreads)) : {}, exportBatch: row.exportBatch !== null };
+    return { title: row.title, workflowId: row.workflowId, autonomousVideo: row.autonomousVideo === null ? undefined : Boolean(row.autonomousVideo), nodes: z.array(workflowNodeSchema).parse(JSON.parse(row.nodes)), models: z.array(modelSchema).parse(JSON.parse(row.models)), skills: z.array(skillSchema).parse(JSON.parse(row.skills)), edges: z.array(z.object({ source: z.string(), target: z.string() })).parse(JSON.parse(row.edges)), stages: row.stages ? workflowSchema.shape.stages.parse(JSON.parse(row.stages)) : undefined, handlerVersion: row.handlerVersion, inspectionThreads: row.inspectionThreads ? z.record(z.string(), z.string()).parse(JSON.parse(row.inspectionThreads)) : {}, exportBatch: row.exportBatch !== null, creativeRoute: row.creativeRoute };
   }
   async function nativeState(runId: string) {
     const tuple = await new SqliteSaver(database).getTuple({ configurable: { thread_id: runId } });
@@ -98,7 +98,7 @@ export function createRunInspector(options: {
     const has = (kind: string, id: string) => documents.some(row => row.kind === kind && row.id === `${runId}:${id}`);
     const directActivities = new Map((database.prepare('SELECT activity_id, status FROM activities WHERE run_id = ? AND activity_id IN (SELECT value FROM json_each(?))').all(runId, JSON.stringify(ids)) as { activity_id: string; status: string }[]).map(row => [row.activity_id, row.status]));
     const unknown = run.status !== 'running' && rows.some(row => row.unknown_count > 0);
-    const projectAvailable = Boolean(store.get('project-summary', run.projectId));
+    const projectAvailable = saved?.creativeRoute === 'style-only' || Boolean(store.get('project-summary', run.projectId));
     const resume = projectAvailable && ['failed', 'needs_attention', 'waiting_external', 'retry_scheduled', 'queued', 'waiting_review'].includes(run.status) && !unknown;
     const steps: RunStepSummary[] = nodes.map(node => {
       const receipt = byNode.get(node.id), current = run.currentNodeId === node.id;

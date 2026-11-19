@@ -20,7 +20,7 @@ for (const viewport of [{ width: 1536, height: 960, theme: 'dark' }, { width: 60
   await expect(dialog.getByLabel('参考素材', { exact: true })).toHaveCount(0);
   await expect(dialog.getByLabel('首帧生成', { exact: true })).toHaveCount(0);
   await expect(dialog.getByRole('combobox', { name: '图片模型', exact: true })).toHaveCount(0);
-  const continuationHint = dialog.getByText('首镜使用已有画面、角色参考图或文字生成。后续镜头依次使用上一镜尾帧。', { exact: true });
+  const continuationHint = dialog.getByText('后续镜头依次使用上一镜尾帧。', { exact: true });
   await expect(continuationHint).toBeVisible();
   await expect(dialog.getByRole('region', { name: '生成并发', exact: true })).toHaveCount(0);
   await expect(dialog.getByLabel(/并发上限/)).toHaveCount(0);

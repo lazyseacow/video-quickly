@@ -120,7 +120,8 @@ export default function WorkbenchProduction({ workflow, run, version, action, no
         const status = !synchronized ? 'pending' : active ? run.status : finished ? applicable.every(task => task.step?.status === 'skipped') ? 'skipped' : 'succeeded' : task?.step?.status ?? 'pending';
         const state = synchronized ? status === 'running' && task?.step ? stepProgressText(task.step) : progressLabel(status) : inspection.error ? '进度读取失败' : '正在同步进度';
         const summary = stages && task ? active ? `${task.label} · ${state}` : `${stage.tasks.filter(taskCompleted).length} / ${stage.tasks.length} 任务 · ${state}` : state;
-        return <WorkbenchStepCard key={stage.key} index={status === 'succeeded' ? <Check size={12} aria-hidden="true" /> : index + 1} label={stage.label} description={stage.description} actionLabel={`打开${stages ? '阶段' : '步骤'}：${stage.label}`} current={highlighted} status={status} onClick={() => openStage(stage)}>{summary}</WorkbenchStepCard>;
+        const description = native ? undefined : stage.key.startsWith('stage:') ? stage.description : stage.tasks[0]?.node?.description ?? stage.tasks[0]?.step?.description;
+        return <WorkbenchStepCard key={stage.key} index={status === 'succeeded' ? <Check size={12} aria-hidden="true" /> : index + 1} label={stage.label} description={description} actionLabel={`打开${stages ? '阶段' : '步骤'}：${stage.label}`} current={highlighted} status={status} onClick={() => openStage(stage)}>{summary}</WorkbenchStepCard>;
       })}</ol>
       {inspection.error && <IconButton label="重试读取制作进度" disabled={inspection.busy} onClick={inspection.refresh}><RefreshCw size={16} className={inspection.busy ? 'spin' : undefined} /></IconButton>}
     </div>

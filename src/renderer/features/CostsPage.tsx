@@ -55,7 +55,7 @@ export default function CostsPage({ workspace }: { workspace: WorkspaceView }) {
           </tr>)}
         </tbody></table>}
         {tasks.busy && !tasks.hasLoaded && !tasks.items.length && <p className="cost-loading" role="status">正在读取任务用量…</p>}
-        {!tasks.items.length && tasks.hasLoaded && !tasks.error && <EmptyState icon={<ChartNoAxesCombined size={25} />} title="还没有 Token 用量" description="模型用量将按任务保存在这里。" />}
+        {!tasks.items.length && tasks.hasLoaded && !tasks.error && <EmptyState icon={<ChartNoAxesCombined size={25} />} title="还没有 Token 用量" />}
       </div>
       {tasks.nextCursor !== null && <Button aria-label="加载更多任务" busy={tasks.loadingMore} disabled={!tasks.canLoadMore} onClick={() => void tasks.loadMore()}><ChevronDown size={14} />加载更多</Button>}
     </div>
@@ -120,7 +120,7 @@ export function TaskUsage({ runId, version, onBack, onTaskUpdated, backLabel = '
       </div>
       <div className="cost-record-list" aria-busy={records.busy}>
         {!records.items.length && records.busy && <p className="cost-loading" role="status">正在读取调用明细…</p>}
-        {!records.items.length && records.hasLoaded && !records.busy && !records.error && <EmptyState icon={<ChartNoAxesCombined size={25} />} title="还没有调用明细" description="此任务尚未记录模型调用。" />}
+        {!records.items.length && records.hasLoaded && !records.busy && !records.error && <EmptyState icon={<ChartNoAxesCombined size={25} />} title="还没有调用明细" />}
         {/* Preserve the table roles when narrow rows switch to CSS grid. */}
         {records.items.length > 0 && <table className="cost-record-table" role="table" aria-labelledby={recordsHeading}>
           <thead role="rowgroup"><tr role="row">

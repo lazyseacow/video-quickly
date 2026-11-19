@@ -71,7 +71,8 @@ for (const scenario of scenarios) test(`keeps control corners consistent across 
   await references.click();
   await fieldStates(page, dialog, scene.getByLabel('场景参考图路径', { exact: true }), radius, 'Shift+Tab');
   await references.click(); await dialog.getByRole('button', { name: '返回创作要求', exact: true }).click();
-  await disclosureStates(page, dialog, dialog.getByText('剪辑 Agent 设置', { exact: true }), radius);
+  await expect(dialog.locator('.production-settings__creation-skills')).toHaveCSS('border-radius', radius);
+  await disclosureStates(page, dialog, dialog.getByRole('button', { name: '创作 Skill', exact: true }), `${scenario.radius - 1}px`);
   await disclosureStates(page, dialog, dialog.getByRole('button', { name: '添加分镜', exact: true }), radius);
   await page.screenshot({ path: info.outputPath('planning-control-states.png') });
   await productionStep(dialog, '模型与素材');

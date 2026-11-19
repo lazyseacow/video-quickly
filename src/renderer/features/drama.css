@@ -22,13 +22,10 @@
 .drama-line { display: grid; gap: var(--space-3); border-block-start: 1px solid var(--border); padding-block-start: var(--space-3); }
 .drama-reference-options { display: grid; gap: var(--space-2); max-block-size: 220px; overflow: auto; }
 .drama-reference-options label { display: flex; gap: var(--space-2); align-items: center; font-size: var(--text-size-caption); min-block-size: var(--control-height); }
-.drama-library > .page-heading p { color: var(--text-secondary); margin-block-start: var(--space-2); }
 .drama-composer { border: 1px solid var(--border); border-radius: var(--radius-medium); background: var(--surface); overflow: clip; scroll-margin-block-start: var(--space-4); }
-.drama-composer-heading { display: flex; align-items: center; justify-content: space-between; gap: var(--space-6); padding: var(--space-6) var(--space-6) var(--space-4); }
-.drama-composer-heading h2 { font-size: var(--text-size-project); line-height: var(--line-height-title); margin-block: var(--space-2); }
-.drama-composer-heading p { color: var(--text-secondary); line-height: var(--line-height-prose); }
-.drama-composer-heading > svg { flex-shrink: 0; color: var(--text-secondary); }
-.drama-composer-tabs { margin-inline: var(--space-6); inline-size: fit-content; max-inline-size: calc(100% - var(--space-10)); }
+.drama-composer-heading { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-3) var(--space-6); padding: var(--space-6) var(--space-6) 0; }
+.drama-composer-heading h2 { font-size: var(--text-size-title); line-height: var(--line-height-title); }
+.drama-composer-tabs { max-inline-size: 100%; }
 .drama-composer-tabs button { display: inline-flex; align-items: center; justify-content: center; gap: var(--space-2); }
 .drama-composer-body { display: grid; grid-template-columns: minmax(0, 1.2fr) minmax(320px, .8fr); gap: var(--space-6); padding: var(--space-6); }
 .drama-composer-script, .drama-composer-settings { min-inline-size: 0; }
@@ -40,14 +37,11 @@
 .drama-script-import > .button { min-block-size: var(--control-height); margin-inline-start: auto; }
 .drama-script-path .icon-button { flex: none; inline-size: var(--control-height); block-size: var(--control-height); }
 .drama-character-count { text-align: end; margin-block-start: calc(-1 * var(--space-2)); }
-.drama-style-preview { display: flex; gap: var(--space-3); border: 1px solid var(--border); border-radius: var(--radius-small); padding: var(--space-4); background: var(--surface-raised); }
-.drama-style-preview > svg { flex-shrink: 0; margin-block-start: var(--space-1); }
-.drama-style-preview p { font-size: var(--text-size-caption); color: var(--text-secondary); line-height: var(--line-height-prose); margin-block-start: var(--space-1); }
 .drama-composer-topics { display: grid; gap: var(--space-2); }
 .drama-composer-advanced { border-block-start: 1px solid var(--border); padding-block-start: var(--space-3); }
 .drama-composer-advanced > summary { cursor: pointer; min-block-size: var(--control-hit-size); display: list-item; align-content: center; font-size: var(--text-size-label); }
 .drama-composer-advanced[open] > summary { margin-block-end: var(--space-3); }
-.drama-template-summary { display: flex; gap: var(--space-2); align-items: center; flex-wrap: wrap; }
+.drama-composer-settings > .drama-template-button { justify-content: start; min-inline-size: 0; min-block-size: var(--control-height); white-space: normal; overflow-wrap: anywhere; text-align: start; border-radius: var(--radius-small); }
 .drama-composer-footer { display: flex; justify-content: end; border-block-start: 1px solid var(--border); padding: var(--space-4) var(--space-6); background: var(--surface-raised); }
 .drama-composer form > .notice { margin: 0 var(--space-6) var(--space-4); }
 .drama-library-heading { display: flex; gap: var(--space-4); align-items: center; justify-content: space-between; flex-wrap: wrap; margin-block: var(--space-8) var(--space-4); }
@@ -82,10 +76,10 @@
   .drama-composer-body { grid-template-columns: minmax(0, 1fr); }
   .drama-composer-settings { padding-inline-start: 0; padding-block-start: var(--space-4); border-inline-start: 0; border-block-start: 1px solid var(--border); }
   .drama-composer-settings .drama-form-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .drama-composer-heading, .drama-composer-body { padding: var(--space-4); }
-  .drama-composer-tabs { margin-inline: var(--space-4); }
+  .drama-composer-heading { padding: var(--space-4) var(--space-4) 0; }
+  .drama-composer-body { padding: var(--space-4); }
   .drama-composer-footer { padding: var(--space-4); }
   .drama-topic-list { grid-template-columns: minmax(0, 1fr); }
 }
 @media (max-width: 640px) { .drama-form-grid { grid-template-columns: minmax(0, 1fr); } .drama-episode-row { align-items: start; flex-wrap: wrap; } }
-@media (max-width: 480px) { .drama-composer-settings .drama-form-grid { grid-template-columns: minmax(0, 1fr); } .drama-topic-toolbar { align-items: stretch; flex-direction: column; } .drama-composer-heading > svg { display: none; } }
+@media (max-width: 480px) { .drama-composer-settings .drama-form-grid { grid-template-columns: minmax(0, 1fr); } .drama-topic-toolbar { align-items: stretch; flex-direction: column; } }

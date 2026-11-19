@@ -1,6 +1,5 @@
 .asset-recovery { width: min(960px, calc(100vw - var(--space-8))); }
 .asset-recovery__body { display: flex; flex-direction: column; gap: var(--space-4); }
-.asset-recovery__intro { margin: 0; color: var(--text-secondary); line-height: var(--line-height-body); }
 .asset-recovery__controls, .asset-recovery__directory { display: flex; align-items: end; gap: var(--space-3); }
 .asset-recovery__controls .field, .asset-recovery__directory .field { flex: 1; min-width: 0; }
 .asset-recovery__progress { display: flex; flex-direction: column; gap: var(--space-2); padding: var(--space-4); border-radius: var(--radius-small); background: var(--surface-raised); font-variant-numeric: tabular-nums; }
@@ -8,7 +7,6 @@
 .asset-recovery__progress progress { width: 100%; accent-color: var(--accent); }
 .asset-recovery__list-heading { display: flex; align-items: center; flex-wrap: wrap; gap: var(--space-2); }
 .asset-recovery__list-heading h3 { margin: 0 auto 0 0; font-size: var(--text-size-body); }
-.asset-recovery__list-heading > span { color: var(--text-secondary); font-variant-numeric: tabular-nums; }
 .asset-recovery__list { display: flex; flex-direction: column; gap: var(--space-3); }
 .asset-recovery__item { min-width: 0; padding: var(--space-4); border: 1px solid var(--border); border-radius: var(--radius-small); }
 .asset-recovery__item-heading { display: flex; justify-content: space-between; align-items: start; gap: var(--space-3); }

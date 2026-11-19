@@ -32,11 +32,10 @@ export default function EditorProjectExport({ project, onClose }: { project: Pro
   }
   return <Dialog title="剪映／CapCut 工程导出" onClose={onClose} className="editor-project-export">
     <div className="dialog__body editor-project-export__body">
-      <p className="editor-project-export__intro">{baseline.title} · 保存的修订 {baseline.revision}。使用当前素材在本地合成并导出。</p>
-      <Notice>工程导出为实验功能。草稿需要本机剪辑软件创建的明文空草稿模板；未选择模板时，将生成素材与时间线交接包。</Notice>
+      <p className="editor-project-export__intro">{baseline.title} · 修订 {baseline.revision}</p>
       <fieldset disabled={busy} className="editor-project-export__fields"><legend>剪辑工程设置</legend>
         <Field label="剪辑软件"><Select value={target} onChange={event => { setTarget(event.target.value === 'capcut' ? 'capcut' : 'jianying'); setTemplate(''); setResult(undefined); }}><option value="jianying">剪映</option><option value="capcut">CapCut</option></Select></Field>
-        <Field label="空草稿模板（可选）" hint="选择本机目标软件生成的 draft_info.json 或 draft_content.json；模板须为空、未加密，不会修改源文件。">
+        <Field label="空草稿模板（可选）" hint="实验性草稿需使用目标软件生成的未加密空模板（draft_info.json 或 draft_content.json）。留空导出交接包。">
           {field => <PathPicker field={field} label="空草稿模板（可选）" value={template} onChange={value => { setTemplate(value); setResult(undefined); }} extensions={['json']} placeholder="留空导出剪辑交接包" />}
         </Field>
         <Field label="工程输出目录" hint="留空使用项目导出目录；每次创建独立文件夹。请选择软件草稿库以外的位置。">
@@ -49,11 +48,11 @@ export default function EditorProjectExport({ project, onClose }: { project: Pro
         <li>已开启的字幕保留文字和时间，目标软件中的字体与排版需核对。</li>
         <li>草稿的实际导入尚未验证。软件版本不同可能需要重新链接素材。</li>
       </ul></details>
-      {busy && <Notice>正在本地合成画面与声音。导出完成后会显示文件位置；关闭窗口后，文件仍会保存到所选目录或项目导出目录。</Notice>}
+      {busy && <Notice>正在合成画面与声音。关闭窗口后继续导出。</Notice>}
       {error && <Notice kind="error">{error}</Notice>}
       {result && <section className="editor-project-export__result" aria-label="剪辑工程导出结果"><Notice kind="success">{result.format === 'draft' ? '实验性草稿已导出' : '剪辑交接包已导出'} · 源修订 {result.projectRevision}</Notice>
         {result.editorVersion && <p className="tiny-meta">模板软件版本：{result.editorVersion}</p>}
-        <p>{result.format === 'draft' ? '请在目标软件中手动导入并核对声画与字幕；本次仅完成本地文件生成。' : '交接包包含画面、混音、字幕和 compile.json 时间线规格。选择空草稿模板后可另行导出实验性草稿。'}</p>
+        <p>{result.format === 'draft' ? '请在目标软件中导入草稿，核对声画和字幕。' : '交接包包含画面、混音、字幕和 compile.json 时间线。'}</p>
         <div className="editor-project-export__path"><span>输出位置</span><code>{result.directory}</code></div>
         {nativeDesktop && <Button variant="ghost" onClick={() => void revealFile(result.manifestPath).catch(reason => setError(reason instanceof Error ? reason.message : String(reason)))}><FolderOpen size={14} />打开导出文件夹</Button>}
         <details><summary>导出说明</summary><ul>{result.warnings.map((warning, index) => <li key={index}>{warning}</li>)}</ul></details>

@@ -36,7 +36,7 @@ for (const platform of [
   await expect.poll(async () => (await saved()).shots[0].title).toBe('平台键盘保存');
 
   const create = page.getByRole('button', { name: '新建短剧', exact: true }); await create.click();
-  const composer = page.getByRole('region', { name: '让故事成为一部短剧', exact: true });
+  const composer = page.getByRole('region', { name: '新建短剧', exact: true });
   const title = composer.getByRole('textbox', { name: '短剧名称', exact: true });
   await expect(title).toBeFocused(); await title.fill(''); await title.pressSequentially('native input');
   // Chromium's native text editing uses the actual host modifier, even when

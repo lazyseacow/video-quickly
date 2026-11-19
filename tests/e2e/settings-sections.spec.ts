@@ -34,7 +34,7 @@ for (const viewport of [{ width: 1536, height: 960, theme: 'dark' }, { width: 10
     await expect(dialog.getByLabel('字幕字体', { exact: true })).toHaveValue('serif');
     expect(await preview!.evaluate(element => element.isConnected)).toBe(true);
     await expect(dialog.locator('[role="tabpanel"]:visible')).toHaveCount(1);
-    await showSettingsPreview(dialog);
+    await showSettingsPreview(dialog, '样式预览');
     await expect(dialog.locator('.series-settings-preview')).toBeVisible();
     await expect(dialog.locator('.dialog__footer')).toBeInViewport({ ratio: 1 });
     const layout = await dialog.evaluate(element => { const body = element.querySelector('.dialog__body')!; const bounds = element.getBoundingClientRect(); return { scroll: body.scrollHeight - body.clientHeight, right: bounds.right, width: innerWidth, bottom: bounds.bottom, height: innerHeight }; });

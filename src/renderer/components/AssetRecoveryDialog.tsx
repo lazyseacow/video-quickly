@@ -105,10 +105,9 @@ export default function AssetRecoveryDialog({ project, directory, onClose }: { p
 
   return <Dialog title="恢复缺失素材" onClose={onClose} className="dialog--wide asset-recovery">
     <div className="dialog__body asset-recovery__body">
-      <p className="asset-recovery__intro">查找相同内容，恢复到原素材位置。素材关联和历史制作快照继续有效。</p>
       <div className="asset-recovery__controls"><Field label="恢复范围"><Select value={scope} disabled={active || busy} onChange={event => setScope(event.target.value)}><option value="">整个工作区（含历史与回收站）</option>{project && <option value={project.id}>当前项目：{project.title}</option>}</Select></Field><Button aria-label="重新检查素材" disabled={active || busy} onClick={() => void start(true)}><RefreshCw size={16} />重新检查</Button></div>
       <form className="asset-recovery__directory" onSubmit={event => { event.preventDefault(); void perform('scan'); }}>
-        <Field label="查找目录" hint="按完整摘要和文件大小匹配，跳过符号链接。原位置的异内容文件会保留。">
+        <Field label="查找目录" hint="按文件内容匹配；保留原位置的不同文件。">
           {field => <PathPicker field={field} label="查找目录" mode="directory" value={source} onChange={setSource} required disabled={active || busy} placeholder={pathExample('backup')} />}
         </Field>
         <Button type="submit" disabled={!job || active || busy || !source.trim()}><FolderSearch size={16} />扫描目录</Button>
@@ -118,9 +117,8 @@ export default function AssetRecoveryDialog({ project, directory, onClose }: { p
       {job && <>
         <div className="asset-recovery__progress" role="status"><strong>{phases[job.phase]}</strong><span>已检查 {job.progress.checked} / {job.progress.total} · 已扫描 {job.progress.scanned} 个文件 · 已校验 {job.progress.hashed} 个候选{job.progress.restored > 0 && ` · 已恢复 ${job.progress.restored} 个`}</span>{active && <progress aria-label="素材恢复进度" {...(job.phase === 'checking' ? { value: job.progress.checked, max: Math.max(1, job.progress.total) } : {})} />}</div>
         {job.error && <Notice kind="error">{job.error} 可检查目录与权限后重新扫描并继续。</Notice>}
-        {job.phase === 'succeeded' && <Notice kind="success">所选素材已恢复，媒体将自动重新读取。还有缺失项时可继续扫描。</Notice>}
         {job.warningCount > 0 && <details className="asset-recovery__warnings"><summary>{job.warningCount} 条目录或回滚提示</summary><ul>{job.warnings.map((warning, index) => <li key={index}><code>{warning.path}</code><span>{warning.message}</span></li>)}</ul>{job.warningCount > job.warnings.length && <p>仅显示前 {job.warnings.length} 条，其他路径也已跳过。</p>}</details>}
-        <div className="asset-recovery__list-heading"><h3>素材检查清单</h3><span>{job.progress.total} 条</span><Button disabled={active || busy || !['awaiting_confirmation', 'failed', 'canceled'].includes(job.phase)} onClick={() => void selectAll()}>选择全部匹配项</Button><Button disabled={active || busy || !count} onClick={() => setSelected({})}>清除选择</Button></div>
+        <div className="asset-recovery__list-heading"><h3>检查清单</h3><Button disabled={active || busy || !['awaiting_confirmation', 'failed', 'canceled'].includes(job.phase)} onClick={() => void selectAll()}>选择全部匹配项</Button><Button disabled={active || busy || !count} onClick={() => setSelected({})}>清除选择</Button></div>
         <div className="asset-recovery__list" aria-label="素材恢复清单">{items.map(item => {
           const candidateId = selected[item.id], match = item.status === 'missing' && item.candidates.length > 0;
           return <article className="asset-recovery__item" key={item.id} data-asset-id={item.assetId} data-recovery-status={item.status}>

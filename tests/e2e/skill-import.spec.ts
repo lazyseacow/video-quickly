@@ -69,7 +69,7 @@ test('continues after closing the import dialog, groups every Skill and applies 
   expect(snapshot.skillImports!.find(job => job.groupId === storedGroup.id)?.status).toBe('succeeded');
 
   await page.getByRole('button', { name: '新建短剧', exact: true }).click();
-  const creation = page.getByRole('region', { name: '让故事成为一部短剧', exact: true });
+  const creation = page.getByRole('region', { name: '新建短剧', exact: true });
   await creation.getByRole('textbox', { name: '剧本正文', exact: true }).fill('清晨，林夏在书房发现一封旧信，她与朋友在城门重逢，决定一起寻找信的主人。');
   await creation.getByRole('textbox', { name: '短剧名称', exact: true }).fill('Skill 全流程验收');
   const creationPicker = creation.getByRole('group', { name: '创作 Skill', exact: true });
@@ -115,17 +115,16 @@ test('continues after closing the import dialog, groups every Skill and applies 
   const after = workspaceSnapshotSchema.parse((await (await request.post('/__desktop_rpc', { data: { method: 'workspace.snapshot', params: {} } })).json()).result);
   const project = after.projects.find(item => item.title === 'Skill 全流程验收 · 第 1 集')!;
   for (const node of project.workflow.nodes.filter(node => ['brief', 'style', 'script'].includes(node.kind))) expect(node.skillIds).toEqual(storedGroup.skillIds);
-  expect(project.workflow.production.agentSkillIds).toEqual(storedGroup.skillIds);
+  expect(project.workflow.production.agentSkillIds).toEqual([]);
 
   await page.getByRole('button', { name: '制作设置', exact: true }).click();
   const settings = page.getByRole('dialog', { name: '制作设置', exact: true });
-  await settings.getByText('剪辑 Agent 设置', { exact: true }).click();
-  await expect(settings.getByRole('button', { name: '剪辑 Agent 的 Skill', exact: true })).toContainText('已选 2 个');
+  await expect(settings.getByRole('button', { name: '创作 Skill', exact: true })).toContainText('已选 2 个');
   await saveProduction(settings);
   await expect(settings).toHaveCount(0);
   const saved = projectDetailSchema.parse((await (await request.post('/__desktop_rpc', { data: { method: 'project.get', params: { projectId: project.id } } })).json()).result).project!;
   for (const node of saved.workflow.nodes.filter(node => ['brief', 'style', 'script'].includes(node.kind))) expect(node.skillIds).toEqual(storedGroup.skillIds);
-  expect(saved.workflow.production).toMatchObject({ agentSkillIds: storedGroup.skillIds, agentMcpServerIds: [] });
+  expect(saved.workflow.production).toMatchObject({ agentSkillIds: [], agentMcpServerIds: [] });
 
   await page.getByRole('button', { name: 'Skill 工作室', exact: true }).click();
   await group.getByRole('button', { name: '查看“ui-drama-write”', exact: true }).click();
@@ -178,11 +177,11 @@ test('expands groups independently and restores their layout when clearing searc
   await expect(secondDisclosure).toHaveAttribute('aria-expanded', 'false');
   const borders = await page.locator('.skill-studio-groups').evaluate(list => {
     const groups = [...list.querySelectorAll('.skill-studio-group')];
-    const tools = list.nextElementSibling!;
     const top = (element: Element) => parseFloat(getComputedStyle(element).borderTopWidth);
     const bottom = (element: Element) => parseFloat(getComputedStyle(element).borderBottomWidth);
-    return [...groups.slice(1).map((group, index) => bottom(groups[index]) + top(group)), bottom(groups.at(-1)!) + top(tools)];
+    return groups.slice(1).map((group, index) => bottom(groups[index]) + top(group));
   });
+  expect(borders.length).toBeGreaterThan(0);
   expect(borders).toEqual(borders.map(() => 1));
   await firstDisclosure.press('Enter');
   await secondDisclosure.press('Space');

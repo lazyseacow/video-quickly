@@ -37,7 +37,7 @@ it('adds built-in drama templates, Skills and readable scene references to an ex
   const project = projectSchema.parse(await upgraded.dispatch('project.create', { title: '新的条漫故事', ...selection }));
   const skillIds = template.creationDefaults!.skillIds;
   expect(project).toMatchObject({ ...template.settings, shots: [], profile: { width: 1080, height: 1920 } });
-  expect(project.workflow.production.agentSkillIds).toEqual(skillIds);
+  expect(project.workflow.production.agentSkillIds).toEqual([]);
   const node = project.workflow.nodes.find(node => node.kind === 'script')!;
   expect(node.skillIds).toEqual(skillIds);
   const preview = promptPreviewSchema.parse(await upgraded.dispatch('prompt.preview', { projectId: project.id, projectRevision: project.revision, node }));

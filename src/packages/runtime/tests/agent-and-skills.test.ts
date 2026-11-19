@@ -1,8 +1,7 @@
 import { createServer, type Server } from 'node:http';
-import { mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { crc32 } from 'node:zlib';
 import { afterEach, describe, expect, it } from 'vitest';
 import { zipSync, strToU8 } from 'fflate';
 import { createRuntime, SimulatedProcessExit } from '../src/index.js';
@@ -133,66 +132,6 @@ describe('Deep Agents integration', () => {
     const replay = await runtime.dispatch('run.replay', { runId: run.id }) as { externalCalls: number };
     expect(replay.externalCalls).toBe(0);
     expect(calls).toBe(2);
-  }, 30_000);
-
-  it('connects an enabled stdio MCP server and persists a real tool response', async () => {
-    const dataDirectory = await directory();
-    const fixture = join(dataDirectory, 'mcp-fixture.mjs'), image = join(dataDirectory, 'embedded.png');
-    const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aN1cAAAAASUVORK5CYII=', 'base64');
-    const text = Buffer.concat([Buffer.from('tEXtComment\0'), Buffer.alloc(800_000, 97)]);
-    const chunk = Buffer.alloc(text.length + 8);
-    chunk.writeUInt32BE(text.length - 4); text.copy(chunk, 4); chunk.writeUInt32BE(crc32(text), text.length + 4);
-    const bytes = Buffer.concat([png.subarray(0, 33), chunk, png.subarray(33)]);
-    await writeFile(image, bytes);
-    await writeFile(fixture, `import { createInterface } from 'node:readline';
-import { readFileSync } from 'node:fs';
-const send = value => process.stdout.write(JSON.stringify(value) + '\\n');
-createInterface({ input: process.stdin }).on('line', line => {
-  const message = JSON.parse(line); if (message.id === undefined) return;
-  let result;
-  if (message.method === 'initialize') result = { protocolVersion: '2025-06-18', capabilities: { tools: {} }, serverInfo: { name: 'fixture', version: '1.0.0' } };
-  else if (message.method === 'tools/list') result = { tools: [{ name: 'echo', description: 'Return a fixture value', inputSchema: { type: 'object', properties: { value: { type: 'string' } }, required: ['value'] } }] };
-  else if (message.method === 'tools/call') result = { content: [{ type: 'text', text: 'mcp:' + message.params.arguments.value }, { type: 'image', mimeType: 'image/png', data: readFileSync(process.argv[2], 'base64') }] };
-  else result = {};
-  send({ jsonrpc: '2.0', id: message.id, result });
-});`);
-    const runtime = createRuntime({ dataDirectory, seed: false }); runtimes.push(runtime);
-    await createEpisode(runtime);
-    const registered = await runtime.dispatch('tool.register', { server: { name: 'fixture', transport: 'stdio', command: process.execPath, args: [fixture, image], enabled: true } }) as { id: string };
-    const unavailable = await runtime.dispatch('tool.register', { server: { name: 'unused-unavailable', transport: 'stdio', command: join(dataDirectory, 'missing-tool'), enabled: true } }) as { id: string };
-    const inspected = await runtime.dispatch('tool.inspect', { serverId: registered.id }) as { tools: Array<{ name: string }> };
-    expect(inspected.tools[0].name).toBe('echo');
-    let calls = 0; let sawMcp = false;
-    const server = createServer(async (request, response) => {
-      let body = ''; for await (const chunk of request) body += chunk.toString();
-      const payload = JSON.parse(body) as { tools: Array<{ function: { name: string } }>; messages: Array<{ role: string; content?: string }> };
-      calls++;
-      sawMcp ||= payload.messages.some(message => message.role === 'tool' && message.content?.includes('mcp:hello'));
-      response.setHeader('Content-Type', 'application/json');
-      const invocation = calls === 1 ? { id: 'list-capabilities', name: 'list_capabilities', input: {} }
-        : calls === 2 ? { id: 'discover-mcp', name: 'discover_mcp_tools', input: { serverId: registered.id } }
-        : calls === 3 ? { id: 'call-mcp', name: 'call_mcp_tool', input: { serverId: registered.id, toolName: 'echo', input: { value: 'hello' } } } : undefined;
-      if (invocation) expect(payload.tools.some(item => item.function.name === invocation.name)).toBe(true);
-      response.end(JSON.stringify({ id: `mcp-response-${calls}`, object: 'chat.completion', created: 1, model: 'fixture', choices: [{ index: 0, finish_reason: invocation ? 'tool_calls' : 'stop', message: invocation ? { role: 'assistant', content: null, tool_calls: [{ id: invocation.id, type: 'function', function: { name: invocation.name, arguments: JSON.stringify(invocation.input) } }] } : { role: 'assistant', content: 'MCP 已执行。' } }] }));
-    });
-    servers.push(server); await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
-    const address = server.address(); if (!address || typeof address === 'string') throw new Error('测试服务未启动。');
-    const initial = await runtime.dispatch('workspace.snapshot') as WorkspaceSnapshot;
-    const model = await runtime.dispatch('model.save', { model: { name: 'fixture', provider: 'openai-compatible', baseUrl: `http://127.0.0.1:${address.port}/v1`, model: 'fixture', connectionType: 'text', capabilities: ['text', 'tools'] } }) as ModelProfile;
-    const agent = workflowNodeSchema.parse({ id: 'agent', kind: 'agent', label: 'Agent', modelId: model.id, config: { mcpServerIds: [registered.id, unavailable.id] } });
-    await runtime.dispatch('project.update', { projectId: initial.projects[0].id, patch: { workflow: { id: 'mcp', version: 1, name: 'MCP fixture', production: { mode: 'native-video', referenceMode: 'none', soundPrompt: '', subtitleMode: 'off' }, nodes: [agent], edges: [] } } });
-    const run = await runtime.dispatch('run.start', { projectId: initial.projects[0].id }) as RunRecord;
-    await runtime.waitForIdle();
-    const after = await runtime.dispatch('workspace.snapshot') as WorkspaceSnapshot;
-    expect(after.runs[0].error).toBeUndefined();
-    expect(after.runs[0].status).toBe('succeeded');
-    expect(sawMcp).toBe(true);
-    expect(after.runs[0].activities.find(item => item.id === 'agent:tool:call-mcp')?.status).toBe('completed');
-    const artifactDirectory = join(dataDirectory, 'tool-artifacts', run.id);
-    const artifacts = await readdir(artifactDirectory);
-    expect(artifacts).toHaveLength(1); expect(artifacts[0].endsWith('.png')).toBe(true);
-    expect(await readFile(join(artifactDirectory, artifacts[0]))).toEqual(bytes);
-    await runtime.dispatch('run.replay', { runId: run.id }); expect(calls).toBe(4);
   }, 30_000);
 
   it('recovers a committed child model response when the native agent checkpoint lags', async () => {

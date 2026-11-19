@@ -87,7 +87,7 @@ for (const viewport of [{ width: 1536, height: 960, theme: 'dark', useReference:
         await summary.click();
       }
       await expect(modelField).toBeHidden();
-      await dialog.getByText('AI 生成参考图（可选）', { exact: true }).click();
+      await dialog.getByText('AI 生成参考图', { exact: true }).click();
       await expect(promptField).toHaveValue(description);
       await promptField.fill(prompt);
       await modelField.selectOption(model.id);

@@ -1,27 +1,46 @@
 import { planningFixtureResponse, storyboardFixtureResponse } from '../../../../tests/fixtures/planning-response';
 import { spawnSync } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
 import { createServer, type Server } from 'node:http';
 import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { afterEach, expect, it } from 'vitest';
-import { assetSchema, createNativeVideoWorkflow, modelSchema, projectSchema, runInspectionSchema, runSchema, type ProjectDocument } from '@video-quickly/contracts';
+import { assetSchema, createNativeVideoWorkflow, modelSchema, projectSchema, runInspectionSchema, runSchema, type ProjectDocument, type WorkflowNode, type WorkspaceSnapshot } from '@video-quickly/contracts';
 import { importSkillFixture } from '../../../../tests/fixtures/import-skill';
 import { createActivityExecutor, validateMediaActivity } from '../../integrations/src/index.js';
 import { probeMedia, runMedia } from '../../video/src/node.js';
-import { createRuntime, SimulatedProcessExit, type RuntimeOptions } from '../src/index.js';
+import { createRuntime, SimulatedProcessExit, type RunSnapshot, type RuntimeOptions } from '../src/index.js';
+import { fingerprint } from '../src/activities.js';
+import { DocumentStore, openDatabase } from '../src/database.js';
+import { createLogger } from '../src/logging.js';
+import { orderedNodes } from '../src/production-nodes.js';
+import { createSkillLibrary } from '../src/skill-library.js';
+import { STORYBOARD_BATCH_SIZE } from '../src/storyboard-generation.js';
+import { WORKFLOW_OUTPUT_VERSION } from '../src/workflow-outputs.js';
 
 const ffmpeg = process.env.VIDEO_QUICKLY_FFMPEG ?? 'ffmpeg';
 const ffprobe = process.env.VIDEO_QUICKLY_FFPROBE ?? join(dirname(ffmpeg), process.platform === 'win32' ? 'ffprobe.exe' : 'ffprobe');
 const mediaAvailable = spawnSync(ffmpeg, ['-version'], { windowsHide: true }).status === 0 && spawnSync(ffprobe, ['-version'], { windowsHide: true }).status === 0;
 const directories: string[] = [], servers: Server[] = [], runtimes = new Set<ReturnType<typeof createRuntime>>();
+
+function frozenEditingAgent(step: WorkflowNode, modelId: string, skillIds: string[]): WorkflowNode {
+  const { operation: _localOperation, ...config } = step.config;
+  return { ...step, kind: 'agent', modelId, skillIds,
+    description: '按需使用 Skill 和工具补充镜头素材，准备时间轴、运镜与转场。',
+    prompt: [step.prompt, '当前任务是剪辑与运镜准备。读取本次分镜、已生成素材和声音要求，根据创作要求判断哪些镜头需要补充素材或调整剪辑。按需使用相关 Skill 和 MCP 工具，优先使用已经准备好的素材。仅在明确需要修正时，才重新生成指定镜头的视频。通过 execute_video_task 导入素材和应用剪辑，保留锁定镜头。',
+      '先完成会改变镜头时长的素材处理。用 read_project_snapshot 获取最新镜头 ID，通过 edit 裁剪、拆分、重排，设置背景音乐、字幕、关键帧或转场。拆分后使用回执中的新镜头 ID。背景音乐先用 list_audio_assets 查找可用素材。需要在成片显示字幕时，检查制作设置中的字幕开关，可通过 timeline.subtitleMode 开启。转场用 fromShotId、toShotId 和 type 指定，顺序以本次重排后的成片为准。根据 result.appliedEdits 和 result.appliedTransitions 简要总结实际应用的结果。接下来的流程会自动导出。',
+    ].filter(Boolean).join('\n\n'),
+    config: { ...config, requiresModel: true, mcpServerIds: [], boundaryTransitions: true, timelineEdits: true },
+  };
+}
 afterEach(async () => {
   await Promise.all([...runtimes].map(runtime => runtime.close())); runtimes.clear();
   await Promise.all(servers.splice(0).map(server => new Promise<void>(resolve => { server.closeAllConnections(); server.close(() => resolve()); })));
   await Promise.all(directories.splice(0).map(directory => rm(directory, { recursive: true, force: true })));
 });
 
-it.skipIf(!mediaAvailable).each(['MCP', 'legacy planning Skill'] as const)('resumes Agent edits with %s and exports the reported timeline, music, captions and camera motion', async capability => {
+it.skipIf(!mediaAvailable).each(['MCP', 'legacy planning Skill'] as const)('resumes frozen historical Agent edits with %s and exports the reported timeline, music, captions and camera motion', async capability => {
   const directory = await mkdtemp(join(tmpdir(), 'video-quickly-agent-real-media-')); directories.push(directory);
   const sourceImage = join(directory, 'source.png'), videos = new Map<string, Buffer>();
   for (const color of ['blue', 'red']) {
@@ -47,6 +66,7 @@ it.skipIf(!mediaAvailable).each(['MCP', 'legacy planning Skill'] as const)('resu
   const fixtureErrors: unknown[] = [];
   const server = createServer(async (request, response) => {
     try {
+      if (request.url === '/mcp') throw new Error('Historical MCP metadata must not connect');
       if (request.method === 'GET') {
         const video = videos.get(request.url ?? '');
         response.setHeader('content-type', video ? 'video/mp4' : 'image/png');
@@ -163,14 +183,11 @@ it.skipIf(!mediaAvailable).each(['MCP', 'legacy planning Skill'] as const)('resu
       parameters: { requestPath: `generate-${connectionType}`, requestTemplate: { prompt: '{{prompt}}', images: '{{character_images}}', narration: '{{narration}}' }, resultUrlPath: 'url' } } }));
   }
   const image = await mediaModel('image'), video = await mediaModel('video'), workflow = createNativeVideoWorkflow();
-  let skillId: string | undefined, connectionId: string | undefined;
+  let skillId: string | undefined;
   if (capability === 'legacy planning Skill') {
     const skillDirectory = join(directory, 'planning-skill'); await mkdir(skillDirectory);
     await writeFile(join(skillDirectory, 'SKILL.md'), '---\nname: planning-skill\ndescription: 创作时选择的叙事方法\n---\n保持镜头之间的画面连续。');
     skillId = (await importSkillFixture(runtime.dispatch, { path: skillDirectory })).skills[0].id;
-  } else {
-    const connection = await runtime.dispatch('tool.register', { server: { name: '剪辑能力', transport: 'http', url: `${baseUrl}/mcp`, enabled: true } }) as { id: string };
-    connectionId = connection.id;
   }
   const shots = storyboard.map((shot, index) => ({ ...shot, id: `shot-${index + 1}`, animation: { transition: 'cut' } }));
   const project = projectSchema.parse(await runtime.dispatch('project.update', { projectId: created.id, revision: created.revision, patch: {
@@ -180,12 +197,29 @@ it.skipIf(!mediaAvailable).each(['MCP', 'legacy planning Skill'] as const)('resu
     production: { ...workflow.production, agentInheritsPlanningSkills: skillId ? undefined : false, textModelId: controller.id, imageModelId: image.id, videoModelId: video.id, referenceMode: 'generate' },
   } } }));
   expect(project.workflow.production.agentSkillIds).toEqual([]);
-  const run = runSchema.parse(await runtime.dispatch('run.start', { projectId: project.id })); await runtime.waitForIdle();
+  // Recreate an existing frozen run. New built-in runs always use local editing;
+  // the historical handler must still resume the exact Agent node it saved.
+  const { models } = await runtime.dispatch('workspace.snapshot') as WorkspaceSnapshot;
+  const database = openDatabase(directory), runId = randomUUID(), createdAt = new Date().toISOString();
+  try {
+    const store = new DocumentStore(database);
+    const library = createSkillLibrary({ store, directory, changed() {}, logger: createLogger({ dataDirectory: directory, component: 'runtime' }) });
+    const nodes = orderedNodes(project.workflow).map(node => node.id === 'animation'
+      ? frozenEditingAgent(node, controller.id, skillId ? [skillId] : []) : node);
+    const saved: RunSnapshot = { project, models, nodes, ...await library.prepareForNodes(nodes),
+      mcpServers: capability === 'MCP' ? [{ id: 'retired-connection', name: '历史剪辑能力', transport: 'http', url: `${baseUrl}/mcp`, enabled: true, args: [], hasSecret: false }] : [],
+      handlerVersion: 1, outputContractVersion: WORKFLOW_OUTPUT_VERSION,
+      autonomousVideo: false, videoEditingAgentId: 'animation', characters: [], characterAssets: [], unifiedShotProfile: true,
+      useOriginalVideoReferences: true, includeProjectOriginalText: true, storyboardBatchSize: STORYBOARD_BATCH_SIZE };
+    store.put('run-snapshot', runId, saved);
+    store.put('run', runId, runSchema.parse({ id: runId, projectId: project.id, projectRevision: project.revision, workflowVersion: project.workflow.version,
+      snapshotDigest: fingerprint(saved), status: 'queued', stepCount: nodes.length, createdAt, updatedAt: createdAt, events: [], activities: [] }));
+  } finally { database.close(); }
+  const run = runSchema.parse(await runtime.dispatch('run.resume', { runId })); await runtime.waitForIdle();
   expect(interrupted).toBe(true);
   await runtime.close(); runtimes.delete(runtime);
   const reopened = createRuntime(options); runtimes.add(reopened);
   if (skillId) await reopened.dispatch('skill.toggle', { skillId, enabled: false });
-  if (connectionId) await reopened.dispatch('tool.toggle', { serverId: connectionId, enabled: false });
   await reopened.dispatch('run.resume', { runId: run.id }); await reopened.waitForIdle();
   const inspection = runInspectionSchema.parse(await reopened.dispatch('run.inspect', { runId: run.id, nodeId: 'animation' }));
   expect(fixtureErrors).toEqual([]); expect(inspection.run.status, inspection.run.error).toBe('succeeded');

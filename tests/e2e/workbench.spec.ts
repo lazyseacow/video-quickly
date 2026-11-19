@@ -155,7 +155,7 @@ for (const reducedMotion of ['no-preference', 'reduce'] as const) {
 
     const create = page.getByRole('button', { name: '新建短剧', exact: true });
     await create.click();
-    const composer = page.getByRole('region', { name: '让故事成为一部短剧', exact: true });
+    const composer = page.getByRole('region', { name: '新建短剧', exact: true });
     await expect(composer.getByRole('textbox', { name: '短剧名称', exact: true })).toBeFocused();
     await composer.getByRole('textbox', { name: '短剧名称', exact: true }).fill('切换后保留的创作输入');
     await openProjectFromList(page, project.title);
@@ -364,7 +364,7 @@ test('creates a project and connects a model without exposing credentials', asyn
     await openApp(page);
     await openStudio(page);
     await page.getByRole('button', { name: '新建短剧', exact: true }).last().click();
-    const dialog = page.getByRole('region', { name: '让故事成为一部短剧', exact: true });
+    const dialog = page.getByRole('region', { name: '新建短剧', exact: true });
     await dialog.getByRole('textbox', { name: '短剧名称', exact: true }).fill('界面验收短剧');
     await dialog.getByRole('textbox', { name: '剧本正文', exact: true }).fill('林夏在旧城发现一封信，与朋友重逢后决定共同寻找真相。');
     await dialog.getByRole('button', { name: '创建短剧', exact: true }).click();
@@ -428,7 +428,7 @@ test('exports an actual local MP4 from the asynchronous export dialog', async ({
   expect(output.assets.some((asset: { kind: string; size: number }) => asset.kind === 'video' && asset.size > 500)).toBe(true);
 });
 
-test('imports and versions a real Skill, and registers tools in disabled state', async ({ page }) => {
+test('imports and reads a real Skill from the Skill studio', async ({ page }) => {
   await openApp(page);
   await page.getByRole('button', { name: 'Skill 工作室', exact: true }).click();
   await page.getByRole('button', { name: '导入 Skill', exact: true }).first().click();
@@ -438,21 +438,14 @@ test('imports and versions a real Skill, and registers tools in disabled state',
   await expect(dialog).toHaveCount(0);
   const group = page.getByRole('region', { name: 'Skill 分组“make-interfaces-feel-better”', exact: true });
   const disclosure = group.getByRole('heading', { level: 2 }).getByRole('button');
+  await expect(disclosure).toHaveAccessibleName('make-interfaces-feel-better');
   await expect(disclosure).toHaveAttribute('aria-expanded', 'false');
   await disclosure.click();
-  await expect(group.getByRole('heading', { name: 'make-interfaces-feel-better', exact: true })).toBeVisible();
+  await expect(group.getByRole('heading', { name: 'make-interfaces-feel-better', level: 3, exact: true })).toBeVisible();
   await group.getByRole('button', { name: '查看“make-interfaces-feel-better”', exact: true }).click();
   const editor = page.getByRole('dialog', { name: 'make-interfaces-feel-better' });
   await expect(editor.getByLabel('Skill 指令')).toContainText('Details that make interfaces feel better');
   await editor.getByRole('button', { name: '关闭', exact: true }).click();
 
-  await page.getByRole('button', { name: '添加工具连接', exact: true }).click();
-  const toolDialog = page.getByRole('dialog', { name: '添加工具连接' });
-  await toolDialog.getByLabel('连接名称').fill('本地工具验收');
-  await toolDialog.getByLabel('可执行文件路径').fill(process.execPath);
-  await toolDialog.getByRole('button', { name: '保存工具连接', exact: true }).click();
-  await expect(toolDialog).toHaveCount(0);
-  const toolCard = page.locator('.list-card').filter({ hasText: '本地工具验收' });
-  await expect(toolCard.getByText('未启用', { exact: true })).toBeVisible();
-  await expect(toolCard.getByRole('button', { name: '查看“本地工具验收”提供的工具' })).toBeDisabled();
+  await expect(page.getByRole('button', { name: '添加工具连接', exact: true })).toHaveCount(0);
 });

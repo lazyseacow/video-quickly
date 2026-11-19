@@ -261,12 +261,16 @@ it('preserves historical output and holds an incomplete run containing an unveri
   expect(requests).toHaveLength(before); expect(media).not.toHaveBeenCalled(); expect(errors).toEqual([]);
 });
 
-it('discovers task-bound Skill and MCP capabilities, imports their output and completes video production with bound assets', async () => {
+it('discovers task-bound Skills, executes their scripts and imports output into completed video production', async () => {
   const { directory, runtime, project: initial, actions, errors, requests, provider, media, resumeLegacyAgent } = await fixture();
   const skillDirectory = join(directory, 'method'); await mkdir(join(skillDirectory, 'references'), { recursive: true }); await mkdir(join(skillDirectory, 'scripts'));
   await writeFile(join(skillDirectory, 'SKILL.md'), '---\nname: water-story\ndescription: 水循环的叙事方法\n---\n采用 references/story.md 中的起承转合。');
   await writeFile(join(skillDirectory, 'references/story.md'), '每个场景体现水滴状态的变化。');
-  await writeFile(join(skillDirectory, 'scripts/marker.mjs'), 'process.stdout.write(JSON.stringify({method:"water-story-script"}));');
+  const externalImage = 'external.png';
+  await writeFile(join(skillDirectory, 'scripts/marker.mjs'), `import { writeFileSync } from 'node:fs'; import { join } from 'node:path';
+const path = join(process.env.VIDEO_QUICKLY_TOOL_OUTPUT_DIR, 'external.png');
+writeFileSync(path, Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aN1cAAAAASUVORK5CYII=', 'base64'));
+process.stdout.write(JSON.stringify({ method: 'water-story-script', path }));`);
   await writeFile(join(skillDirectory, 'scripts/disabled.mjs'), 'throw new Error("disabled tool must never run");');
   const skill = (await importSkillFixture(runtime.dispatch, { path: skillDirectory })).skills[0];
   await runtime.dispatch('skill.tool.toggle', { skillId: skill.id, toolId: 'scripts/marker.mjs', enabled: true });
@@ -280,48 +284,20 @@ it('discovers task-bound Skill and MCP capabilities, imports their output and co
   await writeFile(join(disabledDirectory, 'SKILL.md'), '---\nname: disabled-method\ndescription: 停用方法\n---\n当前任务不允许使用。');
   const disabledSkill = (await importSkillFixture(runtime.dispatch, { path: disabledDirectory })).skills[0];
   await runtime.dispatch('skill.toggle', { skillId: disabledSkill.id, enabled: false });
-  const mcpPath = join(directory, 'mcp-image.mjs'), externalImage = 'external.png';
-  await writeFile(mcpPath, `import { createInterface } from 'node:readline';
-import { writeFileSync } from 'node:fs';
-import { join } from 'node:path';
-const send = result => process.stdout.write(JSON.stringify(result) + '\\n');
-createInterface({ input: process.stdin }).on('line', line => {
-  const message = JSON.parse(line); if (message.id === undefined) return;
-  let result;
-  if (message.method === 'initialize') result = { protocolVersion: '2025-06-18', capabilities: { tools: {} }, serverInfo: { name: 'image-fixture', version: '1' } };
-  else if (message.method === 'tools/list') result = { tools: [{ name: 'make_image', description: 'Generate an external reference image', inputSchema: { type: 'object', properties: {}, additionalProperties: false } }] };
-  else if (message.method === 'tools/call') {
-    const path = join(process.env.VIDEO_QUICKLY_TOOL_OUTPUT_DIR, process.argv[2]);
-    writeFileSync(path, Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aN1cAAAAASUVORK5CYII=', 'base64'));
-    result = { content: [{ type: 'text', text: JSON.stringify({ path }) }] };
-  } else result = {};
-  send({ jsonrpc: '2.0', id: message.id, result });
-});`);
-  const mcp = await runtime.dispatch('tool.register', { server: { name: '外部参考图', transport: 'stdio', command: process.execPath, args: [mcpPath, externalImage], enabled: true } }) as { id: string };
-  const secondMcp = await runtime.dispatch('tool.register', { server: { name: '辅助参考图', transport: 'stdio', command: process.execPath, args: [mcpPath, externalImage], enabled: true } }) as { id: string };
-  const disabled = await runtime.dispatch('tool.register', { server: { name: '停用能力', transport: 'stdio', command: process.execPath, args: ['not-a-real-server'], enabled: false } }) as { id: string };
-  const unboundMcp = await runtime.dispatch('tool.register', { server: { name: '没有为任务选择的离线服务', transport: 'stdio', command: process.execPath, args: ['not-a-real-server'], enabled: true } }) as { id: string };
   const project = projectSchema.parse(await runtime.dispatch('project.update', { projectId: initial.id, revision: initial.revision, patch: { workflow: {
-    ...initial.workflow, production: { ...initial.workflow.production, agentSkillIds: [skill.id, secondSkill.id], agentMcpServerIds: [mcp.id, secondMcp.id] },
+    ...initial.workflow, production: { ...initial.workflow.production, agentSkillIds: [skill.id, secondSkill.id], agentMcpServerIds: ['historical-connection'] },
   } } }));
   let scriptTool = '';
   actions.push(() => ({ name: 'list_capabilities', input: {} }), payload => {
-    const result = toolResult(payload) as { skills: Array<{ id: string; tools: Array<{ id: string; name: string }> }>; mcpServers: Array<{ id: string }> };
+    const result = toolResult(payload) as { skills: Array<{ id: string; tools: Array<{ id: string; name: string }> }> };
     expect(result.skills.map(item => item.id).sort()).toEqual([skill.id, secondSkill.id].sort());
-    expect(result.mcpServers.map(item => item.id).sort()).toEqual([mcp.id, secondMcp.id].sort());
+    expect(result).not.toHaveProperty('mcpServers');
+    expect(payload.tools.map(tool => tool.function.name)).not.toEqual(expect.arrayContaining(['discover_mcp_tools', 'call_mcp_tool']));
     expect(result.skills.map(item => item.id)).not.toContain(unboundSkill.id);
     expect(result.skills.map(item => item.id)).not.toContain(disabledSkill.id);
-    expect(result.mcpServers.map(item => item.id)).not.toContain(disabled.id);
-    expect(result.mcpServers.map(item => item.id)).not.toContain(unboundMcp.id);
     const scripts = result.skills.find(item => item.id === skill.id)!.tools;
     expect(scripts.map(item => item.id)).toEqual(['scripts/marker.mjs']); scriptTool = scripts[0].name;
     return { name: 'read_skill', input: { skillId: unboundSkill.id } };
-  }, payload => {
-    expect(payload.messages.findLast(message => message.role === 'tool')?.content).toContain('允许');
-    return { name: 'discover_mcp_tools', input: { serverId: unboundMcp.id } };
-  }, payload => {
-    expect(payload.messages.findLast(message => message.role === 'tool')?.content).toContain('允许');
-    return { name: 'call_mcp_tool', input: { serverId: unboundMcp.id, toolName: 'make_image', input: {} } };
   }, payload => {
     expect(payload.messages.findLast(message => message.role === 'tool')?.content).toContain('允许');
     return business('brief', 'unbound-skill', { skillIds: [unboundSkill.id] });
@@ -333,16 +309,8 @@ createInterface({ input: process.stdin }).on('line', line => {
     return { name: scriptTool, input: { input: '{}' } };
   }, payload => {
     expect(JSON.stringify(toolResult(payload))).toContain('water-story-script');
-    return { name: 'discover_mcp_tools', input: { serverId: mcp.id } };
-  }, payload => {
-    expect(JSON.stringify(toolResult(payload))).toContain('make_image');
-    return { name: 'discover_mcp_tools', input: { serverId: secondMcp.id } };
-  }, payload => {
-    expect(JSON.stringify(toolResult(payload))).toContain('make_image');
-    return { name: 'call_mcp_tool', input: { serverId: mcp.id, toolName: 'make_image', input: {} } };
-  }, payload => {
     expect(JSON.stringify(toolResult(payload))).toContain('external.png');
-    return { name: 'call_mcp_tool', input: { serverId: secondMcp.id, toolName: 'make_image', input: {} } };
+    return { name: 'read_project_snapshot', input: {} };
   });
   const getShotId = productionActions(actions, [() => business('import', 'import-1', { path: externalImage, shotId: getShotId() })], [skill.id, secondSkill.id]);
   const run = await resumeLegacyAgent(); await runtime.waitForIdle();
@@ -364,7 +332,7 @@ createInterface({ input: process.stdin }).on('line', line => {
 it('reuses a logical image request while continuing from the latest project after every business tool', async () => {
   const { runtime, project, actions, errors, requests, media, resumeLegacyAgent } = await fixture();
   actions.push(() => ({ name: 'list_capabilities', input: {} }), payload => {
-    expect(toolResult(payload)).toMatchObject({ skills: [], mcpServers: [] }); return { name: 'read_project_snapshot', input: {} };
+    expect(toolResult(payload)).toMatchObject({ skills: [] }); expect(toolResult(payload)).not.toHaveProperty('mcpServers'); return { name: 'read_project_snapshot', input: {} };
   });
   productionActions(actions);
   const run = await resumeLegacyAgent(); await runtime.waitForIdle();
@@ -377,7 +345,7 @@ it('reuses a logical image request while continuing from the latest project afte
   expect(media).toHaveBeenCalledTimes(count);
 });
 
-it.each(['none', 'skills', 'mcp'] as const)('automatically discovers the unbound capability class when %s is explicitly selected', async boundClass => {
+it.each(['none', 'skills', 'historical MCP'] as const)('discovers Skills without exposing MCP when %s is explicitly selected', async boundClass => {
   const { directory, runtime, project: initial, actions, errors, resumeLegacyAgent } = await fixture();
   const skills: SkillPackage[] = [];
   for (const name of ['first-method', 'second-method']) {
@@ -385,20 +353,16 @@ it.each(['none', 'skills', 'mcp'] as const)('automatically discovers the unbound
     await writeFile(join(path, 'SKILL.md'), `---\nname: ${name}\ndescription: 测试制作方法\n---\n保持水彩叙事连续。`);
     skills.push((await importSkillFixture(runtime.dispatch, { path })).skills[0]);
   }
-  const connections: Array<{ id: string }> = [];
-  for (const name of ['first-service', 'second-service']) connections.push(await runtime.dispatch('tool.register', {
-    server: { name, transport: 'stdio', command: process.execPath, args: ['unused-during-capability-list'], enabled: true },
-  }) as { id: string });
   await runtime.dispatch('project.update', { projectId: initial.id, revision: initial.revision, patch: { workflow: {
     ...initial.workflow, production: { ...initial.workflow.production,
       agentSkillIds: boundClass === 'skills' ? [skills[0].id] : [],
-      agentMcpServerIds: boundClass === 'mcp' ? [connections[0].id] : [],
+      agentMcpServerIds: boundClass === 'historical MCP' ? ['retired-service'] : [],
     },
   } } });
   actions.push(() => ({ name: 'list_capabilities', input: {} }), payload => {
-    const result = toolResult(payload) as { skills: Array<{ id: string }>; mcpServers: Array<{ id: string }> };
+    const result = toolResult(payload) as { skills: Array<{ id: string }> };
     expect(result.skills.map(item => item.id).sort()).toEqual((boundClass === 'skills' ? [skills[0].id] : skills.map(skill => skill.id)).sort());
-    expect(result.mcpServers.map(item => item.id).sort()).toEqual((boundClass === 'mcp' ? [connections[0].id] : connections.map(server => server.id)).sort());
+    expect(result).not.toHaveProperty('mcpServers');
     return { name: 'read_project_snapshot', input: {} };
   });
   productionActions(actions, [], [skills[0].id]);

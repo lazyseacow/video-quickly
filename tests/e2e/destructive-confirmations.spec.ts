@@ -1,6 +1,6 @@
 import { writeFile } from 'node:fs/promises';
 import { expect, type Locator } from '@playwright/test';
-import type { AssetRecord, CharacterProfile, MCPServer, ModelProfile, ProjectDocument, SeriesTemplate } from '@video-quickly/contracts';
+import type { AssetRecord, CharacterProfile, ModelProfile, ProjectDocument, SeriesTemplate } from '@video-quickly/contracts';
 import { test } from './isolated-workspace';
 import { fixture as productionFixture, open as openProduction, pick, rpc } from './native-video-fixture';
 import { productionStep, saveAndStartProduction, saveProduction } from './production-settings';
@@ -18,19 +18,17 @@ for (const viewport of [{ width: 1536, height: 960, theme: 'dark' }, { width: 60
   const model = await rpc<ModelProfile>(request, 'model.save', { model: { name: '确认移除的模型', provider: 'openai-compatible', connectionType: 'text', capabilities: ['text'], model: 'fixture', baseUrl: 'http://127.0.0.1:1/v1' } });
   const character = await rpc<CharacterProfile>(request, 'character.save', { character: { name: '确认归档的角色', description: '', referenceAssetIds: [] } });
   const template = await rpc<SeriesTemplate>(request, 'seriesTemplate.save', { template: { name: '确认归档的系列', description: '', settings: { style: '', captionStyle: null, scenePreset: null } } });
-  const server = await rpc<MCPServer>(request, 'tool.register', { server: { name: '确认移除的工具', transport: 'http', url: 'http://127.0.0.1:1/mcp', args: [], enabled: false } });
   const path = info.outputPath('confirmation-audio.wav'); await writeWave(path);
   const asset = await rpc<AssetRecord>(request, 'asset.import', { path, kind: 'audio' });
   const writes: string[] = [], errors: string[] = [];
   page.on('pageerror', error => errors.push(error.message));
-  page.on('request', request => { if (request.url().endsWith('/__desktop_rpc')) { const method = request.postDataJSON()?.method; if (['project.archive', 'model.delete', 'asset.delete', 'character.archive', 'seriesTemplate.archive', 'tool.delete'].includes(method)) writes.push(method); } });
+  page.on('request', request => { if (request.url().endsWith('/__desktop_rpc')) { const method = request.postDataJSON()?.method; if (['project.archive', 'model.delete', 'asset.delete', 'character.archive', 'seriesTemplate.archive'].includes(method)) writes.push(method); } });
   await page.setViewportSize(viewport); await page.addInitScript(theme => localStorage.setItem('vq-theme', theme), viewport.theme); await page.goto('/');
   const cases: Array<{ pageName: string; view?: '媒体' | '角色'; trigger: string; title: string; confirm: string; method: string; subject: string; card: Locator }> = [
     { pageName: '模型连接', trigger: `移除“${model.name}”`, title: '移除模型连接？', confirm: '确认移除', method: 'model.delete', subject: model.name, card: page.locator('.list-card').filter({ hasText: model.name }) },
     { pageName: '素材库', view: '媒体', trigger: `移除素材“${asset.name}”`, title: '移除素材记录？', confirm: '确认移除', method: 'asset.delete', subject: asset.name, card: page.locator('.asset-card').filter({ hasText: asset.name }) },
     { pageName: '素材库', view: '角色', trigger: `归档角色：${character.name}`, title: '归档角色？', confirm: '确认归档', method: 'character.archive', subject: character.name, card: page.locator('.character-card').filter({ hasText: character.name }) },
     { pageName: '系列模板', trigger: `归档系列模板：${template.name}`, title: '归档系列模板？', confirm: '确认归档', method: 'seriesTemplate.archive', subject: template.name, card: page.locator('.series-template-card').filter({ hasText: template.name }) },
-    { pageName: 'Skill 工作室', trigger: `移除工具连接“${server.name}”`, title: '移除工具连接？', confirm: '确认移除', method: 'tool.delete', subject: server.name, card: page.locator('.tool-connections .list-card').filter({ hasText: server.name }) },
   ];
   for (const item of cases) {
     if (item.view) await openAssetLibrary(page, item.view);
@@ -52,19 +50,6 @@ for (const viewport of [{ width: 1536, height: 960, theme: 'dark' }, { width: 60
   }
   expect(errors).toEqual([]); await expect(page.locator('vite-error-overlay')).toHaveCount(0); await expect(page).toHaveTitle(/Video Quickly/);
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
-});
-
-test('confirms tool activation and leaves a canceled connection disabled', async ({ page, request }) => {
-  const server = await rpc<MCPServer>(request, 'tool.register', { server: { name: '需主动启用的工具', transport: 'stdio', command: 'confirmation-fixture', args: [], enabled: false } });
-  const writes: string[] = [];
-  page.on('request', request => { if (request.url().endsWith('/__desktop_rpc') && request.postDataJSON()?.method === 'tool.toggle') writes.push(request.postData()!); });
-  await page.goto('/'); await page.getByRole('button', { name: 'Skill 工作室', exact: true }).click();
-  const toggle = page.getByRole('button', { name: `启用工具连接“${server.name}”`, exact: true });
-  await toggle.click(); const dialog = page.getByRole('alertdialog', { name: '启用工具连接？', exact: true });
-  await expect(dialog).toContainText('confirmation-fixture'); await dialog.getByRole('button', { name: '取消', exact: true }).click();
-  expect(writes).toHaveLength(0); await expect(toggle).toHaveAttribute('aria-pressed', 'false');
-  await toggle.click(); await confirmAction(page, '确认启用');
-  await expect(page.getByRole('button', { name: `停用工具连接“${server.name}”`, exact: true })).toHaveAttribute('aria-pressed', 'true'); expect(writes).toHaveLength(1);
 });
 
 test('keeps pending production settings on cancel and discards them only after confirmation', async ({ page, request }, info) => {

@@ -10,7 +10,6 @@ import { fingerprint } from './activities.js';
 import type { createCharacterLibrary } from './characters.js';
 import type { DocumentStore } from './database.js';
 import { validateExecutionModel } from './execution-model.js';
-import type { McpServer } from './mcp.js';
 import { resolveProductionNodes } from './production-nodes.js';
 import { validateResearchProject } from './research.js';
 import type { RunSnapshot } from './run-snapshot.js';
@@ -52,7 +51,6 @@ interface RunStarterOptions {
   projectOccupied(projectId: string): boolean;
   availableModels(): ModelProfile[];
   prepareRunSelection(project: ProjectDocument, selection: RunSelection): Promise<{ plan: RunPlan; saved: RunSnapshot }>;
-  videoEditingAgent(project: ProjectDocument, models: ModelProfile[], mcpServers: McpServer[]): WorkflowNode | undefined;
   regenerationNode(project: ProjectDocument, input: z.infer<typeof regenerationInput>): WorkflowNode;
   canExecuteActivities(): boolean;
   profilesFor: (project: Parameters<ReturnType<typeof createCharacterLibrary>['profilesFor']>[0] & Pick<ProjectDocument, 'drama'>) => { characters: CharacterProfile[]; assets: AssetRecord[]; voices: VoiceProfile[]; voiceAssets: AssetRecord[] };
@@ -69,7 +67,7 @@ function hasExplicitTask(input: RunStartInput) {
 
 export function createRunStarter({
   database, store, project, run, requireRevision, projectOccupied, availableModels, prepareRunSelection,
-  videoEditingAgent, regenerationNode, canExecuteActivities,
+  regenerationNode, canExecuteActivities,
   profilesFor, prepareSkills, regenerateShot, resumeExportBatch, onRunCreated, hydrateRun,
 }: RunStarterOptions) {
   function inheritRunScope(input: RunStartInput, parentRunId: string): InheritedScope {
@@ -171,20 +169,17 @@ export function createRunStarter({
     }
 
     const models = prepared?.saved.models ?? availableModels();
-    const mcpServers = prepared?.saved.mcpServers ?? store.list<McpServer>('mcp-server');
     const isFullProduction = !input.nodeId && !prepared && !input.regeneration && !input.research && !exportStep;
     const localExport: WorkflowNode | undefined = isStandaloneExport
       ? { id: 'export', kind: 'export', label: '导出成片', description: '', prompt: '', config: input.destination ? { destination: input.destination } : {}, skillIds: [], position: { x: 0, y: 0 }, requiresReview: false }
       : undefined;
     const exportNode = exportStep ?? localExport;
     const frozenNodes = exportNode ? [exportNode] : prepared?.saved.nodes;
-    const resolved = frozenNodes ? { nodes: frozenNodes, agent: undefined } : resolveProductionNodes(runProject, {
+    const resolved = frozenNodes ? { nodes: frozenNodes } : resolveProductionNodes(runProject, {
       nodeId: input.nodeId,
       exportDestination: input.destination,
-      editingAgent: isFullProduction ? () => videoEditingAgent(runProject, models, mcpServers) : undefined,
       automaticCasting: isFullProduction && canExecuteActivities(),
     });
-    const { agent } = resolved;
     let { nodes } = resolved;
     if (input.regeneration) nodes = [regenerationNode(runProject, input.regeneration)];
     if (input.research) nodes = [researchStep(runProject, input.research)];
@@ -213,10 +208,8 @@ export function createRunStarter({
       } : {}),
       models,
       ...await prepareSkills(workflowNodesWithSubflows({ ...runProject.workflow, nodes })),
-      mcpServers,
       nodes,
       autonomousVideo: false,
-      ...(agent ? { videoEditingAgentId: agent.id } : {}),
       handlerVersion: 1,
       characters: bundle.characters,
       characterAssets: bundle.assets,

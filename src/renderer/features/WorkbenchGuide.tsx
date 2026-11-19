@@ -11,6 +11,6 @@ export default function WorkbenchGuide({ project, onOpenStage }: {
   const stages = resolveWorkbenchStages(project.workflow);
   const groups = stages ?? nodes.map(node => ({ id: node.id, label: node.label, description: stepGuidance(node).result, nodeIds: [node.id], nodes: [node] }));
   return <section className="workbench-guide" aria-label="制作指引">
-    <ol className={`workbench-guide__steps ${stages ? 'workbench-guide__steps--stages' : ''}`} aria-label={stages ? '制作阶段进度' : '制作步骤进度'}>{groups.map((stage, index) => <WorkbenchStepCard key={stage.id} index={index + 1} label={stage.label} description={stage.description} actionLabel={`打开${stages ? '阶段' : '步骤'}：${stage.label}`} status="pending" onClick={() => onOpenStage(stage)}>尚未制作</WorkbenchStepCard>)}</ol>
+    <ol className={`workbench-guide__steps ${stages ? 'workbench-guide__steps--stages' : ''}`} aria-label={stages ? '制作阶段进度' : '制作步骤进度'}>{groups.map((stage, index) => <WorkbenchStepCard key={stage.id} index={index + 1} label={stage.label} description={project.workflow.id === 'native-video' ? undefined : stages ? stage.description : stage.nodes[0]?.description} actionLabel={`打开${stages ? '阶段' : '步骤'}：${stage.label}`} status="pending" onClick={() => onOpenStage(stage)}>尚未制作</WorkbenchStepCard>)}</ol>
   </section>;
 }
