@@ -1,4 +1,4 @@
-import { openProjectFromList, openStudio } from './workspace-navigation';
+import { openProjectFromList, openWorks } from './workspace-navigation';
 import { writeFile } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
 import { expect, test, type APIRequestContext, type Page } from '@playwright/test';
@@ -17,7 +17,7 @@ async function openProject(page: Page, project: ProjectDocument) {
   await page.emulateMedia({ reducedMotion: 'reduce' });
   const origin = new Date('2026-01-01T00:00:00Z'); await page.clock.install({ time: origin });
   await page.goto('/'); await expect(page.getByRole('navigation', { name: '主导航', exact: true })).toBeVisible();
-  await openStudio(page); await page.getByLabel('搜索作品', { exact: true }).fill(project.title);
+  await openWorks(page); await page.getByLabel('搜索作品', { exact: true }).fill(project.title);
   await openProjectFromList(page, project.title);
   await expect(page.getByLabel('镜头标题', { exact: true })).toHaveValue(project.shots[0].title);
   await expect(page.locator('.project-heading-copy')).toHaveAttribute('data-revision', String(project.revision));

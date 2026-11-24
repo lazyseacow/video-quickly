@@ -1,6 +1,7 @@
 import { productionStep, saveProduction } from './production-settings';
 import { closeProjectSettings, settingField } from './settings';
-import { openProjectFromList } from './workspace-navigation';
+import { chooseStudioEntry, openProjectFromList } from './workspace-navigation';
+import { closeCreationSettings, creationInput, draftDrama, openCreationSettings, sendCreationSource, setCreationTitle } from './drama-creation';
 import { randomUUID } from 'node:crypto';
 import { expect, type APIRequestContext, type Locator, type Page } from '@playwright/test';
 import { createSceneTemplate, DEFAULT_CAPTION_STYLE, DEFAULT_VIDEO_PROFILE, dramaStylePresets, type DramaWork, type ProjectDocument, type SeriesTemplate } from '@video-quickly/contracts';
@@ -21,9 +22,11 @@ function observe(page: Page) {
 function composer(page: Page) { return page.getByRole('region', { name: '新建短剧', exact: true }); }
 async function openCreation(page: Page, title: string) {
   await page.goto('/'); await expect(page).toHaveTitle(/Video Quickly/);
-  await page.getByRole('complementary', { name: '工作空间导航', exact: true }).getByRole('button', { name: '新建短剧', exact: true }).click();
-  const form = composer(page); await expect(form.getByRole('textbox', { name: '短剧名称', exact: true })).toBeFocused(); await form.getByRole('textbox', { name: '短剧名称', exact: true }).fill(title);
-  await form.getByRole('textbox', { name: '剧本正文', exact: true }).fill(screenplay); return form;
+  await chooseStudioEntry(page, '对话');
+  const form = composer(page);
+  await expect(creationInput(form)).toBeFocused();
+  await draftDrama(form, '上传剧本', screenplay, title);
+  return form;
 }
 async function submit(page: Page, form: Locator) {
   const response = page.waitForResponse(response => response.url().endsWith('/__desktop_rpc') && response.request().postDataJSON()?.method === 'dramaStudio.create');
@@ -36,10 +39,12 @@ async function chooseTemplate(page: Page, template: SeriesTemplate) {
   const more = page.getByRole('button', { name: '加载更多系列模板', exact: true });
   await expect.poll(async () => { if (await card.count()) return true; if (await more.count() && await more.isEnabled()) await more.click(); return false; }).toBe(true);
   await card.getByRole('button', { name: '用此模板新建', exact: true }).press('Enter');
-  await expect(composer(page).getByRole('textbox', { name: '短剧名称', exact: true })).toBeFocused();
-  await expect(composer(page).getByText(`系列模板：${template.name}`, { exact: true })).toBeVisible();
-  await composer(page).getByRole('tab', { name: '上传剧本', exact: true }).click();
-  await composer(page).getByRole('textbox', { name: '剧本正文', exact: true }).fill(screenplay);
+  const form = composer(page);
+  await expect(creationInput(form)).toBeFocused();
+  await expect(creationInput(form)).toHaveValue(template.description);
+  const settings = await openCreationSettings(page, form);
+  await expect(settings.getByRole('button', { name: `系列模板 · ${template.name}`, exact: true })).toBeVisible();
+  await closeCreationSettings(settings);
 }
 
 for (const viewport of [{ width: 1536, height: 960, theme: 'dark' }, { width: 600, height: 900, theme: 'light' }] as const) {
@@ -51,7 +56,10 @@ for (const viewport of [{ width: 1536, height: 960, theme: 'dark' }, { width: 60
       const observed = observe(page), title = `短剧创建 ${randomUUID().slice(0, 8)}`, form = await openCreation(page, title);
       await expect(page.locator('html')).toHaveAttribute('data-theme', viewport.theme);
       for (const label of ['画面比例', '分辨率', '素材适配']) await expect(form.getByLabel(label, { exact: true })).toHaveCount(0);
-      await expect(form.getByLabel('画风', { exact: true })).toBeVisible(); await expect(form.getByRole('button', { name: '创作 Skill', exact: true })).toBeVisible();
+      const settings = await openCreationSettings(page, form);
+      await expect(settings.getByLabel('画风', { exact: true })).toBeVisible();
+      await expect(settings.getByRole('button', { name: '创作 Skill', exact: true })).toBeVisible();
+      await closeCreationSettings(settings);
       const create = form.getByRole('button', { name: '创建短剧', exact: true }); await create.scrollIntoViewIfNeeded(); await expect(create).toBeInViewport({ ratio: 1 });
       await page.screenshot({ path: info.outputPath(`creation-${viewport.theme}-${viewport.width}.png`) });
       const { project, work, params } = await submit(page, form);
@@ -72,7 +80,9 @@ test('applies an existing series template to the first episode without changing 
   const original = await rpc<ProjectDocument>(request, 'project.update', { projectId: source.id, revision: source.revision, patch: { style: '保留系列的明亮口吻', captionStyle: { ...DEFAULT_CAPTION_STYLE, textColor: '#225588' }, scenePreset: { kind: 'comparison', palette: 'amber', motion: 'none' } } });
   const template = await rpc<SeriesTemplate>(request, 'seriesTemplate.save', { template: { name: '已有分集的系列设置', description: '复用已保存的系列样式', settings: { style: original.style, captionStyle: original.captionStyle, scenePreset: original.scenePreset } } });
   const observed = observe(page); await page.goto('/'); await chooseTemplate(page, template);
-  await composer(page).getByRole('textbox', { name: '短剧名称', exact: true }).fill('系列短剧新作'); const { project, params } = await submit(page, composer(page));
+  const form = composer(page);
+  await draftDrama(form, '上传剧本', screenplay, '系列短剧新作');
+  const { project, params } = await submit(page, form);
   expect(params).toMatchObject({ seriesTemplateId: template.id, seriesTemplateRevision: template.revision }); expect(project).toMatchObject(template.settings); expect(project.profile).toEqual(newProjectProfile);
   expect(await saved(request, project.id)).toEqual(project); expect(await saved(request, original.id)).toEqual(original); expect(await rpc(request, 'seriesTemplate.get', { templateId: template.id })).toEqual(template); expect(observed.writes).toEqual(['dramaStudio.create']); expect(observed.errors).toEqual([]);
 });
@@ -81,8 +91,9 @@ test('offers all built-in styles and transfers a series template with its select
   const templates = await rpc<{ items: SeriesTemplate[] }>(request, 'seriesTemplate.list', { limit: 100 }); const template = templates.items.find(item => item.name === 'AI 短剧 · 竖屏真人')!; expect(template).toBeDefined();
   const title = '竖屏真人短剧验收';
   const observed = observe(page); const form = await openCreation(page, title);
-  for (const style of dramaStylePresets) await expect(form.getByLabel('画风', { exact: true }).locator(`option[value="${style.id}"]`)).toHaveText(style.name);
-  const choose = form.getByRole('button', { name: '选择系列模板', exact: true });
+  const settings = await openCreationSettings(page, form);
+  for (const style of dramaStylePresets) await expect(settings.getByLabel('画风', { exact: true }).locator(`option[value="${style.id}"]`)).toHaveText(style.name);
+  const choose = settings.getByRole('button', { name: '选择系列模板', exact: true });
   await choose.press('Enter');
   const picker = page.getByRole('dialog', { name: '选择系列模板', exact: true });
   const templateField = picker.getByRole('combobox', { name: '系列模板', exact: true });
@@ -94,10 +105,11 @@ test('offers all built-in styles and transfers a series template with its select
   await templateField.selectOption(template.id);
   await picker.getByRole('button', { name: '应用选择', exact: true }).click();
   await expect(picker).toHaveCount(0);
-  await expect(form.getByRole('button', { name: `系列模板：${template.name}`, exact: true })).toBeFocused();
+  await expect(settings.getByRole('button', { name: `系列模板 · ${template.name}`, exact: true })).toBeFocused();
+  await expect(settings.getByRole('button', { name: '创作 Skill', exact: true })).toContainText(`已选 ${template.creationDefaults!.skillIds.length} 个`);
+  await closeCreationSettings(settings);
   await expect(form.getByRole('textbox', { name: '短剧名称', exact: true })).toHaveValue(title);
-  await expect(form.getByRole('textbox', { name: '剧本正文', exact: true })).toHaveValue(screenplay);
-  await expect(form.getByRole('button', { name: '创作 Skill', exact: true })).toContainText(`已选 ${template.creationDefaults!.skillIds.length} 个`);
+  await expect(form.getByText(screenplay, { exact: true }).first()).toBeVisible();
   await page.screenshot({ path: info.outputPath('builtin-drama-template-composer.png') });
   const { project, params } = await submit(page, form);
   expect(params).toMatchObject({ seriesTemplateId: template.id, seriesTemplateRevision: template.revision });
@@ -115,9 +127,17 @@ test('uses a template from a later library page through the same creation compos
   for (let index = 0; index < 20; index++) await rpc(request, 'seriesTemplate.save', { template: { name: `新模板 ${index + 1}`, description: '', settings } });
   const observed = observe(page); await page.setViewportSize({ width: 600, height: 900 }); await page.emulateMedia({ reducedMotion: 'reduce' }); await page.goto('/'); await page.getByRole('button', { name: '系列模板', exact: true }).click();
   const card = page.locator('.series-template-card').filter({ has: page.getByRole('heading', { name: template.name, exact: true }) }); await expect(card).toHaveCount(0); await expect(page.getByRole('button', { name: '加载更多系列模板', exact: true })).toBeEnabled();
-  await chooseTemplate(page, template); const form = composer(page); await expect(form.getByRole('textbox', { name: '短剧名称', exact: true })).toHaveValue(template.name);
-  await form.getByRole('textbox', { name: '短剧名称', exact: true }).fill('手绘故事新作'); await page.getByRole('button', { name: '模型连接', exact: true }).click(); await page.getByRole('button', { name: '新建短剧', exact: true }).click();
-  await expect(form.getByRole('textbox', { name: '短剧名称', exact: true })).toHaveValue('手绘故事新作'); await expect(form.getByText(`系列模板：${template.name}`, { exact: true })).toBeVisible(); expect(observed.writes).toEqual([]);
+  await chooseTemplate(page, template);
+  const form = composer(page);
+  await sendCreationSource(form, template.description);
+  const title = form.getByRole('textbox', { name: '短剧名称', exact: true });
+  await expect(title).toHaveValue(template.name);
+  await title.fill('手绘故事新作');
+  await page.getByRole('button', { name: '模型连接', exact: true }).click();
+  await chooseStudioEntry(page, '对话');
+  await expect(title).toHaveValue('手绘故事新作');
+  await setCreationTitle(form, '手绘故事新作');
+  expect(observed.writes).toEqual([]);
   await form.screenshot({ path: info.outputPath('create-from-series-composer.png') }); const { project, params } = await submit(page, form); expect(params).toMatchObject({ seriesTemplateId: template.id, seriesTemplateRevision: template.revision }); expect(await saved(request, project.id)).toMatchObject({ ...template.settings, shots: [] }); expect(observed.writes).toEqual(['dramaStudio.create']); expect(observed.errors).toEqual([]);
 });
 

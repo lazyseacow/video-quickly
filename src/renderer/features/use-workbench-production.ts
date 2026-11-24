@@ -32,7 +32,7 @@ export function useWorkbenchProduction({
   projectId, workspace, session, stageConfiguration, configurationError, isConfigurationSaving, save,
   pausePreview, readinessDialog, onReadinessBlocked, action, notify,
 }: WorkbenchProductionOptions) {
-  const activeProductionRun = workspace.runs.find(run => run.projectId === projectId && isRunActive(run.status));
+  const activeProductionRun = workspace.runs.find(run => run.projectId === projectId && run.purpose !== 'novel-adaptation' && isRunActive(run.status));
   const isProductionActive = Boolean(activeProductionRun);
   const [pendingProductionAction, setPendingProductionAction] = useState<'checking' | 'starting' | 'stopping'>();
   const productionInFlight = useRef(false);

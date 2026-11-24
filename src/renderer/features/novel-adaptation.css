@@ -1,0 +1,1023 @@
+.novel-adaptation:not([hidden]) {
+  --novel-adaptation-inset: clamp(var(--space-3), 3cqi, var(--space-8));
+  --novel-adaptation-width: 62.5rem;
+  display: grid;
+  flex: 1 1 0;
+  grid-template-columns: minmax(0, 1fr) minmax(0, max-content);
+  grid-template-rows: auto auto minmax(0, 1fr) auto;
+  grid-template-areas:
+    'header header'
+    'artifacts artifacts'
+    'body rail'
+    'footer rail';
+  container: novel-adaptation / inline-size;
+  min-inline-size: 0;
+  block-size: 100%;
+  min-block-size: 0;
+  background: var(--background);
+}
+
+.novel-adaptation__workspace-header {
+  grid-area: header;
+  padding: var(--space-2) var(--novel-adaptation-inset);
+  border-block-end: 1px solid var(--studio-edge);
+  background: var(--studio-panel);
+}
+
+.novel-adaptation__checkpoints {
+  display: grid;
+  align-items: center;
+  gap: var(--space-2) var(--space-3);
+  max-inline-size: var(--novel-adaptation-width);
+  margin-inline: auto;
+}
+
+.novel-adaptation__overview {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+
+.novel-adaptation__workspace-header h2 {
+  margin: 0;
+  color: var(--text);
+  font-size: var(--text-size-subtitle);
+  font-weight: var(--font-weight-semibold);
+  line-height: var(--line-height-title);
+}
+
+.novel-adaptation__completion {
+  display: grid;
+  gap: var(--space-1);
+  color: var(--text-secondary);
+  font-size: var(--text-size-caption);
+  font-variant-numeric: tabular-nums;
+}
+
+.novel-adaptation__progress {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: var(--space-tight);
+}
+
+.novel-adaptation__progress > span {
+  block-size: var(--space-tight);
+  border-radius: var(--radius-pill);
+  background: var(--studio-active);
+}
+
+.novel-adaptation__progress > span::before {
+  display: block;
+  block-size: 100%;
+  border-radius: inherit;
+  background: var(--studio-attention);
+  content: '';
+  transform-origin: left;
+  scale: 0 1;
+}
+
+.novel-adaptation__progress > span[data-complete]::before {
+  scale: 1;
+}
+
+.novel-adaptation__stage-list {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: var(--space-1);
+  margin: 0;
+  padding: var(--space-1);
+  border: 1px solid var(--studio-edge);
+  border-radius: var(--radius-small);
+  background: var(--background);
+  list-style: none;
+}
+
+.novel-adaptation__stage.button {
+  display: flex;
+  align-items: center;
+  justify-content: start;
+  gap: var(--space-2);
+  inline-size: 100%;
+  min-block-size: var(--control-hit-size);
+  padding: var(--space-1) var(--space-2);
+  border-radius: var(--radius-control-compact);
+  text-align: start;
+  white-space: normal;
+  transition: background-color var(--motion-fast) var(--motion-ease), border-color var(--motion-fast) var(--motion-ease), color var(--motion-fast) var(--motion-ease);
+}
+
+.novel-adaptation__stage.button:disabled {
+  opacity: 1;
+}
+
+.novel-adaptation__stage-icon {
+  display: grid;
+  flex: none;
+  place-items: center;
+  inline-size: var(--space-6);
+  block-size: var(--space-6);
+  border-radius: var(--radius-compact);
+}
+
+.novel-adaptation__stage[aria-current='step'] .novel-adaptation__stage-icon,
+.novel-adaptation__stage[data-running] .novel-adaptation__stage-icon {
+  background: color-mix(in oklab, var(--studio-attention) 17%, var(--studio-attention-surface));
+  color: var(--studio-attention);
+}
+
+.novel-adaptation__stage-copy {
+  display: grid;
+  gap: var(--space-tight);
+  min-inline-size: 0;
+}
+
+.novel-adaptation__stage strong {
+  color: var(--text);
+  font-size: var(--text-size-label);
+  font-weight: var(--font-weight-emphasis);
+  line-height: var(--line-height-compact);
+}
+
+.novel-adaptation__stage small {
+  color: var(--text-secondary);
+  font-size: var(--text-size-micro);
+  line-height: var(--line-height-compact);
+}
+
+.novel-adaptation__stage:not([aria-controls]) strong {
+  color: var(--text-secondary);
+}
+
+.novel-adaptation__stage[data-complete] .novel-adaptation__stage-icon {
+  color: var(--success);
+}
+
+.novel-adaptation__stage[data-running] small {
+  color: var(--studio-attention);
+}
+
+.novel-adaptation__stage[data-status='failed'] small {
+  color: var(--danger);
+}
+
+.novel-adaptation__stage[data-status='needs_attention'] small {
+  color: var(--warning);
+}
+
+.novel-adaptation__stage[data-next] {
+  border-color: var(--studio-edge);
+}
+
+.novel-adaptation__stage.button:not(:disabled):active {
+  border-color: var(--border);
+  background: var(--studio-active);
+  color: var(--text);
+}
+
+.novel-adaptation__stage.button[aria-current='step'] {
+  border-color: var(--studio-attention-edge);
+  background: var(--studio-attention-surface);
+  color: var(--text);
+}
+
+.novel-adaptation__body {
+  grid-area: body;
+  min-block-size: 0;
+  padding-block: var(--space-4);
+  padding-inline: var(--novel-adaptation-inset);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scroll-padding-block: var(--space-4);
+  scrollbar-gutter: stable both-edges;
+}
+
+.novel-adaptation__footer {
+  grid-area: footer;
+  display: grid;
+  gap: var(--space-2);
+  padding-block: var(--space-2) var(--space-3);
+  padding-inline: var(--novel-adaptation-inset);
+  background: var(--background);
+}
+
+.novel-adaptation__footer > * {
+  inline-size: 100%;
+  max-inline-size: var(--novel-adaptation-width);
+  min-inline-size: 0;
+  margin: 0 auto;
+}
+
+.novel-adaptation__artifact-rail {
+  grid-area: rail;
+  display: none;
+  align-content: start;
+  gap: var(--space-4);
+  inline-size: 16rem;
+  min-block-size: 0;
+  padding: var(--space-4);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+  border-inline-start: 1px solid var(--studio-edge);
+  background: var(--studio-panel);
+}
+
+.novel-adaptation__artifact-disclosure {
+  grid-area: artifacts;
+  min-inline-size: 0;
+  border-block-end: 1px solid var(--studio-edge);
+  background: var(--studio-panel);
+}
+
+.novel-adaptation__artifact-disclosure > summary {
+  display: grid;
+  grid-template-columns: auto 1fr auto auto;
+  align-items: center;
+  gap: var(--space-2);
+  min-block-size: var(--control-hit-size);
+  padding-inline: var(--novel-adaptation-inset);
+  cursor: pointer;
+  color: var(--text);
+  font-size: var(--text-size-label);
+  font-weight: var(--font-weight-emphasis);
+  transition: background-color var(--motion-fast) var(--motion-ease);
+}
+
+.novel-adaptation__artifact-disclosure > summary::-webkit-details-marker {
+  display: none;
+}
+
+.novel-adaptation__artifact-disclosure[open] > summary > svg:last-child {
+  rotate: 180deg;
+}
+
+.novel-adaptation__artifact-disclosure[open] > summary,
+.novel-adaptation__artifact-disclosure > summary:active {
+  background: var(--studio-active);
+}
+
+.novel-adaptation__artifact-disclosure > summary:focus-visible {
+  outline-offset: calc(-1 * var(--space-tight));
+}
+
+.novel-adaptation__artifact-disclosure > summary > span,
+.novel-adaptation__artifact small {
+  color: var(--text-secondary);
+  font-size: var(--text-size-caption);
+  font-weight: var(--font-weight-regular);
+  font-variant-numeric: tabular-nums;
+}
+
+.novel-adaptation__artifact-disclosure > .novel-adaptation__artifacts {
+  max-block-size: min(35vh, 17rem);
+  padding-block: 0 var(--space-3);
+  padding-inline: var(--novel-adaptation-inset);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.novel-adaptation__artifact-rail > h3 {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin: 0;
+  font-size: var(--text-size-body);
+  font-weight: var(--font-weight-semibold);
+}
+
+.novel-adaptation__artifact-rail > p,
+.novel-adaptation__artifact > p {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: var(--text-size-caption);
+  line-height: var(--line-height-body);
+  overflow-wrap: anywhere;
+}
+
+.novel-adaptation__artifacts {
+  display: grid;
+  gap: var(--space-2);
+}
+
+.novel-adaptation__artifact {
+  min-inline-size: 0;
+  padding: var(--space-1);
+  border: 1px solid var(--studio-edge);
+  border-radius: calc(var(--radius-track) + var(--space-1));
+  background: var(--surface);
+  transition: background-color var(--motion-fast) var(--motion-ease), border-color var(--motion-fast) var(--motion-ease);
+}
+
+.novel-adaptation__artifact[data-current] {
+  border-color: var(--studio-attention-edge);
+  background: var(--studio-attention-surface);
+}
+
+.novel-adaptation__artifact[data-current] .novel-adaptation__artifact-heading > svg:first-child {
+  color: var(--studio-attention);
+}
+
+.novel-adaptation__artifact > ul {
+  display: grid;
+  gap: var(--space-tight);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.novel-adaptation__artifact > p {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  margin-inline: var(--space-2);
+  margin-block-end: var(--space-2);
+  overflow: clip;
+  white-space: pre-line;
+}
+
+.novel-adaptation__artifact :is(.novel-adaptation__artifact-heading, .novel-adaptation__artifact-link).button {
+  display: flex;
+  justify-content: start;
+  gap: var(--space-2);
+  inline-size: 100%;
+  min-block-size: var(--control-hit-size);
+  padding-inline: var(--space-2);
+  border-radius: var(--radius-track);
+  text-align: start;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.novel-adaptation__artifact-heading > strong {
+  flex: 1;
+  color: var(--text);
+  font-size: var(--text-size-label);
+  font-weight: var(--font-weight-emphasis);
+}
+
+.novel-adaptation__artifact :is(small, svg) {
+  flex: none;
+}
+
+.novel-adaptation__artifact-link > small {
+  margin-inline-start: auto;
+}
+
+.novel-adaptation__artifact .button:not(:disabled):active {
+  background: var(--studio-active);
+}
+
+.novel-adaptation__footer-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  min-block-size: var(--control-hit-size);
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--studio-edge);
+  border-radius: var(--radius-small);
+  background: var(--studio-panel);
+  color: var(--text-secondary);
+  font-size: var(--text-size-label);
+}
+
+.novel-adaptation__footer-row[data-source] {
+  justify-content: flex-end;
+}
+
+.novel-adaptation__metadata,
+.novel-adaptation__shots summary span:last-child {
+  color: var(--text-secondary);
+  font-size: var(--text-size-caption);
+  font-weight: var(--font-weight-regular);
+}
+
+.novel-adaptation__thread {
+  display: grid;
+  gap: var(--space-4);
+  max-inline-size: var(--novel-adaptation-width);
+  margin-inline: auto;
+}
+
+.novel-adaptation__turn {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+  min-inline-size: 0;
+}
+
+.novel-adaptation__turn--user {
+  flex-direction: row-reverse;
+}
+
+.novel-adaptation__turn > svg {
+  flex: 0 0 auto;
+  inline-size: var(--space-8);
+  block-size: var(--space-8);
+  padding: var(--space-2);
+  border-radius: var(--radius-track);
+  background: var(--studio-panel);
+  color: var(--text-secondary);
+  outline: 1px solid var(--studio-edge);
+  outline-offset: -1px;
+}
+
+.novel-adaptation__turn[data-active] > svg {
+  outline-color: var(--studio-attention-edge);
+  background: var(--studio-attention-surface);
+  color: var(--studio-attention);
+}
+
+.novel-adaptation__message {
+  min-inline-size: 0;
+  max-inline-size: min(76%, 45rem);
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--studio-edge);
+  border-radius: var(--radius-small);
+  background: var(--studio-panel);
+  color: var(--text);
+  line-height: var(--line-height-prose);
+  overflow-wrap: anywhere;
+}
+
+.novel-adaptation__turn--user .novel-adaptation__message {
+  background: var(--studio-control);
+}
+
+.novel-adaptation__turn--user .novel-adaptation__message > p {
+  white-space: pre-wrap;
+}
+
+.novel-adaptation__message--source,
+.novel-adaptation__message--card {
+  padding: var(--space-3);
+}
+
+.novel-adaptation__message--source {
+  display: grid;
+  gap: var(--space-2);
+  max-inline-size: min(72%, 42rem);
+}
+
+.novel-adaptation__message--card {
+  flex: 1 1 0;
+  max-inline-size: none;
+  border-color: var(--studio-edge);
+  background: var(--studio-panel);
+}
+
+.novel-adaptation__turn[data-active] .novel-adaptation__message--card {
+  padding: var(--space-4);
+  border-color: var(--studio-attention-edge);
+  border-radius: var(--radius-medium);
+  background: linear-gradient(130deg, var(--studio-attention-surface), var(--studio-panel) 17rem);
+}
+
+.novel-adaptation__message p {
+  margin-block: 0;
+}
+
+.novel-adaptation__excerpt {
+  color: var(--text-secondary);
+  white-space: pre-wrap;
+}
+
+.novel-adaptation__excerpt[data-truncated] {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  overflow: hidden;
+}
+
+.novel-adaptation__message--source details > summary {
+  display: list-item;
+  font-size: var(--text-size-label);
+}
+
+.novel-adaptation__original-text {
+  max-block-size: calc(var(--space-10) * 5);
+  overflow: auto;
+  overscroll-behavior: contain;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.novel-adaptation__panel {
+  display: grid;
+  gap: var(--space-3);
+  min-inline-size: 0;
+}
+
+.novel-adaptation__panel :is(.field, .notice) {
+  margin-block: 0;
+}
+
+.novel-adaptation__panel > p {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: var(--text-size-body);
+  line-height: var(--line-height-body);
+  text-wrap: pretty;
+}
+
+.novel-adaptation__panel textarea {
+  inline-size: 100%;
+  max-inline-size: 100%;
+  resize: vertical;
+}
+
+.novel-adaptation__source-layout,
+.novel-adaptation__source-editor,
+.novel-adaptation__import {
+  display: grid;
+  align-content: start;
+  gap: var(--space-3);
+  min-inline-size: 0;
+}
+
+.novel-adaptation__source-layout {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.novel-adaptation__import {
+  padding: var(--space-3);
+  border: 1px dashed var(--border);
+  border-radius: var(--radius-small);
+  background: var(--studio-control);
+}
+
+.novel-adaptation__import h4 {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin: 0;
+  font-size: var(--text-size-label);
+  font-weight: var(--font-weight-semibold);
+}
+
+.novel-adaptation__import .path-picker > input {
+  background: var(--surface);
+  border-radius: var(--radius-control-compact);
+}
+
+.novel-adaptation__import > .button {
+  justify-self: start;
+  min-block-size: var(--control-hit-size);
+}
+
+.novel-adaptation__panel .novel-adaptation__document {
+  block-size: clamp(9rem, 26dvh, 19rem);
+  padding: var(--space-3) var(--space-4);
+  border-radius: var(--radius-small);
+  background: var(--surface);
+  font-size: var(--text-size-body);
+  line-height: var(--line-height-relaxed);
+}
+
+.novel-adaptation__heading,
+.novel-adaptation__run-status,
+.novel-adaptation__actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.novel-adaptation__heading h3 {
+  margin: 0;
+  font-size: var(--text-size-subtitle);
+  font-weight: var(--font-weight-semibold);
+  line-height: var(--line-height-title);
+  text-wrap: balance;
+}
+
+.novel-adaptation__panel[data-active] .novel-adaptation__heading h3 {
+  font-size: var(--text-size-subheading);
+}
+
+.novel-adaptation__heading .button {
+  min-block-size: var(--control-hit-size);
+  margin-inline-start: auto;
+}
+
+.novel-adaptation__heading h3:focus:not(:focus-visible) {
+  outline: none;
+}
+
+.novel-adaptation__metadata {
+  justify-self: end;
+  font-variant-numeric: tabular-nums;
+}
+
+.novel-adaptation__panel[data-active] .novel-adaptation__result-count {
+  padding: var(--space-tight) var(--space-2);
+  border-radius: var(--radius-pill);
+  background: var(--studio-attention-surface);
+  color: var(--studio-attention);
+}
+
+.novel-adaptation__generation {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: end;
+  gap: var(--space-3);
+}
+
+.novel-adaptation__generation > .field {
+  flex: 1 1 16rem;
+  min-inline-size: 0;
+}
+
+.novel-adaptation__generation > p {
+  flex-basis: 100%;
+  margin: 0;
+}
+
+.novel-adaptation__generation .skill-picker {
+  flex-shrink: 0;
+  min-inline-size: 0;
+}
+
+.novel-adaptation__results {
+  display: grid;
+  gap: var(--space-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.novel-adaptation__results > li {
+  padding-inline: var(--space-3);
+  border: 1px solid var(--studio-edge);
+  border-radius: var(--radius-small);
+  transition: background-color var(--motion-fast) var(--motion-ease), border-color var(--motion-fast) var(--motion-ease);
+}
+
+.novel-adaptation__results > li:has(details[open]) {
+  border-color: var(--border);
+  background: var(--studio-control);
+}
+
+.novel-adaptation__results > li:has(summary:focus) {
+  border-color: var(--studio-attention-edge);
+  background: var(--studio-attention-surface);
+}
+
+.novel-adaptation__results .novel-adaptation__role-summary {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  margin: 0 0 var(--space-3);
+  overflow: hidden;
+  color: var(--text-secondary);
+  font-size: var(--text-size-label);
+  line-height: var(--line-height-body);
+}
+
+.novel-adaptation__results details[open] + .novel-adaptation__role-summary {
+  display: none;
+}
+
+.novel-adaptation__results .form-disclosure__body {
+  padding-block-end: var(--space-4);
+}
+
+.novel-adaptation__role {
+  display: grid;
+  gap: var(--space-3);
+}
+
+.novel-adaptation__references {
+  min-inline-size: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.novel-adaptation__reference-preview {
+  display: grid;
+  justify-items: start;
+  gap: var(--space-2);
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: var(--text-size-caption);
+}
+
+.novel-adaptation__reference-preview img {
+  max-inline-size: 100%;
+  max-block-size: calc(var(--space-10) * 4);
+  border-radius: var(--radius-small);
+  outline: 1px solid var(--image-outline);
+  outline-offset: -1px;
+}
+
+.novel-adaptation__role > .field {
+  min-inline-size: 0;
+}
+
+.novel-adaptation__shots summary > span:first-child {
+  margin-inline: var(--space-1) var(--space-3);
+  overflow-wrap: anywhere;
+}
+
+.novel-adaptation__shots summary span:last-child {
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+.novel-adaptation__shots dl,
+.novel-adaptation__run {
+  display: grid;
+  gap: var(--space-2);
+  margin: 0;
+}
+
+.novel-adaptation__run {
+  padding: var(--space-3);
+  border-radius: var(--radius-track);
+  background: var(--studio-control);
+}
+
+.novel-adaptation__run[data-running] {
+  border-inline-start: var(--space-tight) solid var(--studio-attention);
+  background: var(--studio-attention-surface);
+}
+
+.novel-adaptation__run[data-running] .status {
+  color: var(--studio-attention);
+}
+
+.novel-adaptation__run-status > span:not(.status) {
+  color: var(--text-secondary);
+  font-size: var(--text-size-label);
+}
+
+.novel-adaptation__shots dd {
+  margin: 0;
+  color: var(--text-secondary);
+  line-height: var(--line-height-body);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.novel-adaptation__composer {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-4);
+  border: 1px solid var(--studio-edge);
+  border-radius: var(--radius-medium);
+  background: var(--studio-panel);
+}
+
+.novel-adaptation__composer:focus-within {
+  border-color: var(--studio-attention-edge);
+}
+
+.novel-adaptation__composer-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+
+.novel-adaptation__composer-tools {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  min-inline-size: 0;
+}
+
+.novel-adaptation__composer-tools .field {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  column-gap: var(--space-2);
+  max-inline-size: min(18rem, 100%);
+  min-inline-size: 0;
+  margin-block: 0;
+}
+
+.novel-adaptation__composer-tools .field__label {
+  white-space: nowrap;
+}
+
+.novel-adaptation__composer-tools .skill-picker {
+  max-inline-size: 100%;
+  margin-block: 0;
+}
+
+.novel-adaptation__composer > :is(.field, .field__hint) {
+  margin-block: 0;
+}
+
+.novel-adaptation__composer .novel-adaptation__composer-input {
+  inline-size: 100%;
+  min-inline-size: 0;
+  block-size: var(--control-height);
+  min-block-size: var(--control-height);
+  max-block-size: calc(var(--space-10) * 3);
+  padding: var(--space-1) var(--space-2);
+  border-color: transparent;
+  border-radius: var(--radius-control-compact);
+  background: var(--surface);
+  font-size: var(--text-size-body);
+  line-height: var(--line-height-prose);
+  resize: vertical;
+}
+
+.novel-adaptation__composer .novel-adaptation__composer-input:focus-visible {
+  border-color: var(--accent);
+}
+
+.novel-adaptation__composer-actions {
+  justify-content: end;
+  margin-inline-start: auto;
+}
+
+.novel-adaptation__composer-actions > .button {
+  min-inline-size: 0;
+  min-block-size: var(--control-hit-size);
+}
+
+.novel-adaptation__composer-send.button {
+  flex: 0 0 auto;
+  min-inline-size: 0;
+  padding-inline: var(--space-3);
+  white-space: nowrap;
+}
+
+.novel-adaptation__composer-send.button--default {
+  border-radius: var(--radius-control-compact);
+}
+
+.novel-adaptation__footer .button--primary {
+  background: var(--studio-primary);
+}
+
+.novel-adaptation__footer .button--primary:not(:disabled):hover {
+  background: var(--studio-primary-hover);
+}
+
+.novel-adaptation__footer .button--primary:not(:disabled):active {
+  background: color-mix(in oklab, var(--studio-primary) 90%, var(--accent-contrast));
+}
+
+@media (hover: hover) {
+  .novel-adaptation__stage.button:not(:disabled):not([aria-current]):hover:not(:active),
+  .novel-adaptation__artifact-disclosure:not([open]) > summary:hover:not(:active) {
+    background: var(--studio-control);
+  }
+
+  .novel-adaptation__stage.button[aria-current='step']:not(:disabled):hover {
+    border-color: var(--studio-attention);
+  }
+
+  .novel-adaptation__results > li:has(summary:hover):not(:has(summary:focus)) {
+    background: var(--studio-active);
+  }
+
+  .novel-adaptation__artifact .button:not(:disabled):hover:not(:active) {
+    background: color-mix(in oklab, var(--studio-active) 65%, var(--studio-control));
+  }
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .novel-adaptation__progress > span::before {
+    transition: scale var(--motion-progress) var(--motion-ease);
+  }
+
+  .novel-adaptation__panel[data-active] .novel-adaptation__result-count,
+  .novel-adaptation__run[data-running] {
+    transition: opacity var(--motion-enter) var(--motion-ease), translate var(--motion-enter) var(--motion-ease);
+  }
+
+  @starting-style {
+    .novel-adaptation__panel[data-active] .novel-adaptation__result-count,
+    .novel-adaptation__run[data-running] {
+      opacity: 0;
+      translate: 0 var(--space-1);
+    }
+  }
+
+  .novel-adaptation__artifact-disclosure > summary > svg:last-child {
+    transition: rotate var(--motion-fast) var(--motion-ease);
+  }
+
+  .novel-adaptation__artifact-heading > svg:last-child {
+    transition: translate var(--motion-fast) var(--motion-ease);
+  }
+
+  .novel-adaptation__artifact-heading:focus-visible > svg:last-child {
+    translate: var(--space-tight);
+  }
+}
+
+@media (forced-colors: active) {
+  .novel-adaptation__stage.button[aria-current='step'],
+  .novel-adaptation__artifact[data-current],
+  .novel-adaptation__results > li:has(summary:focus) {
+    border-color: Highlight;
+  }
+
+  .novel-adaptation__progress > span {
+    forced-color-adjust: none;
+    background: GrayText;
+  }
+
+  .novel-adaptation__progress > span::before {
+    background: Highlight;
+  }
+}
+
+@media (hover: hover) and (prefers-reduced-motion: no-preference) {
+  .novel-adaptation__artifact-heading:not(:disabled):hover > svg:last-child {
+    translate: var(--space-tight);
+  }
+}
+
+@media (pointer: coarse) {
+  .novel-adaptation__stage.button,
+  .novel-adaptation__artifact-disclosure > summary,
+  .novel-adaptation__artifact :is(.novel-adaptation__artifact-heading, .novel-adaptation__artifact-link).button,
+  .novel-adaptation__heading .button,
+  .novel-adaptation__import > .button,
+  .novel-adaptation__results summary,
+  .novel-adaptation__composer-actions > .button {
+    min-block-size: var(--control-height);
+  }
+}
+
+@container novel-adaptation (min-width: 44rem) {
+  .novel-adaptation__checkpoints {
+    grid-template-columns: minmax(7rem, max-content) minmax(0, 1fr);
+  }
+
+  .novel-adaptation__overview {
+    display: grid;
+    gap: var(--space-tight);
+  }
+
+  .novel-adaptation__source-layout {
+    grid-template-columns: minmax(12rem, 1fr) minmax(0, 2.4fr);
+  }
+}
+
+@container novel-adaptation (min-width: 64rem) {
+  .novel-adaptation__artifact-rail {
+    display: grid;
+  }
+
+  .novel-adaptation__artifact-disclosure {
+    display: none;
+  }
+}
+
+@container novel-adaptation (max-width: 560px) {
+  .novel-adaptation__turn {
+    gap: var(--space-2);
+  }
+
+  .novel-adaptation__turn:not([data-active]) .novel-adaptation__message,
+  .novel-adaptation__message--source {
+    max-inline-size: calc(100% - var(--space-8) - var(--space-2));
+    padding-inline: var(--space-3);
+  }
+
+  .novel-adaptation__turn[data-active] .novel-adaptation__message--card {
+    padding: var(--space-3);
+  }
+
+  .novel-adaptation__footer .button {
+    min-inline-size: 0;
+  }
+}
+
+@container novel-adaptation (max-width: 28rem) {
+  .novel-adaptation__stage.button {
+    gap: var(--space-1);
+    padding-inline: var(--space-1) var(--space-tight);
+  }
+
+  .novel-adaptation__stage-icon {
+    inline-size: var(--space-5);
+    block-size: var(--space-5);
+  }
+
+  .novel-adaptation__stage-list {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .novel-adaptation__turn[data-active] > svg {
+    display: none;
+  }
+
+  .novel-adaptation__composer {
+    padding-inline: var(--space-3);
+  }
+}

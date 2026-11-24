@@ -49,6 +49,7 @@ interface RunStarterOptions {
   run(runId: string): RunRecord;
   requireRevision(project: ProjectDocument, revision?: number): void;
   projectOccupied(projectId: string): boolean;
+  validateProduction(project: ProjectDocument): void;
   availableModels(): ModelProfile[];
   prepareRunSelection(project: ProjectDocument, selection: RunSelection): Promise<{ plan: RunPlan; saved: RunSnapshot }>;
   regenerationNode(project: ProjectDocument, input: z.infer<typeof regenerationInput>): WorkflowNode;
@@ -66,7 +67,7 @@ function hasExplicitTask(input: RunStartInput) {
 }
 
 export function createRunStarter({
-  database, store, project, run, requireRevision, projectOccupied, availableModels, prepareRunSelection,
+  database, store, project, run, requireRevision, projectOccupied, validateProduction, availableModels, prepareRunSelection,
   regenerationNode, canExecuteActivities,
   profilesFor, prepareSkills, regenerateShot, resumeExportBatch, onRunCreated, hydrateRun,
 }: RunStarterOptions) {
@@ -160,6 +161,7 @@ export function createRunStarter({
     if (runProject.archived) throw new Error('请先恢复项目。');
     if (isStandaloneExport && !runProject.shots.length) throw new Error('请先添加镜头后再导出视频。');
     if (projectOccupied(runProject.id)) throw new Error('该项目已有未完成的运行或批量导出，请先处理现有任务。');
+    if (!isStandaloneExport && !input.research) validateProduction(runProject);
 
     const selection = input.selection;
     const prepared = selection ? await prepareRunSelection(runProject, { nodeId: selection.nodeId, mode: selection.mode }) : undefined;
@@ -257,6 +259,7 @@ export function createRunStarter({
       createdAt: timestamp, updatedAt: timestamp, events: [], activities: [],
     };
     database.transaction(() => {
+      if (!isStandaloneExport && !input.research) validateProduction(project(runProject.id));
       store.put('run-snapshot', runId, snapshot);
       store.put('run', runId, record);
     })();

@@ -1,6 +1,7 @@
-import { openProjectFromList } from './workspace-navigation';
+import { chooseStudioEntry, openProjectFromList, revealStudioNavigation } from './workspace-navigation';
 import { expect, test, type Locator, type Page } from '@playwright/test';
 import { productionFixture, openProduction } from './production-settings';
+import { creationInput } from './drama-creation';
 
 async function keyboardFocus(page: Page, button: Locator) {
   await button.focus(); await button.press('Tab'); await page.keyboard.press('Shift+Tab');
@@ -50,14 +51,14 @@ for (const viewport of [{ width: 1536, height: 960, theme: 'light' }, { width: 6
       await expect(button).toBeFocused(); await expect(button).toHaveCSS('outline-style', 'none');
 
     }
-    const create = page.getByRole('button', { name: '新建短剧', exact: true });
+    const create = (await revealStudioNavigation(page)).getByRole('button', { name: '对话', exact: true });
     await keyboardFocus(page, create); await create.press('Enter');
     const composer = page.getByRole('region', { name: '新建短剧', exact: true });
-    await expect(composer.getByRole('textbox', { name: '短剧名称', exact: true })).toBeFocused();
-    await composer.getByRole('textbox', { name: '短剧名称', exact: true }).fill('键盘打开后保留的短剧');
-    await openProjectFromList(page, source.project.title); await create.click();
-    await expect(composer.getByRole('textbox', { name: '短剧名称', exact: true })).toBeFocused();
-    await expect(composer.getByRole('textbox', { name: '短剧名称', exact: true })).toHaveValue('键盘打开后保留的短剧');
+    await expect(creationInput(composer)).toBeFocused();
+    await creationInput(composer).fill('键盘打开后保留的短剧');
+    await openProjectFromList(page, source.project.title); await chooseStudioEntry(page, '对话');
+    await expect(creationInput(composer)).toBeFocused();
+    await expect(creationInput(composer)).toHaveValue('键盘打开后保留的短剧');
     await openProjectFromList(page, source.project.title);
     const inspector = page.getByRole('button', { name: '切换属性面板', exact: true });
     await keyboardFocus(page, inspector);

@@ -110,7 +110,7 @@ export function createProjectReadiness(options: {
       if (!model) {
         if (node.kind === 'agent') add({ severity: 'error', category: 'model', nodeId: node.id, message: 'Agent 步骤需要选择具备文本和工具能力的模型。', fix: 'step' }, `agent:${node.id}`);
         if (node.kind === 'script' && !manual && !project.shots.length) add({ severity: futureShots ? 'warning' : 'error', category: 'workflow', nodeId: node.id, message: '本地脚本步骤没有可采用的分镜，请先添加镜头或选择文本模型。', fix: 'step' }, `script:${node.id}`);
-        if (node.kind === 'assets' && node.config.operation !== 'prepare-references') {
+        if (node.kind === 'assets' && !manual && node.config.operation !== 'prepare-references') {
           const kind = 'image';
           for (const shot of project.shots) {
             const deferred = !shot.locked && (futureShots || (kind === 'image' ? futureImages : futureVoice));

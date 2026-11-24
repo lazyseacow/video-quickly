@@ -1,4 +1,4 @@
-import { openAssetLibrary, openProjectFromList, openStudio } from './workspace-navigation';
+import { openAssetLibrary, openProjectFromList, openWorks } from './workspace-navigation';
 import { expect, test, type APIRequestContext } from '@playwright/test';
 import type { CharacterProfile, ProjectDocument, RunRecord, SeriesTemplate } from '@video-quickly/contracts';
 
@@ -64,10 +64,10 @@ test('keeps the current page visible while a lazy page loads and honors the late
 test('preserves project filtering and editor selection and undo while pausing the hidden editor', async ({ page, request }) => {
   const created = await rpc<ProjectDocument>(request, 'project.create', { originalText: '清晨，林夏在书房发现一封未寄出的信。她来到旧城寻找信的主人，与朋友在雨中的城门重逢。两人读完信后决定一起回家。', title: '页面缓存编辑验收' });
   const project = await rpc<ProjectDocument>(request, 'project.update', { projectId: created.id, revision: created.revision, patch: { shots: [1, 2].map(index => ({ id: `cache-shot-${index}`, title: `缓存镜头 ${index}`, narration: '', visualPrompt: '', durationUs: 3_000_000 })) } });
-  await page.goto('/'); await openStudio(page);
+  await page.goto('/'); await openWorks(page);
   await page.getByLabel('搜索作品', { exact: true }).fill(project.title);
   await page.getByRole('button', { name: '模型连接', exact: true }).click();
-  await openStudio(page);
+  await openWorks(page);
   await expect(page.getByLabel('搜索作品', { exact: true })).toHaveValue(project.title);
   await openProjectFromList(page, project.title);
   await expect(page.getByLabel('镜头标题', { exact: true })).toHaveValue('缓存镜头 1');

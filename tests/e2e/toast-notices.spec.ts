@@ -74,7 +74,7 @@ for (const reducedMotion of ['no-preference', 'reduce'] as const) {
       await page.clock.install({ time });
       await openModels(page, request, `${name}项目`);
       await expect(page.getByRole('button', { name: '添加模型', exact: true }).locator('svg')).toHaveCount(1);
-      await expect(page.getByRole('button', { name: '新建短剧', exact: true }).locator('svg')).toHaveCount(1);
+      await expect(page.getByRole('button', { name: '短剧工作室', exact: true }).locator('svg')).toHaveCount(1);
       await page.clock.pauseAt(new Date(time.getTime() + 2 * test.info().timeout));
       const trigger = page.getByRole('button', { name: `检查“${name}”连接`, exact: true });
       await expect(trigger.locator('svg')).toHaveCount(1);
@@ -109,7 +109,7 @@ for (const reducedMotion of ['no-preference', 'reduce'] as const) {
       await page.getByRole('button', { name: '素材库', exact: true }).click();
       await expect(page.getByRole('button', { name: '回收站', exact: true }).locator('svg')).toHaveCount(1);
       await page.setViewportSize({ width: 390, height: 844 });
-      await expect(page.getByRole('button', { name: '新建短剧', exact: true }).locator('svg')).toHaveCount(1);
+      await expect(page.getByRole('button', { name: '工作室菜单', exact: true }).locator('svg')).toHaveCount(1);
       expect(errors).toEqual([]);
     } finally { release?.(); server.closeAllConnections(); await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve())); }
   });

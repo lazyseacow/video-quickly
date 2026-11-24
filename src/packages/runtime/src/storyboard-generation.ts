@@ -39,13 +39,13 @@ export function canRevalidateStoryboardBatch(project: ProjectDocument, responses
     && issue?.message === UNKNOWN_CHARACTER_KEY_MESSAGE && /^shots\[\d+\]\.characterKeys\[\d+\]$/.test(issue.path);
 }
 
-export function storyboardOutlineStage(project: ProjectDocument, hasRanking: boolean, automaticCasting = false): StoryboardPromptStage {
+export function storyboardOutlineStage(project: ProjectDocument, hasRanking: boolean, automaticCasting = false, fixedCharacterAssets = false): StoryboardPromptStage {
   return {
     shots: project.shots.map(shot => ({ ...shot, narration: shot.narration.slice(0, 160), visualPrompt: shot.visualPrompt.slice(0, 160), soundPrompt: undefined })),
     contract: [
       '分镜生成阶段：全片大纲。',
       '只返回合法 JSON 对象。outline 写全片的叙事主线、起承转合和连续性。shots 按最终播放顺序列出 1–100 个镜头。明确指定镜头数时按要求列出，每项只写 title 和简短的叙事要点 beat，详细旁白与画面在下一阶段填写。',
-      '沿用已有镜头可填写其原 id，未填则按原位置匹配。新镜头省略 id。锁定镜头必须留在原位置。entities 只列全片需要新增的人物、场景或道具设定，后续各批共同使用。',
+      `沿用已有镜头可填写其原 id，未填则按原位置匹配。新镜头省略 id。锁定镜头必须留在原位置。entities 只列全片需要新增的${fixedCharacterAssets ? '场景或道具' : '人物、场景或道具'}设定，后续各批共同使用。`,
       ...(automaticCasting ? ['根据完整剧本识别反复出镜的人物。角色白名单中已有的人物沿用对应角色；其他人物在 entities 中以 kind=character 建立统一设定。把名字、别名和称谓指向同一个人物 key，name 优先用剧本中的明确姓名，description 固定面貌、发型、体型和代表服装。只在画面中实际出现的人物才算出镜。'] : []),
       hasRanking ? '将榜单中的完整仓库名按原榜单顺序各分配一次到相应镜头的 repositories 数组。过渡镜头可以省略 repositories。' : '常规大纲省略 repositories。',
       `机器校验的 JSON Schema：${JSON.stringify(outlineJsonSchema)}`,
@@ -53,8 +53,12 @@ export function storyboardOutlineStage(project: ProjectDocument, hasRanking: boo
   };
 }
 
-function checkOutline(outline: Outline, project: ProjectDocument, ranking?: GithubTrendingRanking) {
+function checkOutline(outline: Outline, project: ProjectDocument, ranking?: GithubTrendingRanking, fixedCharacterAssets?: boolean) {
   storyboardPlacements(project.shots, outline.shots);
+  const newCharacter = fixedCharacterAssets ? outline.entities.findIndex(entity => entity.kind === 'character') : -1;
+  if (newCharacter !== -1) throw new ModelResponseValidationError([{
+    path: `entities[${newCharacter}]`, message: '分镜须沿用已确认的角色资产。新增设定只可包含场景或道具。',
+  }]);
   const creativeContext = mergeStoryboardEntities(project.creativeContext, outline.entities);
   const repositories = outline.shots.flatMap(shot => shot.repositories ?? []);
   const expected = ranking?.repositories ?? [];
@@ -109,6 +113,7 @@ interface StoryboardExecution {
   outlinePrompt: StoryboardPromptBuilder;
   outputContractVersion?: WorkflowOutputVersion;
   automaticCasting?: boolean;
+  fixedCharacterAssets?: boolean;
   batchPrompt: (stage: StoryboardPromptStage, context: ProjectDocument['creativeContext'], repositories: GithubTrendingRanking['repositories']) => StoryboardPromptBuilder;
   canRetryWithPromptFormat: (response: TextGenerationResult) => boolean;
   request: (request: PartRequest) => Promise<string | TextGenerationResult>;
@@ -175,7 +180,7 @@ export async function executeStoryboard(options: StoryboardExecution) {
 
   const { data: plan, usage: outlineUsage } = await executePart(
     { kind: 'outline' }, '全片大纲', options.outlinePrompt, { outputSchema: outlineJsonSchema, outputSchemaName: 'video_storyboard_outline' }, outlineSchema,
-    outline => checkOutline(outline, project, ranking),
+    outline => checkOutline(outline, project, ranking, options.fixedCharacterAssets),
   );
   const placements = storyboardPlacements(project.shots, plan.shots);
   const batchProject = { ...project, creativeContext: plan.creativeContext };
@@ -203,7 +208,7 @@ export async function executeStoryboard(options: StoryboardExecution) {
         if (shot.id !== undefined && shot.id !== positions[slot].before?.id) throw new ModelResponseValidationError([{ path: `shots[${slot}].id`, message: '请沿用本镜头已有编号，新镜头省略 id。' }]);
         return shot;
       });
-      const validated = materializeStoryboardBatch(generated, batchProject, characters, positions);
+      const validated = materializeStoryboardBatch(generated, batchProject, characters, positions, options.fixedCharacterAssets);
       if (ranking && repositories.length) validateGithubTrendingStoryboard(validated, { ...ranking, repositories });
       return validated;
     }, { completed: shots.length, total: placements.length, count: positions.length });

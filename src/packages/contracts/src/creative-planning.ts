@@ -56,6 +56,19 @@ export const creativePlanningStartInputSchema = z.strictObject({
   imageModelId: z.string().min(1).optional(),
 });
 
+const previewSourceShape = { runId: z.string().min(1), revision: z.string().min(1) };
+export const creativePreviewRecommendInputSchema = z.strictObject({ ...previewSourceShape, requestId: z.uuid() });
+export const creativePreviewRecommendationSchema = z.strictObject({ shotId: z.string().min(1), reason: z.string().trim().min(1).max(200) });
+const creativePreviewRecommendations = z.array(creativePreviewRecommendationSchema).min(1).max(3)
+  .refine(values => new Set(values.map(value => value.shotId)).size === values.length, '推荐镜头不能重复。');
+export const creativePreviewRecommendationsSchema = z.strictObject({ revision: previewSourceShape.revision, recommendations: creativePreviewRecommendations });
+export const creativePreviewStartInputSchema = z.strictObject({
+  ...previewSourceShape, requestId: z.uuid(), imageModelId: z.string().min(1),
+  shotIds: z.array(z.string().min(1)).min(1).max(3).refine(ids => new Set(ids).size === ids.length, '预演镜头不能重复。'),
+  instruction: z.string().trim().min(1).max(1000).optional(),
+}).refine(input => !input.instruction || input.shotIds.length === 1, { path: ['instruction'], message: '指定修改要求时只能重做一个镜头。' });
+export const creativePreviewApplyInputSchema = z.strictObject({ runId: previewSourceShape.runId, shotId: z.string().min(1) });
+
 export const creativeRevisionFieldSchema = z.enum(['title', 'narration', 'visualPrompt', 'soundPrompt', 'lineText']);
 export type CreativeRevisionField = z.infer<typeof creativeRevisionFieldSchema>;
 

@@ -9,9 +9,15 @@ function visible(element: Element | undefined): element is HTMLElement {
   const style = getComputedStyle(element), rect = element.getBoundingClientRect();
   return style.display !== 'none' && style.visibility !== 'hidden' && rect.width > 0 && rect.height > 0;
 }
-function target(name: string) {
+function target(name: string): HTMLElement | undefined {
   const candidates = [...document.querySelectorAll(`[data-guide="${name}"]`)].filter(visible);
-  return name === 'create-project' ? candidates.find(element => element.classList.contains('drama-composer')) ?? candidates[0] : candidates[0];
+  if (name === 'create-project') {
+    const menuToggle = document.querySelector<HTMLButtonElement>('button[aria-label="工作室菜单"]') ?? undefined;
+    return candidates.find(element => element.classList.contains('drama-composer')) ?? candidates[0] ?? (visible(menuToggle) ? menuToggle : undefined);
+  }
+  if (name === 'project-open') return candidates[0] ?? target('work-library');
+  if (name === 'work-library') return candidates.find(element => element.closest('.studio-menu__panel')) ?? candidates[0];
+  return candidates[0];
 }
 function nativeDialog() { return [...document.querySelectorAll('dialog[open]')].find(visible); }
 function loading() { return [...document.querySelectorAll('[data-guide-loading]')].some(visible); }
@@ -20,11 +26,11 @@ interface GuideStep { id: string; action: GuideAction; title: string; descriptio
 interface ResolvedStep { definition: GuideStep; order: number; element: HTMLElement; }
 function definitions(): GuideStep[] {
   return [
-    { id: 'create-project', action: 'project-created', title: '新建短剧', description: '点击高亮的“新建短剧”，上传已有剧本或填写故事想法，选择画风、选题与创作 Skill。创建后会打开第一集工作台；已有作品也可以点“下一步”跳过。', side: 'right' },
+    { id: 'create-project', action: 'project-created', title: '新建短剧', description: '在对话中发送小说原文、剧本或故事想法。在确认卡上为短剧起名，检查创作设置并创建。', side: 'right' },
     { id: 'models', action: 'models-opened', title: '打开模型连接', description: '点击高亮入口打开模型连接。打开后自动继续；如果准备使用本地图片、视频和配音，也可以手动跳过。', side: 'right' },
     { id: 'model-connection', action: 'model-saved', title: '添加模型连接', description: '点击高亮的添加按钮，选择模型类型，填写服务地址和密钥，再选择型号并保存。保存成功且表单关闭后继续；已有连接可以直接跳过。' },
-    { id: 'projects', action: 'projects-opened', title: '打开短剧工作室', description: '点击左侧图标进入短剧工作室，选择作品后打开分集继续创作。也可以使用上方加号创作新短剧。', side: 'right', when: () => !target('project-open') && !target('view') && !target('preview') },
-    { id: 'project-open', action: 'workbench-opened', title: '进入分集工作台', description: '先点击作品的“查看分集”，再点击“打开分集”进入工作台。分集加载完成后，指引会继续介绍镜头、预览和制作区域。' },
+    { id: 'projects', action: 'projects-opened', title: '打开短剧工作室', description: '在菜单栏打开短剧工作室，选择作品后打开分集继续创作。也可以通过「新建对话」开始创作。', side: 'right', when: () => !target('project-open') && !target('view') && !target('preview') },
+    { id: 'project-open', action: 'workbench-opened', title: '进入分集工作台', description: '在工作室菜单打开「我的作品」。在作品里选择「查看分集」，再点击「打开分集」进入工作台。分集加载完成后，指引会继续介绍镜头、预览和制作区域。' },
     { id: 'view', action: 'production-settings-opened', title: '制作设置', description: '点击“制作设置”配置创作要求和模型。关闭设置后继续介绍工作台。' },
     { id: 'outline-toggle', action: 'outline-opened', title: '展开镜头导航', description: '左侧镜头导航已收起，点击高亮按钮展开。展开后会接着介绍真实的镜头列表。', when: () => !target('shots') },
     { id: 'shots', action: 'shot-selected', title: '整理镜头', description: '直接点击列表中的镜头，查看它的画面、旁白与时长。成功选择镜头后，指引会自动继续。', side: 'right' },
@@ -103,7 +109,8 @@ export default function GettingStartedGuide({ onClose }: { onClose: () => void }
     }
     function keyboard(event: KeyboardEvent) {
       if (nativeDialog()) return;
-      if (event.key === 'Escape' && document.querySelector('[data-help-tooltip], :popover-open')) return;
+      if (event.key === 'Escape' && (document.querySelector('[data-help-tooltip], :popover-open')
+        || event.target instanceof Element && event.target.closest('.workspace-sidebar[data-expanded="true"]'))) return;
       if (event.key === 'Escape') { event.preventDefault(); event.stopImmediatePropagation(); finish(); return; }
       if (!tour?.isActive() || !popover) return;
       const inPopover = event.target instanceof Node && popover.wrapper.contains(event.target);
@@ -111,7 +118,9 @@ export default function GettingStartedGuide({ onClose }: { onClose: () => void }
         event.preventDefault(); event.stopImmediatePropagation(); move(event.key === 'ArrowRight' ? 1 : -1); return;
       }
       if (event.key !== 'Tab') return;
-      const active = tour.getActiveElement(), roots = active ? [popover.wrapper, active] : [popover.wrapper];
+      const active = tour.getActiveElement();
+      const activePopover = event.target instanceof Element ? event.target.closest(':popover-open') : null;
+      const roots = activePopover ? [activePopover] : active ? [popover.wrapper, active] : [popover.wrapper];
       const selector = 'a[href],button:not([disabled]),input:not([disabled]):not([type="hidden"]),textarea:not([disabled]),select:not([disabled]),[tabindex]:not([tabindex="-1"]),[contenteditable="true"]';
       const controls = [...new Set(roots.flatMap(root => [...(root.matches(selector) ? [root] : []), ...root.querySelectorAll(selector)]))].filter(visible);
       const index = controls.findIndex(element => element === document.activeElement);
@@ -183,7 +192,7 @@ export default function GettingStartedGuide({ onClose }: { onClose: () => void }
         tour.setConfig({ ...tour.getConfig(), steps: driverSteps }); tour.moveTo(index);
       } else { updateButtons(); tour.refresh(); }
     }
-    mutations.observe(document.documentElement, { childList: true, subtree: true, attributes: true, attributeFilter: ['hidden', 'open', 'class', 'style', 'aria-hidden', 'data-guide-loading'] });
+    mutations.observe(document.documentElement, { childList: true, subtree: true, attributes: true, attributeFilter: ['hidden', 'open', 'class', 'style', 'aria-hidden', 'data-guide', 'data-guide-loading'] });
     document.addEventListener('scroll', schedule, true); document.addEventListener('click', schedule, true);
     window.addEventListener('resize', schedule); window.addEventListener('keydown', keyboard, true); schedule();
     return () => { disposed = true; stop(); retireDriver(); restoreFocus(); };

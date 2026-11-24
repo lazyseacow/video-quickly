@@ -40,6 +40,7 @@ export default function ProductionSettingsDialog({ project, projectId, projectRe
   onImportReferenceAudio: (path: string) => Promise<AssetRecord | undefined>;
 }) {
   const [settings, setSettings] = useState(() => productionSettingsSchema.parse(workflow.production));
+  const novelAdaptation = workflow.production.novelAdaptation === true;
   const [fields, setFields] = useState<ProductionProjectSettings>(() => ({
     brief: settings.manualPlanningSteps?.includes('brief') ? '' : project.brief,
     style: settings.manualPlanningSteps?.includes('style') ? '' : project.style,
@@ -81,7 +82,7 @@ export default function ProductionSettingsDialog({ project, projectId, projectRe
   const active = Boolean(run && ['queued', 'running', 'waiting_review', 'waiting_external', 'retry_scheduled'].includes(run.status));
   const planningSteps = productionPlanningSteps.filter(kind => nodes.some(node => productionPlanningStep(workflow, node) === kind));
   const { data: generated, error: generatedError, refresh: refreshGenerated } = useRuntimeRead(
-    'project.planning.outputs', { projectId }, version, generatedPlanningSchema, Boolean(projectId && planningSteps.length),
+    'project.planning.outputs', { projectId }, version, generatedPlanningSchema, Boolean(projectId && planningSteps.length && !novelAdaptation),
   );
   const projectShots = planning?.project.shots ?? [];
   const shotCount = projectShots.length;
@@ -92,7 +93,7 @@ export default function ProductionSettingsDialog({ project, projectId, projectRe
   const continues = resolved.production.continueFromLastFrame !== false;
   const showImageModel = !nativeReferences && (automaticCasting || resolved.production.referenceMode === 'generate');
   const groupReferenceImages = settings.groupReferenceImages !== false;
-  const requiredModelTasks = resolved.nodes.filter(node => !usesManualPlanning(resolved, node) && stepGuidance(node).requiresModel);
+  const requiredModelTasks = resolved.nodes.filter(node => !(novelAdaptation && node.id === 'script') && !usesManualPlanning(resolved, node) && stepGuidance(node).requiresModel);
   const modelFields = unifiedModelFields.map(field => {
     const tasks = requiredModelTasks.filter(node => productionModelSetting(node) === field.key);
     const models = workspace.models.filter(model => model.enabled && model.capabilities.includes(field.capability)
@@ -278,7 +279,8 @@ export default function ProductionSettingsDialog({ project, projectId, projectRe
       && shot.narration === original.narration && (shot.soundPrompt ?? '') === (original.soundPrompt ?? '');
   });
   const generatedStoryboardStatus = previewStoryboard || matchesGenerated ? `AI 生成 · ${storyboardShots.length} 个镜头` : '';
-  const storyboardStatus = generatedStoryboardStatus || storyboardContent || (shotCount ? `项目分镜 · ${shotCount} 个镜头` : autoPlanningPlaceholder);
+  const storyboardStatus = novelAdaptation ? storyboardContent || '待在「小说改编」应用分镜'
+    : generatedStoryboardStatus || storyboardContent || (shotCount ? `项目分镜 · ${shotCount} 个镜头` : autoPlanningPlaceholder);
   function planningTextField(kind: PlanningDocumentKind) {
     const edit = authored[kind];
     const output = edit ? undefined : generatedText(kind);
@@ -301,7 +303,8 @@ export default function ProductionSettingsDialog({ project, projectId, projectRe
             <div className="production-settings__storyboard" role="group" aria-label="分镜全局参数">
               <VideoSettings mode="generation" profile={fields.profile} onChange={profile => setFields(current => ({ ...current, profile }))} />
             </div>
-            <Field label="项目原文"><textarea className="production-settings__original-text" rows={3} maxLength={30000} placeholder="粘贴小说或剧本正文" value={fields.originalText ?? ''} onChange={event => setFields(current => ({ ...current, originalText: event.target.value }))} /></Field>
+            {novelAdaptation ? <Notice>在工作台的「小说改编」审核导演剧本、确认角色资产并生成分镜。</Notice>
+              : <Field label="项目原文"><textarea className="production-settings__original-text" rows={3} maxLength={30000} placeholder="粘贴小说或剧本正文" value={fields.originalText ?? ''} onChange={event => setFields(current => ({ ...current, originalText: event.target.value }))} /></Field>}
             {planningSteps.length > 0 && <div role="group" aria-label="策划内容" className="production-settings__planning-content">
               {planningSteps.map(kind => kind === 'script' ? <div key={kind} role="group" aria-labelledby={`${id}-storyboard-heading`} className="production-settings__planning-entry production-settings__storyboard-card">
                 <header className="production-settings__storyboard-header">
@@ -310,9 +313,9 @@ export default function ProductionSettingsDialog({ project, projectId, projectRe
                     <p className="production-settings__storyboard-status" id={`${id}-storyboard-status`}>{storyboardStatus}</p>
                   </div>
                   <div className="production-settings__storyboard-actions">
-                    {storyboardContent && <Button static variant="ghost" onClick={() => { setManualStoryboard(false); storyboardAction.current?.focus(); }}>改用 AI 生成</Button>}
-                    {!storyboardContent && shotCount > 0 && !planningDisabled && <Button static variant="ghost" onClick={() => { setManualStoryboard(true); storyboardAction.current?.focus(); }}>使用项目分镜</Button>}
-                    {(!previewStoryboard || !planningDisabled) && <Button ref={storyboardAction} static aria-describedby={`${id}-storyboard-status`} aria-haspopup="dialog" disabled={!planning || planningDisabled || shotCount >= MAX_STORYBOARD_SHOTS} onClick={() => editStoryboard()}>
+                    {!novelAdaptation && storyboardContent && <Button static variant="ghost" onClick={() => { setManualStoryboard(false); storyboardAction.current?.focus(); }}>改用 AI 生成</Button>}
+                    {!novelAdaptation && !storyboardContent && shotCount > 0 && !planningDisabled && <Button static variant="ghost" onClick={() => { setManualStoryboard(true); storyboardAction.current?.focus(); }}>使用项目分镜</Button>}
+                    {(!novelAdaptation || storyboardContent) && (!previewStoryboard || !planningDisabled) && <Button ref={storyboardAction} static aria-describedby={`${id}-storyboard-status`} aria-haspopup="dialog" disabled={!planning || planningDisabled || shotCount >= MAX_STORYBOARD_SHOTS} onClick={() => editStoryboard()}>
                       <Plus aria-hidden="true" />添加分镜
                     </Button>}
                   </div>
@@ -347,7 +350,7 @@ export default function ProductionSettingsDialog({ project, projectId, projectRe
               </div> : planningTextField(kind))}
             </div>}
             {generatedError && <Notice kind="error">读取 AI 产物失败。<Button static onClick={() => void refreshGenerated()}>重试</Button></Notice>}
-            {!planningSteps.length && <div className="production-settings__models production-settings__prompts">
+            {(novelAdaptation || !planningSteps.length) && <div className="production-settings__models production-settings__prompts">
               <Field label="创作要求"><textarea rows={3} maxLength={30000} value={fields.brief} onChange={event => setFields(current => ({ ...current, brief: event.target.value }))} placeholder="主题、受众、核心信息与时长" /></Field>
               <Field label="视觉风格"><textarea rows={3} value={fields.style} onChange={event => setFields(current => ({ ...current, style: event.target.value }))} placeholder="画面风格、色调与光线" /></Field>
             </div>}
@@ -358,7 +361,7 @@ export default function ProductionSettingsDialog({ project, projectId, projectRe
               hint={mixedCreationSkills ? '各步骤选择不同。勾选会加入全部创作步骤，取消会从全部创作步骤移除。' : undefined}
               onChange={updateCreationSkills}
             />}
-            {advanced({ id: 'planning', label: '创作要求', nodeIds: resolved.nodes.filter(node => stepGuidance(node).capability === 'text').map(node => node.id) })}
+            {!novelAdaptation && advanced({ id: 'planning', label: '创作要求', nodeIds: resolved.nodes.filter(node => stepGuidance(node).capability === 'text').map(node => node.id) })}
           </section>
           <section className="form-stack" data-production-step="materials" hidden={step !== 'materials'} aria-label="模型与素材" tabIndex={-1}>
             {modelField(textField)}
@@ -399,9 +402,9 @@ export default function ProductionSettingsDialog({ project, projectId, projectRe
                 <div><dt>画面规格</dt><dd>{aspectRatio && `${aspectRatio} · `}{width} × {height} · {formatFrameRate(frameRate)} fps</dd></div>
                 <div><dt>素材适配</dt><dd>{VIDEO_FIT_MODE_LABELS[fitMode]}</dd></div>
                 <div><dt>{planningSteps.includes('brief') ? '简报内容' : '创作要求'}</dt><dd>{planningTextSummary('brief', '尚未填写')}</dd></div>
-                {Boolean(fields.originalText?.trim()) && <div><dt>项目原文</dt><dd>{fields.originalText?.length} 字符</dd></div>}
+                {Boolean(fields.originalText?.trim()) && <div><dt>{novelAdaptation ? '导演剧本' : '项目原文'}</dt><dd>{fields.originalText?.length} 字符</dd></div>}
                 <div><dt>{planningSteps.includes('style') ? '风格内容' : '视觉风格'}</dt><dd>{planningTextSummary('style', '沿用默认风格')}</dd></div>
-                {planningSteps.includes('script') && <div><dt>分镜内容</dt><dd>{storyboardContent || (generatedStoryboardStatus ? '继续由 AI 生成' : autoPlanningPlaceholder)}</dd></div>}
+                {planningSteps.includes('script') && <div><dt>分镜内容</dt><dd>{novelAdaptation ? storyboardStatus : storyboardContent || (generatedStoryboardStatus ? '继续由 AI 生成' : autoPlanningPlaceholder)}</dd></div>}
                 <div><dt>项目角色池</dt><dd>{fields.creativeContext?.characterIds.length ? `已选择 ${fields.creativeContext.characterIds.length} 个角色` : '未选择'}</dd></div>
                 {fields.creativeContext?.continuity && <div><dt>连续性要求</dt><dd>{fields.creativeContext.continuity}</dd></div>}
                 {Boolean(fields.creativeContext?.entities.length) && <div><dt>文字设定</dt><dd>{fields.creativeContext?.entities.map(entity => entity.name).join('、')}</dd></div>}

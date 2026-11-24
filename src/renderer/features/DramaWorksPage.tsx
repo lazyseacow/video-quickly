@@ -1,20 +1,29 @@
-import { lazy, Suspense, useDeferredValue, useEffect, useRef, useState } from 'react';
-import { Archive, ArrowLeft, ChevronDown, Clapperboard, Pencil, Plus, RotateCcw, Sparkles } from 'lucide-react';
-import { DEFAULT_VIDEO_PROFILE, dramaNarrativeModeLabels, dramaStylePresets, dramaTopicSchema, dramaVisualStyleLabels, dramaWorkSchema, projectSummarySchema, recordPageSchema, type DramaTopic, type DramaWork, type ProjectDocument } from '@video-quickly/contracts';
+import { lazy, Suspense, useDeferredValue, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { Archive, ArrowLeft, ArrowRight, ChevronDown, ChevronRight, Clapperboard, Film, History, Pencil, Plus, RotateCcw, Search } from 'lucide-react';
+import { DEFAULT_VIDEO_PROFILE, dramaNarrativeModeLabels, dramaStylePresets, dramaTopicSchema, dramaVisualStyleLabels, dramaWorkSchema, MAX_NOVEL_SOURCE_LENGTH, projectSummarySchema, recordPageSchema, type DramaTopic, type DramaWork, type ProjectDocument, type ProjectSummary } from '@video-quickly/contracts';
 import { Button, Dialog, EmptyState, Field, Notice, Select } from '../components/Primitives';
+import { useConfirmation } from '../components/ConfirmationDialog';
+import type { StudioMenuCommand } from '../components/WorkspaceSidebar';
 import { CharacterPicker } from '../components/CharacterPicker';
 import { useRecordPage } from '../lib/use-record-page';
 import { useRuntimeRead } from '../lib/use-runtime-read';
 import type { Action, WorkspaceView } from '../lib/types';
 import SkillPicker from '../components/SkillPicker';
-import DramaCreationComposer, { type DramaCreationRequest } from './DramaCreationComposer';
+import DramaCreationComposer, { type DramaComposerHandle, type DramaCreationRequest, type StudioPlanningInput } from './DramaCreationComposer';
+import type { CreativePlanningHandle, CreativePlanningThreadRequest } from './CreativePlanningDialog';
 import DramaTopicsDialog from './DramaTopicsDialog';
 import { rpc } from '../lib/client';
 import './drama.css';
+import './drama-library.css';
 
 const workPage = recordPageSchema(dramaWorkSchema);
 const episodesSchema = projectSummarySchema.array();
 const CreativePlanningDialog = lazy(() => import('./CreativePlanningDialog'));
+const WorkPreview = lazy(() => import('../components/ScenePreview').then(module => ({ default: module.ScenePreview })));
+const shortDate = new Intl.DateTimeFormat('zh-CN', { dateStyle: 'medium' });
+
+export interface DramaStudioRequest extends DramaCreationRequest { command: StudioMenuCommand; }
+export interface DramaStudioMenuContext { current: StudioMenuCommand; guideLibrary: boolean; }
 
 export function DramaModeFields({ visualStyle, narrativeMode, onChange, disabled = false }: {
   visualStyle: DramaWork['visualStyle']; narrativeMode: DramaWork['narrativeMode']; disabled?: boolean;
@@ -30,24 +39,112 @@ export function DramaModeFields({ visualStyle, narrativeMode, onChange, disabled
   </div>;
 }
 
-export default function DramaWorksPage({ workspace, action, onOpen, creationRequest }: { workspace: WorkspaceView; action: Action; onOpen(id: string, editStoryboard?: boolean): void; creationRequest?: DramaCreationRequest }) {
+export default function DramaWorksPage({ workspace, action, onOpen, onContinue, onMenuContext, request }: {
+  workspace: WorkspaceView; action: Action; request?: DramaStudioRequest;
+  onOpen(id: string, editStoryboard?: boolean): void; onContinue(id: string): void; onMenuContext(context: DramaStudioMenuContext): void;
+}) {
+  const id = useId();
+  const confirm = useConfirmation();
+  const [view, setView] = useState<'dialogue' | 'works'>('dialogue');
+  const [composerVersion, setComposerVersion] = useState(0);
+  const [composerRequest, setComposerRequest] = useState<DramaCreationRequest>();
+  const composerSequence = useRef(0);
+  const forwardedRequest = useRef<number | undefined>(undefined);
+  const composer = useRef<DramaComposerHandle>(null);
+  const planning = useRef<CreativePlanningHandle>(null);
+  const planningSequence = useRef(0);
+  const [planningRequest, setPlanningRequest] = useState<CreativePlanningThreadRequest>();
+  const [planningActive, setPlanningActive] = useState(false);
+  const [resetOpen, setResetOpen] = useState(false);
+  const keepDraft = useRef<HTMLButtonElement>(null);
   const [archived, setArchived] = useState(false);
   const [search, setSearch] = useState('');
   const query = useDeferredValue(search.trim());
   const searchInput = useRef<HTMLInputElement>(null);
+  const worksHeading = useRef<HTMLHeadingElement>(null);
+  const worksPage = useRef<HTMLElement>(null);
+  const returnToWork = useRef<string | undefined>(undefined);
   const [selected, setSelected] = useState<DramaWork>();
   const [editing, setEditing] = useState<DramaWork>();
   const [creatingEpisode, setCreatingEpisode] = useState(false);
-  const [planning, setPlanning] = useState(false);
   const [failure, setFailure] = useState('');
   const [busy, setBusy] = useState(false);
-  useEffect(() => { if (creationRequest) setSelected(undefined); }, [creationRequest]);
+  useEffect(() => {
+    if (!request || forwardedRequest.current === request.sequence) return;
+    forwardedRequest.current = request.sequence;
+    const { command } = request;
+    if (command === 'new') {
+      const statuses = [composer.current?.draftStatus(), planning.current?.draftStatus()];
+      if (statuses.includes('busy')) return;
+      if (statuses.includes('edited')) setResetOpen(true);
+      else resetComposer();
+      return;
+    }
+    if (command === 'works') { setSelected(undefined); setView('works'); return; }
+    setView('dialogue');
+    if (request.template) setPlanningActive(false);
+    if (!planningActive || request.template) setComposerRequest({ sequence: ++composerSequence.current, template: request.template });
+  }, [request, planningActive]);
+  useLayoutEffect(() => {
+    if (view !== 'works') return;
+    const workId = returnToWork.current;
+    returnToWork.current = undefined;
+    const trigger = workId && worksPage.current?.querySelector<HTMLButtonElement>(
+      `[data-work-id="${CSS.escape(workId)}"] .drama-library__view-work`,
+    );
+    if (trigger) trigger.focus();
+    else worksHeading.current?.focus({ preventScroll: true });
+  }, [view, selected?.id]);
   const library = useRecordPage('dramaWork.list', { archived, search: query, limit: 20 }, workspace.version, workPage);
-  const detail = useRuntimeRead('dramaWork.get', { workId: selected?.id }, workspace.version, dramaWorkSchema, Boolean(selected));
-  const episodes = useRuntimeRead('dramaWork.episodes', { workId: selected?.id }, workspace.version, episodesSchema, Boolean(selected));
+  const detail = useRuntimeRead('dramaWork.get', { workId: selected?.id }, workspace.version, dramaWorkSchema, view === 'works' && Boolean(selected));
+  const episodes = useRuntimeRead('dramaWork.episodes', { workId: selected?.id }, workspace.version, episodesSchema, view === 'works' && Boolean(selected));
   const work = selected ? detail.data ?? selected : undefined;
   const values = library.stale ? [] : library.items;
+  const { episodesByWork, episodePreviews } = useMemo(() => {
+    const episodesByWork = new Map<string, WorkEpisodes>();
+    const episodePreviews = new Map<string, EpisodePreview>();
+    for (const episode of workspace.projects) {
+      if (!episode.drama) continue;
+      const group = episodesByWork.get(episode.drama.workId) ?? { count: 0 };
+      const preview = readEpisodePreview(episode);
+      if (preview) episodePreviews.set(episode.id, preview);
+      group.count += 1;
+      if (!episode.archived) {
+        if (!group.latest || episode.updatedAt > group.latest.updatedAt) group.latest = episode;
+        if (preview && (!group.cover || episode.updatedAt > group.cover.project.updatedAt)) group.cover = preview;
+      }
+      episodesByWork.set(episode.drama.workId, group);
+    }
+    return { episodesByWork, episodePreviews };
+  }, [workspace.projects]);
+  const guideLibrary = view !== 'works' && !archived && !query && values.some(value => episodesByWork.get(value.id)?.latest);
+  useEffect(() => { onMenuContext({ current: view, guideLibrary }); }, [view, guideLibrary, onMenuContext]);
   const nextEpisodeNumber = (episodes.data ?? []).reduce((maximum, episode) => Math.max(maximum, episode.drama?.number ?? 0), 0) + 1;
+  const latestEpisodeId = work && !work.archived ? episodesByWork.get(work.id)?.latest?.id : undefined;
+
+  function resetComposer() {
+    setResetOpen(false); setComposerRequest(undefined); setView('dialogue');
+    setPlanningActive(false); setPlanningRequest(undefined);
+    setComposerVersion(value => value + 1);
+  }
+  async function openPlanning(input: StudioPlanningInput) {
+    const status = planning.current?.draftStatus();
+    if (status === 'busy' && (input.goal || input.history)) return false;
+    if (input.goal && status === 'edited' && !await confirm({
+      title: '开始新的分镜需求？', description: '当前分镜有未提交的内容。确认后会使用刚发送的需求。', confirmLabel: '使用新的需求',
+    })) return false;
+    if (!planningRequest || input.goal || input.history) setPlanningRequest({ ...input, sequence: ++planningSequence.current });
+    setPlanningActive(true);
+    return true;
+  }
+  function returnToComposer() {
+    setPlanningActive(false);
+    setComposerRequest({ sequence: ++composerSequence.current });
+  }
+  function openCreated(project: ProjectDocument) {
+    if (project.workflow.production.novelAdaptation) onContinue(project.id);
+    else onOpen(project.id);
+  }
   async function archive(value: DramaWork) {
     if (busy) return;
     setBusy(true); setFailure('');
@@ -56,44 +153,212 @@ export default function DramaWorksPage({ workspace, action, onOpen, creationRequ
     else setFailure('操作尚未完成，作品内容已保留，请核对提示后重试。');
     setBusy(false);
   }
-  return <div className="content-page drama-library">
-    <header className="page-heading"><div>{work && <Button variant="ghost" onClick={() => setSelected(undefined)}><ArrowLeft size={15} aria-hidden="true" />短剧工作室</Button>}<h1>{work?.title ?? '短剧工作室'}</h1></div>
-      {work ? <div className="heading-actions"><Button onClick={() => setEditing(work)} disabled={busy || work.archived}><Pencil size={15} aria-hidden="true" />编辑作品</Button><Button variant="primary" onClick={() => setCreatingEpisode(true)} disabled={work.archived}><Plus size={15} aria-hidden="true" />新建分集</Button></div>
-        : <Button aria-haspopup="dialog" onClick={() => setPlanning(true)}><Sparkles size={16} aria-hidden="true" />创作分镜</Button>}
-    </header>
-    {failure && <Notice kind="error">{failure}</Notice>}
-    <div hidden={Boolean(work)}><DramaCreationComposer workspace={workspace} action={action} request={work ? undefined : creationRequest} onCreated={project => { library.refresh(); onOpen(project.id); }} /></div>
-    {work ? <>
-      {detail.error && <Notice kind="error">{detail.error}<Button onClick={detail.refresh}>重试读取作品</Button></Notice>}
-      <div className="drama-work-overview" data-guide-loading={(!episodes.data || episodes.busy) && !episodes.error || undefined}>{work.description && <p>{work.description}</p>}<div className="pill-row"><span className="pill">{dramaVisualStyleLabels[work.visualStyle]}</span><span className="pill">{dramaNarrativeModeLabels[work.narrativeMode]}</span><span className="pill">{work.characterIds.length} 个共享角色</span>{work.archived && <span className="pill">已归档</span>}</div></div>
-      <div className="panel-heading"><h2>分集</h2><Button disabled={busy} onClick={() => void archive(work)}>{work.archived ? <RotateCcw size={15} /> : <Archive size={15} />}{work.archived ? '恢复作品' : '归档作品'}</Button></div>
-      {episodes.error && <Notice kind="error">{episodes.error}<Button onClick={episodes.refresh}>重试读取分集</Button></Notice>}
-      {episodes.busy && !episodes.data && <p role="status">正在读取分集…</p>}
-      <div className="drama-episode-list">{episodes.data?.map(episode => <article className="drama-episode-row" data-project-id={episode.id} key={episode.id}><div>{episode.drama && <span className="tiny-meta">第 {episode.drama.number} 集</span>}<h3>{episode.title}</h3>{episode.brief && <p>{episode.brief}</p>}{episode.drama && <div className="pill-row"><span className="pill">{dramaVisualStyleLabels[episode.drama.visualStyle]}</span><span className="pill">{dramaNarrativeModeLabels[episode.drama.narrativeMode]}</span></div>}{episode.archived && <span className="tiny-meta">已归档</span>}</div><Button data-guide="project-open" disabled={episode.archived} onClick={() => onOpen(episode.id)}>打开分集</Button></article>)}</div>
-      {episodes.data?.length === 0 && <EmptyState icon={<Clapperboard size={25} />} title="还没有分集" />}
-    </> : <>
-      <div className="drama-library-heading">
-        <h2>我的作品</h2>
-        <search className="drama-library-controls" aria-label="作品搜索">
-          <Field label="搜索作品"><input ref={searchInput} type="search" maxLength={200} value={search} onChange={event => setSearch(event.target.value)} placeholder="作品名称或故事设定" /></Field>
-          <div className="tabs" role="group" aria-label="作品筛选">
-            <button type="button" aria-pressed={!archived} className={!archived ? 'active' : ''} onClick={() => setArchived(false)}>可用</button>
-            <button type="button" aria-pressed={archived} className={archived ? 'active' : ''} onClick={() => setArchived(true)}>已归档</button>
-          </div>
-        </search>
+  return <div className="drama-studio">
+    <h1 className="drama-studio__title">短剧工作室</h1>
+    <div className="drama-studio__dialogue" hidden={view !== 'dialogue'}>
+      <div className="drama-studio__composer" hidden={planningActive}>
+        <DramaCreationComposer key={composerVersion} ref={composer} workspace={workspace} action={action} request={composerRequest}
+          focusOnMount={composerVersion > 0} onPlanning={openPlanning} onCreated={project => { library.refresh(); openCreated(project); }} />
       </div>
-      {library.error && <Notice kind="error">{library.error}<Button onClick={library.refresh}>重试读取作品</Button></Notice>}
-      {library.busy && !library.hasLoaded && <p role="status">正在读取作品…</p>}
-      <div className="drama-work-list">{values.map(value => <article className="drama-work-card" data-work-id={value.id} key={value.id}><Clapperboard size={21} aria-hidden="true" /><h2>{value.title}</h2>{value.description && <p>{value.description}</p>}<div className="pill-row"><span className="pill">{dramaVisualStyleLabels[value.visualStyle]}</span><span className="pill">{dramaNarrativeModeLabels[value.narrativeMode]}</span></div><Button data-guide="project-open" onClick={() => setSelected(value)}>查看分集</Button></article>)}</div>
-      {!values.length && library.hasLoaded && !library.error && !library.busy && <EmptyState icon={<Clapperboard size={25} />} title={query ? '没有匹配的作品' : archived ? '没有归档作品' : '还没有作品'}>{query && <Button onClick={() => { setSearch(''); searchInput.current?.focus(); }}>清除搜索作品</Button>}</EmptyState>}
-      {library.nextCursor !== null && <Button busy={library.loadingMore} onClick={() => void library.loadMore()}><ChevronDown size={15} />加载更多作品</Button>}
-    </>}
+      {planningRequest && <div className="drama-studio__planning" hidden={!planningActive}>
+        <Suspense fallback={<p role="status">正在接续分镜创作…</p>}>
+          <CreativePlanningDialog ref={planning} presentation="workspace" active={view === 'dialogue' && planningActive} threadRequest={planningRequest}
+            workspace={workspace} action={action} onClose={returnToComposer} onEdit={projectId => { setPlanningActive(false); onOpen(projectId, true); }} />
+        </Suspense>
+      </div>}
+    </div>
+    <section ref={worksPage} className="content-page drama-library" aria-labelledby={`${id}-works-heading`} hidden={view !== 'works'}>
+      {work ? <>
+        <header className="drama-library__detail-header">
+          <Button static variant="ghost" className="drama-library__back" aria-label="返回作品列表" onClick={() => {
+            returnToWork.current = work.id;
+            setSelected(undefined);
+          }}><ArrowLeft size={16} aria-hidden="true" />我的作品</Button>
+          <div className="drama-library__detail-title">
+            <h2 ref={worksHeading} id={`${id}-works-heading`} tabIndex={-1}>{work.title}</h2>
+            <div className="heading-actions">
+              <Button onClick={() => setEditing(work)} disabled={busy || work.archived}><Pencil size={16} aria-hidden="true" />编辑作品</Button>
+              <Button variant="primary" onClick={() => setCreatingEpisode(true)} disabled={work.archived || !episodes.data}><Plus size={16} aria-hidden="true" />新建分集</Button>
+            </div>
+          </div>
+          <div className="drama-library__detail-meta" data-guide-loading={(!episodes.data || episodes.busy) && !episodes.error || undefined}>
+            {work.description && <p>{work.description}</p>}
+            <div className="drama-library__facts">
+              <span>{dramaVisualStyleLabels[work.visualStyle]}</span>
+              <span>{dramaNarrativeModeLabels[work.narrativeMode]}</span>
+              {work.characterIds.length > 0 && <span>{work.characterIds.length} 个共享角色</span>}
+              {work.archived && <span>已归档</span>}
+            </div>
+          </div>
+        </header>
+        {failure && <Notice kind="error">{failure}</Notice>}
+        {detail.error && <Notice kind="error">{detail.error}<Button onClick={detail.refresh}>重试读取作品</Button></Notice>}
+        <section className="drama-library__episodes" aria-labelledby={`${id}-episodes-title`}>
+          <header className="drama-library__episodes-heading">
+            <h3 id={`${id}-episodes-title`}>分集</h3>
+            {episodes.data && <span className="drama-library__count">{episodes.data.length} 集</span>}
+            <Button static variant="ghost" disabled={busy} onClick={() => void archive(work)}>
+              {work.archived ? <RotateCcw size={16} aria-hidden="true" /> : <Archive size={16} aria-hidden="true" />}
+              {work.archived ? '恢复作品' : '归档作品'}
+            </Button>
+          </header>
+          {episodes.error && <Notice kind="error">{episodes.error}<Button onClick={episodes.refresh}>重试读取分集</Button></Notice>}
+          {episodes.busy && !episodes.data && <p className="drama-library__reading" role="status">正在读取分集…</p>}
+          {Boolean(episodes.data?.length) && <ol className="drama-episode-list" role="list">
+            {episodes.data?.map(episode => <EpisodeRow key={episode.id} episode={episode} preview={episodePreviews.get(episode.id)}
+              latest={episode.id === latestEpisodeId} onContinue={onContinue} />)}
+          </ol>}
+          {episodes.data?.length === 0 && <EmptyState icon={<Film size={20} strokeWidth={1.75} />} title="还没有分集" />}
+        </section>
+      </> : <>
+        <header className="drama-library-heading">
+          <h2 ref={worksHeading} id={`${id}-works-heading`} tabIndex={-1}>我的作品</h2>
+          <search className="drama-library-controls" aria-label="作品搜索">
+            <Field label="搜索作品">{field => <span className="search-field">
+              <Search size={16} strokeWidth={1.5} aria-hidden="true" />
+              <input {...field} ref={searchInput} type="search" maxLength={200} value={search} onChange={event => setSearch(event.target.value)} placeholder="作品名称或故事设定" />
+            </span>}</Field>
+            <div className="tabs" role="group" aria-label="作品筛选">
+              <button type="button" aria-pressed={!archived} className={!archived ? 'active' : ''} onClick={() => setArchived(false)}>可用</button>
+              <button type="button" aria-pressed={archived} className={archived ? 'active' : ''} onClick={() => setArchived(true)}>已归档</button>
+            </div>
+          </search>
+        </header>
+        {library.error && <Notice kind="error">{library.error}<Button onClick={library.refresh}>重试读取作品</Button></Notice>}
+        {library.busy && (!library.hasLoaded || library.stale) && <p className="drama-library__reading" role="status">正在读取作品…</p>}
+        {values.length > 0 && <ul className="drama-work-list drama-library__works" role="list">
+          {values.map(value => <WorkCard key={value.id} work={value} episodes={episodesByWork.get(value.id)}
+            onOpen={() => setSelected(value)} onContinue={onContinue} />)}
+        </ul>}
+        {!values.length && library.hasLoaded && !library.error && !library.busy && <div className="drama-library__empty">
+          <EmptyState icon={query ? <Search size={20} strokeWidth={1.75} /> : archived ? <Archive size={20} strokeWidth={1.75} /> : <Clapperboard size={20} strokeWidth={1.75} />}
+            title={query ? '没有匹配的作品' : archived ? '没有归档作品' : '还没有作品'}>
+            {query
+              ? <Button onClick={() => { setSearch(''); searchInput.current?.focus(); }}>清除搜索作品</Button>
+              : !archived && <Button variant="primary" onClick={() => { setView('dialogue'); returnToComposer(); }}>开始创作<ArrowRight size={16} aria-hidden="true" /></Button>}
+          </EmptyState>
+        </div>}
+        {library.nextCursor !== null && !library.stale && <Button busy={library.loadingMore} disabled={!library.canLoadMore} onClick={() => void library.loadMore()}>
+          <ChevronDown size={16} aria-hidden="true" />加载更多作品
+        </Button>}
+      </>}
+    </section>
     {editing && <WorkEditor work={editing} workspace={workspace} action={action} onClose={() => setEditing(undefined)} onSaved={value => { setEditing(undefined); library.refresh(); setSelected(value); }} />}
-    {creatingEpisode && work && <EpisodeCreator work={work} action={action} number={nextEpisodeNumber} onClose={() => setCreatingEpisode(false)} onCreated={project => { setCreatingEpisode(false); onOpen(project.id); }} />}
-    {planning && <Suspense fallback={<p role="status">正在打开分镜创作…</p>}>
-      <CreativePlanningDialog workspace={workspace} action={action} onClose={() => setPlanning(false)} onEdit={projectId => { setPlanning(false); onOpen(projectId, true); }} />
-    </Suspense>}
+    {creatingEpisode && work && <EpisodeCreator work={work} action={action} number={nextEpisodeNumber} onClose={() => setCreatingEpisode(false)} onCreated={project => { setCreatingEpisode(false); openCreated(project); }} />}
+    {resetOpen && <Dialog title="新建对话" role="alertdialog" descriptionId={`${id}-reset`} initialFocus={keepDraft} onClose={() => setResetOpen(false)}>
+      <div className="dialog__body"><p id={`${id}-reset`}>开始新对话会清空当前未创建的内容和创作设置。</p></div>
+      <div className="dialog__footer">
+        <Button ref={keepDraft} onClick={() => setResetOpen(false)}>保留当前草稿</Button>
+        <Button variant="primary" onClick={resetComposer}>开始新对话</Button>
+      </div>
+    </Dialog>}
   </div>;
+}
+
+function UpdatedDate({ value }: { value: string }) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return null;
+  return <time dateTime={date.toISOString()}>更新于 {shortDate.format(date)}</time>;
+}
+
+type EpisodePreview = {
+  project: ProjectSummary;
+  shot: NonNullable<ProjectSummary['thumbnailShot']>;
+  assets: NonNullable<ProjectSummary['thumbnailAsset']>[];
+};
+
+type WorkEpisodes = { count: number; latest?: ProjectSummary; cover?: EpisodePreview };
+
+function readEpisodePreview(project: ProjectSummary): EpisodePreview | undefined {
+  const shot = project.thumbnailShot;
+  const asset = project.thumbnailAsset;
+  if (!shot || shot.clipEdit || shot.sceneTemplate || !asset?.active || (asset.kind !== 'image' && asset.kind !== 'video')) return;
+  return { project, shot, assets: [asset] };
+}
+
+function EpisodeFrame({ preview }: { preview: EpisodePreview }) {
+  return <Suspense fallback={null}><WorkPreview {...preview} shotIndex={0} thumbnail /></Suspense>;
+}
+
+function WorkCard({ work, episodes, onOpen, onContinue }: {
+  work: DramaWork;
+  episodes?: WorkEpisodes;
+  onOpen(): void;
+  onContinue(id: string): void;
+}) {
+  const id = useId();
+  const { count = 0, latest, cover } = episodes ?? {};
+  const episodeLabel = latest?.drama && `第 ${latest.drama.number} 集`;
+  const episodeTitle = latest && episodeLabel && ![work.title, episodeLabel, `${work.title} · ${episodeLabel}`].includes(latest.title) ? latest.title : undefined;
+  return <li>
+    <article className="drama-work-card drama-library__card" data-work-id={work.id}>
+      {cover && <div className="drama-library__cover">
+        <EpisodeFrame preview={cover} />
+        {cover.project.id !== latest?.id && cover.project.drama &&
+          <span className="drama-library__cover-label">第 {cover.project.drama.number} 集</span>}
+      </div>}
+      <header>
+        {!cover && <span className="drama-library__card-mark"><Clapperboard size={16} strokeWidth={1.75} aria-hidden="true" /></span>}
+        <div className="drama-library__card-heading">
+          <h3 id={id}>{work.title}</h3>
+          <div className="drama-library__facts">
+            <span>{count} 集</span>
+            <span>{dramaVisualStyleLabels[work.visualStyle]}</span>
+            <span>{dramaNarrativeModeLabels[work.narrativeMode]}</span>
+          </div>
+        </div>
+      </header>
+      {(work.description || episodeLabel) && <div className="drama-library__card-content">
+        {work.description && <p className="drama-library__summary">{work.description}</p>}
+        {episodeLabel && <p className="drama-library__latest"><History size={14} aria-hidden="true" /><span>最近编辑 · {episodeLabel}</span>
+          {episodeTitle && <strong>{episodeTitle}</strong>}
+        </p>}
+      </div>}
+      <footer>
+        <UpdatedDate value={latest && latest.updatedAt > work.updatedAt ? latest.updatedAt : work.updatedAt} />
+        <div className="drama-library__card-actions">
+          <Button static variant="ghost" className="drama-library__view-work" data-guide="project-open" aria-describedby={id} onClick={onOpen}>
+            查看分集<ChevronRight size={16} aria-hidden="true" />
+          </Button>
+          {latest && !work.archived && <Button static className="drama-library__continue-work" aria-describedby={id} onClick={() => onContinue(latest.id)}>
+            继续创作<ArrowRight size={16} aria-hidden="true" />
+          </Button>}
+        </div>
+      </footer>
+    </article>
+  </li>;
+}
+
+function EpisodeRow({ episode, preview, latest, onContinue }: { episode: ProjectSummary; preview?: EpisodePreview; latest: boolean; onContinue(id: string): void }) {
+  const id = useId();
+  const number = episode.drama ? `第 ${episode.drama.number} 集` : undefined;
+  return <li>
+    <article className="drama-episode-row" data-project-id={episode.id} data-latest={latest || undefined}>
+      <div className="drama-library__episode-main">
+        {preview && <div className="drama-library__episode-preview"><EpisodeFrame preview={preview} /></div>}
+        <div className="drama-library__episode-content">
+          {number && episode.title !== number && <span className="drama-library__episode-number">{number}</span>}
+          <div className="drama-library__episode-heading">
+            <h4 id={id}>{episode.title}</h4>
+            {latest && <span className="drama-library__episode-latest"><History size={13} aria-hidden="true" />最近编辑</span>}
+          </div>
+          {episode.brief && <p className="drama-library__summary">{episode.brief}</p>}
+        </div>
+      </div>
+      <div className="drama-library__facts drama-library__episode-meta">
+        {episode.archived && <span>已归档</span>}
+        <span className="drama-library__shot-count"><Film size={14} strokeWidth={1.5} aria-hidden="true" />{episode.shotCount ? `${episode.shotCount} 镜` : '待分镜'}</span>
+        {episode.drama && <>
+          <span>{dramaVisualStyleLabels[episode.drama.visualStyle]}</span>
+          <span>{dramaNarrativeModeLabels[episode.drama.narrativeMode]}</span>
+        </>}
+        <UpdatedDate value={episode.updatedAt} />
+      </div>
+      <Button static variant="ghost" data-guide="project-open" aria-describedby={id} disabled={episode.archived} onClick={() => onContinue(episode.id)}>
+        打开分集<ChevronRight size={16} aria-hidden="true" />
+      </Button>
+    </article>
+  </li>;
 }
 
 function WorkEditor({ work, workspace, action, onClose, onSaved }: { work: DramaWork; workspace: WorkspaceView; action: Action; onClose(): void; onSaved(work: DramaWork): void }) {
@@ -134,10 +399,30 @@ function WorkEditor({ work, workspace, action, onClose, onSaved }: { work: Drama
 
 function EpisodeCreator({ work, number, action, onClose, onCreated }: { work: DramaWork; number: number; action: Action; onClose(): void; onCreated(project: ProjectDocument): void }) {
   const [title, setTitle] = useState(`第 ${Math.min(number, 100000)} 集`), [brief, setBrief] = useState(''), [episodeNumber, setEpisodeNumber] = useState(Math.min(number, 100000));
+  const [novelSource, setNovelSource] = useState('');
   const [modes, setModes] = useState({ visualStyle: work.visualStyle, narrativeMode: work.narrativeMode });
   const [busy, setBusy] = useState(false), [error, setError] = useState(''); const pending = useRef(false);
-  return <Dialog title="新建分集" onClose={onClose} dismissDisabled={busy} dismissOnBackdrop={false} className="drama-editor"><form onSubmit={event => {
-    event.preventDefault(); if (pending.current) return; pending.current = true; setBusy(true); setError('');
-    void action<ProjectDocument>('project.create', { title, brief, profile: { ...DEFAULT_VIDEO_PROFILE, width: 1080, height: 1920 }, drama: { workId: work.id, number: episodeNumber, ...modes, scenes: [] } }, '分集已创建').then(result => { if (result) onCreated(result); else setError('分集尚未创建，请核对集数和提示后重试。'); }).finally(() => { pending.current = false; setBusy(false); });
-  }}><div className="dialog__body form-stack"><Field label="分集名称" required><input name="title" required maxLength={160} value={title} disabled={busy} onChange={event => setTitle(event.target.value)} /></Field><Field label="集数" required hint={number > 100000 ? '默认序号已达上限，请填写一个未使用的集数。' : '同一作品中的集数不能重复，已归档分集也保留集数。'}><input name="number" type="number" required min={1} max={100000} step={1} value={episodeNumber} disabled={busy} onChange={event => setEpisodeNumber(Number(event.target.value))} /></Field><Field label="本集故事"><textarea name="brief" rows={4} maxLength={30000} value={brief} disabled={busy} onChange={event => setBrief(event.target.value)} /></Field><DramaModeFields {...modes} disabled={busy} onChange={patch => setModes({ ...modes, ...patch })} />{error && <Notice kind="error">{error}</Notice>}</div><div className="dialog__footer"><Button disabled={busy} onClick={onClose}>取消</Button><Button type="submit" variant="primary" busy={busy}>创建分集</Button></div></form></Dialog>;
+  async function create() {
+    if (pending.current) return;
+    pending.current = true; setBusy(true); setError('');
+    try {
+      const result = await action<ProjectDocument>('project.create', { title, brief, novelSource: novelSource.trim() || undefined,
+        profile: { ...DEFAULT_VIDEO_PROFILE, width: 1080, height: 1920 }, drama: { workId: work.id, number: episodeNumber, ...modes, scenes: [] } }, '分集已创建');
+      if (result) onCreated(result);
+      else setError('分集尚未创建，请核对集数和提示后重试。');
+    } finally { pending.current = false; setBusy(false); }
+  }
+  return <Dialog title="新建分集" onClose={onClose} dismissDisabled={busy} dismissOnBackdrop={false} className="drama-editor">
+    <form onSubmit={event => { event.preventDefault(); void create(); }}>
+      <div className="dialog__body form-stack">
+        <Field label="分集名称" required><input name="title" required maxLength={160} value={title} disabled={busy} onChange={event => setTitle(event.target.value)} /></Field>
+        <Field label="集数" required hint={number > 100000 ? '默认序号已达上限，请填写一个未使用的集数。' : '同一作品中的集数不能重复，已归档分集也保留集数。'}><input name="number" type="number" required min={1} max={100000} step={1} value={episodeNumber} disabled={busy} onChange={event => setEpisodeNumber(Number(event.target.value))} /></Field>
+        <Field label="本集故事"><textarea name="brief" rows={3} maxLength={30000} value={brief} disabled={busy} onChange={event => setBrief(event.target.value)} /></Field>
+        <Field label="小说原文" hint="粘贴要改编的章节，即可用导演剧本流程制作本集。">{field => <textarea {...field} name="novelSource" rows={5} maxLength={MAX_NOVEL_SOURCE_LENGTH} value={novelSource} disabled={busy} onChange={event => setNovelSource(event.target.value)} />}</Field>
+        <DramaModeFields {...modes} disabled={busy} onChange={patch => setModes({ ...modes, ...patch })} />
+        {error && <Notice kind="error">{error}</Notice>}
+      </div>
+      <div className="dialog__footer"><Button disabled={busy} onClick={onClose}>取消</Button><Button type="submit" variant="primary" busy={busy}>创建分集</Button></div>
+    </form>
+  </Dialog>;
 }

@@ -24,7 +24,7 @@ import { editingOutputSchema, manualPlanningOutput, parseProductionDocument, pro
 import { githubTrendingPrompt, githubTrendingRequest, githubTrendingSummary, validateGithubTrendingStoryboard } from './github-trending.js';
 import { storyboardWebPrompt, storyboardWebRequest, type StoryboardWebReader, type StoryboardWebResearch } from './storyboard-research.js';
 import { executeStoryboard, STORYBOARD_BATCH_SIZE, storyboardOutlineStage } from './storyboard-generation.js';
-import { createModelResponses, ModelResponseValidationError } from './model-responses.js';
+import { createModelResponses, ModelResponseValidationError, parseModelJson, responseIssues } from './model-responses.js';
 import { createRunProgress } from './run-progress.js';
 import { creativeContextSchema, MediaRequestRejectedError, projectCharacterIds, shotCreativePrompt, validateCreativeReferences } from '@video-quickly/contracts';
 import { executeMediaGraph } from './media-graph.js';
@@ -33,7 +33,7 @@ import { seedBuiltInDramaTemplates } from './builtin-drama-templates.js';
 import { seedBuiltInDramaStudio } from './builtin-drama-studio.js';
 import { createDramaTopicLibrary } from './drama-topics.js';
 import { readDramaScript } from './drama-scripts.js';
-import { createDramaWorkflow, dramaStudioCreateInputSchema, dramaStylePresets } from '@video-quickly/contracts';
+import { createDramaWorkflow, createNovelDramaWorkflow, dramaStudioCreateInputSchema, dramaStylePresets, novelSourceSchema } from '@video-quickly/contracts';
 import { resolveProductionWorkflow, nativeReferenceStep, openingFrameShots, groupsNativeFirstFrames, groupsReferenceImages, isVideoGenerationNode, DEFAULT_AUDIO_PROCESSING, planReferenceImageSequences, planningDocumentSchemas, productionPlanningStep, productionSettingsSchema, sameJsonContent, singleImageRequestModel, supportsProductionAgent, usesManualPlanning } from '@video-quickly/contracts';
 import { createSkillLibrary } from './skill-library.js';
 import { appendSkillContext, supportsSkillScript } from '@video-quickly/contracts';
@@ -58,6 +58,8 @@ import { createProjectFileCleanup } from './project-file-cleanup.js';
 import { createRunInspector, redactInspectionText } from './run-inspection.js';
 import { createRunControl, runIdInput } from './run-control.js';
 import { createRunStarter, regenerationInput, researchInput, shotRegenerationInput } from './run-start.js';
+import { createNovelAdaptation, novelProductionBlockedMessage } from './novel-adaptation.js';
+import { generatedNovelCharactersSchema, novelAdaptationStartInputSchema } from '@video-quickly/contracts';
 import type { FrozenProjectDocument, RunSnapshot } from './run-snapshot.js';
 import { createLogger, logError, type DiagnosticLogger } from './logging.js';
 import { createProjectReadiness } from './project-readiness.js';
@@ -81,9 +83,10 @@ import { agentToolOutputDirectory, materializeToolArtifact } from './tool-artifa
 import { characterAppearanceShot, matchCastReferences, recurringCast } from './automatic-casting.js';
 import { orderedNodes, resolveProductionNodes } from './production-nodes.js';
 import { prepareCreativePlanningExecution, readCreativeReferenceImage } from './creative-planning-execution.js';
-import { creativeObjectiveInputSchema, creativePlanningReviseInputSchema, creativePlanningStartInputSchema, runInspectionSchema } from '@video-quickly/contracts';
+import { creativeObjectiveInputSchema, creativePlanningReviseInputSchema, creativePlanningStartInputSchema, creativePreviewStartInputSchema, runInspectionSchema } from '@video-quickly/contracts';
 import { createCreativeObjectivePlanner } from './creative-objective-planner.js';
 import { createCreativePlanning } from './creative-planning.js';
+import { createCreativePreviewRecommender, type CreativePreviewRecommendationSource } from './creative-preview-recommender.js';
 
 export { SimulatedProcessExit } from './activities.js';
 export type { DiagnosticLogger } from './logging.js';
@@ -173,7 +176,7 @@ const chargeStartInput = entityId.extend({
   nodeId: z.string().optional(), parentRunId: z.string().optional(), selection: runSelectionSchema.optional(),
   regeneration: regenerationInput.optional(), research: researchInput.optional(),
 });
-const projectCreateInput = z.object({ title: z.string().min(1).max(160), brief: z.string().max(30000).default(''), originalText: projectSchema.shape.originalText, drama: createDramaEpisodeInput.optional(), profile: videoProfileSchema.optional(), skillIds: z.array(z.string().min(1)).max(500).optional(), templateId: z.string().optional(), seriesTemplateId: z.string().min(1).optional(), seriesTemplateRevision: z.number().int().positive().optional() }).refine(value => Boolean(value.seriesTemplateId) === (value.seriesTemplateRevision !== undefined), '请选择系列模板及其当前修订。');
+const projectCreateInput = z.object({ title: z.string().min(1).max(160), brief: z.string().max(30000).default(''), originalText: projectSchema.shape.originalText, novelSource: novelSourceSchema.optional(), drama: createDramaEpisodeInput.optional(), profile: videoProfileSchema.optional(), skillIds: z.array(z.string().min(1)).max(500).optional(), templateId: z.string().optional(), seriesTemplateId: z.string().min(1).optional(), seriesTemplateRevision: z.number().int().positive().optional() }).refine(value => Boolean(value.seriesTemplateId) === (value.seriesTemplateRevision !== undefined), '请选择系列模板及其当前修订。');
 const now = () => new Date().toISOString();
 
 function rpcIdentifiers(value: unknown): Record<string, string> {
@@ -254,6 +257,15 @@ export function createRuntime(options: RuntimeOptions) {
   const voices = createVoiceLibrary({ database, store, onChanged: changed });
   const dramaWorks = createDramaWorkLibrary({ database, store, changed });
   const dramaTopics = createDramaTopicLibrary({ database, store, changed });
+  const novelAdaptation = createNovelAdaptation({ database, store, project, writeProject, run,
+    projectOccupied: id => batches.blocked(id) || projectBusy(id), availableModels, prepareSkills: ids => skillLibrary.prepare(ids),
+    profilesFor: projectProfiles, validateReferences: requireCandidateAssets,
+    validateReferenceFiles: assets => validatePromptAssets(assets, '角色参考图', '重试'), changed,
+    onRunCreated(id) {
+      recordEvent(id, 'run.created', '小说改编步骤已开始。');
+      schedule(id);
+    },
+  });
   function projectProfiles(value: Parameters<typeof characters.profilesFor>[0] & Pick<ProjectDocument, 'drama'>) {
     const bundle = characters.profilesFor(value);
     const sound = voices.profilesFor(value, bundle.characters);
@@ -268,6 +280,7 @@ export function createRuntime(options: RuntimeOptions) {
     directory, database, store, reads, project, readAudioWaveform: options.readAudioWaveform?.bind(options), trackWork, changed,
     characterAssetsInUse: ids => new Set([...characters.assetsInUse(ids), ...voices.assetsInUse(ids)]),
     imageToolAssetsInUse: imageTools.assetsInUse,
+    adaptationAssetsInUse: novelAdaptation.assetsInUse,
     bindImportedAsset(projectId, shotId, asset) {
       const currentProject = project(projectId);
       if (!currentProject.shots.some(shot => shot.id === shotId)) throw new Error('镜头已移除，无法关联导入素材。');
@@ -338,12 +351,12 @@ export function createRuntime(options: RuntimeOptions) {
     }
   }
 
-  async function validatePromptAssets(assets: AssetRecord[]) {
+  async function validatePromptAssets(assets: AssetRecord[], description = '实验输入素材', retry = '重新预览') {
     requireCandidateAssets(assets);
     for (const asset of assets) {
       const info = await stat(asset.path).catch(() => undefined);
-      if (!info?.isFile() || info.size !== asset.size) throw new Error('实验输入素材缺失或损坏，请修复后重新预览。');
-      if (await hashFileSha256(asset.path) !== asset.sha256) throw new Error('实验输入素材校验失败，请修复后重新预览。');
+      if (!info?.isFile() || info.size !== asset.size) throw new Error(`${description}缺失或损坏，请修复后${retry}。`);
+      if (await hashFileSha256(asset.path) !== asset.sha256) throw new Error(`${description}校验失败，请修复后${retry}。`);
     }
   }
 
@@ -457,6 +470,13 @@ export function createRuntime(options: RuntimeOptions) {
   function writeProject(value: ProjectDocument, baseline = project(value.id)) {
     const previousWorkflow = baseline.workflow;
     let workflow = value.workflow;
+    if (previousWorkflow.production.novelAdaptation !== workflow.production.novelAdaptation) throw new Error('已创建的分集不能切换小说改编流程。');
+    if (workflow.production.novelAdaptation && (workflow.id !== 'native-video'
+      || !workflow.nodes.some(node => node.id === 'screenplay' && node.kind === 'brief' && node.config.documentRole === 'screenplay' && !node.config.screenplayDraft)
+      || !workflow.nodes.some(node => node.id === 'director-characters' && node.kind === 'assets' && node.config.documentRole === 'novel-characters')
+      || !workflow.nodes.some(node => node.id === 'script' && node.kind === 'script' && node.config.modelBinding === 'default'))) {
+      throw new Error('小说改编流程须保留导演剧本、角色资产和分镜步骤。');
+    }
     const sameProduction = sameJsonContent(workflow.production, previousWorkflow.production)
       || sameJsonContent(workflow.production, workflowSchema.shape.production.safeParse(previousWorkflow.production).data);
     if (sameProduction) {
@@ -577,7 +597,7 @@ export function createRuntime(options: RuntimeOptions) {
   type VideoApplicationReceipt = { nodeIds: string[]; projectDigest: string; outputDigest: string };
 
   function applyProductionResult(runId: string, saved: RunSnapshot, videoNodeId?: string) {
-    if (saved.assistant || saved.trial || saved.regeneration || saved.research || saved.exportBatch || saved.creativePlanning) return;
+    if (saved.assistant || saved.trial || saved.regeneration || saved.research || saved.exportBatch || saved.creativePlanning || saved.novelAdaptation) return;
     if (!videoNodeId && (saved.selection || !saved.nodes.some(node => node.kind === 'agent') && (saved.inspectionNodes ?? saved.nodes).filter(node => node.kind !== 'subflow').length < 2)) return;
     const videoApplication = store.get<VideoApplicationReceipt>('run-video-application', runId);
     if (store.get('run-application', runId) || videoNodeId && videoApplication?.nodeIds.includes(videoNodeId)) return;
@@ -607,6 +627,7 @@ export function createRuntime(options: RuntimeOptions) {
   async function preparePromptDraft(draft: PromptDraft, prefill = false): Promise<{ saved: RunSnapshot; preview: PromptPreview }> {
     const baseline = project(draft.projectId); requireRevision(baseline, draft.projectRevision);
     if (baseline.archived) throw new Error('请先恢复项目。');
+    if (novelAdaptation.blockProduction(baseline)) throw new Error(novelProductionBlockedMessage);
     const original = baseline.workflow.nodes.find(node => node.id === draft.node.id && node.kind === draft.node.kind);
     if (original && original.config.documentRole !== draft.node.config.documentRole) throw new Error('不能通过提示词草稿更改步骤的文档类型。');
     if (draft.node.config.imageEdit !== undefined) throw new Error('局部改图请从镜头候选选择原图与区域后生成。');
@@ -855,6 +876,7 @@ export function createRuntime(options: RuntimeOptions) {
   }
   function productionBlockIssue(value: ProjectDocument, nodes: WorkflowNode[]): Pick<ReadinessIssue, 'category' | 'message' | 'fix' | 'nodeId'> | undefined {
     if (value.archived) return { category: 'project', message: '请先恢复项目。', fix: 'project' };
+    if (novelAdaptation.blockProduction(value)) return { category: 'project', message: novelProductionBlockedMessage, fix: 'novel-adaptation' };
     if (batches.blocked(value.id)) return { category: 'project', message: '该项目已有未完成的批量导出，请继续或停止该批次。', fix: 'batch-export' };
     if (projectBusy(value.id)) return { category: 'project', message: '该项目已有未完成的任务，请继续或停止现有任务。', fix: 'production' };
     const ids = new Set(nodes.map(node => node.id));
@@ -1171,7 +1193,7 @@ export function createRuntime(options: RuntimeOptions) {
     if (node.kind === 'subflow') return executeSubflow(runId, node, saved, controller);
     updateRun(runId, { status: 'running', currentNodeId: node.id, error: undefined });
     recordEvent(runId, 'node.started', `开始：${node.label}`, node.id);
-    const creativePreview = node.id === 'assets' && saved.creativePlanning?.plan?.route === 'keyframe-preview';
+    const creativePreview = node.id === 'assets' && (saved.creativePlanning?.preview || saved.creativePlanning?.plan?.route === 'keyframe-preview');
     if (creativePreview && !options.executeActivity) throw new Error('当前运行环境无法预演关键镜头。');
     const scopedProject = saved.regeneration ? { ...saved.project, creativeContext: saved.project.creativeContext ? { ...saved.project.creativeContext, characterIds: [] } : undefined, shots: saved.project.shots.filter(shot => shot.id === saved.regeneration!.shotId) } : saved.project;
     const frozenInput = store.get<ProjectDocument>('node-project', `${runId}:${node.id}`);
@@ -1192,7 +1214,7 @@ export function createRuntime(options: RuntimeOptions) {
     // Keep locked shots as group boundaries without expecting newly generated assets for them.
     const mediaInputProject = nativeFirstFrames ? executionProject : mediaProject;
     store.put('node-project', `${runId}:${node.id}`, executionProject);
-    if (saved.trial || saved.sourceGeneration) await validatePromptAssets(saved.assets ?? []);
+    if (saved.trial || saved.sourceGeneration || saved.creativePlanning?.preview) await validatePromptAssets(saved.assets ?? []);
     if (node.config.imageEdit !== undefined && (!saved.regeneration?.imageEdit || fingerprint(node.config.imageEdit) !== fingerprint(saved.regeneration.imageEdit))) throw new Error('局部改图输入须由镜头候选冻结，请重新选择改图区域。');
     const selectedModel = node.modelId ? saved.models.find(model => model.id === node.modelId) : undefined;
     validateExecutionModel(node, selectedModel);
@@ -1205,7 +1227,7 @@ export function createRuntime(options: RuntimeOptions) {
     const storyboardBatchSize = usesProvider && node.kind === 'script' && !saved.regeneration && !creative ? saved.storyboardBatchSize : undefined;
     const secret = selectedModel?.credentialRef ? rememberSecret(await options.secretStore?.get(selectedModel.credentialRef)) : undefined;
     if (selectedModel?.hasSecret && !secret) throw new Error('模型凭据不可用，请重新保存密钥后创建新的运行。');
-    const media = ['assets', 'animation', 'export'].includes(node.kind);
+    const media = node.config.documentRole !== 'novel-characters' && ['assets', 'animation', 'export'].includes(node.kind);
     if (media && saved.voiceAssets?.length) await validateVoiceAssets(saved.voiceAssets);
     const safety = options.activitySafety?.(node) ?? (usesProvider || (media && !!selectedModel) ? 'external' : 'local');
     const cached = journal.get(runId, node.id);
@@ -1244,7 +1266,7 @@ export function createRuntime(options: RuntimeOptions) {
     const researchContext = usesProvider && node.kind === 'research' ? selectResearchPassages(executionProject, saved.research?.sourceIds ?? (Array.isArray(node.config.sourceIds) ? node.config.sourceIds.filter((id): id is string => typeof id === 'string') : undefined), saved.research?.instruction ?? node.prompt) : undefined;
     let githubTrending: GithubTrendingRanking | undefined;
     let webResearch: StoryboardWebResearch | undefined;
-    if (usesProvider && node.kind === 'script' && !saved.trial && !saved.regeneration && !saved.assistant && !creative) {
+    if (usesProvider && node.kind === 'script' && !saved.trial && !saved.regeneration && !saved.assistant && !creative && !saved.novelAdaptation) {
       const id = `${runId}:${node.id}`;
       githubTrending = store.get<GithubTrendingRanking>('github-trending-input', id);
       webResearch = store.get<StoryboardWebResearch>('storyboard-web-input', id);
@@ -1272,7 +1294,9 @@ export function createRuntime(options: RuntimeOptions) {
     const fixedOutputs = Boolean(saved.outputContractVersion);
     const videoModel = node.kind === 'script' && !creative ? storyboardVideoModel(saved.trial?.inputProject ?? saved.project, saved.models) : undefined;
     const document = productionDocumentContract(node, saved.outputContractVersion);
-    const outputSchema = creative?.outputSchema ?? (node.kind === 'script' && !storyboardBatchSize ? storyboardOutputContract(saved.outputContractVersion).jsonSchema : document?.jsonSchema);
+    const novelCharacters = saved.novelAdaptation?.step === 'characters';
+    const outputSchema = creative?.outputSchema ?? (novelCharacters ? novelCharactersJsonSchema
+      : node.kind === 'script' && !storyboardBatchSize ? storyboardOutputContract(saved.outputContractVersion).jsonSchema : document?.jsonSchema);
     const input = { project: executionProject, node, model: selectedModel ?? null, skills: saved.skills.filter(skill => node.skillIds.includes(skill.id)), handlerVersion: saved.handlerVersion, ...(fixedOutputs ? { outputContractVersion: saved.outputContractVersion } : {}), ...(storyboardBatchSize ? { storyboardBatchSize } : {}), ...(saved.unifiedShotProfile ? { unifiedShotProfile: true } : {}), ...(saved.exportBatch ? { exportBatch: saved.exportBatch, assets: saved.assets } : {}), ...(githubTrending ? { githubTrending } : {}), ...(webResearch ? { webResearch } : {}), ...(creative ? { creativePlanning: saved.creativePlanning, creativePrompt: creative.prompt } : {}), ...(creativePreview ? { creativePlan: saved.creativePlanning?.plan } : {}) };
     const retryIssues = outputSchema ? modelResponses.retryIssues(`${runId}:${node.id}`) : undefined;
     const upstream = usesProvider && !saved.assistant && !researchContext ? upstreamResults(runId, node, saved) : [];
@@ -1280,13 +1304,21 @@ export function createRuntime(options: RuntimeOptions) {
       : saved.includeEpisodeOriginalText ? (saved.project.episode ?? saved.project.episodeSource)?.originalText : undefined;
     const workflowPrompt = (project: ProjectDocument, stage?: StoryboardPromptStage, legacyPlanningProfile = false) => buildWorkflowPrompt(project, node, saved.skills, Boolean(saved.regeneration), executionCharacters, upstream, saved.outputContractVersion, stage,
       { legacyPlanningProfile, unifiedShotProfile: Boolean(saved.unifiedShotProfile), originalText, originalTextLabel: saved.includeProjectOriginalText ? '项目原文' : '本集原文' });
-    const outlineStage = storyboardBatchSize ? storyboardOutlineStage(executionProject, Boolean(githubTrending), node.config.automaticCasting === true) : undefined;
+    const fixedCharacterAssets = saved.novelAdaptation?.step === 'storyboard';
+    const outlineStage = storyboardBatchSize ? storyboardOutlineStage(executionProject, Boolean(githubTrending), node.config.automaticCasting === true, fixedCharacterAssets) : undefined;
     const originalScript = outlineStage && node.config.automaticCasting === true && !(saved.includeProjectOriginalText && originalText?.trim())
       ? (saved.includeProjectOriginalText ? saved.project.brief : saved.project.episode?.originalText || saved.project.brief).trim() : '';
     const webPrompt = githubTrending ? githubTrendingPrompt(githubTrending) : webResearch ? storyboardWebPrompt(webResearch) : '';
-    const resultLabel = creative?.label ?? document?.label ?? '分镜';
+    const resultLabel = creative?.label ?? document?.label ?? (novelCharacters ? '角色资产' : '分镜');
     const correction = retryIssues?.length ? `\n\n上次${resultLabel}返回的字段校验错误：${JSON.stringify(retryIssues)}\n本次请修正上述字段，${document || creative ? '' : '仍依据本次已完成的简报与风格'}返回完整 JSON 对象，不要只返回修补片段。` : '';
     const buildPrompt = (legacyPlanningProfile = false) => {
+      if (saved.novelAdaptation?.step === 'screenplay' || novelCharacters) {
+        const heading = novelCharacters ? '审核通过的导演剧本' : '小说原文';
+        const content = novelCharacters ? executionProject.originalText : saved.novelAdaptation?.source;
+        const style = executionProject.style.trim(), brief = executionProject.brief.trim();
+        return appendSkillContext([node.prompt, brief && `本集创作要求：\n${brief}`, style && `本集画风：\n${style}`,
+          `${heading}（创作资料）：\n${content ?? ''}`, correction].filter(Boolean).join('\n\n'), node, saved.skills);
+      }
       const basePrompt = creative?.prompt ?? (saved.assistant ? node.prompt
         : researchContext ? researchPrompt(executionProject, node, saved.skills, researchContext)
         : usesProvider ? [workflowPrompt(executionProject, outlineStage, legacyPlanningProfile),
@@ -1326,7 +1358,7 @@ export function createRuntime(options: RuntimeOptions) {
           let requestPhase: ModelRequestPhase | undefined;
           nodeLogger.info('provider.request_started', { phase: 'submit' });
           try {
-            const model = (storyboardBatchSize || creative) && request.outputSchema && request.outputSchemaName
+            const model = (storyboardBatchSize || creative || saved.novelAdaptation) && request.outputSchema && request.outputSchemaName
               ? textModelWithTaskSchema(selectedModel, request.outputSchema, request.outputSchemaName) : selectedModel;
             const usePromptFormat = () => {
               modelResponses.usePromptFormat(context.operationId);
@@ -1355,6 +1387,7 @@ export function createRuntime(options: RuntimeOptions) {
           const storyboard = await executeStoryboard({
             journal, responses: modelResponses, progress: runProgress, runId, nodeId: node.id, inputHash: fingerprint(input), batchSize: storyboardBatchSize,
             project: executionProject, characters: executionCharacters, ranking: githubTrending, signal: controller.signal, safety, automaticCasting: node.config.automaticCasting === true,
+            fixedCharacterAssets,
             outputContractVersion: saved.outputContractVersion,
             outlinePrompt: legacyPlanningProfile => legacyPlanningProfile ? buildPrompt(true) : prompt,
             batchPrompt: (stage, creativeContext, repositories) => legacyPlanningProfile => {
@@ -1378,7 +1411,7 @@ export function createRuntime(options: RuntimeOptions) {
           return { ...storyboard, source: 'model', modelId: selectedModel.id } as unknown as JsonValue;
         }
         const generate = () => requestText(
-          { prompt, operationId: responseAttempt ? `${context.operationId}:response:${responseAttempt}` : context.operationId, outputSchema, outputSchemaName: creative?.name ?? document?.name },
+          { prompt, operationId: responseAttempt ? `${context.operationId}:response:${responseAttempt}` : context.operationId, outputSchema, outputSchemaName: creative?.name ?? document?.name ?? (novelCharacters ? 'novel_character_assets' : undefined) },
           responseAttempt ? { operationId: context.operationId, attempt: responseAttempt } : undefined,
         );
         const generated = researchContext
@@ -1407,6 +1440,11 @@ export function createRuntime(options: RuntimeOptions) {
               path: '$', message: textIncompleteMessage(generated.incompleteReason ?? 'unknown', document || creative?.reference ? 'document' : 'storyboard'),
             }], resultLabel);
             if (creative) return { ...creative.parse(text), ...metadata } as JsonValue;
+            if (novelCharacters) {
+              const parsed = generatedNovelCharactersSchema.safeParse(parseModelJson(text, resultLabel));
+              if (!parsed.success) throw new ModelResponseValidationError(responseIssues(parsed.error), resultLabel);
+              return { ...parsed.data, ...metadata } as JsonValue;
+            }
             if (document) return { ...parseProductionDocument(text, document), ...metadata } as JsonValue;
             const script = parseWorkflowScript(text, executionProject, Boolean(saved.regeneration), executionCharacters, saved.outputContractVersion);
             if (githubTrending) validateGithubTrendingStoryboard(script.shots, githubTrending);
@@ -1498,13 +1536,19 @@ export function createRuntime(options: RuntimeOptions) {
       const manual = fixedOutputs ? manualPlanningOutput(saved.project, node, saved.outputContractVersion) : undefined;
       return manual ?? localNodeResult(node, executionProject, store.list<AssetRecord>('asset'));
     }, output => {
+      if (saved.novelAdaptation) {
+        store.put('node-result', `${runId}:${node.id}`, output);
+        return;
+      }
       if (saved.creativePlanning) {
         if (node.id === 'style') creativePlanning.captureStyleCard(runId, saved, output);
         if (creativePreview) {
-          for (const asset of nodeResultAssets(output)) {
+          const assets = nodeResultAssets(output);
+          for (const asset of assets) {
             if (store.get<AssetRecord>('asset', asset.id)) requireCandidateAssets([asset]);
             else store.put('asset', asset.id, asset);
           }
+          creativePlanning.capturePreviewAssets(runId, saved, assets);
         }
         store.put('node-result', `${runId}:${node.id}`, output);
         return;
@@ -1611,7 +1655,9 @@ export function createRuntime(options: RuntimeOptions) {
     if (closing) throw new Error('运行环境正在关闭。');
     const saved = store.get<RunSnapshot>('run-snapshot', runId);
     if (!saved || ![1, 2, 3, 4].includes(saved.handlerVersion)) throw new Error('运行版本不兼容，请复制项目并创建新的运行。');
-    const { stepRetry: retry, currentNodeId } = run(runId);
+    const current = run(runId);
+    novelAdaptation.assertCurrentRun(current, saved);
+    const { stepRetry: retry, currentNodeId } = current;
     const retryNode = retry?.status === 'pending' ? (saved.inspectionNodes ?? saved.nodes).find(node => node.id === retry.nodeId) : undefined;
     if (retry?.status === 'pending' && !retryNode) throw new Error('本次制作中没有所选的重试步骤。');
     if (resume && currentNodeId === 'video-agent' && isAutonomousVideoRun(saved)) {
@@ -1901,6 +1947,7 @@ export function createRuntime(options: RuntimeOptions) {
     if (method === 'run.resume' || method === 'run.step.retry') {
       const { runId, nodeId } = runIdInput.extend({ nodeId: z.string().optional() }).parse(params);
       const saved = store.get<RunSnapshot>('run-snapshot', runId);
+      if (saved?.novelAdaptation) novelAdaptation.assertCurrentRun(run(runId), saved);
       const nodes = saved ? saved.inspectionNodes ?? workflowNodesWithSubflows({ ...saved.project.workflow, nodes: saved.nodes }) : [];
       return nodes.some(node => (method === 'run.resume' || node.id === nodeId || node.id.startsWith(`${nodeId}/subflow/`))
         && stepMayCharge(node, !saved?.useOriginalVideoReferences || !nativeReferenceStep(saved.project.workflow)));
@@ -1910,11 +1957,14 @@ export function createRuntime(options: RuntimeOptions) {
       const { requestId } = z.object({ requestId: z.string().uuid() }).parse(params);
       return !store.get('planning-prefill-request', requestId);
     }
+    if (method === 'novelAdaptation.start') return !novelAdaptation.hasRequest(novelAdaptationStartInputSchema.parse(params).requestId);
     if (method === 'workflowAssistant.start') {
       const request = entityId.extend({ requestId: z.string().uuid() }).parse(params);
       return !store.get('workflow-assistant-request', fingerprint(request));
     }
     if (method === 'creativePlanning.plan') return !creativeObjectives.hasSubmission(creativeObjectiveInputSchema.parse(params).requestId);
+    if (method === 'creativePlanning.previewRecommend') return !creativePreviewRecommender.hasSubmission(params);
+    if (method === 'creativePlanning.previewStart') return !creativePlanning.hasRequest(creativePreviewStartInputSchema.parse(params).requestId);
     if (method === 'creativePlanning.start' || method === 'creativePlanning.revise') {
       const input = (method === 'creativePlanning.start' ? creativePlanningStartInputSchema : creativePlanningReviseInputSchema).parse(params);
       return !creativePlanning.hasRequest(input.requestId);
@@ -1940,21 +1990,31 @@ export function createRuntime(options: RuntimeOptions) {
       const saved = store.get<RunSnapshot>('prompt-session-snapshot', `${sessionId}@${revision}`);
       return { ...prompt, estimate: summarizeCharge(saved ? snapshotChargeWork(saved) : []) };
     }
+    if (method === 'novelAdaptation.start') {
+      const input = novelAdaptationStartInputSchema.parse(params);
+      const title = { screenplay: '改写导演剧本？', characters: '提取角色资产？', storyboard: '生成分镜？' }[input.step];
+      return { ...prompt, title, estimate: summarizeCharge([{ kind: 'text', model: novelAdaptation.quote(input), count: input.step === 'storyboard' ? undefined : 1 }]) };
+    }
     if (method === 'creativePlanning.start') {
       const input = creativePlanningStartInputSchema.parse(params);
       const model = store.get<ModelProfile>('model', input.modelId);
       const plan = creativePlanning.executionPlan(input);
       const work: PlannedCharge[] = [{ kind: 'text', model, count: plan?.route === 'style-only' || 'styleCardId' in input.reference ? 1 : 2 }];
-      if (plan?.route === 'keyframe-preview') {
-        const imageModel = creativePlanning.previewModel(input, plan);
-        work.push({ kind: 'image', model: imageModel && singleImageRequestModel(imageModel), count: plan.keyframeShots.length });
-      }
       const confirmedPlanPrompt = {
         title: '执行创作方案？',
         description: '将按已选方案生成创作产物。本次模型请求可能产生费用。',
         confirmLabel: '确认开始方案',
       };
       return { ...(plan ? confirmedPlanPrompt : prompt), estimate: summarizeCharge(work) };
+    }
+    if (method === 'creativePlanning.previewRecommend') {
+      return { ...prompt, estimate: summarizeCharge([{ kind: 'text', model: creativePreviewRecommender.modelFor(params), count: 1 }]) };
+    }
+    if (method === 'creativePlanning.previewStart') {
+      const input = creativePreviewStartInputSchema.parse(params);
+      const model = creativePlanning.previewQuote(input);
+      return { ...prompt, description: `将为所选的 ${input.shotIds.length} 个镜头生成候选图。这些图片模型请求可能产生费用。`,
+        estimate: summarizeCharge([{ kind: 'image', model: singleImageRequestModel(model), count: input.shotIds.length }]) };
     }
     if (method === 'creativePlanning.revise') {
       const input = creativePlanningReviseInputSchema.parse(params);
@@ -1981,6 +2041,7 @@ export function createRuntime(options: RuntimeOptions) {
     isActive: runId => active.has(runId),
     abortActive: runId => active.get(runId)?.controller.abort(),
     inspectRun: runId => runInspector.dispatch('run.inspect', { runId }),
+    validateAdaptationRun: novelAdaptation.assertCurrentRun,
     cancelCosts: runId => costs.cancelRun(runId),
   });
 
@@ -1988,6 +2049,7 @@ export function createRuntime(options: RuntimeOptions) {
     database, store, project, run, requireRevision, availableModels, prepareRunSelection,
     regenerationNode, hydrateRun,
     projectOccupied: projectId => batches.blocked(projectId) || projectBusy(projectId),
+    validateProduction(value) { if (novelAdaptation.blockProduction(value)) throw new Error(novelProductionBlockedMessage); },
     canExecuteActivities: () => Boolean(options.executeActivity),
     profilesFor: projectProfiles,
     prepareSkills: skillLibrary.prepareForNodes,
@@ -2078,11 +2140,11 @@ export function createRuntime(options: RuntimeOptions) {
     const episode = dramaWorks.forCreation(drama);
     const selectedSkills = input.skillIds ?? episode.skillIds;
     const skillIds = skillLibrary.resolveSkills(selectedSkills).map(skill => skill.id);
-    const workflow = createDramaWorkflow();
+    const workflow = input.novelSource ? createNovelDramaWorkflow() : createDramaWorkflow();
     const brief = input.drama ? [episode.brief, input.brief].filter(Boolean).join('\n\n') : input.brief;
     if (brief.length > 30000) throw new Error('本集创作要求合计超过 30000 个字符，请精简后再创建。');
     const timestamp = now();
-    const value = projectSchema.parse({ id: randomUUID(), title: input.title, brief, originalText: input.originalText,
+    const value = projectSchema.parse({ id: randomUUID(), title: input.title, brief, originalText: input.novelSource ? undefined : input.originalText,
       drama: episode.drama, creativeContext: { characterIds: episode.characterIds, entities: [], continuity: '' },
       templateId: input.templateId ?? 'drama', revision: 1,
       profile: input.profile ?? defaults?.profile ?? { ...DEFAULT_VIDEO_PROFILE, width: 1080, height: 1920 },
@@ -2091,11 +2153,17 @@ export function createRuntime(options: RuntimeOptions) {
         ...workflow,
         nodes: workflow.nodes.map(node => ['brief', 'style', 'script', 'agent'].includes(node.kind) ? { ...node, skillIds } : node),
       }, createdAt: timestamp, updatedAt: timestamp, archived: false });
-    validateEdits(value); projectProfiles(value); store.put('project', value.id, value); return value;
+    validateEdits(value); projectProfiles(value); store.put('project', value.id, value);
+    if (input.novelSource) novelAdaptation.initialize(value, input.novelSource);
+    return value;
   }
 
   const creativeObjectives = createCreativeObjectivePlanner({ store, responses: modelResponses, costs,
     model: id => availableModels().find(item => item.id === id), provider: options.provider ?? generateText,
+    resolveSecret: async model => model.credentialRef ? rememberSecret(await options.secretStore?.get(model.credentialRef)) : undefined,
+  });
+  const creativePreviewRecommender = createCreativePreviewRecommender({ store, responses: modelResponses, costs,
+    provider: options.provider ?? generateText, readSource: (runId): CreativePreviewRecommendationSource => creativePlanning.previewSource(runId),
     resolveSecret: async model => model.credentialRef ? rememberSecret(await options.secretStore?.get(model.credentialRef)) : undefined,
   });
   const creativePlanning = createCreativePlanning({ database, store, project, writeProject, changed,
@@ -2109,6 +2177,7 @@ export function createRuntime(options: RuntimeOptions) {
     projectOccupied: projectId => batches.blocked(projectId) || projectBusy(projectId),
     model: id => availableModels().find(item => item.id === id), prepareSkills: ids => skillLibrary.prepare(ids),
     readPlan: creativeObjectives.get, canExecuteMedia: () => Boolean(options.executeActivity),
+    readPreviewRecommendations: (runId, revision) => creativePreviewRecommender.get(runId, revision)?.recommendations,
     importImage: async path => assetSchema.parse(await assetLibrary.dispatch('asset.import', { path, kind: 'image' })),
     inspectRun: async runId => runInspectionSchema.parse(await runInspector.dispatch('run.inspect', { runId })),
     runCreated(id) { recordEvent(id, 'run.created', '创作分镜已开始。'); schedule(id); },
@@ -2191,12 +2260,19 @@ export function createRuntime(options: RuntimeOptions) {
           const work = dramaWorks.create({ ...input.work, skillIds: input.work.skillIds ?? template?.creationDefaults?.skillIds.filter(id => store.get<SkillPackage>('skill', id)?.enabled) ?? [] });
           const suffix = ' · 第 1 集', prefix = work.title.slice(0, 160 - suffix.length).replace(/[\uD800-\uDBFF]$/, '');
           const value = createProjectRecord(projectCreateInput.parse({ title: prefix + suffix, originalText: input.originalText,
+            novelSource: input.mode === 'novel' ? input.novelSource : undefined,
             drama: { workId: work.id, number: 1 }, seriesTemplateId: input.seriesTemplateId, seriesTemplateRevision: input.seriesTemplateRevision }));
           return { work, project: value };
         }).immediate();
         changed(); return result;
       }
       case 'dramaScript.read': return readDramaScript(rawParams);
+      case 'novelAdaptation.get': return novelAdaptation.get(rawParams);
+      case 'novelAdaptation.saveSource': return novelAdaptation.saveSource(rawParams);
+      case 'novelAdaptation.start': return novelAdaptation.start(rawParams);
+      case 'novelAdaptation.approve': return novelAdaptation.approve(rawParams);
+      case 'novelAdaptation.applyCharacters': return novelAdaptation.applyCharacters(rawParams);
+      case 'novelAdaptation.applyStoryboard': return novelAdaptation.applyStoryboard(rawParams);
       case 'dramaStudio.catalog.get': return { styles: dramaStylePresets };
       case 'creativePlanning.plan': return creativeObjectives.plan(rawParams);
       case 'creativePlanning.start': return creativePlanning.start(rawParams);
@@ -2205,6 +2281,9 @@ export function createRuntime(options: RuntimeOptions) {
       case 'creativePlanning.styleCards': return creativePlanning.styleCards(rawParams);
       case 'creativePlanning.revise': return creativePlanning.revise(rawParams);
       case 'creativePlanning.apply': return creativePlanning.apply(rawParams);
+      case 'creativePlanning.previewRecommend': return creativePreviewRecommender.recommend(rawParams);
+      case 'creativePlanning.previewStart': return creativePlanning.startPreview(rawParams);
+      case 'creativePlanning.previewApply': return creativePlanning.applyPreview(rawParams);
       case 'project.update': {
         const input = projectUpdateInput.parse(rawParams);
         const value = project(input.projectId); requireRevision(value, input.revision);
@@ -2247,7 +2326,7 @@ export function createRuntime(options: RuntimeOptions) {
           }
           const assets = store.list<AssetRecord>('asset'), mixes = audioPreview.projectJobs(projects, assets);
           if (mixes.some(mix => mix.status === 'queued' || mix.status === 'running')) throw new Error('所选项目正在准备声音试听，请等待完成后重试。');
-          for (const id of ids) store.delete('project', id);
+          for (const id of ids) { store.delete('project', id); novelAdaptation.remove(id); }
           const cleanup = projectFiles.stage(projects, assets, mixes);
           for (const mix of mixes) store.delete('audio-mix-job', mix.id);
           return { cleanup, mixes };
@@ -2540,7 +2619,9 @@ export function createRuntime(options: RuntimeOptions) {
           validateResearchProject(value, value);
           validateEdits(value, value);
           const bundle = projectProfiles(value);
-          const referenced = new Set([...value.shots.flatMap(shot => [shot.assetId, shot.videoAssetId, shot.audioAssetId, shot.captionTrack?.sourceAssetId]), ...(value.clipEditSources ?? []).flatMap(clipSourceAssetIds), ...(value.musicClips ?? []).map(clip => clip.assetId), ...(value.workflow.production.referenceAudioAssetIds ?? []), ...creativeReferenceAssetIds(value), ...bundle.assets.map(asset => asset.id), ...bundle.voiceAssets.map(asset => asset.id)]);
+          const adaptation = novelAdaptation.forBackup(value);
+          const roleReferences = adaptation?.characters.items.flatMap(role => role.referenceAssetIds ?? []) ?? [];
+          const referenced = new Set([...value.shots.flatMap(shot => [shot.assetId, shot.videoAssetId, shot.audioAssetId, shot.captionTrack?.sourceAssetId]), ...(value.clipEditSources ?? []).flatMap(clipSourceAssetIds), ...(value.musicClips ?? []).map(clip => clip.assetId), ...(value.workflow.production.referenceAudioAssetIds ?? []), ...creativeReferenceAssetIds(value), ...roleReferences, ...bundle.assets.map(asset => asset.id), ...bundle.voiceAssets.map(asset => asset.id)]);
           const availableAssets = store.list<AssetRecord>('asset').filter(asset => !isLegacyTimelineAsset(asset));
           for (const asset of availableAssets.filter(asset => asset.projectId === projectId)) referenced.add(asset.id);
           let added = true;
@@ -2556,7 +2637,10 @@ export function createRuntime(options: RuntimeOptions) {
           const hasPromptBindings = workflowNodesWithSubflows(value.workflow).some(node => node.promptBindings !== undefined || node.promptTemplate !== undefined);
           const { manualPlanningSteps, manualPlanningFields } = value.workflow.production;
           const schemaVersion = value.drama || value.shots.some(shot => shot.drama) || bundle.voices.length || bundle.characters.some(character => character.appearances?.length || character.defaultVoiceId) ? 10 : manualPlanningSteps?.length || manualPlanningFields ? 9 : creativeReferenceAssetIds(value).length || assets.some(asset => asset.derivation) ? 8 : value.episode || value.episodeSource ? 7 : hasPromptBindings ? 6 : value.creativeContext || value.shots.some(shot => shot.creativeEntityKeys?.length) ? 5 : 4;
-          await writeFile(join(backupDirectory, 'project.json'), JSON.stringify({ schemaVersion, project: { ...value, originalText: projectOriginalText(value) }, assets: portable, characters: bundle.characters, ...(schemaVersion === 10 ? { voices: bundle.voices, ...(value.drama ? { dramaWork: dramaWorks.get(value.drama.workId) } : {}) } : {}) }, null, 2), { encoding: 'utf8', flag: 'wx' });
+          await writeFile(join(backupDirectory, 'project.json'), JSON.stringify({ schemaVersion, project: { ...value, originalText: projectOriginalText(value) }, assets: portable,
+            characters: bundle.characters, ...(schemaVersion === 10 ? { voices: bundle.voices, ...(value.drama ? { dramaWork: dramaWorks.get(value.drama.workId) } : {}) } : {}),
+            ...(adaptation ? { novelAdaptation: adaptation } : {}),
+          }, null, 2), { encoding: 'utf8', flag: 'wx' });
           return { path: backupDirectory, assets: portable.length };
         }, projectId);
       }
@@ -2588,6 +2672,7 @@ export function createRuntime(options: RuntimeOptions) {
         const saved = store.get<RunSnapshot>('run-snapshot', runId);
         if (saved?.assistant) throw new Error('任务修改建议请在预览中应用到编辑草稿。');
         if (saved?.creativePlanning) throw new Error('请在创作分镜中将风格卡和分镜一起应用。');
+        if (saved?.novelAdaptation) throw new Error('请在「小说改编」确认并应用本次产物。');
         if (saved?.trial && record.status !== 'succeeded') throw new Error('请等待试运行成功后再应用产物。');
         if ((saved?.inspectionNodes ?? saved?.nodes)?.some(node => node.id === nodeId && node.kind === 'research')) throw new Error('该历史资料产物仅支持查看。');
         if (saved?.regeneration) {
@@ -2665,6 +2750,7 @@ export function createRuntime(options: RuntimeOptions) {
       closing = true;
       characterImages.close();
       creativeObjectives.cancelActive();
+      creativePreviewRecommender.cancelActive();
       for (const controller of editorExports.values()) controller.abort();
       try {
         await skillLibrary.close();
@@ -2680,6 +2766,8 @@ export function createRuntime(options: RuntimeOptions) {
     },
   };
 }
+
+const novelCharactersJsonSchema = z.toJSONSchema(generatedNovelCharactersSchema, { io: 'input' });
 
 function localNodeResult(node: WorkflowNode, project: ProjectDocument, assets: AssetRecord[]): JsonValue {
   switch (node.kind) {

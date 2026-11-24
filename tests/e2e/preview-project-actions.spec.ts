@@ -3,7 +3,7 @@ import { readFile, stat } from 'node:fs/promises';
 import { expect, test, type APIRequestContext } from '@playwright/test';
 import type { DramaWork, ProjectDocument, RecordPage, RunSummary } from '@video-quickly/contracts';
 import { probeMedia } from '../../src/packages/video/src/media-process';
-import { openProjectFromList, openStudio } from './workspace-navigation';
+import { openProjectFromList, openWorks } from './workspace-navigation';
 import { settingField } from './settings';
 
 async function rpc<T>(request: APIRequestContext, method: string, params: unknown): Promise<T> {
@@ -131,7 +131,7 @@ for (const { width, height, theme } of [{ width: 1024, height: 720, theme: 'dark
     const writes: string[] = [], errors: string[] = [];
     page.on('pageerror', error => errors.push(error.message));
     page.on('request', request => { if (request.url().endsWith('/__desktop_rpc')) { const method = request.postDataJSON().method; if (['dramaWork.archive', 'dramaWork.restore', 'project.archive', 'project.deleteMany'].includes(method)) writes.push(method); } });
-    await openStudio(page); await page.getByLabel('搜索作品', { exact: true }).fill(group);
+    await openWorks(page); await page.getByLabel('搜索作品', { exact: true }).fill(group);
     const card = (work: DramaWork) => page.locator(`.drama-work-card[data-work-id="${work.id}"]`);
     const filters = page.getByRole('group', { name: '作品筛选', exact: true });
     await expect(card(first.work)).toBeVisible(); await expect(card(keep.work)).toBeVisible();
@@ -142,7 +142,7 @@ for (const { width, height, theme } of [{ width: 1024, height: 720, theme: 'dark
     await expect(page.getByRole('button', { name: '新建分集', exact: true })).toBeDisabled();
     expect((await rpc<{ project: ProjectDocument }>(request, 'project.get', { projectId: first.project.id })).project).toEqual(first.project);
     expect(await rpc<DramaWork>(request, 'dramaWork.get', { workId: keep.work.id })).toEqual(keep.work);
-    await openStudio(page); await page.getByLabel('搜索作品', { exact: true }).fill(group);
+    await openWorks(page); await page.getByLabel('搜索作品', { exact: true }).fill(group);
     await expect(card(first.work)).toHaveCount(0); await expect(card(keep.work)).toBeVisible();
     await filters.getByRole('button', { name: '已归档', exact: true }).click();
     await expect(card(first.work)).toBeVisible(); await expect(card(keep.work)).toHaveCount(0);

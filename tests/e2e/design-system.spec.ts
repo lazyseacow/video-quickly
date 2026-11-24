@@ -2,7 +2,8 @@ import { openCosts, setWorkspaceTheme } from './workspace-settings';
 import { expect, test, type Page } from '@playwright/test';
 import { writeFile } from 'node:fs/promises';
 import { addModelConnection } from './settings';
-import { openProjectFromList, openStudio, sampleProjectTitle } from './workspace-navigation';
+import { chooseStudioEntry, openProjectFromList, openStudio, sampleProjectTitle } from './workspace-navigation';
+import { closeCreationSettings, creationInput, creationMode, creationModes, draftDrama, openCreationSettings } from './drama-creation';
 
 test.use({ storageState: async ({ baseURL }, use) => {
   if (!baseURL) throw new Error('Design-system tests require a local application origin');
@@ -53,9 +54,10 @@ test('applies the default and saved color schemes before the renderer loads', as
 test('keeps a modal open when selecting text across its backdrop', async ({ page }) => {
   await page.emulateMedia({ reducedMotion: 'reduce' });
   await openApp(page);
-  await page.getByRole('button', { name: '新建短剧', exact: true }).click();
+  await chooseStudioEntry(page, '对话');
   const composer = page.getByRole('region', { name: '新建短剧', exact: true });
-  const trigger = composer.getByRole('button', { name: '打开选题库', exact: true });
+  const creation = await openCreationSettings(page, composer);
+  const trigger = creation.getByRole('button', { name: '打开选题库', exact: true });
   await trigger.click();
   const dialog = page.getByRole('dialog', { name: '选题库', exact: true });
   const name = dialog.getByRole('searchbox', { name: '搜索选题', exact: true });
@@ -84,7 +86,7 @@ test('shares typography and spacing roles across the workspace, navigation and d
   });
   for (const theme of ['light', 'dark']) {
     if (theme === 'dark') await setWorkspaceTheme(page, 'dark');
-    await expect(page.getByRole('button', { name: '短剧工作室', exact: true })).toHaveCSS('font-size', '15px');
+    await expect(page.getByRole('button', { name: '素材库', exact: true })).toHaveCSS('font-size', '15px');
     await expect(page.getByLabel('项目名称', { exact: true })).toHaveCSS('font-size', '26px');
     const create = page.locator('.project-heading-actions').getByRole('button', { name: '制作设置', exact: true });
     await expect(create).toHaveCSS('font-size', '14px');
@@ -162,9 +164,12 @@ for (const width of [1536, 600]) for (const theme of ['light', 'dark']) {
     await expect(page.getByRole('button', { name: '制作记录', exact: true })).toHaveCount(0);
     for (const name of ['短剧工作室', '素材库', '系列模板', '模型连接', 'Skill 工作室', 'Token 消耗']) {
       if (name === 'Token 消耗') await openCosts(page); else if (name === '短剧工作室') await openStudio(page); else await page.getByRole('button', { name, exact: true }).click();
-      await expect(page.getByRole('heading', { level: 1, name, exact: true })).toBeVisible();
+      const routeHeading = page.getByRole('heading', { level: 1, name, exact: true });
+      await expect(routeHeading).toBeVisible();
+      if (name === '短剧工作室') await chooseStudioEntry(page, '对话');
+      const visibleHeading = name === '短剧工作室' ? page.getByRole('heading', { name: '把故事拍成短剧', exact: true }) : routeHeading;
       expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), name).toBe(true);
-      await expect(page.getByRole('heading', { level: 1, name, exact: true })).toHaveCSS('font-weight', '650');
+      await expect(visibleHeading).toHaveCSS('font-weight', '650');
     }
     await page.getByRole('button', { name: '模型连接', exact: true }).click();
     const model = await addModelConnection(page);
@@ -253,27 +258,99 @@ for (const viewport of [{ width: 1536, height: 960 }, { width: 1024, height: 720
     await page.setViewportSize(viewport);
     await page.emulateMedia({ reducedMotion: 'reduce' });
     await openApp(page);
-    const trigger = page.getByRole('button', { name: '新建短剧', exact: true });
-    await trigger.click();
+    await chooseStudioEntry(page, '对话');
     const composer = page.getByRole('region', { name: '新建短剧', exact: true });
-    await expect(composer.getByRole('textbox', { name: '短剧名称', exact: true })).toBeFocused();
+    await expect(creationInput(composer)).toBeFocused();
+    const modes = creationModes(composer);
+    await expect(modes.getByRole('radio')).toHaveCount(5);
+    const attachment = composer.getByRole('button', { name: '添加文件', exact: true });
+    await expect(attachment).toBeVisible();
+    const modeNames = ['自动判断', '改编小说', '上传剧本', '制作剧本', '创作分镜'] as const;
+    const [modeBounds, fileBounds, sourceBounds, labels] = await Promise.all([
+      modes.boundingBox(),
+      attachment.boundingBox(),
+      creationInput(composer).boundingBox(),
+      Promise.all(modeNames.map(name => modes.getByText(name, { exact: true }).boundingBox())),
+    ]);
+    expect(modeBounds).toBeTruthy();
+    expect(fileBounds).toBeTruthy();
+    expect(sourceBounds).toBeTruthy();
+    expect(modeBounds!.y + modeBounds!.height).toBeLessThanOrEqual(Math.min(fileBounds!.y, sourceBounds!.y));
+    expect(labels.every(Boolean)).toBe(true);
+    if (viewport.width >= 1024) {
+      expect(fileBounds!.x + fileBounds!.width).toBeLessThanOrEqual(sourceBounds!.x);
+      expect(fileBounds!.y + fileBounds!.height).toBeGreaterThan(sourceBounds!.y);
+      expect(sourceBounds!.y + sourceBounds!.height).toBeGreaterThan(fileBounds!.y);
+      expect(new Set(labels.map(box => Math.round(box!.y))).size).toBe(1);
+      for (let index = 1; index < labels.length; index++) expect(labels[index]!.x).toBeGreaterThan(labels[index - 1]!.x);
+    } else {
+      expect(fileBounds!.y + fileBounds!.height).toBeLessThanOrEqual(sourceBounds!.y);
+    }
     await page.screenshot({ path: info.outputPath(`studio-creation-${viewport.width}.png`) });
     await expect(page.getByRole('dialog', { name: '新建视频项目', exact: true })).toHaveCount(0);
-    const modes = composer.getByRole('tablist', { name: '剧本来源', exact: true });
-    await modes.getByRole('tab', { name: '上传剧本', exact: true }).focus();
-    await page.keyboard.press('ArrowRight');
-    await expect(modes.getByRole('tab', { name: '制作剧本', exact: true })).toBeFocused();
-    await expect(modes.getByRole('tab', { name: '制作剧本', exact: true })).toHaveAttribute('aria-selected', 'true');
-    await page.keyboard.press('Home');
-    await expect(modes.getByRole('tab', { name: '上传剧本', exact: true })).toHaveAttribute('aria-selected', 'true');
-    const skills = composer.getByRole('button', { name: '创作 Skill', exact: true });
+    const menuButton = page.getByRole('button', { name: '工作室菜单', exact: true });
+    const navigation = page.getByRole('navigation', { name: '工作室菜单', exact: true });
+    if (viewport.width <= 980) await menuButton.press('Enter');
+    await expect(navigation).toBeVisible();
+    if (viewport.width <= 980) await expect(navigation).toBeInViewport({ ratio: 1 });
+    for (const name of ['对话', '新建对话', '我的作品']) {
+      await expect(navigation.getByRole('button', { name, exact: true })).toBeVisible();
+    }
+    await expect(navigation.getByRole('button', { name: '创作分镜', exact: true })).toHaveCount(0);
+    if (viewport.width <= 980) {
+      await page.keyboard.press('Escape');
+      await expect(navigation).toBeHidden();
+      await expect(menuButton).toBeFocused();
+    } else await expect(menuButton).toBeHidden();
+    await expect(composer.getByRole('tablist', { name: '剧本来源', exact: true })).toHaveCount(0);
+    await expect(composer.getByRole('combobox', { name: '创作方式', exact: true })).toHaveCount(0);
+    const automatic = creationMode(composer, '自动判断');
+    const novel = creationMode(composer, '改编小说');
+    await expect(automatic).toBeChecked();
+    await automatic.press('ArrowRight');
+    await expect(novel).toBeChecked();
+    await expect(novel).toBeFocused();
+    await creationMode(composer, '上传剧本').check();
+    await expect(composer.getByRole('button', { name: '添加文件', exact: true })).toBeVisible();
+    const write = creationMode(composer, '制作剧本');
+    await write.check();
+    await expect(write).toBeChecked();
+    await expect(composer.getByRole('button', { name: '添加文件', exact: true })).toHaveCount(0);
+    await automatic.check();
+    await page.emulateMedia({ reducedMotion: 'no-preference' });
+    const styleTrigger = composer.getByRole('button', { name: '快速选择画风', exact: true });
+    await styleTrigger.click();
+    const stylePicker = page.getByRole('dialog', { name: '选择画风', exact: true });
+    const styleSearch = stylePicker.getByRole('searchbox', { name: '搜索画风', exact: true });
+    await expect(styleSearch).toBeFocused();
+    await expect(stylePicker).toHaveCSS('transition-property', 'opacity, translate, display, overlay');
+    await styleSearch.fill('水墨');
+    await expect(stylePicker.getByRole('button', { name: '自然写实', exact: true })).toHaveCount(0);
+    await stylePicker.getByRole('button', { name: '国风水墨', exact: true }).click();
+    await expect(stylePicker).toBeHidden();
+    await expect(styleTrigger).toHaveText('国风水墨');
+    await page.emulateMedia({ reducedMotion: 'reduce' });
+    await styleTrigger.press('Enter');
+    await expect(stylePicker).toHaveCSS('transition-duration', '0s');
+    await expect(stylePicker.getByRole('button', { name: '国风水墨', exact: true })).toHaveAttribute('aria-pressed', 'true');
+    await page.keyboard.press('Escape');
+    await expect(styleTrigger).toBeFocused();
+    await page.emulateMedia({ reducedMotion: 'no-preference' });
+    const starters = composer.getByRole('list', { name: '创作起点', exact: true });
+    await starters.getByRole('button', { name: /^规划一组分镜/ }).click();
+    await expect(creationMode(composer, '创作分镜')).toBeChecked();
+    await expect(creationInput(composer)).toBeFocused();
+    await expect(composer.getByRole('button', { name: '添加文件', exact: true })).toHaveCount(0);
+    await draftDrama(composer, '制作剧本', '车站管理员捡到了一封写给自己的旧信。', '窄窗口创作验收');
+    const create = composer.getByRole('button', { name: '创建短剧', exact: true });
+    await create.scrollIntoViewIfNeeded();
+    await expect(create).toBeInViewport({ ratio: 1 });
+    const creation = await openCreationSettings(page, composer);
+    await expect(creation.getByRole('combobox', { name: '画风', exact: true })).toHaveValue('ink-wash');
+    const skills = creation.getByRole('button', { name: '创作 Skill', exact: true });
     await skills.scrollIntoViewIfNeeded();
     await expect(skills).toBeInViewport({ ratio: .95 });
-    const footer = composer.locator('.drama-composer-footer');
-    await footer.scrollIntoViewIfNeeded();
-    await expect(footer).toBeInViewport({ ratio: 1 });
-    for (const button of await footer.getByRole('button').all()) await expect(button).toBeInViewport({ ratio: 1 });
-    const topics = composer.getByRole('button', { name: '打开选题库', exact: true });
+    const topics = creation.getByRole('button', { name: '打开选题库', exact: true });
     await topics.scrollIntoViewIfNeeded(); await topics.click();
     const dialog = page.getByRole('dialog', { name: '选题库', exact: true });
     const layout = await dialog.evaluate(element => {
@@ -288,6 +365,7 @@ for (const viewport of [{ width: 1536, height: 960 }, { width: 1024, height: 720
     await page.keyboard.press('Escape');
     await expect(dialog).toHaveCount(0);
     await expect(topics).toBeFocused();
+    await closeCreationSettings(creation);
     const misplacedIcons = await page.locator('.icon-button').evaluateAll(buttons => buttons.flatMap(button => {
       const target = button.getBoundingClientRect();
       if (!target.width || !target.height) return [];

@@ -66,7 +66,8 @@ export default function WorkbenchProduction({ workflow, run, version, action, no
   const current = steps.find(step => step.id === run.currentNodeId);
   const configurationFailure = isConfigurationFailure(run.error ?? current?.error);
   const isCurrent = (task: ProgressTask) => task.id === run.currentNodeId && !taskCompleted(task) && !['succeeded', 'canceled'].includes(run.status);
-  const stages = groupProgress(native ? nativeWorkbenchStages : data?.stages ?? resolveWorkbenchStages(workflow), tasks, workflow, native, autonomous);
+  const stageDefinitions = native && !workflow.production.novelAdaptation ? nativeWorkbenchStages : data?.stages ?? resolveWorkbenchStages(workflow);
+  const stages = groupProgress(stageDefinitions, tasks, workflow, native, autonomous);
   const groups = stages ?? tasks.map(task => ({ key: `task:${task.id}`, label: flat && task.step?.modelGeneration ? generationLabel(task.label) : task.label, description: task.description, tasks: [task] }));
   const exportTask = autonomous ? tasks.findLast(task => task.step?.kind === 'export') : undefined;
   // Completion clears the execution pointer; keep the last executed item selected.

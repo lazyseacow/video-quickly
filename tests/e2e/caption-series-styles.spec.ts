@@ -2,6 +2,7 @@ import { confirmAction } from './confirmation-actions';
 import { openProjectSettings, projectSettingAction, settingField, settingControl, showSettingsPreview } from './settings';
 import { openProjectFromList } from './workspace-navigation';
 import { setWorkspaceTheme } from './workspace-settings';
+import { draftDrama } from './drama-creation';
 import { expect, test, type APIRequestContext, type Locator, type Page } from '@playwright/test';
 import { createSceneTemplate, DEFAULT_CAPTION_STYLE, type CaptionStyle, type ProjectDocument, type SeriesTemplate } from '@video-quickly/contracts';
 
@@ -77,9 +78,7 @@ test('creates and edits reusable series settings in the library and copies a tem
   const chosenCard = page.locator('.series-template-card').filter({ has: page.getByRole('heading', { name: chosen.name, exact: true }) });
   await chosenCard.getByRole('button', { name: '用此模板新建', exact: true }).click();
   const create = page.getByRole('region', { name: '新建短剧', exact: true });
-  await create.getByRole('textbox', { name: '短剧名称', exact: true }).fill('从系列模板创建的短剧');
-  await create.getByRole('tab', { name: '上传剧本', exact: true }).click();
-  await create.getByRole('textbox', { name: '剧本正文', exact: true }).fill('林夏在旧城发现一封信，与老友重逢后共同寻找真相。');
+  await draftDrama(create, '上传剧本', '林夏在旧城发现一封信，与老友重逢后共同寻找真相。', '从系列模板创建的短剧');
   const createdResponse = page.waitForResponse(response => response.url().endsWith('/__desktop_rpc') && response.request().postDataJSON()?.method === 'dramaStudio.create');
   await create.getByRole('button', { name: '创建短剧', exact: true }).click();
   const creation = await createdResponse; expect(creation.request().postDataJSON().params).toMatchObject({ seriesTemplateId: chosen.id, seriesTemplateRevision: chosen.revision });

@@ -24,10 +24,27 @@ export async function ensureSampleProject(page: Page): Promise<ProjectDocument> 
 
 export async function openStudio(page: Page) {
   await page.getByRole('complementary', { name: '工作空间导航', exact: true }).getByRole('button', { name: '短剧工作室', exact: true }).click();
-  await expect(page.locator('.drama-library')).toBeVisible();
-  const back = page.locator('.page-heading').getByRole('button', { name: '短剧工作室', exact: true });
-  if (await back.count()) await back.click();
   await expect(page.getByRole('heading', { name: '短剧工作室', exact: true, level: 1 })).toBeVisible();
+}
+
+export async function revealStudioNavigation(page: Page) {
+  const navigation = page.getByRole('navigation', { name: '工作室菜单', exact: true });
+  if (!await navigation.isVisible()) await page.getByRole('button', { name: '工作室菜单', exact: true }).click();
+  await expect(navigation).toBeVisible();
+  return navigation;
+}
+
+export async function chooseStudioEntry(page: Page, name: string) {
+  const navigation = await revealStudioNavigation(page);
+  await navigation.getByRole('button', { name, exact: true }).click();
+  if (await page.getByRole('button', { name: '工作室菜单', exact: true }).isVisible()) await expect(navigation).toBeHidden();
+}
+
+export async function openWorks(page: Page) {
+  await openStudio(page);
+  const search = page.getByRole('searchbox', { name: '搜索作品', exact: true });
+  if (!await search.isVisible()) await chooseStudioEntry(page, '我的作品');
+  await expect(search).toBeVisible();
 }
 
 export async function openAssetLibrary(page: Page, view: '媒体' | '角色') {
@@ -44,7 +61,7 @@ export async function openProjectFromList(page: Page, title?: string, { waitForR
   const project = sample ? workspace.projects.find(project => project.id === sample.id) : workspace.projects.find(project => project.title === name && !project.archived);
   if (!project?.drama) throw new Error(`未找到测试短剧分集：${name}`);
   const work = await rpc<DramaWork>(page, 'dramaWork.get', { workId: project.drama.workId });
-  await openStudio(page);
+  await openWorks(page);
   await page.getByRole('group', { name: '作品筛选', exact: true }).getByRole('button', { name: '可用', exact: true }).click();
   await page.getByRole('searchbox', { name: '搜索作品', exact: true }).fill(work.title);
   const card = page.locator(`.drama-work-card[data-work-id="${work.id}"]`);

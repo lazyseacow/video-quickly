@@ -8,6 +8,13 @@ import { expect } from '@playwright/test';
 
 const execute = promisify(execFile);
 
+export async function revealStudioMenu(page) {
+  const navigation = page.getByRole('navigation', { name: '工作室菜单', exact: true });
+  if (!await navigation.isVisible()) await page.getByRole('button', { name: '工作室菜单', exact: true }).click();
+  await expect(navigation).toBeVisible();
+  return navigation;
+}
+
 /** Use the real desktop bridge and isolated sidecar without starting a model request. */
 export async function verifyNativeDramaStudio({ page, rpc, openProject, fixture, artifacts, ffmpegPath, environment, checks }) {
   const originalTitle = await page.getByRole('textbox', { name: '项目名称', exact: true }).inputValue();
@@ -49,9 +56,10 @@ export async function verifyNativeDramaStudio({ page, rpc, openProject, fixture,
   assert.deepEqual((await rpc('voice.references', { voiceId: voice.id })).map(asset => asset.id), [audio.id]);
 
   await page.getByRole('complementary', { name: '工作空间导航', exact: true }).getByRole('button', { name: '短剧工作室', exact: true }).click();
-  const library = page.locator('.drama-library'), back = library.getByRole('button', { name: '短剧工作室', exact: true });
+  const studio = await revealStudioMenu(page);
+  await studio.getByRole('button', { name: '我的作品', exact: true }).click();
+  const library = page.locator('.drama-library');
   await expect(library).toBeVisible();
-  if (await back.isVisible()) await back.click();
   const filters = library.getByRole('group', { name: '作品筛选', exact: true });
   await expect(filters).toBeVisible();
   await filters.getByRole('button', { name: '可用', exact: true }).click();
@@ -111,5 +119,23 @@ export async function verifyNativeDramaStudio({ page, rpc, openProject, fixture,
   const after = await rpc('workspace.snapshot');
   assert.equal(after.runs.length, before.runs.length, 'Editing drama metadata must not start a model run');
   checks.nativeDramaReferenceProtection = true; checks.nativeDramaPortableBackup = true;
+
+  const source = '清晨，守桥人在桥洞发现了一封来历不明的信。她展开信纸，看见了自己的名字。';
+  const { project: adapted } = await rpc('dramaStudio.create', {
+    work: { title: `原生改编对话 ${suffix}`, description: '', visualStyle: 'live-action', narrativeMode: 'mixed' },
+    mode: 'novel', novelSource: source,
+  });
+  await page.getByRole('complementary', { name: '工作空间导航', exact: true }).getByRole('button', { name: '短剧工作室', exact: true }).click();
+  const recent = (await revealStudioMenu(page)).getByRole('region', { name: '最近分集', exact: true });
+  await recent.getByRole('button').filter({ hasText: adapted.title }).click();
+  const conversation = page.getByRole('region', { name: '小说改编', exact: true });
+  await expect(conversation.getByRole('heading', { name: '导演剧本', exact: true })).toBeVisible();
+  const workspaces = page.getByRole('group', { name: '分集工作区', exact: true });
+  await workspaces.getByRole('button', { name: '分镜工作台', exact: true }).click();
+  await expect(page.getByRole('textbox', { name: '项目名称', exact: true })).toHaveValue(adapted.title);
+  await workspaces.getByRole('button', { name: '对话', exact: true }).click();
+  await expect(conversation.getByRole('heading', { name: '导演剧本', exact: true })).toBeVisible();
+  assert.equal((await rpc('workspace.snapshot')).runs.length, after.runs.length, 'Continuing the conversation must not start a model run');
+  checks.nativeAdaptationConversation = true;
   await openProject(originalTitle);
 }

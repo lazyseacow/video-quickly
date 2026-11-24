@@ -1,0 +1,596 @@
+.drama-library {
+  container: drama-library / inline-size;
+}
+
+.workspace-shell .content-page.drama-library {
+  padding-block: var(--space-6);
+}
+
+.drama-library :is(h2, h3, h4, p) {
+  min-inline-size: 0;
+  overflow-wrap: anywhere;
+}
+
+.drama-library :is(.drama-library-heading h2, .drama-library__detail-title h2) {
+  color: var(--text);
+  font-size: var(--text-size-project);
+  font-weight: var(--font-weight-semibold);
+  line-height: var(--line-height-title);
+  text-wrap: balance;
+}
+
+.drama-library .drama-library-heading {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  margin-block-end: var(--space-5);
+  padding-block-end: var(--space-3);
+  border-block-end: 1px solid var(--studio-edge);
+}
+
+.drama-library-heading h2 {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.drama-library-heading h2::before {
+  content: "";
+  flex: none;
+  inline-size: var(--space-1);
+  block-size: var(--space-5);
+  border-radius: var(--radius-pill);
+  background: var(--studio-attention);
+}
+
+.drama-library .drama-library-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  flex: 0 1 28rem;
+  gap: var(--space-3);
+  min-inline-size: 0;
+}
+
+.drama-library .drama-library-controls > .field {
+  flex: 1 1 12rem;
+  margin-block: 0;
+}
+
+.drama-library-controls .field__label {
+  position: absolute;
+  clip-path: inset(50%);
+  inline-size: 1px;
+  block-size: 1px;
+  overflow: hidden;
+}
+
+.drama-library-controls > .tabs {
+  flex: none;
+  margin-inline-start: auto;
+  padding-block: var(--space-tight);
+  background: var(--studio-panel);
+}
+
+.drama-library-controls > .tabs button[aria-pressed='true'] {
+  background: var(--studio-attention-surface);
+  box-shadow: inset 0 0 0 1px var(--studio-attention-edge);
+  color: var(--studio-attention);
+}
+.drama-library-controls > .tabs button[aria-pressed='false']:hover { background: var(--studio-control); }
+
+.drama-library-controls .search-field input {
+  border-color: var(--studio-edge);
+  background: var(--studio-panel);
+}
+
+.drama-library-controls .search-field svg {
+  pointer-events: none;
+}
+
+.drama-library .drama-library__works {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 15rem), 1fr));
+  align-items: start;
+  gap: var(--space-4);
+  margin-block: 0 var(--space-4);
+}
+
+.drama-library :is(.drama-library__works, .drama-episode-list) {
+  padding: 0;
+  list-style: none;
+}
+
+.drama-library :is(.drama-library__works, .drama-episode-list) > li {
+  min-inline-size: 0;
+}
+
+.drama-library .drama-library__card {
+  position: relative;
+  isolation: isolate;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  padding: 0;
+  gap: var(--space-3);
+  border: 1px solid var(--studio-edge);
+  border-radius: var(--studio-card-radius);
+  background: var(--studio-panel);
+  transition: border-color var(--motion-fast) var(--motion-ease);
+}
+
+.drama-library__card::before {
+  content: "";
+  position: absolute;
+  z-index: -1;
+  inset: 0;
+  border-radius: inherit;
+  background: linear-gradient(to top, var(--studio-attention-surface), transparent 56%);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity var(--motion-fast) var(--motion-ease);
+}
+
+.drama-library .drama-library__card:has(.button:focus-visible) {
+  border-color: var(--studio-attention-edge);
+}
+
+.drama-library__card:has(.button:focus-visible)::before {
+  opacity: 1;
+}
+
+.drama-library__card > header {
+  display: flex;
+  align-items: start;
+  gap: var(--space-3);
+  padding: var(--space-4) var(--space-4) 0;
+}
+
+.drama-library__card-mark {
+  display: grid;
+  flex: none;
+  place-items: center;
+  inline-size: var(--space-8);
+  block-size: var(--space-8);
+  border-radius: var(--radius-track);
+  background: var(--studio-attention-surface);
+  color: var(--studio-attention);
+}
+
+.drama-library__card-heading {
+  display: grid;
+  gap: var(--space-1);
+  min-inline-size: 0;
+}
+
+.drama-library__card h3 {
+  font-size: var(--text-size-subheading);
+  font-weight: var(--font-weight-semibold);
+  line-height: var(--line-height-title);
+  text-wrap: balance;
+}
+
+.drama-library__cover {
+  position: relative;
+  aspect-ratio: 2 / 3;
+  border-start-start-radius: calc(var(--studio-card-radius) - 1px);
+  border-start-end-radius: calc(var(--studio-card-radius) - 1px);
+  border-block-end: 1px solid var(--studio-edge);
+}
+
+.drama-library__cover::after {
+  content: "";
+  position: absolute;
+  inset: auto 0 0;
+  block-size: min(28%, calc(var(--space-10) * 2));
+  background: linear-gradient(to top, color-mix(in srgb, var(--media-overlay) 60%, transparent), transparent);
+  pointer-events: none;
+}
+
+.drama-library :is(.drama-library__cover, .drama-library__episode-preview) {
+  overflow: hidden;
+  background: var(--media-placeholder);
+  outline: 1px solid var(--image-outline);
+  outline-offset: -1px;
+}
+
+.drama-library :is(.drama-library__cover, .drama-library__episode-preview) canvas {
+  display: block;
+  inline-size: 100%;
+  block-size: 100%;
+  object-fit: cover;
+}
+
+.drama-library__cover-label {
+  position: absolute;
+  z-index: 1;
+  inset-inline-start: var(--space-2);
+  inset-block-end: var(--space-2);
+  padding: var(--space-1) var(--space-2);
+  border-radius: var(--radius-track);
+  background: var(--media-overlay);
+  color: var(--on-media);
+  font-size: var(--text-size-caption);
+  font-variant-numeric: tabular-nums;
+}
+
+.drama-library__card > .drama-library__cover + header {
+  padding-block-start: 0;
+}
+
+.drama-library__card-content {
+  display: grid;
+  gap: var(--space-2);
+  padding-inline: var(--space-4);
+}
+
+.drama-library .drama-library__summary {
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  color: var(--text-secondary);
+  font-size: var(--text-size-label);
+  line-height: var(--line-height-compact);
+  white-space: normal;
+}
+
+.drama-library__facts {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  row-gap: var(--space-1);
+  column-gap: var(--space-2);
+  min-inline-size: 0;
+  color: var(--text-secondary);
+  font-size: var(--text-size-caption);
+  line-height: var(--line-height-compact);
+  font-variant-numeric: tabular-nums;
+}
+
+.drama-library__facts > * + * {
+  border-inline-start: 1px solid var(--studio-edge);
+  padding-inline-start: var(--space-2);
+}
+
+.drama-library .drama-library__latest {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-1);
+  margin: 0;
+  color: var(--studio-attention);
+  font-size: var(--text-size-caption);
+  font-variant-numeric: tabular-nums;
+  white-space: normal;
+}
+
+.drama-library__latest > svg {
+  flex: none;
+}
+
+.drama-library__latest strong {
+  color: var(--text);
+  font-weight: var(--font-weight-medium);
+}
+
+.drama-library__card > footer {
+  display: grid;
+  gap: var(--space-1);
+  padding: var(--space-2) var(--space-3);
+  border-block-start: 1px solid var(--studio-edge);
+}
+
+.drama-library__card > footer > time {
+  padding-inline: var(--space-1);
+  color: var(--text-secondary);
+  font-size: var(--text-size-caption);
+  font-variant-numeric: tabular-nums;
+}
+
+.drama-library__card-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: var(--space-tight) var(--space-1);
+}
+
+.drama-library .drama-library__card-actions .button {
+  min-block-size: var(--control-hit-size);
+  padding-inline: var(--space-2);
+  color: var(--text);
+}
+
+.drama-library .drama-library__card-actions .drama-library__continue-work {
+  margin-inline-start: auto;
+  padding-inline: var(--space-3) var(--space-2);
+  border-color: var(--studio-attention-edge);
+  background: var(--studio-attention-surface);
+  color: var(--studio-attention);
+}
+
+.drama-library__detail-header {
+  display: grid;
+  gap: var(--space-3);
+  margin-block-end: var(--space-4);
+  padding-block-end: var(--space-4);
+  border-block-end: 1px solid var(--studio-edge);
+}
+
+.drama-library__detail-header > .drama-library__back {
+  justify-self: start;
+  min-block-size: var(--control-hit-size);
+  margin-inline-start: calc(-1 * var(--space-3));
+  padding-inline: var(--space-3);
+}
+
+.drama-library__detail-title {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+
+.drama-library__detail-title > .heading-actions {
+  margin-inline-start: 0;
+}
+
+.drama-library__detail-title .button {
+  min-block-size: var(--control-hit-size);
+}
+
+.drama-library__detail-meta {
+  display: grid;
+  gap: var(--space-2);
+}
+
+.drama-library__detail-meta > p {
+  max-inline-size: 64ch;
+  color: var(--text-secondary);
+  line-height: var(--line-height-body);
+  white-space: pre-wrap;
+}
+
+.drama-library__episodes-heading {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  margin-block-end: var(--space-2);
+}
+
+.drama-library__episodes-heading h3 {
+  font-size: var(--text-size-subheading);
+  font-weight: var(--font-weight-semibold);
+}
+
+.drama-library__episodes-heading > .button {
+  min-block-size: var(--control-hit-size);
+  margin-inline-start: auto;
+}
+
+.drama-library__count,
+.drama-library__reading,
+.drama-library__episode-number {
+  color: var(--text-secondary);
+  font-size: var(--text-size-caption);
+  font-variant-numeric: tabular-nums;
+}
+
+.drama-library .drama-episode-list {
+  display: grid;
+  margin: 0;
+  border: 1px solid var(--studio-edge);
+  border-radius: var(--studio-card-radius);
+  background: var(--studio-panel);
+}
+
+.drama-library .drama-episode-row {
+  position: relative;
+  display: grid;
+  grid-template-columns: minmax(8rem, 1fr) minmax(0, auto) auto;
+  align-items: center;
+  gap: var(--space-2) var(--space-3);
+  padding: var(--space-2) var(--space-3);
+}
+
+.drama-episode-row[data-latest] {
+  background: linear-gradient(to right, var(--studio-attention-surface), transparent 74%);
+}
+
+.drama-episode-row[data-latest]::before {
+  content: "";
+  position: absolute;
+  inset-block: var(--space-2);
+  inset-inline-start: 0;
+  inline-size: var(--space-tight);
+  border-radius: var(--radius-pill);
+  background: var(--studio-attention);
+}
+
+.drama-episode-list > li + li {
+  border-block-start: 1px solid var(--studio-edge);
+}
+
+.drama-episode-list > li:first-child > .drama-episode-row {
+  border-start-start-radius: calc(var(--studio-card-radius) - 1px);
+  border-start-end-radius: calc(var(--studio-card-radius) - 1px);
+}
+
+.drama-episode-list > li:last-child > .drama-episode-row {
+  border-end-start-radius: calc(var(--studio-card-radius) - 1px);
+  border-end-end-radius: calc(var(--studio-card-radius) - 1px);
+}
+
+.drama-library__episode-main {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  min-inline-size: 0;
+}
+
+.drama-library__episode-preview {
+  align-self: start;
+  flex: 0 0 min(32%, 6rem);
+  aspect-ratio: 3 / 2;
+  border-radius: var(--radius-track);
+}
+
+.drama-library__episode-content {
+  display: grid;
+  gap: var(--space-1);
+  min-inline-size: 0;
+}
+
+.drama-library__episode-content h4 {
+  margin: 0;
+  font-size: var(--text-size-body);
+  font-weight: var(--font-weight-semibold);
+  line-height: var(--line-height-title);
+}
+
+.drama-library__episode-heading {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--space-1) var(--space-2);
+}
+
+.drama-library__episode-latest {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  color: var(--studio-attention);
+  font-size: var(--text-size-caption);
+}
+
+.drama-library__episode-latest > svg { flex: none; }
+
+.drama-library .drama-episode-row > .button {
+  min-block-size: var(--control-hit-size);
+  padding-inline: var(--space-3);
+  color: var(--text);
+}
+
+.drama-library .drama-episode-row[data-latest] > .button {
+  color: var(--studio-attention);
+}
+
+.drama-library__episode-meta {
+  justify-content: end;
+}
+
+.drama-library__shot-count { display: inline-flex; align-items: center; gap: var(--space-1); }
+
+.drama-library :is(.drama-library__view-work, .drama-episode-row > .button):enabled:hover {
+  background: var(--studio-control);
+}
+
+.drama-library :is(.drama-library__view-work, .drama-episode-row > .button):enabled:active {
+  background: var(--studio-active);
+}
+
+.drama-library .drama-library__continue-work:enabled:is(:hover, :focus-visible) {
+  border-color: var(--studio-attention);
+  background: var(--studio-attention-surface);
+}
+
+.drama-library .drama-library__continue-work:enabled:active {
+  background: var(--studio-active);
+}
+
+.drama-library .button--primary { background: var(--studio-primary); }
+.drama-library .button--primary:enabled:hover { background: var(--studio-primary-hover); }
+
+.drama-library__empty {
+  border: 1px solid var(--studio-edge);
+  border-radius: var(--studio-card-radius);
+  background: radial-gradient(ellipse at 50% 0, var(--studio-attention-surface), transparent 75%), var(--studio-panel);
+}
+
+.drama-library :is(.drama-library__empty, .drama-library__episodes) .empty-state {
+  padding-block: var(--space-8);
+}
+
+.drama-library .empty-state__icon {
+  inline-size: var(--control-height);
+  block-size: var(--control-height);
+  margin-block: 0 var(--space-2);
+  background: var(--studio-control);
+}
+
+.drama-library .empty-state h3 { font-size: var(--text-size-subheading); }
+
+.drama-library__empty .empty-state > .button {
+  margin-block: var(--space-3) 0;
+  min-block-size: var(--control-hit-size);
+}
+
+@media (hover: hover) {
+  .drama-library .drama-library__card:hover { border-color: var(--studio-attention-edge); }
+  .drama-library__card:hover::before { opacity: 1; }
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .drama-library__detail-header,
+  .drama-library__episodes {
+    animation: drama-library-detail-in var(--motion-enter) var(--motion-ease) both;
+  }
+
+  .drama-library__episodes { animation-delay: var(--motion-fast); }
+
+  .drama-library :is(.drama-library__view-work, .drama-library__continue-work, .drama-episode-row > .button) > svg {
+    transition: translate var(--motion-fast) var(--motion-ease);
+  }
+
+  .drama-library :is(.drama-library__view-work, .drama-library__continue-work, .drama-episode-row > .button):enabled:is(:hover, :focus-visible) > svg {
+    translate: var(--space-tight) 0;
+  }
+}
+
+@keyframes drama-library-detail-in {
+  from { opacity: .65; translate: 0 var(--space-2); }
+}
+
+@media (pointer: coarse) {
+  .drama-library :is(.button, .drama-library-controls > .tabs button) { min-block-size: var(--control-height); }
+}
+
+@container drama-library (max-width: 36rem) {
+  .drama-library .drama-episode-row {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+
+  .drama-library__episode-meta {
+    grid-column: 1;
+    justify-content: start;
+  }
+
+  .drama-library .drama-episode-row > .button {
+    grid-column: 2;
+    grid-row: 1 / span 2;
+  }
+}
+
+@container drama-library (max-width: 28rem) {
+  .drama-library .drama-library-controls {
+    flex-basis: 100%;
+    align-items: start;
+  }
+}
+
+@container drama-library (max-width: 20rem) {
+  .drama-library .drama-episode-row {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .drama-library .drama-episode-row > .button {
+    grid-column: 1;
+    grid-row: auto;
+    justify-self: end;
+  }
+}

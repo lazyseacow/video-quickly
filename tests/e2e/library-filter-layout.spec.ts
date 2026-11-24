@@ -1,7 +1,7 @@
 import { expect, test, type Locator } from '@playwright/test';
 import type { ProjectDocument } from '@video-quickly/contracts';
 import { openCosts } from './workspace-settings';
-import { openAssetLibrary, openStudio } from './workspace-navigation';
+import { openAssetLibrary, openWorks } from './workspace-navigation';
 
 for (const { width, theme } of [
   { width: 1536, theme: 'dark' }, { width: 1536, theme: 'light' },
@@ -36,7 +36,7 @@ for (const { width, theme } of [
     await page.screenshot({ path: info.outputPath(`${name}-${theme}-${width}.png`) });
   }
   const toolbar = () => page.locator('.content-page:visible .page-toolbar:visible');
-  await openStudio(page);
+  await openWorks(page);
   const search = page.getByLabel('搜索作品', { exact: true });
   await search.fill(project.title); await expect(page.locator('.drama-work-card')).toHaveCount(1);
   await expect(page.locator('.drama-work-card')).toContainText(project.title);
@@ -84,7 +84,7 @@ test('recovers from work search misses and distinguishes loading, failed and emp
   const response = await request.post('/__desktop_rpc', { data: { method: 'project.create', params: { originalText: '清晨，林夏在书房发现一封未寄出的信。她来到旧城寻找信的主人，与朋友在雨中的城门重逢。两人读完信后决定一起回家。', title } } });
   expect((await response.json()).result.title).toBe(title);
   await page.goto('/');
-  await openStudio(page);
+  await openWorks(page);
   const search = page.getByLabel('搜索作品', { exact: true });
   await search.fill('  library search fixture  ');
   await expect(page.getByRole('heading', { name: title, exact: true })).toBeVisible();

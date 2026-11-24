@@ -1,4 +1,4 @@
-import { ensureSampleProject, openProjectFromList, openStudio, sampleProjectTitle } from './workspace-navigation';
+import { ensureSampleProject, openProjectFromList, openWorks, sampleProjectTitle } from './workspace-navigation';
 import { openCosts, openGuide, openWorkspaceSettings } from './workspace-settings';
 import { randomUUID } from 'node:crypto';
 import { createServer } from 'node:http';
@@ -7,10 +7,11 @@ import { expect, test, type APIRequestContext, type Page, type TestInfo } from '
 import { createSceneTemplate, type DramaWork, type ModelProfile, type ProjectDocument, type ProjectSummary, type RunSummary } from '@video-quickly/contracts';
 import { test as isolatedTest } from './isolated-workspace';
 import { selectModel, settingField } from './settings';
+import { creationInput, creationMode, sendCreationSource, setCreationTitle } from './drama-creation';
 
 const preference = 'vq-onboarding-v1';
 const targets: Record<string, string[]> = {
-  '新建短剧': ['create-project'], '打开模型连接': ['models'], '添加模型连接': ['model-connection'], '打开短剧工作室': ['projects'], '进入分集工作台': ['project-open'],
+  '新建短剧': ['create-project'], '打开模型连接': ['models'], '添加模型连接': ['model-connection'], '打开短剧工作室': ['projects'], '进入分集工作台': ['project-open', 'work-library'],
   '制作设置': ['view'], '展开镜头导航': ['outline-toggle'], '整理镜头': ['shots'], '预览画面': ['preview'],
   '安排镜头节奏': ['timeline'], '展开属性面板': ['inspector-toggle'], '编辑属性': ['inspector'],
   '制作前检查': ['check'], '自动制作': ['produce'], '导出成片': ['export'], '随时重开指引': ['help'],
@@ -32,7 +33,17 @@ async function nextStep(page: Page) {
   await guide(page).getByRole('button', { name: '下一步', exact: true }).click();
   await expect(guide(page).getByRole('heading')).not.toHaveText(previous);
 }
+async function enterHighlightedWorks(page: Page) {
+  const expand = active(page).and(page.getByRole('button', { name: '工作室菜单', exact: true }));
+  if (await expand.isVisible()) await expand.click();
+  if (await active(page).getAttribute('data-guide') === 'work-library') {
+    const works = active(page).and(page.getByRole('button', { name: '我的作品', exact: true }));
+    await works.click();
+    await expect(active(page)).toHaveAttribute('data-guide', 'project-open');
+  }
+}
 async function openHighlightedProject(page: Page) {
+  await enterHighlightedWorks(page);
   const opensWork = await active(page).evaluate(element => Boolean(element.closest('.drama-work-card')));
   await active(page).click();
   if (opensWork) {
@@ -97,7 +108,7 @@ async function walk(page: Page, info?: TestInfo, screenshotPrefix = '') {
     if (info && ['preview', 'timeline'].includes(target)) await page.screenshot({ path: info.outputPath(`${screenshotPrefix}tour-${target}.png`) });
     const done = guide(page).getByRole('button', { name: '完成引导', exact: true });
     if (await done.isVisible()) { await done.click(); await expect(guide(page)).toHaveCount(0); return seen; }
-    if (target === 'project-open') await openHighlightedProject(page);
+    if (target === 'project-open' || target === 'work-library') await openHighlightedProject(page);
     else await nextStep(page);
   }
   throw new Error('The tour did not finish within its configured target count');
@@ -163,13 +174,24 @@ async function localProvider() {
 }
 
 for (const viewport of [{ width: 1536, height: 960, theme: 'dark', reducedMotion: 'no-preference' }, { width: 390, height: 844, theme: 'light', reducedMotion: 'reduce' }] as const) {
-  test.describe(`spotlight tour at ${viewport.width}px in ${viewport.theme}`, () => {
-    test.use({ viewport: { width: viewport.width, height: viewport.height }, reducedMotion: viewport.reducedMotion,
+  isolatedTest.describe(`spotlight tour at ${viewport.width}px in ${viewport.theme}`, () => {
+    isolatedTest.use({ viewport: { width: viewport.width, height: viewport.height }, reducedMotion: viewport.reducedMotion,
       storageState: async ({ baseURL }, use) => { if (!baseURL) throw new Error('A local application origin is required'); await use(freshProfile(baseURL, viewport.theme)); },
     });
-    test('tracks every real target, remembers completion and restores Help focus after several steps', async ({ page }, info) => {
+    isolatedTest('tracks every real target, remembers completion and restores Help focus after several steps', async ({ page }, info) => {
       const observed = observe(page); await page.goto('/'); await opened(page); await anchored(page);
       await expect(page.locator('html')).toHaveAttribute('data-theme', viewport.theme);
+      const styleTrigger = page.getByRole('button', { name: '快速选择画风', exact: true });
+      await styleTrigger.click();
+      const picker = page.getByRole('dialog', { name: '选择画风', exact: true });
+      const search = picker.getByRole('searchbox', { name: '搜索画风', exact: true });
+      await expect(search).toBeFocused();
+      await search.press('Tab');
+      await expect(picker.getByRole('button', { name: '关闭画风选择', exact: true })).toBeFocused();
+      await page.keyboard.press('Escape');
+      await expect(picker).toBeHidden();
+      await expect(styleTrigger).toBeFocused();
+      await expect(guide(page).getByRole('heading')).toHaveText('新建短剧');
       const previous = guide(page).getByRole('button', { name: '上一步', exact: true }); if (await previous.count()) await expect(previous).toBeDisabled();
       await page.screenshot({ path: info.outputPath(`tour-first-${viewport.theme}-${viewport.width}.png`) });
       await guide(page).getByRole('button', { name: '下一步', exact: true }).click(); await expect(guide(page).getByRole('heading')).toHaveText('打开模型连接'); await anchored(page);
@@ -185,6 +207,24 @@ for (const viewport of [{ width: 1536, height: 960, theme: 'dark', reducedMotion
     });
   });
 }
+
+test('dismisses the compact workspace menu before closing its guide step', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  await page.goto('/'); await opened(page); await reach(page, '进入分集工作台');
+  const menuToggle = page.getByRole('button', { name: '工作室菜单', exact: true });
+  await menuToggle.click();
+  const navigation = page.getByRole('navigation', { name: '工作室菜单', exact: true });
+  const works = navigation.getByRole('button', { name: '我的作品', exact: true });
+  const guideHeading = guide(page).getByRole('heading', { name: '进入分集工作台', exact: true });
+  await expect(active(page)).toHaveText('我的作品');
+  await expect(guideHeading).toBeFocused();
+  await works.press('Escape');
+  await expect(navigation).toBeHidden();
+  await expect(active(page)).toHaveAccessibleName('工作室菜单');
+  await expect(guideHeading).toBeFocused();
+  await page.keyboard.press('Escape'); await expect(guide(page)).toHaveCount(0);
+});
 
 for (const dismissal of ['skip', 'close', 'overlay'] as const) {
   test(`remembers ${dismissal} dismissal and leaves the workspace unchanged`, async ({ page }) => {
@@ -239,6 +279,7 @@ test('moves away from a target that becomes hidden instead of leaving a stale cu
 test('resumes the same episode guide after an unchanged background refresh completes', async ({ page, request }) => {
   const sample = await ensureSampleProject(page), observed = observe(page);
   await page.emulateMedia({ reducedMotion: 'reduce' }); await page.goto('/'); await opened(page); await reach(page, '进入分集工作台');
+  await enterHighlightedWorks(page);
   await expect(active(page)).toHaveText('查看分集');
   expect(await active(page).evaluate(element => element.closest('.drama-work-card')?.getAttribute('data-work-id'))).toBe(sample.drama!.workId);
   await active(page).click();
@@ -319,18 +360,21 @@ test('continues the same tour only after a real short drama is created and prese
   const observed = observe(page); await page.emulateMedia({ reducedMotion: 'reduce' }); await page.goto('/'); await opened(page);
   const composer = page.locator('section.drama-composer[data-guide="create-project"]');
   await expect(active(page)).toHaveClass(/drama-composer/);
-  const title = composer.getByRole('textbox', { name: '短剧名称', exact: true }), body = composer.getByRole('textbox', { name: '剧本正文', exact: true });
+  await creationMode(composer, '上传剧本').check();
   const submit = composer.getByRole('button', { name: '创建短剧', exact: true });
-  await submit.click(); await atStep(page, '新建短剧'); expect(observed.writes).toEqual([]);
-  await title.fill('导览失败时保留输入'); await submit.click(); await atStep(page, '新建短剧'); expect(observed.writes).toEqual([]);
-  await body.fill('第一场：夜班员把维修单放在桌上，抬头看见熟悉的签名。');
+  await creationInput(composer).press('Enter'); await atStep(page, '新建短剧'); expect(observed.writes).toEqual([]);
+  const screenplay = '第一场：夜班员把维修单放在桌上，抬头看见熟悉的签名。';
+  await sendCreationSource(composer, screenplay); await atStep(page, '新建短剧'); expect(observed.writes).toEqual([]);
+  const title = '导览失败时保留输入';
+  await setCreationTitle(composer, title);
   const failed = await holdNextRpc(page, 'dramaStudio.create', '隔离的新建失败');
   await submit.click(); await failed.entered; await atStep(page, '新建短剧'); await expect(submit).toBeDisabled(); failed.release();
   await expect(page.getByText('隔离的新建失败', { exact: true })).toBeVisible(); await atStep(page, '新建短剧');
-  await expect(title).toHaveValue('导览失败时保留输入'); await expect(body).toHaveValue(/夜班员/);
+  await expect(composer.getByRole('textbox', { name: '短剧名称', exact: true })).toHaveValue(title);
+  await expect(composer.getByText(screenplay, { exact: true }).first()).toBeVisible();
   expect(await page.evaluate(key => localStorage.getItem(key), preference)).toBeNull();
-  const pending = await holdNextRpc(page, 'dramaStudio.create'), acceptedTitle = `导览中真实短剧 ${randomUUID().slice(0, 8)}`;
-  await title.fill(acceptedTitle);
+  await setCreationTitle(composer, `导览中真实短剧 ${randomUUID().slice(0, 8)}`);
+  const pending = await holdNextRpc(page, 'dramaStudio.create');
   const response = page.waitForResponse(response => response.url().endsWith('/__desktop_rpc') && response.request().postDataJSON()?.method === 'dramaStudio.create');
   await submit.evaluate((button: HTMLButtonElement) => { button.click(); button.click(); }); await pending.entered;
   await expect(submit).toBeDisabled(); await atStep(page, '新建短剧'); pending.release();
@@ -450,9 +494,10 @@ isolatedTest('guides an empty studio and preserves works and episodes through re
   const main = page.getByRole('main'), heading = main.getByRole('heading', { name: '短剧工作室', level: 1, exact: true });
   await expect(heading).toBeVisible();
   const seen = await walk(page); expect(seen).toEqual(['create-project', 'models', 'projects', 'help']);
+  await expect(creationInput(main.getByRole('region', { name: '新建短剧', exact: true }))).toBeEnabled();
+  await openWorks(page);
   await expect(main.getByRole('heading', { name: '还没有作品', exact: true })).toBeVisible();
   await expect(main.getByLabel('搜索作品', { exact: true })).toBeVisible();
-  await expect(main.getByRole('region', { name: '新建短剧', exact: true }).getByRole('button', { name: '创建短剧', exact: true })).toBeEnabled();
   expect((await rpc<{ items: DramaWork[] }>(request, 'dramaWork.list')).items).toEqual([]);
   expect(isolatedWorkspace.origin).toBe(new URL(page.url()).origin); expect(observed.writes).toEqual([]); expect(observed.errors).toEqual([]);
   await page.setViewportSize({ width: 360, height: 844 });
@@ -464,7 +509,7 @@ isolatedTest('guides an empty studio and preserves works and episodes through re
   await expect(main.getByRole('button', { name: '新建分集', exact: true })).toBeEnabled();
   await main.locator(`.drama-episode-row[data-project-id="${sample.id}"]`).getByRole('button', { name: '打开分集', exact: true }).click();
   await expect(page.locator('.workbench')).toBeVisible(); await expect(page.getByLabel('项目名称', { exact: true })).toHaveValue(sample.title);
-  await openStudio(page);
+  await openWorks(page);
   await filters.getByRole('button', { name: '可用', exact: true }).click();
   await main.getByRole('searchbox', { name: '搜索作品', exact: true }).fill('');
   const restored = await rpc<DramaWork>(request, 'dramaWork.get', { workId: sample.drama!.workId });

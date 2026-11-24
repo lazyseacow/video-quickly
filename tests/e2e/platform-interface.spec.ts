@@ -1,6 +1,7 @@
-import { openProjectFromList } from './workspace-navigation';
+import { chooseStudioEntry, openProjectFromList } from './workspace-navigation';
 import { expect, test, type APIRequestContext } from '@playwright/test';
 import type { ProjectDocument } from '@video-quickly/contracts';
+import { creationInput } from './drama-creation';
 
 async function rpc<T>(request: APIRequestContext, method: string, params: unknown = {}): Promise<T> {
   const response = await request.post('/__desktop_rpc', { data: { method, params } });
@@ -35,13 +36,13 @@ for (const platform of [
   await expect(redo).toBeEnabled(); await redo.focus(); await expect(redo).toBeFocused(); await page.keyboard.press(`${platform.key}+Shift+z`);
   await expect.poll(async () => (await saved()).shots[0].title).toBe('平台键盘保存');
 
-  const create = page.getByRole('button', { name: '新建短剧', exact: true }); await create.click();
+  await chooseStudioEntry(page, '对话');
   const composer = page.getByRole('region', { name: '新建短剧', exact: true });
-  const title = composer.getByRole('textbox', { name: '短剧名称', exact: true });
-  await expect(title).toBeFocused(); await title.fill(''); await title.pressSequentially('native input');
+  const input = creationInput(composer);
+  await expect(input).toBeFocused(); await input.fill(''); await input.pressSequentially('native input');
   // Chromium's native text editing uses the actual host modifier, even when
   // navigator.platform is emulated for the hint and application-level tests.
-  await title.press('ControlOrMeta+z'); await expect(title).not.toHaveValue('native input');
+  await input.press('ControlOrMeta+z'); await expect(input).not.toHaveValue('native input');
   await openProjectFromList(page, project.title); await expect(page.getByLabel('项目名称', { exact: true })).toHaveValue(project.title);
 
   await page.getByRole('button', { name: '导出', exact: true }).click();

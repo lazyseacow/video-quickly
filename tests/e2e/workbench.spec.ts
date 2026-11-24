@@ -2,13 +2,14 @@ import { confirmAction } from './confirmation-actions';
 import { saveProduction } from './production-settings';
 import { selectModel, closeProjectSettings } from './settings';
 import { createSceneTemplate, type ProjectDocument } from '@video-quickly/contracts';
-import { openProjectFromList, sampleProjectTitle, openStudio, ensureSampleProject } from './workspace-navigation';
+import { chooseStudioEntry, openProjectFromList, sampleProjectTitle, openStudio, ensureSampleProject, revealStudioNavigation } from './workspace-navigation';
 import { setWorkspaceTheme } from './workspace-settings';
 import { addModelConnection } from './settings';
 import { projectSettingField } from './settings';
 import { expect, test, type Page, type APIRequestContext } from '@playwright/test';
 import { resolve } from 'node:path';
 import { modelCatalog } from './model-catalog';
+import { creationInput, draftDrama } from './drama-creation';
 
 async function openApp(page: Page) {
   // Navigation completes before the workspace request on a cold CI browser.
@@ -153,14 +154,13 @@ for (const reducedMotion of ['no-preference', 'reduce'] as const) {
     await page.getByRole('button', { name: '关闭提示', exact: true }).click();
     await expect(page.locator('.toast-anchor')).toHaveCount(0);
 
-    const create = page.getByRole('button', { name: '新建短剧', exact: true });
-    await create.click();
+    await chooseStudioEntry(page, '对话');
     const composer = page.getByRole('region', { name: '新建短剧', exact: true });
-    await expect(composer.getByRole('textbox', { name: '短剧名称', exact: true })).toBeFocused();
-    await composer.getByRole('textbox', { name: '短剧名称', exact: true }).fill('切换后保留的创作输入');
+    await expect(creationInput(composer)).toBeFocused();
+    await creationInput(composer).fill('切换后保留的创作输入');
     await openProjectFromList(page, project.title);
-    await create.press('Enter');
-    await expect(composer.getByRole('textbox', { name: '短剧名称', exact: true })).toHaveValue('切换后保留的创作输入');
+    await (await revealStudioNavigation(page)).getByRole('button', { name: '对话', exact: true }).press('Enter');
+    await expect(creationInput(composer)).toHaveValue('切换后保留的创作输入');
     await openProjectFromList(page, project.title);
     // Change the preference in an already-mounted app, then unmount animated surfaces.
     await page.locator('.project-heading-actions').getByRole('button', { name: '制作设置', exact: true }).click();
@@ -363,10 +363,9 @@ test('creates a project and connects a model without exposing credentials', asyn
   try {
     await openApp(page);
     await openStudio(page);
-    await page.getByRole('button', { name: '新建短剧', exact: true }).last().click();
+    await chooseStudioEntry(page, '对话');
     const dialog = page.getByRole('region', { name: '新建短剧', exact: true });
-    await dialog.getByRole('textbox', { name: '短剧名称', exact: true }).fill('界面验收短剧');
-    await dialog.getByRole('textbox', { name: '剧本正文', exact: true }).fill('林夏在旧城发现一封信，与朋友重逢后决定共同寻找真相。');
+    await draftDrama(dialog, '上传剧本', '林夏在旧城发现一封信，与朋友重逢后决定共同寻找真相。', '界面验收短剧');
     await dialog.getByRole('button', { name: '创建短剧', exact: true }).click();
     await expect(dialog).toBeHidden();
     await expect(page.getByLabel('项目名称', { exact: true })).toHaveValue('界面验收短剧 · 第 1 集');

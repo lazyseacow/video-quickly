@@ -1,8 +1,9 @@
-import { openProjectFromList } from './workspace-navigation';
+import { chooseStudioEntry, openProjectFromList } from './workspace-navigation';
 import { setWorkspaceTheme } from './workspace-settings';
 import { expect, test, type APIRequestContext, type Page } from '@playwright/test';
 import type { ProjectDocument } from '@video-quickly/contracts';
 import { addModelConnection, settingField } from './settings';
+import { creationMode } from './drama-creation';
 
 async function rpc<T>(request: APIRequestContext, method: string, params: unknown = {}): Promise<T> {
   const response = await request.post('/__desktop_rpc', { data: { method, params } }); const payload = await response.json(); expect(response.ok()).toBe(true); expect(payload.error).toBeUndefined(); return payload.result;
@@ -12,7 +13,7 @@ async function expectCleanChrome(page: Page) {
   await expect(page.locator('.topbar, .breadcrumb, .sidebar-local, .avatar')).toHaveCount(0);
   for (const text of ['本地工作区', '已连接本机', '项目与执行进度保存在本机']) await expect(page.getByText(text, { exact: true })).toHaveCount(0);
   await expect(page.getByLabel('本地创作者', { exact: true })).toHaveCount(0);
-  await expect(page.getByRole('navigation', { name: '主导航', exact: true })).toBeVisible(); await expect(page.getByRole('navigation', { name: '资源导航', exact: true })).toBeVisible(); await expect(page.locator('.sidebar').getByRole('button', { name: '新建短剧', exact: true })).toBeVisible();
+  await expect(page.getByRole('navigation', { name: '主导航', exact: true })).toBeVisible(); await expect(page.getByRole('navigation', { name: '资源导航', exact: true })).toBeVisible(); await expect(page.locator('.sidebar').getByRole('button', { name: '短剧工作室', exact: true })).toBeVisible();
 }
 
 test('keeps one page heading and functional guidance after removing repeated desktop chrome and slogans', async ({ page, request }, info) => {
@@ -39,7 +40,14 @@ test('keeps one page heading and functional guidance after removing repeated des
   }
   await expect(page.locator('.statusbar')).toHaveCount(0);
   await page.screenshot({ path: info.outputPath('workspace-cleanup-dark-1536.png') });
-  await page.locator('.sidebar').getByRole('button', { name: '新建短剧', exact: true }).click(); const composer = page.getByRole('region', { name: '新建短剧', exact: true }); await expect(composer).toBeVisible(); await expect(composer.getByRole('textbox', { name: '短剧名称', exact: true })).toBeFocused(); await expect(composer.getByRole('textbox', { name: '剧本正文', exact: true })).toBeVisible(); await composer.getByRole('tab', { name: '制作剧本', exact: true }).click(); await expect(composer.getByLabel('故事想法', { exact: true })).toBeVisible(); expect(errors).toEqual([]);
+  await chooseStudioEntry(page, '对话');
+  const composer = page.getByRole('region', { name: '新建短剧', exact: true });
+  await expect(composer).toBeVisible(); await expect(composer.getByRole('textbox', { name: '创作输入', exact: true })).toBeFocused();
+  await expect(creationMode(composer, '自动判断')).toBeChecked();
+  const writeMode = creationMode(composer, '制作剧本');
+  await writeMode.check();
+  await expect(writeMode).toBeChecked();
+  expect(errors).toEqual([]);
 });
 
 test('keeps recovery feedback and editing actions on a compact light workspace without an empty footer', async ({ page, request }, info) => {
@@ -78,6 +86,6 @@ test('keeps recovery feedback and editing actions on a compact light workspace w
   await expect(recoveryNotice).toHaveCount(0);
   const exportButton = page.getByRole('button', { name: '导出', exact: true }); await expect(exportButton).toBeEnabled();
   const controls = await page.locator('.project-heading').evaluate(element => ({ viewport: innerWidth, heading: element.getBoundingClientRect().toJSON(), actions: element.querySelector('.project-heading-actions')!.getBoundingClientRect().toJSON(), buttons: Array.from(element.querySelectorAll('button')).filter(button => button.checkVisibility()).map(button => ({ name: button.getAttribute('aria-label') || button.textContent, left: button.getBoundingClientRect().left, right: button.getBoundingClientRect().right })) }));
-  expect(controls.buttons.filter(button => button.left < 52 || button.right > controls.viewport), JSON.stringify(controls)).toEqual([]);
+  expect(controls.buttons.filter(button => button.left < controls.heading.left || button.right > controls.viewport), JSON.stringify(controls)).toEqual([]);
   await exportButton.scrollIntoViewIfNeeded(); await page.screenshot({ path: info.outputPath('workspace-cleanup-light-600.png') }); await exportButton.click(); const dialog = page.getByRole('dialog', { name: '导出视频', exact: true }); await expect(dialog).toBeVisible(); await expect(dialog.getByRole('button', { name: '导出 MP4', exact: true })).toBeEnabled(); expect(errors).toEqual([]);
 });

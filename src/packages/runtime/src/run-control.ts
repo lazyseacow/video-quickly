@@ -16,6 +16,7 @@ interface RunControlOptions {
   isActive(runId: string): boolean;
   abortActive(runId: string): void;
   inspectRun(runId: string): Promise<unknown>;
+  validateAdaptationRun(run: RunRecord, saved: RunSnapshot | undefined): void;
   projectBusy(projectId: string, exceptBatchId?: string, exceptRunId?: string): boolean;
   batches: Pick<ReturnType<typeof createExportBatchManager>, 'blocked' | 'dispatch'>;
   modelResponses: ReturnType<typeof createModelResponses>;
@@ -27,7 +28,7 @@ interface RunControlOptions {
 }
 
 export function createRunControl({
-  store, run, project, isActive, abortActive, inspectRun, projectBusy, batches, modelResponses,
+  store, run, project, isActive, abortActive, inspectRun, validateAdaptationRun, projectBusy, batches, modelResponses,
   updateRun, schedule, recordEvent, cancelCosts, hydrateRun,
 }: RunControlOptions) {
   function pendingRetry(run: RunRecord, runId: string, nodeId: string) {
@@ -46,6 +47,7 @@ export function createRunControl({
     if (!step?.retry?.allowed) throw new Error(step?.retry?.reason || '只能重试本次制作中选中的失败步骤。');
     value = run(runId);
     const saved = store.get<RunSnapshot>('run-snapshot', runId);
+    validateAdaptationRun(value, saved);
     if (saved?.creativePlanning?.plan?.route !== 'style-only') project(value.projectId);
     const concurrentRetry = pendingRetry(value, runId, nodeId);
     if (concurrentRetry) return concurrentRetry;
@@ -71,6 +73,7 @@ export function createRunControl({
   async function resume(rawParams: unknown): Promise<RunRecord> {
     const { runId } = runIdInput.parse(rawParams); const value = run(runId);
     const saved = store.get<RunSnapshot>('run-snapshot', runId);
+    validateAdaptationRun(value, saved);
     if (saved?.creativePlanning?.plan?.route !== 'style-only') project(value.projectId);
     if (saved?.exportBatch) { await batches.dispatch('render.batch.resume', { batchId: saved.exportBatch.batchId }); return hydrateRun(run(runId)); }
     if (batches.blocked(value.projectId)) throw new Error('请先继续或取消当前批量导出，再恢复其他运行。');

@@ -3,7 +3,8 @@ import { z } from 'zod';
 export const chargeActionSchema = z.enum([
   'run.start', 'run.resume', 'run.step.retry', 'shot.regenerate',
   'character.generateImage', 'planning.prefill.start', 'promptTrial.start', 'workflowAssistant.start',
-  'creativePlanning.plan', 'creativePlanning.start', 'creativePlanning.revise',
+  'creativePlanning.plan', 'creativePlanning.start', 'creativePlanning.revise', 'creativePlanning.previewRecommend', 'creativePlanning.previewStart',
+  'novelAdaptation.start',
   'cost.update',
 ]);
 export type ChargeAction = z.infer<typeof chargeActionSchema>;

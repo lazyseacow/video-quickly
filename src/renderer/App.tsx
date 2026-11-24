@@ -1,9 +1,9 @@
 import { Suspense, lazy, startTransition, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { BookOpen, Clapperboard, Layers, Palette, Sparkles, RefreshCw } from 'lucide-react';
+import { BookOpen, Cable, Clapperboard, LayoutTemplate, LibraryBig, RefreshCw } from 'lucide-react';
 import { projectSchema, projectDetailSchema, workspaceSummarySchema, type ProjectDocument, type ProjectDetail, type SeriesTemplate } from '@video-quickly/contracts';
 import { createRefreshQueue } from './lib/refresh-queue';
 import { Button, Notice } from './components/Primitives';
-import WorkspaceSidebar, { type Page, type SidebarNavigationItem } from './components/WorkspaceSidebar';
+import WorkspaceSidebar, { type Page, type SidebarNavigationItem, type StudioMenuCommand } from './components/WorkspaceSidebar';
 import WorkspaceSettings from './components/WorkspaceSettings';
 import BrandMark from './components/BrandMark';
 import RuntimeConnectionNotice from './components/RuntimeConnectionNotice';
@@ -18,7 +18,7 @@ import { rpc, subscribe } from './lib/client';
 import type { Action, StepOutputSelection, WorkspaceView } from './lib/types';
 import { useButtonFocus } from './lib/use-button-focus';
 import CostsPage from './features/CostsPage';
-import type { DramaCreationRequest } from './features/DramaCreationComposer';
+import type { DramaStudioMenuContext, DramaStudioRequest } from './features/DramaWorksPage';
 import { beginGuideAction } from './lib/guide-actions';
 import { useChargeRpc } from './components/ConfirmationDialog';
 import { isChargeAction } from '@video-quickly/contracts';
@@ -30,9 +30,9 @@ const GettingStartedGuide = lazy(() => import('./components/GettingStartedGuide'
 
 const pages: SidebarNavigationItem[] = [
   { id: 'projects', label: '短剧工作室', icon: Clapperboard, group: 'main' },
-  { id: 'assets', label: '素材库', icon: Layers, group: 'resources' },
-  { id: 'templates', label: '系列模板', icon: Palette, group: 'resources' },
-  { id: 'models', label: '模型连接', icon: Sparkles, group: 'tools' },
+  { id: 'assets', label: '素材库', icon: LibraryBig, group: 'resources' },
+  { id: 'templates', label: '系列模板', icon: LayoutTemplate, group: 'resources' },
+  { id: 'models', label: '模型连接', icon: Cable, group: 'tools' },
   { id: 'skills', label: 'Skill 工作室', icon: BookOpen, group: 'tools' },
 ];
 
@@ -55,6 +55,8 @@ export default function App() {
   const consumeOutputRequest = useCallback(() => setOutputRequest(undefined), []);
   const [storyboardRequest, setStoryboardRequest] = useState<string>();
   const consumeStoryboardRequest = useCallback(() => setStoryboardRequest(undefined), []);
+  const [episodeViewRequest, setEpisodeViewRequest] = useState<{ projectId: string; conversation: boolean }>();
+  const consumeEpisodeViewRequest = useCallback(() => setEpisodeViewRequest(undefined), []);
   const [repairModelId, setRepairModelId] = useState<string>();
   const consumeRepairModel = useCallback(() => setRepairModelId(undefined), []);
   const [{ page, visited, assetTab }, setNavigation] = useState<NavigationState>({ page: 'projects', visited: ['projects'], assetTab: 'media' });
@@ -67,8 +69,11 @@ export default function App() {
     return initialTheme === 'dark' ? 'dark' : 'light';
   });
   const [toast, setToast] = useState<ToastMessage>();
-  const [creation, setCreation] = useState<DramaCreationRequest>();
-  const creationSequence = useRef(0);
+  const [studioRequest, setStudioRequest] = useState<DramaStudioRequest>();
+  const studioRequestSequence = useRef(0);
+  const [studioMenuContext, setStudioMenuContext] = useState<DramaStudioMenuContext>({ current: 'dialogue', guideLibrary: false });
+  const recentEpisodes = useMemo(() => workspace?.projects.filter(episode => episode.drama && !episode.archived)
+    .toSorted((left, right) => right.updatedAt.localeCompare(left.updatedAt)).slice(0, 6) ?? [], [workspace?.projects]);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const settingsAnchor = useRef<HTMLButtonElement>(null);
   const [showGettingStarted, setShowGettingStarted] = useState(() => localStorage.getItem('vq-onboarding-v1') !== 'done');
@@ -240,25 +245,31 @@ export default function App() {
     if (next === 'models') setRepairModelId(modelId);
     return true;
   }
-  function registerSave(callback: (() => Promise<boolean>) | null) { saveBeforeLeave.current = callback; }
-  async function openProject(id: string, editStoryboard = false) {
+  const registerSave = useCallback((callback: (() => Promise<boolean>) | null) => { saveBeforeLeave.current = callback; }, []);
+  async function openProject(id: string, editStoryboard = false, continueConversation = false) {
     if (page === 'workbench' && id !== projectId && saveBeforeLeave.current && !await saveBeforeLeave.current()) return false;
     const complete = beginGuideAction('workbench-opened');
     if (page !== 'workbench') navigationGuide.current = { page: 'workbench', complete }; else complete();
     const retry = failedProjectReads.current.delete(id);
     currentProjectId.current = id; setProjectId(id); setStoryboardRequest(editStoryboard ? id : undefined);
+    setEpisodeViewRequest({ projectId: id, conversation: continueConversation });
     activatePage('workbench'); if (retry) void refreshProject(id); return true;
   }
   async function openStepOutput(selection: StepOutputSelection) { if (await openProject(selection.projectId)) setOutputRequest(selection); }
-  async function createProject(template?: SeriesTemplate) {
+  async function openStudio(command: StudioMenuCommand, template?: SeriesTemplate) {
     if (!await navigate('projects')) return;
     pageScroll.current.delete('projects');
-    setCreation({ sequence: ++creationSequence.current, template });
+    if (page === 'projects' && pageBody.current) pageBody.current.scrollTop = 0;
+    setStudioRequest({ sequence: ++studioRequestSequence.current, template, command });
   }
   if (!workspace) return <div className="welcome-loading"><BrandMark size={34} /><strong>Video Quickly</strong><RuntimeConnectionNotice connection={connection} onReconnect={() => void reconnectRuntime()} />{connection.state === 'ready' && <p>{loadError || '正在打开本地工作区…'}</p>}{loadError && connection.state === 'ready' && <Button onClick={() => void refresh()}><RefreshCw size={15} />重新连接</Button>}</div>;
   return <div className="app workspace-shell">
     <WorkspaceSidebar page={page} navigation={pages} settingsOpen={settingsOpen} settingsRef={settingsAnchor}
-      onNavigate={next => void navigate(next)} onCreate={() => void createProject()}
+      studioMenu={{ current: page === 'projects' ? studioMenuContext.current : undefined, episodes: recentEpisodes,
+        currentEpisodeId: page === 'workbench' ? projectId : undefined,
+        guideLibrary: page === 'projects' && studioMenuContext.guideLibrary, onChoose: command => void openStudio(command),
+        onOpenEpisode: id => void openProject(id, false, true) }}
+      onNavigate={next => void navigate(next)}
       onSettings={() => { if (showGettingStarted) closeGettingStarted(); setSettingsOpen(value => !value); }} />
     <div className="main-shell">
       <SkillImportStatus jobs={workspace.skillImports} groups={workspace.skillGroups} action={action} />
@@ -273,6 +284,7 @@ export default function App() {
             if (project && project.id === projectId) return <Workbench key={project.id} project={project} workspace={workspace}
               outputRequest={outputRequest} onOutputConsumed={consumeOutputRequest} onOpenOutput={selection => void openStepOutput(selection)}
               openStoryboard={storyboardRequest === project.id} onStoryboardOpened={consumeStoryboardRequest}
+              viewRequest={episodeViewRequest?.projectId === project.id ? episodeViewRequest : undefined} onViewOpened={consumeEpisodeViewRequest}
               action={action} notify={notify} onRegisterSave={registerSave} onNavigate={navigateToRepair} />;
             if (!projectId) return null;
             const error = projectLoadError || loadError;
@@ -280,8 +292,9 @@ export default function App() {
               {error ? <><p>{error}</p><Button aria-label="重试项目" onClick={retryProject}>重试</Button></> : '正在读取项目…'}
             </div>;
           }
-          if (cachedPage === 'projects') return <DramaWorksPage workspace={workspace} action={action} creationRequest={creation} onOpen={openProject} />;
-          if (cachedPage === 'templates') return <SeriesTemplatesPage workspace={workspace} action={action} onCreate={template => void createProject(template)} />;
+          if (cachedPage === 'projects') return <DramaWorksPage workspace={workspace} action={action} request={studioRequest} onOpen={openProject}
+            onContinue={id => void openProject(id, false, true)} onMenuContext={setStudioMenuContext} />;
+          if (cachedPage === 'templates') return <SeriesTemplatesPage workspace={workspace} action={action} onCreate={template => void openStudio('dialogue', template)} />;
           if (cachedPage === 'costs') return <CostsPage workspace={workspace} />;
           if (cachedPage === 'models') return <ModelsPage workspace={workspace} action={action} repairModelId={repairModelId} onRepairConsumed={consumeRepairModel} />;
           if (cachedPage === 'skills') return <SkillsPage workspace={workspace} action={action} onOpenOutput={openStepOutput} />;

@@ -206,10 +206,10 @@ export function mergeStoryboardEntities(existing: ProjectDocument['creativeConte
   return existing || generated.length ? creativeContextSchema.parse({ ...context, entities: [...entities.values()] }) : undefined;
 }
 
-export function materializeStoryboardBatch(shots: ScriptOutput['shots'], project: ScriptProject, characters: CharacterProfile[], placements: readonly StoryboardPlacement[]) {
+export function materializeStoryboardBatch(shots: ScriptOutput['shots'], project: ScriptProject, characters: CharacterProfile[], placements: readonly StoryboardPlacement[], fixedCharacterAssets = false) {
   // An empty library scope has no bindings to resolve. Story characters are still described in the shot text and entities.
   const batch = projectCharacterIds(project).length ? shots : shots.map(shot => shot.characterKeys?.length ? { ...shot, characterKeys: [] } : shot);
-  return materializeScript({ shots: batch, entities: [] }, project, false, characters, placements).shots;
+  return materializeScript({ shots: batch, entities: [] }, project, false, characters, placements, fixedCharacterAssets).shots;
 }
 
 function storyboardDescription(text: string, path: string): string {
@@ -235,7 +235,7 @@ function storyboardVisualPrompt(shot: GeneratedStoryboardShot, durationUs: numbe
   return [`初始画面\n${initialFrame}`, `人物站位\n${characterPositions}`, `动作时间轴\n${actions.join('\n')}`].join('\n\n');
 }
 
-function materializeScript(parsed: ScriptOutput, project: ScriptProject, singleShot: boolean, characters: CharacterProfile[], placements?: readonly StoryboardPlacement[]) {
+function materializeScript(parsed: ScriptOutput, project: ScriptProject, singleShot: boolean, characters: CharacterProfile[], placements?: readonly StoryboardPlacement[], fixedCharacterAssets = false) {
   const previous = project.shots, preset = project.scenePreset;
   if (singleShot && parsed.entities.length) invalid('entities', '单镜头候选不能新增创作设定，请在项目制作设置中添加。');
   const creativeContext = mergeStoryboardEntities(project.creativeContext, parsed.entities);
@@ -265,7 +265,8 @@ function materializeScript(parsed: ScriptOutput, project: ScriptProject, singleS
     if (project.creativeContext?.characterIds.length && before?.characterIds === undefined && shot.characterKeys === undefined) invalid(`shots[${index}].characterKeys`, '已选择项目角色池，请让分镜为每个新镜头提供 characterKeys；无人出镜时使用空数组。');
     const sceneTemplate = before ? before.sceneTemplate : preset ? { ...createSceneTemplate(preset.kind), palette: preset.palette, motion: preset.motion } : undefined;
     const durationUs = before?.clipEdit ? before.durationUs : shot.durationUs ?? before?.durationUs ?? 8_000_000;
-    return shotSchema.parse({ ...before, title: shot.title, narration: shot.narration, visualPrompt: storyboardVisualPrompt(shot, durationUs, index), soundPrompt: shot.soundPrompt ?? before?.soundPrompt, captionStyle: before?.captionStyle, claimIds: before?.claimIds ?? [], characterIds: before?.characterIds ?? shot.characterIds, creativeEntityKeys: before?.creativeEntityKeys ?? shot.entityKeys, sceneTemplate, id, durationUs });
+    const creativeEntityKeys = fixedCharacterAssets ? shot.entityKeys : before?.creativeEntityKeys ?? shot.entityKeys;
+    return shotSchema.parse({ ...before, title: shot.title, narration: shot.narration, visualPrompt: storyboardVisualPrompt(shot, durationUs, index), soundPrompt: shot.soundPrompt ?? before?.soundPrompt, captionStyle: before?.captionStyle, claimIds: before?.claimIds ?? [], characterIds: before?.characterIds ?? shot.characterIds, creativeEntityKeys, sceneTemplate, id, durationUs });
   });
   validateCreativeReferences({ shots, creativeContext });
   return { shots, ...(creativeContext ? { creativeContext } : {}) };

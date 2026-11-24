@@ -23,12 +23,15 @@ const editableWork = z.object({
 export const dramaWorkSchema = editableWork.extend(revisionFields);
 export const dramaWorkInputSchema = editableWork.extend({ id: identity.optional(), revision: z.number().int().positive().optional() });
 export type DramaWork = z.infer<typeof dramaWorkSchema>;
+export const MAX_NOVEL_SOURCE_LENGTH = 30_000;
+export const novelSourceSchema = z.string().trim().min(1, '请填写小说原文。').max(MAX_NOVEL_SOURCE_LENGTH, '小说原文最多 30000 个字符，请按分集拆分。');
 export const dramaStudioCreateInputSchema = z.object({
   work: dramaWorkInputSchema.omit({ id: true, revision: true }).extend({ skillIds: uniqueIds(500).optional() }),
-  originalText: z.string().max(30000).default(''), mode: z.enum(['upload', 'write']),
+  originalText: z.string().max(30000).default(''), novelSource: novelSourceSchema.optional(), mode: z.enum(['novel', 'upload', 'write']),
   seriesTemplateId: identity.optional(), seriesTemplateRevision: z.number().int().positive().optional(),
 }).superRefine((value, context) => {
   if (value.mode === 'upload' && !value.originalText.trim()) context.addIssue({ code: 'custom', path: ['originalText'], message: '请先上传或填写剧本正文。' });
+  if (value.mode === 'novel' && !value.novelSource) context.addIssue({ code: 'custom', path: ['novelSource'], message: '请填写小说原文。' });
   if (Boolean(value.seriesTemplateId) !== (value.seriesTemplateRevision !== undefined)) context.addIssue({ code: 'custom', path: ['seriesTemplateId'], message: '请选择系列模板及其当前修订。' });
 });
 export const dramaScriptReadResultSchema = z.object({ fileName: z.string().min(1), text: z.string().trim().min(1).max(30000, '剧本正文最多 30000 个字符，请按分集拆分后导入。') });

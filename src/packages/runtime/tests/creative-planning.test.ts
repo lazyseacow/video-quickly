@@ -220,8 +220,9 @@ it('recovers a standalone style extraction from its snapshot and leaves the work
   expect(await reopened.dispatch('run.replay', { runId: draft.id })).toMatchObject({ matchesSnapshot: true, externalCalls: 0 });
 });
 
-it('recovers keyframe previews using their recorded image request and applies only the chosen frames', async () => {
+it('resumes a confirmed preview, preserves dialogue-only frame bindings, and replaces only the redone shot', async () => {
   let crashed = false, imageSubmissions = 0, imageResumes = 0;
+  const imageScopes: string[][] = [];
   const bytes = Buffer.from(image, 'base64');
   const timestamp = new Date().toISOString();
   const { runtime, calls, request, options } = await fixture({
@@ -230,7 +231,6 @@ it('recovers keyframe previews using their recorded image request and applies on
     },
     async executeActivity(context) {
       expect(context.node).toMatchObject({ id: 'assets', kind: 'assets', config: { operation: 'prepare-references', referenceMode: 'generate' } });
-      expect(context.project.shots.map(shot => shot.title)).toEqual(['入口', '交信']);
       expect(context.project.style).toContain(style.swatches[1].hex);
       const receipt = `image-receipt:${context.operationId}`;
       if (context.remoteTaskId) {
@@ -239,9 +239,10 @@ it('recovers keyframe previews using their recorded image request and applies on
       } else {
         context.persistRemoteTask(receipt);
         imageSubmissions++;
+        imageScopes.push(context.project.shots.map(shot => shot.id));
       }
       const assets = await Promise.all(context.project.shots.map(async shot => {
-        const id = `keyframe-${createHash('sha256').update(shot.id).digest('hex').slice(0, 24)}`;
+        const id = `keyframe-${createHash('sha256').update(`${context.runId}:${shot.id}`).digest('hex').slice(0, 24)}`;
         const path = join(context.dataDirectory, `${id}.png`);
         if (!context.remoteTaskId) await writeFile(path, bytes);
         return { id, name: `${shot.title}.png`, kind: 'image', path, mimeType: 'image/png', size: bytes.length,
@@ -258,30 +259,73 @@ it('recovers keyframe previews using their recorded image request and applies on
   expect(plan.route).toBe('keyframe-preview');
   expect(plan.options).toHaveLength(1);
   const started = creativePlanningResultSchema.parse(await runtime.dispatch('creativePlanning.start', {
-    ...request, imageModelId: imageModel.id, plan: { id: plan.id, optionId: plan.options[0].id },
+    ...request, plan: { id: plan.id, optionId: plan.options[0].id },
   }));
+  await runtime.waitForIdle();
+  const draft = await result(runtime, started.id);
+  expect(draft.status, draft.error).toBe('succeeded');
+  assert(draft.shots && draft.preview);
+  const [firstId, middleId, thirdId] = draft.shots.map(shot => shot.id);
+  expect(draft.shots.map(shot => shot.durationUs)).toEqual([2_000_000, 4_000_000, 6_000_000]);
+  expect(imageSubmissions).toBe(0);
+  const selection = { requestId: randomUUID(), runId: draft.id, revision: draft.preview.revision, imageModelId: imageModel.id, shotIds: [middleId, thirdId] };
+  const generated = creativePlanningResultSchema.parse(await runtime.dispatch('creativePlanning.previewStart', selection));
   await runtime.waitForIdle();
   expect(crashed).toBe(true);
   expect(imageSubmissions).toBe(1);
-  expect((await result(runtime, started.id)).keyframes).toBeUndefined();
+  expect((await result(runtime, generated.id)).keyframes).toBeUndefined();
   await runtime.close();
   runtimes.delete(runtime);
 
   const reopened = open({ ...options, failpoint: undefined });
-  await reopened.dispatch('run.resume', { runId: started.id });
+  await reopened.dispatch('run.resume', { runId: generated.id });
   await reopened.waitForIdle();
-  const recovered = await result(reopened, started.id);
+  const recovered = await result(reopened, generated.id);
   expect(recovered.status, recovered.error).toBe('succeeded');
-  assert(recovered.shots && recovered.keyframes);
+  assert(recovered.keyframes);
+  expect(recovered.keyframes.map(asset => asset.shotId)).toEqual([middleId, thirdId]);
+  expect(await reopened.dispatch('creativePlanning.previewStart', selection)).toMatchObject({ id: generated.id });
   expect(imageSubmissions).toBe(1);
   expect(imageResumes).toBe(1);
   expect(outputNames(calls)).toEqual(['creative_objective', 'creative_style_card', 'creative_storyboard_planned']);
-  expect(recovered.shots.map(shot => shot.durationUs)).toEqual([2_000_000, 4_000_000, 6_000_000]);
-  expect(recovered.keyframes.map(asset => asset.shotId)).toEqual([recovered.shots[0].id, recovered.shots[2].id]);
-  expect((await savedProject(reopened, recovered.projectId)).shots).toEqual([]);
-  const applied = projectSchema.parse(await reopened.dispatch('creativePlanning.apply', { runId: recovered.id }));
-  expect(applied.shots.map(shot => shot.assetId)).toEqual([recovered.keyframes[0].id, undefined, recovered.keyframes[1].id]);
+  expect((await savedProject(reopened, draft.projectId)).shots).toEqual([]);
+  const firstImage = recovered.keyframes[0].id, thirdImage = recovered.keyframes[1].id;
+  await reopened.dispatch('creativePlanning.previewApply', { runId: generated.id, shotId: middleId });
+  const applied = projectSchema.parse(await reopened.dispatch('creativePlanning.apply', { runId: draft.id }));
+  expect(applied.shots.map(shot => shot.assetId)).toEqual([undefined, firstImage, undefined]);
   expect(applied.workflow.stages?.map(stage => stage.label)).toEqual(stages);
+
+  const narration = '把信交给我。';
+  const editedLine = projectSchema.parse(await reopened.dispatch('project.update', { projectId: applied.id, revision: applied.revision,
+    patch: { shots: applied.shots.map(shot => shot.id === thirdId ? { ...shot, narration } : shot) } }));
+  const unchanged = (await result(reopened, draft.id)).preview;
+  expect(unchanged?.frames.find(frame => frame.shotId === middleId)).toMatchObject({ current: { id: firstImage }, stale: false });
+  expect(unchanged?.frames.find(frame => frame.shotId === thirdId)).toMatchObject({ candidate: { asset: { id: thirdImage }, stale: false } });
+  await reopened.dispatch('creativePlanning.previewApply', { runId: generated.id, shotId: thirdId });
+  const afterLine = await savedProject(reopened, draft.projectId);
+  expect(afterLine.shots[2]).toMatchObject({ narration, assetId: thirdImage });
+  expect(afterLine.revision).toBeGreaterThan(editedLine.revision);
+
+  await reopened.dispatch('project.update', { projectId: afterLine.id, revision: afterLine.revision,
+    patch: { shots: afterLine.shots.map(shot => shot.id === middleId ? { ...shot, visualPrompt: '镜头改为蓝色信封特写。' } : shot) } });
+  const changed = (await result(reopened, draft.id)).preview;
+  assert(changed);
+  expect(changed.frames.find(frame => frame.shotId === middleId)).toMatchObject({ current: { id: firstImage }, stale: true });
+  expect(changed.frames.find(frame => frame.shotId === thirdId)).toMatchObject({ current: { id: thirdImage }, stale: false });
+  await expect(reopened.dispatch('creativePlanning.previewStart', { ...selection, requestId: randomUUID(), shotIds: [firstId] })).rejects.toThrow(/分镜.*变更|重新/);
+  const redo = creativePlanningResultSchema.parse(await reopened.dispatch('creativePlanning.previewStart', {
+    ...selection, requestId: randomUUID(), revision: changed.revision, shotIds: [middleId], instruction: '保留构图，减少背景人物。',
+  }));
+  await reopened.waitForIdle();
+  const ready = (await result(reopened, draft.id)).preview;
+  const comparison = ready?.frames.find(frame => frame.shotId === middleId);
+  expect(comparison).toMatchObject({ current: { id: firstImage }, candidate: { runId: redo.id, stale: false } });
+  assert(comparison?.candidate);
+  expect(comparison.candidate.asset.id).not.toBe(firstImage);
+  await reopened.dispatch('creativePlanning.previewApply', { runId: redo.id, shotId: middleId });
+  const final = await savedProject(reopened, draft.projectId);
+  expect(final.shots.map(shot => shot.assetId)).toEqual([undefined, comparison.candidate.asset.id, thirdImage]);
+  expect(imageScopes).toEqual([[middleId, thirdId], [middleId]]);
 });
 
 it('previews a single sentence change in the first draft shot and confirms only that change', async () => {

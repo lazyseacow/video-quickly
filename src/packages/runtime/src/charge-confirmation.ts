@@ -21,6 +21,9 @@ export const chargePrompts = {
   'creativePlanning.plan': { title: '分析创作目标？', description: '将使用文本模型建议制作路线和时长方案，可能产生费用。确认执行方案后才生成对应产物。', confirmLabel: '确认分析创作目标' },
   'creativePlanning.start': { title: '生成创作分镜？', description: '将生成风格卡和三段分镜，或沿用已选风格卡。范围内的模型请求可能产生费用。', confirmLabel: '确认生成分镜' },
   'creativePlanning.revise': { title: '只改第二段？', description: '沿用配色和风格卡，保留第一段、第三段以及第二段的 5 秒时长。此次模型请求可能产生费用。', confirmLabel: '确认修改第二段' },
+  'creativePlanning.previewRecommend': { title: '推荐关键镜头？', description: '将根据当前分镜推荐值得预演的镜头。这次文本模型请求可能产生费用。', confirmLabel: '确认推荐镜头' },
+  'creativePlanning.previewStart': { title: '生成预演图？', description: '将为所选镜头生成候选图。这些图片模型请求可能产生费用。', confirmLabel: '确认生成预演' },
+  'novelAdaptation.start': { title: '开始生成？', description: '将使用所选文本模型生成本步骤产物。这次模型请求可能产生费用。', confirmLabel: '确认生成' },
   'cost.update': { title: '保存费用记录？', description: '将更新此条费用记录中的金额、币种或备注。', confirmLabel: '确认保存费用' },
 } satisfies Record<ChargeAction, ChargePrompt>;
 

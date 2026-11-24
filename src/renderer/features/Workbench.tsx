@@ -2,7 +2,7 @@ import { pathExample, shortcutLabel } from '../lib/desktop';
 import SubflowInputBindings from '../components/SubflowInputBindings';
 import { CreativeEntityPicker } from '../components/CreativeContextEditor';
 import { Suspense, lazy, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
-import { Undo2, Redo2, PanelLeft, PanelRight, PanelRightClose, ScanLine, Settings2, FileText, Film, Image, Layers, LockKeyhole, Save, UnlockKeyhole, WandSparkles, ArrowDownToLine, Upload, Square } from 'lucide-react';
+import { ArrowLeft, MessageSquare, Undo2, Redo2, PanelLeft, PanelRight, PanelRightClose, ScanLine, Settings2, FileText, Film, Image, Layers, LockKeyhole, Save, UnlockKeyhole, WandSparkles, ArrowDownToLine, Upload, Square } from 'lucide-react';
 import { applyShotCandidate, captionTrackSchema, createSceneTemplate, DEFAULT_AUDIO_PROCESSING, runStepPayloadSchema, shotSchema, silenceDetectionSchema, timeAtFrame, usesManualPlanning, usesVideoAudio, type AssetRecord, type CaptionStyle, type CaptionTrack, type JsonValue, type MusicClip, type ProjectDocument, type ProjectReadiness, type ReadinessIssue, type ResolvedWorkflowStage, type Shot, type ShotCandidate, type ShotCandidateField, type ShotCandidateKind, type WorkflowNode } from '@video-quickly/contracts';
 import { buildTimeline, createTransitionTimeline } from '@video-quickly/video';
 import { canSplitShot, preserveSceneIndices, splitShotInContext, trimShotInContext } from '@video-quickly/video/editing';
@@ -65,6 +65,7 @@ const ProductionRecordsDialog = lazy(() => import('./ProductionRecordsDialog'));
 const PlanningResultEditor = lazy(() => import('../components/PlanningResultEditor'));
 const DramaContentEditor = lazy(() => import('../components/DramaContentEditor'));
 const DramaScriptEditor = lazy(() => import('../components/DramaScriptEditor'));
+const NovelAdaptationConversation = lazy(() => import('./NovelAdaptationConversation'));
 
 export type WorkbenchRepairDestination = 'projects' | 'models' | 'characters';
 
@@ -79,10 +80,12 @@ type WorkbenchProps = {
   onOpenOutput: (selection: StepOutputSelection) => void;
   openStoryboard?: boolean;
   onStoryboardOpened?: () => void;
+  viewRequest?: { conversation: boolean };
+  onViewOpened: () => void;
   onNavigate: (destination: WorkbenchRepairDestination, modelId?: string) => Promise<boolean>;
 };
 
-export default function Workbench({ project, workspace, action, notify, onRegisterSave, outputRequest, onOutputConsumed, onOpenOutput, openStoryboard, onStoryboardOpened, onNavigate }: WorkbenchProps) {
+export default function Workbench({ project, workspace, action, notify, onRegisterSave, outputRequest, onOutputConsumed, onOpenOutput, openStoryboard, onStoryboardOpened, viewRequest, onViewOpened, onNavigate }: WorkbenchProps) {
   const confirm = useConfirmation();
   const { session, state: edits, ready, storageError, canPersistDraft, checkpoint } = useProjectEdits(project, workspace.system.dataDirectory);
   const [retryingDraft, setRetryingDraft] = useState(false);
@@ -131,12 +134,28 @@ export default function Workbench({ project, workspace, action, notify, onRegist
   const [conflictDialog, setConflictDialog] = useState(false);
   const [dramaEditing, setDramaEditing] = useState<ProjectDocument>();
   const [scriptEditing, setScriptEditing] = useState<ProjectDocument>();
-  const offeredScript = useRef(false);
+  const [adaptationOpen, setAdaptationOpen] = useState(() => project.workflow.production.novelAdaptation === true && viewRequest?.conversation === true);
+  const [adaptationVisited, setAdaptationVisited] = useState(adaptationOpen);
+  const canLeaveAdaptation = useRef<(() => Promise<boolean>) | null>(null);
+  const registerAdaptationLeave = useCallback((check: (() => Promise<boolean>) | null) => { canLeaveAdaptation.current = check; }, []);
+  const storyboardView = useRef<HTMLButtonElement>(null);
+  const [adaptedStoryboardRevision, setAdaptedStoryboardRevision] = useState<number>();
+  const novelAdaptation = content.workflow.production.novelAdaptation === true;
+  const showConversation = novelAdaptation && adaptationOpen;
+  useLayoutEffect(() => {
+    if (!ready || !viewRequest) return;
+    const show = novelAdaptation && viewRequest.conversation;
+    setAdaptationOpen(show);
+    if (show) setAdaptationVisited(true);
+    onViewOpened();
+  }, [ready, viewRequest, novelAdaptation, onViewOpened]);
+  const offeredPlanning = useRef(false);
   useEffect(() => {
-    if (!ready || offeredScript.current) return;
-    offeredScript.current = true;
-    if (content.drama && !content.originalText?.trim() && content.workflow.nodes.some(node => node.id === 'screenplay')) setScriptEditing(structuredClone(authoredProject));
-  }, [ready, content.drama, content.originalText, content.workflow, authoredProject]);
+    if (!ready || offeredPlanning.current) return;
+    offeredPlanning.current = true;
+    if (!content.drama || novelAdaptation || content.originalText?.trim()) return;
+    if (content.workflow.nodes.some(node => node.id === 'screenplay')) setScriptEditing(structuredClone(authoredProject));
+  }, [ready, content.drama, content.originalText, content.workflow, authoredProject, novelAdaptation]);
 
   const [settingsSection, setSettingsSection] = useState('planning');
   const { title, profile } = content;
@@ -239,6 +258,7 @@ export default function Workbench({ project, workspace, action, notify, onRegist
   const outputReadNotify = useRef(notify); outputReadNotify.current = notify;
   useEffect(() => {
     if (!outputRequest || outputRequest.projectId !== project.id) return;
+    setAdaptationOpen(false);
     const { regeneration, candidateShotId } = outputRequest;
     if (regeneration || candidateShotId) {
       const shot = session.state.present.shots.find(shot => shot.id === (regeneration?.shotId ?? candidateShotId));
@@ -323,7 +343,10 @@ export default function Workbench({ project, workspace, action, notify, onRegist
     isConfigurationSaving: () => configurationInFlight.current,
     save: () => save(),
     pausePreview: () => clock.pause(),
-    onReadinessBlocked: setReadinessDialog,
+    onReadinessBlocked: report => {
+      if (report.issues.some(issue => issue.fix === 'novel-adaptation')) openAdaptation();
+      else setReadinessDialog(report);
+    },
   });
   const previousPlayback = useRef({ timeline, runId: undefined as string | undefined });
   useLayoutEffect(() => {
@@ -344,6 +367,7 @@ export default function Workbench({ project, workspace, action, notify, onRegist
     if (runId && playing && !clock.getSnapshot().playing && clock.getSnapshot().timeUs < clock.lastTimeUs) clock.toggle();
   }, [clock, timeline, totalUs, playbackRate, live?.runId, liveShot?.id, project.revision, edits.revision, edits.conflict]);
   useEffect(() => () => { clock.pause(); clock.dispose(); }, [clock]);
+  useEffect(() => { if (showConversation) clock.pause(); }, [clock, showConversation]);
   useEffect(() => { if (stageEditor || stepEditor || exporting || batchExporting || bulkEditing || assetDialog || captionStyleTarget || captionShotId || musicEditing || regenerationShotId || transcriptDialog || readinessDialog || recoveringAssets || runtimeRepair) clock.pause(); }, [clock, stageEditor, stepEditor, exporting, batchExporting, bulkEditing, assetDialog, captionStyleTarget, captionShotId, musicEditing, regenerationShotId, transcriptDialog, readinessDialog, recoveringAssets, runtimeRepair]);
   const save = useCallback(async () => {
     if (saveInFlight.current) return saveInFlight.current;
@@ -379,7 +403,7 @@ export default function Workbench({ project, workspace, action, notify, onRegist
     return saved;
   }, [save, session]);
   useEffect(() => {
-    onRegisterSave(save);
+    onRegisterSave(async () => await save() && (await canLeaveAdaptation.current?.() ?? true));
     return () => onRegisterSave(null);
   }, [dirtyShot, dirtyProject, onRegisterSave, save]);
   useEffect(() => {
@@ -388,6 +412,7 @@ export default function Workbench({ project, workspace, action, notify, onRegist
     return () => window.removeEventListener('beforeunload', beforeUnload);
   }, [dirtyShot, dirtyProject]);
   useEffect(() => {
+    if (showConversation) return;
     function keydown(event: KeyboardEvent) {
       const insideGuideTarget = event.target instanceof Element && Boolean(event.target.closest('.driver-active-element'));
       if (document.querySelector('dialog[open]') || document.querySelector('[data-guide-popover]') && !insideGuideTarget || event.defaultPrevented) return;
@@ -416,7 +441,7 @@ export default function Workbench({ project, workspace, action, notify, onRegist
       if (event.code === 'End') { event.preventDefault(); clock.seek(totalUs); }
     }
     window.addEventListener('keydown', keydown); return () => window.removeEventListener('keydown', keydown);
-  }, [clock, saveExplicitly, totalUs, selectedShotId, profile.frameRate, savingEdits, live]);
+  }, [clock, saveExplicitly, totalUs, selectedShotId, profile.frameRate, savingEdits, live, showConversation]);
   async function selectShot(id: string, modifiers?: SelectionModifiers) {
     const complete = beginGuideAction('shot-selected'), previous = selectionRef.current;
     const transportRevision = clock.transportRevision;
@@ -674,11 +699,16 @@ export default function Workbench({ project, workspace, action, notify, onRegist
     setPlanningEditor({ section, options, structuredDocument, baseline: structuredClone({ title: current.title, brief: current.brief, style: current.style, profile: options?.profile ?? current.profile, manualPlanningFields, creativeContext: current.creativeContext ?? undefined, shots: current.shots }) });
   }
   useEffect(() => {
-    if (!openStoryboard || !ready || savingEdits || edits.busy || isProductionActive) return;
+    if ((!openStoryboard && adaptedStoryboardRevision === undefined) || !ready || savingEdits || edits.busy || isProductionActive) return;
     if (edits.conflict) notify('项目已有外部修改，请比较合并后编辑分镜。', true);
-    else openPlanningEditor('script');
-    onStoryboardOpened?.();
-  }, [openStoryboard, ready, savingEdits, edits.busy, isProductionActive, edits.conflict, notify, onStoryboardOpened]);
+    else {
+      if (adaptedStoryboardRevision !== undefined && edits.revision < adaptedStoryboardRevision) return;
+      setAdaptationOpen(false);
+      openPlanningEditor('script');
+    }
+    if (openStoryboard) onStoryboardOpened?.();
+    if (adaptedStoryboardRevision !== undefined) setAdaptedStoryboardRevision(undefined);
+  }, [openStoryboard, adaptedStoryboardRevision, ready, savingEdits, edits.revision, edits.busy, isProductionActive, edits.conflict, notify, onStoryboardOpened]);
   async function savePlanning(change: PlanningChange) {
     if (!planningEditor) return false;
     if (isProductionActive) throw new Error('制作正在进行，完成或停止后再修改策划内容。');
@@ -768,6 +798,7 @@ export default function Workbench({ project, workspace, action, notify, onRegist
     session.discard(saved); setConflictDialog(false);
   }
   async function repairReadiness(issue: ReadinessIssue) {
+    if (issue.fix === 'novel-adaptation') { setReadinessDialog(undefined); openAdaptation(); return; }
     if (issue.fix === 'step') {
       const workflow = session.state.present.workflow, nodes = workflow.nodes;
       const node = nodes.find(node => node.id === issue.nodeId) ?? nodes.filter(node => node.kind === 'subflow' && issue.nodeId?.startsWith(`${node.id}/subflow/`)).sort((left, right) => right.id.length - left.id.length)[0];
@@ -794,6 +825,7 @@ export default function Workbench({ project, workspace, action, notify, onRegist
   const configuredContent = stageConfiguration.projectSettings ?? content;
   const needsCustomBrief = stageConfiguration.workflow.id !== 'native-video' && !(configuredContent.brief.trim() || configuredContent.originalText?.trim());
   const configurationIncomplete = needsCustomBrief || stageConfiguration.workflow.nodes.some(node => {
+    if (novelAdaptation && (node.id === 'screenplay' || node.id === 'script')) return false;
     if (!usesManualPlanning(stageConfiguration.workflow, node)) return stepGuidance(node).requiresModel && !matchingStepModels(node, workspace.models).some(model => model.id === node.modelId);
     if (node.config.documentRole === 'screenplay') return !configuredContent.originalText?.trim();
     if (node.kind === 'brief') return !configuredContent.brief.trim();
@@ -822,8 +854,23 @@ export default function Workbench({ project, workspace, action, notify, onRegist
     onEdit: openPlanningEditor,
     disabledReason: isProductionActive ? '制作正在进行，完成或停止后可修改策划内容。' : savingEdits || edits.busy ? '正在保存项目，请稍后修改。' : edits.conflict ? '请先处理项目草稿冲突。' : undefined,
   };
-  return <div className="workbench" onBlurCapture={() => session.endGroup()} onPointerUpCapture={event => { if (event.target instanceof HTMLInputElement && event.target.type === 'range') session.endGroup(); }}>
-    <div className="project-heading">
+  function openAdaptation() {
+    clock.pause();
+    setAdaptationVisited(true);
+    setAdaptationOpen(true);
+  }
+  return <div className={`workbench${showConversation ? ' workbench--conversation' : ''}`} onBlurCapture={() => session.endGroup()} onPointerUpCapture={event => { if (event.target instanceof HTMLInputElement && event.target.type === 'range') session.endGroup(); }}>
+    {novelAdaptation && <header className="episode-workspace-bar">
+      <div className="episode-workspace-bar__project">
+        <IconButton label="返回短剧工作室" onClick={() => void onNavigate('projects')}><ArrowLeft size={16} /></IconButton>
+        <h1 title={title}>{title}</h1>
+      </div>
+      <div className="episode-workspace-bar__views" role="group" aria-label="分集工作区">
+        <Button variant="ghost" aria-pressed={showConversation} onClick={openAdaptation}><MessageSquare size={15} aria-hidden="true" />对话</Button>
+        <Button ref={storyboardView} variant="ghost" aria-pressed={!showConversation} onClick={() => setAdaptationOpen(false)}><Film size={15} aria-hidden="true" />分镜工作台</Button>
+      </div>
+    </header>}
+    <div className="project-heading" hidden={showConversation}>
       <div className="project-heading-copy" data-revision={edits.revision}>
         <input className="project-title-input" aria-label="项目名称" title={title} value={title} onChange={event => setTitle(event.target.value)} />
         {(dirtyShot || dirtyProject) && <p><span className="unsaved-dot">未保存</span></p>}
@@ -854,7 +901,9 @@ export default function Workbench({ project, workspace, action, notify, onRegist
         </IconButton>
         <IconButton label={savingEdits ? '正在保存修改' : '保存修改'} disabled={savingEdits || !(dirtyShot || dirtyProject)} onClick={() => void saveExplicitly()}><Save size={16} /></IconButton>
         <ProjectMoreActions disabled={Boolean(pendingProductionAction)} onCheck={() => setReadinessDialog('manual')} />
-        {content.drama && <Button disabled={savingEdits || Boolean(edits.conflict)} onClick={() => { clock.pause(); setScriptEditing(structuredClone(authoredProject)); }}><FileText size={15} aria-hidden="true" />分集剧本</Button>}
+        {content.drama && !novelAdaptation && <Button disabled={savingEdits || Boolean(edits.conflict)} onClick={() => {
+          clock.pause(); setScriptEditing(structuredClone(authoredProject));
+        }}><FileText size={15} aria-hidden="true" />分集剧本</Button>}
         {content.drama && <Button disabled={savingEdits || Boolean(edits.conflict)} onClick={() => { clock.pause(); setDramaEditing(structuredClone(authoredProject)); }}><FileText size={15} aria-hidden="true" />场次与对白</Button>}
         {stageConfiguration.workflow.production && <Button
           static
@@ -878,7 +927,10 @@ export default function Workbench({ project, workspace, action, notify, onRegist
         <Button data-guide="export" variant="primary" onClick={() => void save().then(saved => { if (saved) setExporting(true); })}><ArrowDownToLine size={15} />导出</Button>
       </div>
     </div>
-    {!latestRun && <WorkbenchGuide project={{ ...displayedProject, workflow: stageConfiguration.workflow }} onOpenStage={stage => openStage(stage, { tab: 'run' })} />}
+    {!latestRun && <WorkbenchGuide project={{ ...displayedProject, workflow: stageConfiguration.workflow }} onOpenStage={stage => {
+      if (novelAdaptation && stage.id === 'planning') openAdaptation();
+      else openStage(stage, { tab: 'run' });
+    }} />}
     {latestRun && <WorkbenchProduction
       notify={notify}
       key={latestRun.id}
@@ -903,7 +955,7 @@ export default function Workbench({ project, workspace, action, notify, onRegist
       onResolve={choices => { session.resolve(choices); setConflictDialog(false); }}
       onDiscard={() => void discardEdits()}
     />}
-    <div className={`workbench-grid ${!outlineVisible ? 'outline-collapsed' : ''} ${!inspectorVisible ? 'inspector-collapsed' : ''}`} style={layoutStyle} ref={editor}>
+    <div className={`workbench-grid ${!outlineVisible ? 'outline-collapsed' : ''} ${!inspectorVisible ? 'inspector-collapsed' : ''}`} style={layoutStyle} ref={editor} hidden={showConversation}>
       <aside data-guide="shots" className="story-panel" id="project-outline" hidden={!outlineVisible}>
         <ProjectOutline
           project={playbackProject}
@@ -1129,6 +1181,12 @@ export default function Workbench({ project, workspace, action, notify, onRegist
         onPreview={previewTranscript}
         onLevels={readAudioLevels}
       />
+    </Suspense>}
+    {novelAdaptation && adaptationVisited && <Suspense fallback={showConversation ? <p className="empty-state" role="status">正在打开小说改编…</p> : null}>
+      <NovelAdaptationConversation project={authoredProject} workspace={workspace} active={showConversation} onRegisterLeave={registerAdaptationLeave}
+        saveBeforeAction={async () => await save() ? session.state.revision : undefined}
+        onOpenStoryboard={revision => { storyboardView.current?.focus(); setAdaptedStoryboardRevision(revision); }}
+        onOpenCharacters={() => { void onNavigate('characters'); }} />
     </Suspense>}
     {scriptEditing && <Suspense fallback={null}><DramaScriptEditor project={scriptEditing} models={workspace.models} action={action} disabled={savingEdits || Boolean(edits.conflict)} onClose={() => { session.endGroup(); setScriptEditing(undefined); }} onDraft={text => {
       if (!session.state.busy && !session.state.conflict && !savingEdits) session.edit({ ...session.state.present, originalText: text }, '编辑分集剧本', 'drama-script-body');

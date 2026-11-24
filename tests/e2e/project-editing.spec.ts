@@ -1,10 +1,11 @@
 import { confirmAction } from './confirmation-actions';
-import { openProjectFromList } from './workspace-navigation';
+import { chooseStudioEntry, openProjectFromList } from './workspace-navigation';
 import { setWorkspaceTheme } from './workspace-settings';
 import { createServer } from 'node:http';
 import { expect, test, type APIRequestContext, type Page } from '@playwright/test';
 import type { ProjectDocument } from '@video-quickly/contracts';
 import { storyboardFixtureResponse } from '../fixtures/planning-response';
+import { creationMode } from './drama-creation';
 
 async function rpc(request: APIRequestContext, method: string, params: unknown = {}) {
   const response = await request.post('/__desktop_rpc', { data: { method, params } });
@@ -169,9 +170,9 @@ test('separates adjacent layout controls and keeps both monochrome themes usable
   await expect(page.getByRole('button', { name: '重做', exact: true })).toBeVisible();
   await page.screenshot({ path: info.outputPath('monochrome-light-600.png') });
   await page.emulateMedia({ reducedMotion: 'reduce' });
-  await page.getByRole('button', { name: '新建短剧', exact: true }).click();
+  await chooseStudioEntry(page, '对话');
   const composer = page.getByRole('region', { name: '新建短剧', exact: true });
-  await expect(composer.getByRole('textbox', { name: '短剧名称', exact: true })).toBeFocused();
-  await expect(composer.getByRole('tab', { name: '上传剧本', exact: true })).toBeVisible();
+  await expect(composer.getByRole('textbox', { name: '创作输入', exact: true })).toBeFocused();
+  await expect(creationMode(composer, '自动判断')).toBeChecked();
   await expect(page.locator('vite-error-overlay')).toHaveCount(0); expect(errors).toEqual([]);
 });

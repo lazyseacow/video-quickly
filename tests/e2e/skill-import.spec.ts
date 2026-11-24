@@ -7,6 +7,8 @@ import { projectDetailSchema, workspaceSnapshotSchema } from '@video-quickly/con
 import { importSkillFixture } from '../fixtures/import-skill';
 import { rpc } from './native-video-fixture';
 import { saveProduction } from './production-settings';
+import { closeCreationSettings, draftDrama, openCreationSettings } from './drama-creation';
+import { chooseStudioEntry } from './workspace-navigation';
 
 const { strToU8, zipSync } = createRequire(new URL('../../src/packages/runtime/package.json', import.meta.url))('fflate') as typeof import('../../src/packages/runtime/node_modules/fflate');
 const directories: string[] = [];
@@ -68,11 +70,11 @@ test('continues after closing the import dialog, groups every Skill and applies 
   expect(storedGroup.skillIds).toHaveLength(2);
   expect(snapshot.skillImports!.find(job => job.groupId === storedGroup.id)?.status).toBe('succeeded');
 
-  await page.getByRole('button', { name: '新建短剧', exact: true }).click();
+  await chooseStudioEntry(page, '对话');
   const creation = page.getByRole('region', { name: '新建短剧', exact: true });
-  await creation.getByRole('textbox', { name: '剧本正文', exact: true }).fill('清晨，林夏在书房发现一封旧信，她与朋友在城门重逢，决定一起寻找信的主人。');
-  await creation.getByRole('textbox', { name: '短剧名称', exact: true }).fill('Skill 全流程验收');
-  const creationPicker = creation.getByRole('group', { name: '创作 Skill', exact: true });
+  await draftDrama(creation, '上传剧本', '清晨，林夏在书房发现一封旧信，她与朋友在城门重逢，决定一起寻找信的主人。', 'Skill 全流程验收');
+  const creationSettings = await openCreationSettings(page, creation);
+  const creationPicker = creationSettings.getByRole('group', { name: '创作 Skill', exact: true });
   const trigger = creationPicker.getByRole('button', { name: '创作 Skill', exact: true });
   const search = creationPicker.getByRole('searchbox');
   const groupEntry = creationPicker.getByRole('button', { name: /^短剧方法验收/ });
@@ -110,6 +112,7 @@ test('continues after closing the import dialog, groups every Skill and applies 
   await page.keyboard.press('Escape');
   await expect(search).not.toBeVisible();
   await expect(trigger).toBeFocused();
+  await closeCreationSettings(creationSettings);
   await creation.getByRole('button', { name: '创建短剧', exact: true }).click();
   await expect(creation).toBeHidden();
   const after = workspaceSnapshotSchema.parse((await (await request.post('/__desktop_rpc', { data: { method: 'workspace.snapshot', params: {} } })).json()).result);

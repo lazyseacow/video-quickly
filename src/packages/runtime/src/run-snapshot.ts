@@ -1,4 +1,4 @@
-import type { AssetRecord, CharacterProfile, CreativeObjectiveExecution, CreativeRevisionScope, CreativeStyleCard, ImageEditInput, MCPServer, ModelProfile, ProjectDocument, PromptPreview, RunSelection, Shot, ShotCandidateKind, SkillPackage, VoiceProfile, WorkflowAssistantContext, WorkflowDefinition, WorkflowNode } from '@video-quickly/contracts';
+import type { AssetRecord, CharacterProfile, CreativeObjectiveExecution, CreativeRevisionScope, CreativeStyleCard, ImageEditInput, MCPServer, ModelProfile, NovelAdaptationStep, ProjectDocument, PromptPreview, RunSelection, Shot, ShotCandidateKind, SkillPackage, VoiceProfile, WorkflowAssistantContext, WorkflowDefinition, WorkflowNode } from '@video-quickly/contracts';
 import type { WorkflowUpstreamResult } from './workflow-prompts.js';
 import type { WorkflowOutputVersion } from './workflow-outputs.js';
 
@@ -10,6 +10,9 @@ export interface CreativePlanningSnapshot {
   reference?: AssetRecord;
   styleCard?: CreativeStyleCard;
   plan?: CreativeObjectiveExecution;
+  previewFollowup?: true;
+  previewRootRunId?: string;
+  preview?: { revision: string; shots: { shotId: string; visualHash: string; baseAssetHash: string }[] };
   revision?: { instruction: string; shots: Shot[]; scope?: CreativeRevisionScope; applyDraft?: boolean; projectStyle?: string };
 }
 
@@ -38,6 +41,7 @@ export interface RunSnapshot {
   regeneration?: { shotId: string; kind: ShotCandidateKind; baseline: Shot; instruction?: string; imageEdit?: ImageEditInput };
   assistant?: WorkflowAssistantContext;
   creativePlanning?: CreativePlanningSnapshot;
+  novelAdaptation?: { step: NovelAdaptationStep; source?: string; instruction?: string };
   characters?: CharacterProfile[];
   characterAssets?: AssetRecord[];
   voices?: VoiceProfile[];

@@ -96,6 +96,10 @@ export function storyboardOutputContract(version?: WorkflowOutputVersion) {
 }
 
 export function manualPlanningOutput(project: ProjectDocument, node: WorkflowNode, version?: WorkflowOutputVersion): JsonValue | undefined {
+  if (node.config.documentRole === 'novel-characters') {
+    const characters = project.creativeContext?.entities.filter(entity => entity.kind === 'character') ?? [];
+    return { characters: characters as unknown as JsonValue, text: characters.map(({ name, description }) => `${name}\n${description}`).join('\n\n') || '本集角色清单为空。', source: 'project' };
+  }
   if (node.config.documentRole === 'screenplay') return node.config.screenplayDraft === true ? undefined
     : { ...validateOutput(screenplayOutputSchema, { text: project.originalText ?? '' }, '已保存剧本'), source: 'project' };
   const step = productionPlanningStep(project.workflow, node);

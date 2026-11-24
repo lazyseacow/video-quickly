@@ -11,6 +11,7 @@ const textModelTasks = new Set<WorkflowNode['kind']>(['brief', 'style', 'script'
 
 export const productionSettingsSchema = z.object({
   mode: z.literal('native-video'),
+  novelAdaptation: z.literal(true).optional(),
   // Retained for historical projects and frozen runs; new built-in runs do not consume these bindings.
   agentSkillIds: z.array(z.string().min(1)).default([]),
   agentInheritsPlanningSkills: z.boolean().optional(),
@@ -35,6 +36,7 @@ export function productionPlanningStep(workflow: Pick<WorkflowDefinition, 'id'>,
 }
 
 export function usesManualPlanning(workflow: Pick<WorkflowDefinition, 'id' | 'production'>, node: Pick<WorkflowNode, 'id' | 'kind' | 'config'>): boolean {
+  if (node.config.documentRole === 'novel-characters') return true;
   if (node.config.documentRole === 'screenplay') return node.config.screenplayDraft !== true;
   const step = productionPlanningStep(workflow, node);
   return Boolean(step && workflow.production.manualPlanningSteps?.includes(step));

@@ -3,6 +3,7 @@ import { createServer } from 'node:http';
 import { expect, test, type APIRequestContext, type Page } from '@playwright/test';
 import type { DramaWork, ModelProfile, ProjectDocument } from '@video-quickly/contracts';
 import { confirmAction } from './confirmation-actions';
+import { openWorks } from './workspace-navigation';
 
 async function rpc<T>(request: APIRequestContext, method: string, params: unknown = {}): Promise<T> {
   const response = await request.post('/__desktop_rpc', { data: { method, params } });
@@ -11,7 +12,7 @@ async function rpc<T>(request: APIRequestContext, method: string, params: unknow
 
 async function openEpisode(page: Page, work: DramaWork, project: ProjectDocument) {
   await page.goto('/');
-  await expect(page.getByRole('heading', { name: '短剧工作室', exact: true })).toBeVisible();
+  await openWorks(page);
   await page.locator('.drama-work-card').filter({ has: page.getByRole('heading', { name: work.title, exact: true }) }).getByRole('button', { name: '查看分集', exact: true }).click();
   await page.locator('.drama-episode-row').filter({ has: page.getByRole('heading', { name: project.title, exact: true }) }).getByRole('button', { name: '打开分集', exact: true }).click();
 }

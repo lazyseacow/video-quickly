@@ -30,6 +30,7 @@ interface AssetLibraryOptions {
   reads: Pick<ReturnType<typeof createReadModels>, 'assets' | 'assetsInUse'>;
   characterAssetsInUse: (assetIds: readonly string[]) => Set<string>;
   imageToolAssetsInUse: (assetIds: readonly string[]) => Set<string>;
+  adaptationAssetsInUse: (assetIds: readonly string[]) => Set<string>;
   project: (projectId: string) => ProjectDocument;
   bindImportedAsset: (projectId: string, shotId: string, asset: AssetRecord) => void;
   readAudioWaveform?: (asset: AssetRecord) => Promise<AudioWaveform>;
@@ -37,7 +38,7 @@ interface AssetLibraryOptions {
   changed: () => void;
 }
 
-export function createAssetLibrary({ directory, database, store, reads, characterAssetsInUse, imageToolAssetsInUse,
+export function createAssetLibrary({ directory, database, store, reads, characterAssetsInUse, imageToolAssetsInUse, adaptationAssetsInUse,
   project, bindImportedAsset, readAudioWaveform, trackWork, changed }: AssetLibraryOptions) {
   function requireAsset(assetId: string) {
     const asset = store.get<AssetRecord>('asset', assetId);
@@ -105,7 +106,7 @@ export function createAssetLibrary({ directory, database, store, reads, characte
   function moveToTrash(assetIds: string[], isBatch: boolean) {
     const removedCount = database.transaction(() => {
       const assets = assetIds.map(requireAsset);
-      const referenceSets = [reads.assetsInUse(assetIds), characterAssetsInUse(assetIds), imageToolAssetsInUse(assetIds)];
+      const referenceSets = [reads.assetsInUse(assetIds), characterAssetsInUse(assetIds), imageToolAssetsInUse(assetIds), adaptationAssetsInUse(assetIds)];
       const blockedAsset = assets.find(asset => asset.retained || referenceSets.some(ids => ids.has(asset.id)));
       if (blockedAsset) throw new Error(isBatch
         ? `“${blockedAsset.name}”正在使用或已保留，请重新选择后重试。`
@@ -126,7 +127,8 @@ export function createAssetLibrary({ directory, database, store, reads, characte
         if (uncheckedIds.length === 0) return page;
         const characterReferences = characterAssetsInUse(uncheckedIds);
         const imageReferences = imageToolAssetsInUse(uncheckedIds);
-        return { ...page, items: page.items.map(asset => !asset.inUse && (characterReferences.has(asset.id) || imageReferences.has(asset.id))
+        const adaptationReferences = adaptationAssetsInUse(uncheckedIds);
+        return { ...page, items: page.items.map(asset => !asset.inUse && (characterReferences.has(asset.id) || imageReferences.has(asset.id) || adaptationReferences.has(asset.id))
           ? { ...asset, inUse: true } : asset) };
       }
       case 'asset.import': {

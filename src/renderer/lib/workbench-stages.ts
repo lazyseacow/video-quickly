@@ -8,6 +8,7 @@ export function stageTaskId(kind: WorkflowNode['kind'], editing: boolean) {
 }
 
 export function resolveWorkbenchStages(workflow: WorkflowDefinition): ResolvedWorkflowStage[] | undefined {
+  if (workflow.production.novelAdaptation && workflow.stages?.length) return resolveWorkflowStages(workflow);
   if (workflow.id === nativeWorkflow.id) return nativeWorkbenchStages.map(stage => {
     const nodes = workflow.nodes.filter(node => {
       const role = nativeWorkflow.nodes.some(nativeNode => nativeNode.id === node.id) ? node.id : stageTaskId(node.kind, node.config.operation === 'prepare-edit');

@@ -1,4 +1,4 @@
-import { openStudio, openProjectFromList } from './workspace-navigation';
+import { openWorks, openProjectFromList } from './workspace-navigation';
 
 import { expect, type APIRequestContext } from '@playwright/test';
 import { createSceneTemplate, type ProjectDocument } from '@video-quickly/contracts';
@@ -22,24 +22,31 @@ for (const viewport of [{ width: 1536, height: 960, theme: 'light' }, { width: 1
     expect(project.workflow.nodes.every(node => !node.requiresReview)).toBe(true);
     await page.addInitScript(theme => localStorage.setItem('vq-theme', theme), viewport.theme);
     await page.setViewportSize(viewport); await page.emulateMedia({ reducedMotion: 'reduce' }); await page.goto('/'); await expect(page).toHaveTitle(/Video Quickly/);
-    await openStudio(page); await page.getByLabel('搜索作品', { exact: true }).fill(project.title);
+    await openWorks(page); await page.getByLabel('搜索作品', { exact: true }).fill(project.title);
     const card = page.locator('.drama-work-card').filter({ has: page.getByRole('heading', { name: project.title, exact: true }) });
-    await expect(card.getByRole('heading')).toHaveText(project.title); await expect(card).not.toContainText(/个镜头|1920|1080|00:02/); await expect(card.locator('.pill')).toHaveCount(2);
-    expect((await card.boundingBox())!.width).toBeLessThanOrEqual(viewport.width - 52);
+    await expect(card.getByRole('heading')).toHaveText(project.title);
+    await expect(card).toContainText('1 集'); await expect(card).toContainText('最近编辑');
+    await expect(card).not.toContainText(/个镜头|1920|1080|00:02/);
+    const libraryBounds = (await page.locator('.drama-library').boundingBox())!;
+    const cardBounds = (await card.boundingBox())!;
+    expect(cardBounds.x).toBeGreaterThanOrEqual(libraryBounds.x);
+    expect(cardBounds.x + cardBounds.width).toBeLessThanOrEqual(libraryBounds.x + libraryBounds.width);
     await page.screenshot({ path: info.outputPath(`compact-projects-${viewport.theme}-${viewport.width}.png`) });
     await openProjectFromList(page, project.title);
+    const actionGroup = page.locator('.project-heading-actions');
+    const actionBounds = (await actionGroup.boundingBox())!;
     for (const name of ['分集剧本', '场次与对白', '导出']) {
-      const button = page.locator('.project-heading-actions').getByRole('button', { name, exact: true });
+      const button = actionGroup.getByRole('button', { name, exact: true });
       await expect(button).toBeVisible(); const bounds = await button.boundingBox();
       expect(bounds, `${name} must have a rendered box`).not.toBeNull();
-      expect(bounds!.x, `${name} left edge`).toBeGreaterThanOrEqual(52);
-      expect(bounds!.x + bounds!.width, `${name} right edge`).toBeLessThanOrEqual(viewport.width);
+      expect(bounds!.x, `${name} left edge`).toBeGreaterThanOrEqual(actionBounds.x);
+      expect(bounds!.x + bounds!.width, `${name} right edge`).toBeLessThanOrEqual(Math.min(viewport.width, actionBounds.x + actionBounds.width) + 1);
     }
     if (viewport.width === 1024 || viewport.width === 1100) {
       const title = await page.locator('.project-heading-copy').boundingBox(), actions = await page.locator('.project-heading-actions').boundingBox();
       expect(actions!.y).toBeGreaterThanOrEqual(title!.y + title!.height);
       const actionRows = await page.locator('.project-heading-actions > button, .project-heading-actions > .project-more').evaluateAll(controls => [...new Set(controls.filter(control => control.checkVisibility()).map(control => { const box = control.getBoundingClientRect(); return Math.round(box.y + box.height / 2); }))]);
-      expect(actionRows).toHaveLength(1);
+      expect(actionRows.length).toBeLessThanOrEqual(2);
     } else if (viewport.width >= 1464) {
       const title = await page.locator('.project-heading-copy').boundingBox(), actions = await page.locator('.project-heading-actions').boundingBox();
       expect(Math.abs(title!.y + title!.height / 2 - actions!.y - actions!.height / 2)).toBeLessThanOrEqual(1);

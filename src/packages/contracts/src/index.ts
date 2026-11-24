@@ -21,14 +21,14 @@ import { captionStyleSchema, scenePresetSchema, seriesSettingsSchema } from './c
 import { audioMixSettingsSchema, audioProcessingSchema } from './audio-processing.js';
 import { motionKeyframesSchema } from './keyframes.js';
 import { creativeContextSchema, creativeEntityKeysSchema } from './creative-context.js';
-import { characterAppearancesSchema, dramaEpisodeSchema, dramaEpisodeSummarySchema, dramaVisualStyleSchema, dramaWorkSchema, shotDramaSchema } from './drama.js';
+import { characterAppearancesSchema, dramaEpisodeSchema, dramaEpisodeSummarySchema, dramaVisualStyleSchema, dramaWorkSchema, MAX_NOVEL_SOURCE_LENGTH, shotDramaSchema } from './drama.js';
 export * from './drama.js';
 export * from './drama-catalog.js';
 export { creativeContextSchema, creativeEntitySchema, creativeEntityKeysSchema, creativeCharacterBindings, projectCharacterIds, validateCreativeReferences, shotCreativePrompt, creativeEntityLabels, creativeReferenceAssetIds, hasCharacterAppearance, isCreativeReferenceAsset, type CreativeContext, type CreativeEntity } from './creative-context.js';
 import { productionSettingsSchema, resolveProductionWorkflow } from './production.js';
 export { productionSettingsSchema, resolveProductionWorkflow, nativeReferenceStep, openingFrameShots, groupsReferenceImages, groupsNativeFirstFrames, isVideoGenerationNode, isModelGenerationNode, captionsEnabled, productionModelSetting, supportsProductionAgent, supportsAutomaticCasting, productionPlanningSteps, productionPlanningStep, usesManualPlanning, MAX_REFERENCE_AUDIO_BYTES, MAX_REFERENCE_AUDIOS, type ProductionPlanningStep, type ProductionSettings } from './production.js';
 export { MAX_STORYBOARD_SHOTS, planningDocumentSchemas, planningDocumentSections, formatPlanningDocument, type ManualPlanningFields, type PlanningDocumentKind } from './planning-fields.js';
-import { creativeObjectiveRouteSchema, creativeRevisionChangeSchema, creativeRevisionTargetSchema, creativeStyleCardSchema } from './creative-planning.js';
+import { creativeObjectiveRouteSchema, creativePreviewRecommendationSchema, creativeRevisionChangeSchema, creativeRevisionTargetSchema, creativeStyleCardSchema } from './creative-planning.js';
 export * from './creative-planning.js';
 export * from './asset-recovery.js';
 export { skillPromptContext, appendSkillContext, supportsSkillScript } from './skill-context.js';
@@ -366,6 +366,40 @@ export const mcpServerSchema = z.object({
 });
 export type MCPServer = z.infer<typeof mcpServerSchema>;
 export const runStatusSchema = z.enum(['queued', 'running', 'waiting_review', 'waiting_external', 'retry_scheduled', 'needs_attention', 'succeeded', 'failed', 'canceled']);
+export const MAX_DIRECTOR_SCREENPLAY_LENGTH = 30_000;
+export const MAX_NOVEL_ADAPTATION_INSTRUCTION_LENGTH = 3_000;
+const novelAdaptationInstructionSchema = z.string().trim().min(1).max(MAX_NOVEL_ADAPTATION_INSTRUCTION_LENGTH);
+export const novelAdaptationStepSchema = z.enum(['screenplay', 'characters', 'storyboard']);
+export type NovelAdaptationStep = z.infer<typeof novelAdaptationStepSchema>;
+const novelCharacterFields = {
+  key: z.string().regex(/^(?!role-)[a-z][a-z0-9-]{0,63}$/), name: z.string().trim().min(1).max(100),
+  description: z.string().trim().min(1).max(2_000), visualPrompt: z.string().trim().min(1).max(4_000),
+};
+export const novelCharacterAssetSchema = z.strictObject({ ...novelCharacterFields,
+  referenceAssetIds: z.array(z.string().min(1)).max(4).refine(ids => new Set(ids).size === ids.length, '角色参考图不能重复。').optional(),
+});
+export type NovelCharacterAsset = z.infer<typeof novelCharacterAssetSchema>;
+export const novelCharacterAssetsSchema = z.array(novelCharacterAssetSchema).max(50)
+  .refine(items => new Set(items.map(item => item.key)).size === items.length, '角色编号不能重复。');
+export const generatedNovelCharactersSchema = z.strictObject({
+  characters: z.array(z.strictObject(novelCharacterFields)).max(50)
+    .refine(items => new Set(items.map(item => item.key)).size === items.length, '角色编号不能重复。'),
+});
+export const novelAdaptationStateSchema = z.object({
+  projectId: z.string().min(1), projectRevision: z.number().int().positive(), revision: z.number().int().nonnegative(),
+  source: z.string().max(MAX_NOVEL_SOURCE_LENGTH),
+  screenplay: z.object({ text: z.string().max(MAX_DIRECTOR_SCREENPLAY_LENGTH), approved: z.boolean() }),
+  characters: z.object({ items: novelCharacterAssetsSchema, applied: z.boolean() }),
+  storyboard: z.object({ shots: z.array(shotSchema), applied: z.boolean() }),
+  runs: z.partialRecord(novelAdaptationStepSchema, z.object({ id: z.string().min(1), nodeId: z.string().min(1), status: runStatusSchema,
+    instruction: novelAdaptationInstructionSchema.optional(), error: z.string().optional() })),
+});
+export type NovelAdaptationState = z.infer<typeof novelAdaptationStateSchema>;
+export const novelAdaptationStartInputSchema = z.strictObject({
+  projectId: z.string().min(1), revision: z.number().int().nonnegative(), requestId: z.string().uuid(),
+  step: novelAdaptationStepSchema, modelId: z.string().min(1), skillIds: z.array(z.string().min(1)).max(50).optional(),
+  instruction: novelAdaptationInstructionSchema.optional(),
+});
 export function isRunActive(status: z.infer<typeof runStatusSchema>) {
   return status === 'queued' || status === 'running' || status === 'waiting_review' || status === 'waiting_external' || status === 'retry_scheduled';
 }
@@ -395,7 +429,7 @@ export type RunPlan = z.infer<typeof runPlanSchema>;
 export const readinessIssueSchema = z.object({
   id: z.string(), severity: z.enum(['error', 'warning']), category: z.enum(['project', 'workflow', 'model', 'media', 'environment', 'skill']),
   message: z.string(), hint: z.string().optional(), nodeId: z.string().optional(), nodeLabel: z.string().optional(), modelId: z.string().optional(), modelName: z.string().optional(), assetId: z.string().optional(),
-  fix: z.enum(['project', 'step', 'models', 'characters', 'assets', 'runtime', 'production', 'batch-export']),
+  fix: z.enum(['project', 'step', 'models', 'characters', 'assets', 'runtime', 'production', 'batch-export', 'novel-adaptation']),
 });
 export type ReadinessIssue = z.infer<typeof readinessIssueSchema>;
 export const projectReadinessSchema = z.object({
@@ -412,7 +446,7 @@ export const runSchema = z.object({
   stepRetry: z.object({ nodeId: z.string().min(1), status: z.enum(['pending', 'completed']) }).optional(),
   regenerationSource: z.object({ runId: z.string().min(1), nodeId: z.string().min(1), shotId: z.string().min(1), requestId: z.string().uuid() }).optional(),
   events: z.array(runEventSchema).default([]), activities: z.array(activitySchema).default([]),
-  purpose: z.enum(['production', 'prompt-trial', 'workflow-assistant', 'creative-planning']).optional(), promptSessionId: z.string().optional(), promptSessionRevision: z.number().int().positive().optional(),
+  purpose: z.enum(['production', 'prompt-trial', 'workflow-assistant', 'creative-planning', 'novel-adaptation']).optional(), promptSessionId: z.string().optional(), promptSessionRevision: z.number().int().positive().optional(),
 });
 export type StepRun = z.infer<typeof runSchema>;
 export type RunRecord = StepRun;
@@ -468,6 +502,13 @@ export const creativePlanningEntrySchema = z.object({
   error: z.string().optional(), createdAt: z.string(), parentRunId: z.string().optional(),
 });
 export type CreativePlanningEntry = z.infer<typeof creativePlanningEntrySchema>;
+export const creativePreviewStateSchema = z.object({
+  revision: z.string().min(1), recommendations: z.array(creativePreviewRecommendationSchema).min(1).max(3).optional(),
+  frames: z.array(z.object({ shotId: z.string().min(1), current: assetSchema.optional(), stale: z.boolean(),
+    candidate: z.object({ runId: z.string().min(1), asset: assetSchema, stale: z.boolean() }).optional() })),
+  latestRunId: z.string().min(1).optional(),
+});
+export type CreativePreviewState = z.infer<typeof creativePreviewStateSchema>;
 export const creativePlanningResultSchema = creativePlanningEntrySchema.extend({
   currentNodeId: z.string().optional(), failedNodeId: z.string().optional(), retryCompleted: z.boolean().optional(),
   resumeAllowed: z.boolean().optional(), recoveryReason: z.string().optional(),
@@ -475,6 +516,7 @@ export const creativePlanningResultSchema = creativePlanningEntrySchema.extend({
   shots: z.array(shotSchema).min(1).optional(), appliedRevision: z.number().int().positive().optional(),
   target: creativeRevisionTargetSchema.optional(), changes: z.array(creativeRevisionChangeSchema).optional(),
   route: creativeObjectiveRouteSchema.optional(), keyframes: z.array(assetSchema).optional(),
+  preview: creativePreviewStateSchema.optional(), previewRootRunId: z.string().min(1).optional(),
 });
 export type CreativePlanningResult = z.infer<typeof creativePlanningResultSchema>;
 export const promptDraftSchema = z.object({
@@ -625,5 +667,26 @@ export function createDramaWorkflow(): WorkflowDefinition {
   return resolveProductionWorkflow({ ...workflow, name: '短剧制作', version: 2, nodes: [screenplay, ...workflow.nodes],
     edges: [{ id: 'screenplay-brief', source: 'screenplay', target: 'brief' }, ...workflow.edges],
     stages: workflow.stages?.map(stage => stage.id === 'planning' ? { ...stage, nodeIds: ['screenplay', ...stage.nodeIds] } : stage),
+  });
+}
+
+export function createNovelDramaWorkflow(): WorkflowDefinition {
+  const workflow = createDramaWorkflow();
+  const characters: WorkflowNode = {
+    id: 'director-characters', kind: 'assets', label: '角色资产', description: '读取本集确认的角色设定与参考素材。',
+    prompt: '', config: { documentRole: 'novel-characters' }, skillIds: [], position: { x: 120, y: 100 }, requiresReview: false,
+  };
+  const nodes = workflow.nodes.flatMap(node => {
+    if (node.id === 'brief' || node.id === 'style') return [];
+    if (node.id === 'screenplay') return [{ ...node, label: '导演剧本', description: '读取本集审核通过的导演剧本。' }, characters];
+    return [node];
+  });
+  return resolveProductionWorkflow({
+    ...workflow, name: '小说改编制作', version: 3, nodes,
+    production: { ...workflow.production, novelAdaptation: true },
+    edges: nodes.slice(1).map((node, index) => ({ id: `${nodes[index].id}-${node.id}`, source: nodes[index].id, target: node.id })),
+    stages: workflow.stages?.map(stage => stage.id === 'planning'
+      ? { ...stage, description: '使用已审核的导演剧本、角色资产和分镜。', nodeIds: ['screenplay', characters.id, 'script'] }
+      : stage),
   });
 }

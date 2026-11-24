@@ -19,6 +19,9 @@ const guidance: Record<WorkflowNode['kind'], StepGuidance> = {
 };
 
 export function stepGuidance(node: Pick<WorkflowNode, 'kind' | 'config'>): StepGuidance {
+  if (node.config.documentRole === 'novel-characters' && node.kind === 'assets') return {
+    purpose: '读取已确认的角色设定和参考素材。', result: '本集角色资产', review: '检查角色设定与参考素材。', local: '确认的角色资产',
+  };
   if (node.config.operation === 'prepare-references') {
     const generatesImages = node.config.referenceMode === 'generate';
     let purpose = generatesImages ? '为各镜头生成参考首帧。' : '准备参考素材，或直接使用文字生成视频。';
