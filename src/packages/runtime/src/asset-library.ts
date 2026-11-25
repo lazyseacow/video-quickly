@@ -19,7 +19,7 @@ const assetImportInput = z.object({
 });
 const maxJsonPreviewBytes = 1024 * 1024;
 
-type AssetImport = z.infer<typeof assetImportInput> & { name?: string };
+type AssetImport = z.infer<typeof assetImportInput>;
 type AssetLibraryMethod = 'asset.list' | 'asset.import' | 'asset.getMany' | 'asset.waveform' | 'asset.read'
   | 'asset.retain' | 'asset.delete' | 'asset.deleteMany' | 'asset.restore';
 
@@ -46,12 +46,12 @@ export function createAssetLibrary({ directory, database, store, reads, characte
     return asset;
   }
 
-  async function importAsset(input: AssetImport, origin: 'user' | 'tool'): Promise<AssetRecord> {
+  async function importAsset(input: AssetImport): Promise<AssetRecord> {
     const sourcePath = resolve(input.path);
     const sourceFile = await stat(sourcePath);
     if (!sourceFile.isFile() || sourceFile.size > 2_000_000_000) throw new Error('请选择不超过 2 GB 的文件。');
-    const projectForBinding = input.projectId && origin === 'user' ? project(input.projectId) : undefined;
-    if (origin === 'user' && input.shotId && !projectForBinding?.shots.some(shot => shot.id === input.shotId)) throw new Error('镜头不存在。');
+    const projectForBinding = input.projectId ? project(input.projectId) : undefined;
+    if (input.shotId && !projectForBinding?.shots.some(shot => shot.id === input.shotId)) throw new Error('镜头不存在。');
 
     const assetId = randomUUID();
     const extension = extname(sourcePath).toLowerCase();
@@ -68,12 +68,11 @@ export function createAssetLibrary({ directory, database, store, reads, characte
     const fileBytes = await readFile(stagedPath);
     await rename(stagedPath, destinationPath);
     const asset = assetSchema.parse({
-      id: assetId, projectId: input.projectId, shotId: input.shotId, name: input.name ?? basename(sourcePath),
+      id: assetId, projectId: input.projectId, shotId: input.shotId, name: basename(sourcePath),
       kind: input.kind ?? format.kind, path: destinationPath, mimeType: format.mimeType, size: sourceFile.size,
       sha256: createHash('sha256').update(fileBytes).digest('hex'), version: 1, createdAt: new Date().toISOString(),
-      provenance: origin === 'user' ? '用户导入' : '工具导入', retained: false, active: true,
+      provenance: '用户导入', retained: false, active: true,
     });
-    if (origin === 'tool') return asset;
 
     database.transaction(() => {
       store.put('asset', asset.id, asset);
@@ -133,7 +132,7 @@ export function createAssetLibrary({ directory, database, store, reads, characte
       }
       case 'asset.import': {
         const input = assetImportInput.parse(rawParams);
-        return trackWork(() => importAsset(input, 'user'), input.projectId);
+        return trackWork(() => importAsset(input), input.projectId);
       }
       case 'asset.getMany': {
         const { assetIds } = z.object({ assetIds: z.array(z.string().min(1)).max(100) }).parse(rawParams);
@@ -173,7 +172,7 @@ export function createAssetLibrary({ directory, database, store, reads, characte
     }
   }
 
-  return { dispatch, importToolAsset: (input: AssetImport) => importAsset(input, 'tool') };
+  return { dispatch };
 }
 
 async function readJsonAssetPreview(asset: AssetRecord) {

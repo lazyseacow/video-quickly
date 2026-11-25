@@ -118,7 +118,6 @@ test('continues after closing the import dialog, groups every Skill and applies 
   const after = workspaceSnapshotSchema.parse((await (await request.post('/__desktop_rpc', { data: { method: 'workspace.snapshot', params: {} } })).json()).result);
   const project = after.projects.find(item => item.title === 'Skill 全流程验收 · 第 1 集')!;
   for (const node of project.workflow.nodes.filter(node => ['brief', 'style', 'script'].includes(node.kind))) expect(node.skillIds).toEqual(storedGroup.skillIds);
-  expect(project.workflow.production.agentSkillIds).toEqual([]);
 
   await page.getByRole('button', { name: '制作设置', exact: true }).click();
   const settings = page.getByRole('dialog', { name: '制作设置', exact: true });
@@ -127,7 +126,6 @@ test('continues after closing the import dialog, groups every Skill and applies 
   await expect(settings).toHaveCount(0);
   const saved = projectDetailSchema.parse((await (await request.post('/__desktop_rpc', { data: { method: 'project.get', params: { projectId: project.id } } })).json()).result).project!;
   for (const node of saved.workflow.nodes.filter(node => ['brief', 'style', 'script'].includes(node.kind))) expect(node.skillIds).toEqual(storedGroup.skillIds);
-  expect(saved.workflow.production).toMatchObject({ agentSkillIds: [], agentMcpServerIds: [] });
 
   await page.getByRole('button', { name: 'Skill 工作室', exact: true }).click();
   await group.getByRole('button', { name: '查看“ui-drama-write”', exact: true }).click();

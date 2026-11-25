@@ -22,6 +22,14 @@
 .getting-started-guide-popover .driver-popover-arrow-side-bottom { border-bottom-color: var(--surface); }
 @media (max-width: 520px) {
   .driver-popover.getting-started-guide-popover { padding: var(--space-4); }
+  .driver-popover.getting-started-guide-popover[data-guide-composer-dock] {
+    /* Driver uses a bottom fallback when no side of the composer fits the popover. */
+    inset: var(--guide-composer-top) auto auto 50% !important;
+    translate: -50% 0;
+    max-block-size: min(48dvh, calc(100dvh - var(--space-8)));
+  }
+  [data-guide-composer-dock] .driver-popover-arrow { display: none; }
+  body:has([data-guide-composer-dock]) .page-body { margin-block-start: var(--guide-composer-space, 0px); }
   .getting-started-guide-popover .driver-popover-footer { gap: var(--space-3) var(--space-1); }
   .getting-started-guide-popover .driver-popover-navigation-btns { gap: var(--space-1); }
   .getting-started-guide-popover .button { min-height: var(--control-height); padding-inline: var(--space-2); }

@@ -75,9 +75,8 @@ test('reads real two-second media and bounds the final frame while authored scen
   // The 60th 29.97 fps frame ends beyond the physical 2-second source.
   await expect.poll(async () => (await savedProject(request, project.id)).shots[0].durationUs).toBe(1_968_633);
   const bounded = await savedProject(request, project.id);
-  const outHandle = page.getByRole('slider', { name: '镜头出点', exact: true });
-  await expect(outHandle).toBeEnabled();
-  await outHandle.press('ArrowRight');
+  await outPoint.fill('2.001');
+  await expect(apply).toBeDisabled();
   expect((await savedProject(request, project.id)).revision).toBe(bounded.revision);
   await page.screenshot({ path: info.outputPath('real-media-frame-bound.png') });
 
@@ -124,7 +123,6 @@ test('blocks trimming throughout source replacement loading and decode failure w
     await expect(outPoint).toBeEnabled();
     await outPoint.fill('9');
     await expect(apply).toBeDisabled();
-    await expect(page.getByRole('slider', { name: '镜头出点', exact: true })).toBeDisabled();
     await page.screenshot({ path: info.outputPath('source-loading-trim-blocked.png') });
 
     release();
@@ -154,6 +152,5 @@ test('projects independent audio duration onto the common trim clock and blocks 
   await rpc(request, 'project.update', { projectId: project.id, revision: saved.revision, patch: { shots: saved.shots.map((shot, index) => index ? shot : { ...shot, audioInUs: 3_000_000 }) } });
   await expect(page.locator('.clip-timing [role=alert]')).toContainText('入点之后没有可用素材');
   await expect(apply).toBeDisabled();
-  await expect(page.getByRole('slider', { name: '镜头出点', exact: true })).toBeDisabled();
   await expect(page.locator('vite-error-overlay')).toHaveCount(0);
 });

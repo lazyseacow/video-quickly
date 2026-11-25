@@ -49,7 +49,7 @@
 .creative-context-editor__workspace-return { grid-area: return; min-height: var(--control-hit-size); }
 .creative-context-editor__workspace > .settings-sections { flex: 1; height: auto; grid-template-columns: 200px minmax(0, 1fr); }
 .creative-context-editor__workspace .settings-sections__nav { overscroll-behavior: contain; }
-.creative-context-editor__workspace .settings-sections__nav > button { min-inline-size: 0; max-inline-size: 100%; }
+.creative-context-editor__workspace .settings-sections__nav > button { min-inline-size: 0; max-inline-size: 100%; border-radius: var(--radius-small); }
 .creative-context-editor__workspace .settings-sections__nav > button > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .creative-context-editor__workspace .settings-sections__content { scrollbar-gutter: stable; }
 .creative-context-editor__workspace .settings-sections__content::-webkit-scrollbar-track { margin-block: var(--space-2) var(--radius-small); }

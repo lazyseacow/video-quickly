@@ -96,12 +96,13 @@ describe('Deep Agents integration', () => {
     expect(calls).toBe(4);
   });
 
-  it('uses native persistence, invokes the project tool, and journals each model response', async () => {
+  it.each(['full', 'selected'] as const)('uses the project tool and journals each model response for a %s workflow Agent', async scope => {
     let calls = 0;
     let sawToolResult = false;
     const server = createServer(async (request, response) => {
       let body = ''; for await (const chunk of request) body += chunk.toString();
-      const payload = JSON.parse(body) as { messages: Array<{ role: string; content?: unknown }> };
+      const payload = JSON.parse(body) as { tools: Array<{ function: { name: string } }>; messages: Array<{ role: string; content?: unknown }> };
+      expect(payload.tools.map(tool => tool.function.name)).not.toContain('execute_video_task');
       calls++;
       sawToolResult ||= payload.messages.some(message => message.role === 'tool');
       response.setHeader('Content-Type', 'application/json');
@@ -116,7 +117,7 @@ describe('Deep Agents integration', () => {
     const model = await runtime.dispatch('model.save', { model: { name: 'Agent fixture', provider: 'openai-compatible', baseUrl: `http://127.0.0.1:${address.port}/v1`, model: 'fixture', connectionType: 'text', capabilities: ['text', 'tools'] } }) as ModelProfile;
     const agent = workflowNodeSchema.parse({ id: 'agent', kind: 'agent', label: 'Agent', modelId: model.id });
     await runtime.dispatch('project.update', { projectId: initial.projects[0].id, patch: { workflow: { id: 'agent', version: 1, name: 'Agent fixture', production: { mode: 'native-video', referenceMode: 'none', soundPrompt: '', subtitleMode: 'off' }, nodes: [agent], edges: [] } } });
-    const run = await runtime.dispatch('run.start', { projectId: initial.projects[0].id }) as RunRecord;
+    const run = await runtime.dispatch('run.start', { projectId: initial.projects[0].id, ...(scope === 'selected' ? { nodeId: agent.id } : {}) }) as RunRecord;
     await runtime.waitForIdle();
     const snapshot = await runtime.dispatch('workspace.snapshot') as WorkspaceSnapshot;
     const completed = snapshot.runs.find(value => value.id === run.id)!;

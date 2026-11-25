@@ -87,14 +87,14 @@ if (requested !== undefined) {
       await openProjectFromList(page, project.title);
       await expect(page.locator('.preview-panel .scene-preview')).toHaveAttribute('aria-busy', 'false'); openToPreviewMs = performance.now() - started;
       const play = page.getByRole('button', { name: '播放预览', exact: true }); await expect(play).toBeEnabled({ timeout: 90_000 }); await play.click();
-      const ruler = page.getByRole('slider', { name: '预览播放位置', exact: true }), beginning = Number(await ruler.getAttribute('aria-valuenow')), clockStart = performance.now();
+      const ruler = page.getByRole('slider', { name: '播放器播放位置', exact: true }), beginning = Number(await ruler.getAttribute('data-playhead-ms')), clockStart = performance.now();
       while (performance.now() - clockStart < seconds * 1_000) {
         await page.waitForTimeout(Math.max(0, Math.min(650, seconds * 1_000 - (performance.now() - clockStart))));
         const { videos, presentation } = await decodedVideos(session); maxLiveVideos = Math.max(maxLiveVideos, videos.length);
         const previewVideos = videos.filter(video => ['scene', 'thumbnail'].includes(video.role)), durationProbes = videos.filter(video => video.role === 'duration-probe');
         maxPreviewVideos = Math.max(maxPreviewVideos, previewVideos.length); maxDurationProbes = Math.max(maxDurationProbes, durationProbes.length);
         const heap = await session.send('Runtime.getHeapUsage');
-        samples.push({ elapsedMs: performance.now() - clockStart, programTimeMs: Number(await ruler.getAttribute('aria-valuenow')), heap, videos, presentation });
+        samples.push({ elapsedMs: performance.now() - clockStart, programTimeMs: Number(await ruler.getAttribute('data-playhead-ms')), heap, videos, presentation });
         if (presentation?.stable && presentation.frames > 0) {
           const path = new URL(presentation.source).searchParams.get('path'), index = assets.findIndex(asset => asset.path === path);
           expect(index).toBeGreaterThanOrEqual(0);
@@ -112,7 +112,7 @@ if (requested !== undefined) {
         await expect(page.getByRole('button', { name: '暂停预览', exact: true })).toBeVisible();
         await expect(page.locator('.preview-panel .scene-preview__state[role="alert"]')).toHaveCount(0);
       }
-      const advanced = Number(await ruler.getAttribute('aria-valuenow')) - beginning;
+      const advanced = Number(await ruler.getAttribute('data-playhead-ms')) - beginning;
       expect(advanced).toBeGreaterThan(seconds * 1_000 * .8); expect(advanced).toBeLessThan(seconds * 1_000 + 5_000);
       expect(observed.size).toBeGreaterThanOrEqual(seconds >= 60 ? 12 : 3);
       expect(presentedFrames).toBeGreaterThan(seconds * 2);

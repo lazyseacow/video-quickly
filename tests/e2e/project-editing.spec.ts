@@ -1,3 +1,4 @@
+import { clickShotAction, openShotInspectorSection } from './storyboard-actions';
 import { confirmAction } from './confirmation-actions';
 import { chooseStudioEntry, openProjectFromList } from './workspace-navigation';
 import { setWorkspaceTheme } from './workspace-settings';
@@ -44,13 +45,13 @@ test('undoes and redoes grouped input, ordering, duplication and deletion with m
   await page.getByRole('button', { name: '重做', exact: true }).click();
   await expect(title).toHaveValue('连续输入');
   await expect(page.getByRole('button', { name: '保存镜头', exact: true })).toBeDisabled();
-  await page.getByRole('button', { name: '将镜头后移', exact: true }).click();
+  await clickShotAction(page, '向后移动');
   await expect(page.locator('.outline-shot').first()).toContainText('测试镜头 2');
   await expect(page.getByRole('button', { name: '保存镜头', exact: true })).toBeDisabled();
-  await page.getByRole('button', { name: '复制镜头', exact: true }).click();
+  await clickShotAction(page, '复制镜头');
   await expect(page.locator('.outline-shot')).toHaveCount(3);
   await expect(page.getByRole('button', { name: '保存镜头', exact: true })).toBeDisabled();
-  await page.getByRole('button', { name: '移除所选镜头', exact: true }).click(); await confirmAction(page, '确认移除');
+  await clickShotAction(page, '移除镜头'); await confirmAction(page, '确认移除');
   await expect(page.locator('.outline-shot')).toHaveCount(2);
   for (const count of [3, 2, 2]) {
     await expect(page.getByRole('button', { name: '保存镜头', exact: true })).toBeDisabled();
@@ -94,6 +95,7 @@ test('restores an unsaved multi-field draft and resolves external edits without 
   await comparison.getByRole('button', { name: '合并所选内容', exact: true }).click();
   await expect(page.getByLabel('镜头标题')).toHaveValue('另一视图的标题');
   await expect(page.getByLabel('旁白', { exact: true })).toHaveValue('重启后仍保留的旁白');
+  await openShotInspectorSection(page, '画面与素材');
   await expect(page.getByLabel('画面要求')).toHaveValue('另一视图的画面');
   await page.getByRole('button', { name: '保存镜头', exact: true }).click();
   await expect(page.getByRole('button', { name: '保存镜头', exact: true })).toBeDisabled();

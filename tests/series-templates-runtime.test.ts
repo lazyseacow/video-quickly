@@ -37,7 +37,6 @@ it('adds built-in drama templates, Skills and readable scene references to an ex
   const project = projectSchema.parse(await upgraded.dispatch('project.create', { title: '新的条漫故事', ...selection }));
   const skillIds = template.creationDefaults!.skillIds;
   expect(project).toMatchObject({ ...template.settings, shots: [], profile: { width: 1080, height: 1920 } });
-  expect(project.workflow.production.agentSkillIds).toEqual([]);
   const node = project.workflow.nodes.find(node => node.kind === 'script')!;
   expect(node.skillIds).toEqual(skillIds);
   const preview = promptPreviewSchema.parse(await upgraded.dispatch('prompt.preview', { projectId: project.id, projectRevision: project.revision, node }));
@@ -55,10 +54,10 @@ it('adds built-in drama templates, Skills and readable scene references to an ex
   }
 
   const manual = projectSchema.parse(await upgraded.dispatch('project.create', { title: '手动清空配套 Skill', skillIds: [], ...selection }));
-  expect(manual.workflow.production.agentSkillIds).toEqual([]);
+  expect(manual.workflow.nodes.find(node => node.kind === 'script')?.skillIds).toEqual([]);
   await upgraded.dispatch('skill.toggle', { skillId: skillIds[0], enabled: false });
   const disabled = projectSchema.parse(await upgraded.dispatch('project.create', { title: '配套 Skill 已停用', ...selection }));
-  expect(disabled.workflow.production.agentSkillIds).toEqual([]);
+  expect(disabled.workflow.nodes.find(node => node.kind === 'script')?.skillIds).toEqual(skillIds.slice(1));
   const edited = await save(upgraded, '工作区自用漫剧模板', { id: template.id, revision: template.revision });
   expect(edited.creationDefaults).toEqual(template.creationDefaults);
   const archived = await upgraded.dispatch('seriesTemplate.archive', { templateId: edited.id, revision: edited.revision });

@@ -84,7 +84,9 @@ for (const viewport of [{ width: 1536, height: 960, theme: 'dark' }, { width: 10
         const bounds = element.getBoundingClientRect();
         return [...element.querySelectorAll('h3, dt, dd, button')].filter(target => target.checkVisibility()).flatMap(target => {
           const box = target.getBoundingClientRect();
-          return box.left >= bounds.left && box.right <= bounds.right && box.top >= bounds.top && box.bottom <= bounds.bottom ? [] : [target.textContent];
+          return box.left >= bounds.left && box.right <= bounds.right && box.top >= bounds.top && box.bottom <= bounds.bottom
+            ? []
+            : [target.getAttribute('aria-label') || target.textContent || target.tagName];
         });
       });
       expect(clipped).toEqual([]);

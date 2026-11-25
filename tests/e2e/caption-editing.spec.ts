@@ -1,3 +1,4 @@
+import { clickShotAction, openShotInspectorSection } from './storyboard-actions';
 import { openProjectFromList } from './workspace-navigation';
 import { setWorkspaceTheme } from './workspace-settings';
 import { readFile } from 'node:fs/promises';
@@ -25,6 +26,7 @@ async function openProject(page: Page, title: string) {
   await expect(page.getByLabel('镜头标题')).toHaveValue('字幕编辑镜头');
 }
 async function editor(page: Page) {
+  await openShotInspectorSection(page, '字幕与文稿');
   await page.getByRole('button', { name: '编辑字幕', exact: true }).click();
   const dialog = page.getByRole('dialog', { name: '编辑字幕', exact: true });
   await expect(dialog).toBeVisible();
@@ -74,7 +76,7 @@ test('edits estimated captions through the production dialog as one undo command
   await dialog.getByLabel('字幕 1 出点（秒）', { exact: true }).fill('1.4');
   await dialog.getByLabel('字幕 2 出点（秒）', { exact: true }).fill('3.5');
   await dialog.getByRole('button', { name: '定位字幕 2', exact: true }).click();
-  await expect(page.locator('.timeline-ruler')).toHaveAttribute('aria-valuenow', '2000');
+  await expect(page.getByRole('slider', { name: '播放器播放位置', exact: true })).toHaveAttribute('data-playhead-ms', '2000');
   await page.screenshot({ path: info.outputPath('caption-editor-dark-1536.png') });
   await dialog.getByRole('button', { name: '应用字幕', exact: true }).click();
   await expect(dialog).toHaveCount(0);
@@ -145,9 +147,9 @@ test('projects split captions, preserves hidden source cues during local edits, 
   ] };
   const project = await createProject(request, '分割字幕与源区间验收', original);
   await openProject(page, project.title);
-  const ruler = page.getByRole('slider', { name: '预览播放位置', exact: true });
+  const ruler = page.getByRole('slider', { name: '播放器播放位置', exact: true });
   await ruler.press('Home'); for (let index = 0; index < 3; index++) await ruler.press('Shift+ArrowRight');
-  await page.getByRole('button', { name: '在播放头处分割镜头', exact: true }).click();
+  await clickShotAction(page, '在播放头处分割镜头');
   await expect.poll(async () => (await savedProject(request, project.id)).shots.length).toBe(3);
   let dialog = await editor(page);
   await expect(dialog.getByLabel('字幕 1 入点（秒）', { exact: true })).toHaveValue('0');

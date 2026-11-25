@@ -1,4 +1,4 @@
-import { memo, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type MouseEvent, type PointerEvent } from 'react';
+import { memo, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent, type MouseEvent, type PointerEvent } from 'react';
 import { Film, Maximize, Minimize, Pause, Play, SkipBack, SkipForward, Volume2, VolumeX, Plus } from 'lucide-react';
 import { frameAtTime, timeAtFrame, type AssetRecord, type PreparedAudioMix, type ProjectDocument, type Shot, usesVideoAudio } from '@video-quickly/contracts';
 import { type TimelineClip } from '@video-quickly/video';
@@ -29,7 +29,7 @@ export default memo(function PlaybackPreview({ project, draft, assets, timeline,
   const [controlsVisible, setControlsVisible] = useState(true);
   const hideControls = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const hoveringControls = useRef(false);
-  const scrubbing = useRef<{ pointerId: number; resume: boolean } | undefined>(undefined);
+  const scrubbing = useRef<{ pointerId: number; resume: boolean; initialTimeUs: number; completeSeek: () => void } | undefined>(undefined);
   const [quality, setQuality] = useState<number | undefined>(() => {
     const stored = Number(localStorage.getItem('vq-preview-scale'));
     return [.25, .5, 1].includes(stored) ? stored : undefined;
@@ -49,12 +49,12 @@ export default memo(function PlaybackPreview({ project, draft, assets, timeline,
     clock.toggle();
     if (clock.getSnapshot().playing) completed();
   }
-  function revealControls() {
+  const revealControls = useCallback(() => {
     clearTimeout(hideControls.current);
     setControlsVisible(true);
-    if (clock.getSnapshot().playing && !hoveringControls.current) hideControls.current = setTimeout(() => setControlsVisible(false), 2200);
-  }
-  useEffect(() => { revealControls(); return () => clearTimeout(hideControls.current); }, [playing]);
+    if (fullscreen && clock.getSnapshot().playing && !hoveringControls.current) hideControls.current = setTimeout(() => setControlsVisible(false), 2200);
+  }, [clock, fullscreen]);
+  useEffect(() => { revealControls(); return () => clearTimeout(hideControls.current); }, [playing, revealControls]);
   useEffect(() => {
     const update = () => {
       const ownsFullscreen = Boolean(player.current && document.fullscreenElement === player.current);
@@ -94,21 +94,44 @@ export default memo(function PlaybackPreview({ project, draft, assets, timeline,
     togglePlayback();
   }
   function seekFrame(frame: number) {
-    const resume = clock.getSnapshot().playing;
+    const { timeUs } = clock.getSnapshot();
+    const resume = clock.canResumeAfterSeek;
+    const completeSeek = scrubbing.current ? undefined : beginGuideAction('preview-seeked');
     clock.seek(timeAtFrame(frame, project.profile.frameRate));
-    if (resume && playable) clock.toggle();
+    if (clock.getSnapshot().timeUs !== timeUs) completeSeek?.();
+    if (resume && playable && clock.getSnapshot().timeUs < clock.lastTimeUs) clock.toggle();
+  }
+  function seekFromKeyboard(event: KeyboardEvent<HTMLInputElement>) {
+    if (event.altKey || event.ctrlKey || event.metaKey) return;
+    const current = frameAtTime(clock.getSnapshot().timeUs, project.profile.frameRate);
+    const step = event.shiftKey ? 10 : 1;
+    let destination: number;
+    switch (event.key) {
+      case 'Home': destination = 0; break;
+      case 'End': destination = lastFrame; break;
+      case 'ArrowRight': case 'ArrowUp': destination = current + step; break;
+      case 'ArrowLeft': case 'ArrowDown': destination = current - step; break;
+      default: return;
+    }
+    event.preventDefault();
+    // A command at the current frame still supersedes a pending shot-selection seek.
+    seekFrame(destination);
   }
   function startScrubbing(event: PointerEvent<HTMLInputElement>) {
-    scrubbing.current = { pointerId: event.pointerId, resume: clock.getSnapshot().playing };
-    clock.pause();
+    if (event.button !== 0 || scrubbing.current) return;
+    const { timeUs } = clock.getSnapshot();
+    scrubbing.current = { pointerId: event.pointerId, resume: clock.canResumeAfterSeek, initialTimeUs: timeUs, completeSeek: beginGuideAction('preview-seeked') };
+    clock.seek(timeUs);
     event.currentTarget.setPointerCapture(event.pointerId);
   }
   function finishScrubbing(event: PointerEvent<HTMLInputElement>) {
     if (scrubbing.current?.pointerId !== event.pointerId) return;
-    const { resume } = scrubbing.current;
+    const { resume, initialTimeUs, completeSeek } = scrubbing.current;
     scrubbing.current = undefined;
     if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
-    if (resume && playable && !clock.getSnapshot().playing) clock.toggle();
+    if (event.type === 'pointerup' && clock.getSnapshot().timeUs !== initialTimeUs) completeSeek();
+    const current = clock.getSnapshot();
+    if (resume && playable && !current.playing && current.timeUs < clock.lastTimeUs) clock.toggle();
   }
   useEffect(() => { if (!playable) clock.pause(); onPlayableChange(playable); }, [playable, clock, onPlayableChange]);
   const clip = timeline.find(item => timeUs >= item.startUs && timeUs < item.endUs) ?? timeline.at(-1);
@@ -126,7 +149,7 @@ export default memo(function PlaybackPreview({ project, draft, assets, timeline,
     document.addEventListener('visibilitychange', pauseWhenHidden);
     return () => document.removeEventListener('visibilitychange', pauseWhenHidden);
   }, [clock]);
-  return <section ref={player} data-guide="preview" className="preview-panel preview-player" aria-label="视频预览播放器" tabIndex={0} data-controls-visible={!playing || controlsVisible} onPointerMove={revealControls} onKeyDown={event => {
+  return <section ref={player} data-guide="preview" className="preview-panel preview-player" aria-label="视频预览播放器" tabIndex={0} data-controls-visible={!fullscreen || !playing || controlsVisible} onPointerMove={fullscreen ? revealControls : undefined} onKeyDown={event => {
     if (event.target !== event.currentTarget || event.ctrlKey || event.metaKey || event.altKey) return;
     if (event.code === 'KeyF') { event.preventDefault(); if (!event.repeat) void toggleFullscreen(); }
     if (event.code === 'KeyM') { event.preventDefault(); if (!event.repeat) toggleMuted(); }
@@ -138,20 +161,28 @@ export default memo(function PlaybackPreview({ project, draft, assets, timeline,
     </div>
     <div className="preview-audio">{mix ? <PreparedMixPreview mix={mix} onLevels={onLevels} controls={false} showLevels={false} playing={playing && !buffering && mixPlayable} timeUs={timeUs} muted={silent} volume={volume} onReadyChange={mixReady} onError={mixFailure} /> : audioMix.status === 'pending' ? <p className="tiny-meta" role="status">正在准备预览混音…</p> : audioMix.status === 'error' ? <Notice kind="error">{audioMix.error}<Button aria-label="重新准备预览混音" onClick={audioMix.retry}>重新准备</Button></Notice> : null}</div>
     <div className="preview-controls preview-chrome" onPointerEnter={() => { hoveringControls.current = true; revealControls(); }} onPointerLeave={() => { hoveringControls.current = false; revealControls(); }}>
-      <input className="preview-seek" type="range" aria-label="播放器播放位置" aria-valuetext={`${formatTime(timeUs)} / ${formatTime(totalUs)}`} min={0} max={lastFrame} step={1} value={frame} disabled={!totalUs} style={progressStyle} onChange={event => seekFrame(event.target.valueAsNumber)} onPointerDown={startScrubbing} onPointerUp={finishScrubbing} onPointerCancel={finishScrubbing} onLostPointerCapture={finishScrubbing} />
+      <input className="preview-seek" type="range" data-guide="preview-seek" data-playhead-ms={Math.round(timeUs / 1000)}
+        aria-label="播放器播放位置" aria-valuetext={`${formatTime(timeUs)} / ${formatTime(totalUs)}，第 ${frame + 1} 帧`}
+        aria-keyshortcuts="Shift+ArrowLeft Shift+ArrowRight Shift+ArrowUp Shift+ArrowDown" min={0} max={lastFrame} step={1} value={frame} disabled={!totalUs} style={progressStyle}
+        onChange={event => seekFrame(event.target.valueAsNumber)} onKeyDown={seekFromKeyboard} onPointerDown={startScrubbing} onPointerUp={finishScrubbing}
+        onPointerCancel={finishScrubbing} onLostPointerCapture={finishScrubbing} />
       <div className="preview-controls__row">
-        <IconButton label={playing ? '暂停预览' : '播放预览'} aria-pressed={playing} disabled={!project.shots.length || !playable} onClick={togglePlayback}>{playing ? <Pause size={18} fill="currentColor" /> : <Play size={18} fill="currentColor" style={{ marginLeft: 2 }} />}</IconButton>
-        <IconButton className="preview-skip" label="回到开头" disabled={!project.shots.length} onClick={() => clock.seek(0)}><SkipBack size={16} /></IconButton>
-        <IconButton className="preview-skip" label="下一镜头" disabled={!project.shots.length} onClick={() => { const next = project.shots[((clip?.index ?? 0) + 1) % project.shots.length]; if (next) void onSelect(next.id); }}><SkipForward size={16} /></IconButton>
         <span className="timecode"><b>{formatTime(timeUs)}</b><span> / {formatTime(totalUs)}</span></span>
-        <div className="preview-volume">
-          <IconButton label={project.musicClips?.length || includesVideoAudio ? silent ? '开启预览声音' : '静音预览声音' : silent ? '开启旁白声音' : '静音旁白'} aria-pressed={silent} onClick={toggleMuted}>{silent ? <VolumeX size={17} /> : <Volume2 size={17} />}</IconButton>
-          <span className="preview-volume__slider">
-            <input type="range" aria-label="预览音量" aria-valuetext={`${Math.round((silent ? 0 : volume) * 100)}%`} min={0} max={1} step={0.05} value={silent ? 0 : volume} onChange={event => { setVolume(event.target.valueAsNumber); setMuted(false); }} />
-          </span>
+        <div className="preview-transport">
+          <IconButton className="preview-skip" label="回到开头" disabled={!project.shots.length} onClick={() => clock.seek(0)}><SkipBack size={16} /></IconButton>
+          <IconButton className="preview-play" label={playing ? '暂停预览' : '播放预览'} aria-pressed={playing} disabled={!project.shots.length || !playable} onClick={togglePlayback}>{playing ? <Pause size={18} fill="currentColor" /> : <Play className="preview-play__glyph" size={18} fill="currentColor" />}</IconButton>
+          <IconButton className="preview-skip" label="下一镜头" disabled={!project.shots.length} onClick={() => { const next = project.shots[((clip?.index ?? 0) + 1) % project.shots.length]; if (next) void onSelect(next.id); }}><SkipForward size={16} /></IconButton>
         </div>
-        <label className="preview-quality-control"><span className="preview-quality-label">清晰度</span><Select className="preview-quality" aria-label="预览质量" title="预览清晰度" value={previewScale} onChange={event => { const value = Number(event.target.value); setQuality(value); localStorage.setItem('vq-preview-scale', String(value)); }}><option value="0.25">流畅</option><option value="0.5">平衡</option><option value="1">原画</option></Select></label>
-        <IconButton label={fullscreen ? '退出全屏预览' : '全屏预览'} aria-pressed={fullscreen} disabled={!document.fullscreenEnabled} onClick={() => void toggleFullscreen(fullscreen)}>{fullscreen ? <Minimize size={17} /> : <Maximize size={17} />}</IconButton>
+        <div className="preview-options">
+          <div className="preview-volume">
+            <IconButton label={project.musicClips?.length || includesVideoAudio ? silent ? '开启预览声音' : '静音预览声音' : silent ? '开启旁白声音' : '静音旁白'} aria-pressed={silent} onClick={toggleMuted}>{silent ? <VolumeX size={17} /> : <Volume2 size={17} />}</IconButton>
+            <span className="preview-volume__slider">
+              <input type="range" aria-label="预览音量" aria-valuetext={`${Math.round((silent ? 0 : volume) * 100)}%`} min={0} max={1} step={0.05} value={silent ? 0 : volume} onChange={event => { setVolume(event.target.valueAsNumber); setMuted(false); }} />
+            </span>
+          </div>
+          <label className="preview-quality-control"><span className="preview-quality-label">清晰度</span><Select className="preview-quality" aria-label="预览质量" title="预览清晰度" value={previewScale} onChange={event => { const value = Number(event.target.value); setQuality(value); localStorage.setItem('vq-preview-scale', String(value)); }}><option value="0.25">流畅</option><option value="0.5">平衡</option><option value="1">原画</option></Select></label>
+          <IconButton label={fullscreen ? '退出全屏预览' : '全屏预览'} aria-pressed={fullscreen} disabled={!document.fullscreenEnabled} onClick={() => void toggleFullscreen(fullscreen)}>{fullscreen ? <Minimize size={17} /> : <Maximize size={17} />}</IconButton>
+        </div>
       </div>
     </div>
   </section>;

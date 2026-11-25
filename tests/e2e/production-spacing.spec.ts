@@ -30,13 +30,15 @@ for (const { width, height, theme } of [
     const steps = dialog.getByRole('navigation', { name: '制作设置步骤' }).locator('ol');
     const next = dialog.getByRole('button', { name: '下一步', exact: true });
     const original = dialog.getByRole('textbox', { name: '项目原文', exact: true });
+    const originalField = content.locator('.field').filter({ has: page.getByRole('textbox', { name: '项目原文', exact: true }) });
     const planning = dialog.getByRole('group', { name: '策划内容', exact: true });
     const profile = await openStoryboardProfile(dialog);
     const presets = profile.locator('.field-row');
     await expect(dialog.locator('summary').filter({ hasText: /分镜全局参数|自定义分镜尺寸|项目原文/ })).toHaveCount(0);
     await expect(profile.getByRole('spinbutton')).toHaveCount(0);
-    await expectGap(presets, original, 12);
-    await expectGap(original, planning, 12);
+    await expectGap(presets, originalField, 12);
+    await expectGap(originalField.locator('.field__label'), original, 4);
+    await expectGap(originalField, planning, 12);
     const brief = planning.getByRole('textbox', { name: '简报内容', exact: true });
     const style = planning.getByRole('textbox', { name: '风格内容', exact: true });
     const storyboard = planning.getByRole('group', { name: '分镜内容', exact: true });

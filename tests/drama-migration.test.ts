@@ -32,7 +32,7 @@ it('upgrades v28 to drama-capable storage while preserving legacy projects, froz
 
   const upgraded = openDatabase(directory);
   try {
-    expect(upgraded.pragma('user_version', { simple: true })).toBe(29);
+    expect(upgraded.pragma('user_version', { simple: true })).toBe(WORKSPACE_MIGRATIONS.at(-1)?.version);
     expect(upgraded.prepare("SELECT kind, id, body FROM documents WHERE kind != 'project-summary' ORDER BY rowid").all()).toEqual(originalDocuments);
     expect(upgraded.prepare('SELECT * FROM activities').all()).toEqual(originalActivities);
     expect(new DocumentStore(upgraded).get('project', project.id)).toEqual(project);

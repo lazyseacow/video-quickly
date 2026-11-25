@@ -8,7 +8,7 @@ function InlineResult({ text }: { text: string }) {
     : part.startsWith('`') && part.endsWith('`') ? <code key={index}>{part.slice(1, -1)}</code> : part);
 }
 
-export function VideoProfileResult({ profile }: { profile: VideoProfile }) {
+function VideoProfileResult({ profile }: { profile: VideoProfile }) {
   return <dl className="result-document__specs" aria-label="成片规格">
     <div><dt>分辨率</dt><dd>{profile.width} × {profile.height}</dd></div>
     <div><dt>帧率</dt><dd>{formatFrameRate(profile.frameRate)} fps</dd></div>

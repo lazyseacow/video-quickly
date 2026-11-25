@@ -1,5 +1,6 @@
 import { openProjectFromList } from './workspace-navigation';
 import { projectSettingAction } from './settings';
+import { openShotInspectorSection } from './storyboard-actions';
 import { writeFile } from 'node:fs/promises';
 import { expect, test, type APIRequestContext, type Page } from '@playwright/test';
 import type { AssetRecord, ProjectDocument } from '@video-quickly/contracts';
@@ -55,6 +56,7 @@ test('keeps a caption draft when its source window changes externally and accept
   const errors = observeErrors(page);
   const project = await createProject(request, '字幕弹窗外部修订验收');
   await openProject(page, project.title);
+  await openShotInspectorSection(page, '字幕与文稿');
   await page.getByRole('button', { name: '编辑字幕', exact: true }).click();
   const dialog = page.getByRole('dialog', { name: '编辑字幕', exact: true });
   await dialog.getByLabel('字幕 1 文字', { exact: true }).fill('保留的字幕草稿');
@@ -129,6 +131,7 @@ test('retries its own unsaved caption edit after a rejected save and restores bo
   const errors = observeErrors(page);
   const project = await createProject(request, '字幕保存失败重试验收');
   await openProject(page, project.title);
+  await openShotInspectorSection(page, '字幕与文稿');
   let rejectedWrites = 0;
   await page.route('**/__desktop_rpc', async route => {
     if (route.request().postDataJSON().method === 'project.update' && rejectedWrites === 0) {

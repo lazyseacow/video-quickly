@@ -60,10 +60,10 @@ async function exportBoundaryColors(request: APIRequestContext, project: Project
 }
 
 async function seek(page: Page, frame: number) {
-  const ruler = page.getByRole('slider', { name: '预览播放位置', exact: true }); await ruler.press('Home');
+  const ruler = page.getByRole('slider', { name: '播放器播放位置', exact: true }); await ruler.press('Home');
   for (let index = 0; index < Math.floor(frame / 10); index++) await ruler.press('Shift+ArrowRight');
   for (let index = 0; index < frame % 10; index++) await ruler.press('ArrowRight');
-  await expect(ruler).toHaveAttribute('aria-valuenow', String(Math.round(frame * 1000 / 30)));
+  await expect(ruler).toHaveAttribute('data-playhead-ms', String(Math.round(frame * 1000 / 30)));
 }
 
 for (const readbackDelayMs of [0, 180]) {
@@ -94,11 +94,11 @@ test(`never paints a deleted one-frame video gap during real playback or scrubbi
     const startedAt = performance.now(), state = { samples: [] as PaintSample[], commits: [] as CommittedClockSample[], audioEvents: [] as AudioEvent[], redImage: '', active: true, request: 0, readbackRequest: 0, delayed: false };
     const context = element.getContext('2d')!, readPixel = context.getImageData.bind(context);
     let framePixel = { rgb: [] as number[], readbackMs: 0, frameTimeMs: 0 };
-    const ruler = document.querySelector<HTMLElement>('[role="slider"][aria-label="预览播放位置"]');
+    const ruler = document.querySelector<HTMLElement>('input[aria-label="播放器播放位置"]');
     if (!ruler) throw new Error('Preview position is missing');
     function clocks(): ClockSample {
       const audio = document.querySelector<HTMLAudioElement>('.preview-panel audio[data-audio-role="处理后混音"]');
-      return { wallMs: performance.now() - startedAt, uiMs: Number(ruler!.getAttribute('aria-valuenow')), audioMs: (audio?.currentTime ?? 0) * 1000, paused: audio?.paused ?? true };
+      return { wallMs: performance.now() - startedAt, uiMs: Number(ruler!.getAttribute('data-playhead-ms')), audioMs: (audio?.currentTime ?? 0) * 1000, paused: audio?.paused ?? true };
     }
     const audio = document.querySelector<HTMLAudioElement>('.preview-panel audio[data-audio-role="处理后混音"]');
     const mediaEvents = ['play', 'pause', 'seeking', 'seeked', 'waiting'];
@@ -107,7 +107,7 @@ test(`never paints a deleted one-frame video gap during real playback or scrubbi
     // This observer runs after React commits the producer's new position.
     // The RAF sampler was registered first and can still see the previous UI.
     const observer = new MutationObserver(() => { if (state.active) state.commits.push({ ...clocks(), precedingPaintIndex: state.samples.length - 1 }); });
-    observer.observe(ruler, { attributes: true, attributeFilter: ['aria-valuenow'] });
+    observer.observe(ruler, { attributes: true, attributeFilter: ['data-playhead-ms'] });
     // Real GPU readback may block while the media clock keeps advancing. Delay
     // one observation to exercise that boundary without changing its clocks.
     function pixel() {

@@ -57,17 +57,16 @@ export async function verifyNativeCompactDialogs({ page, rpc, openProject, fixtu
   assert.equal((await rpc('project.get', { projectId: project.id })).project.brief, brief);
   checks.compactProductionSettings = true;
 
-  const more = button(page, '更多');
-  await more.press('Enter');
-  const actions = page.getByRole('group', { name: '更多操作', exact: true });
-  await expect(actions.getByRole('button')).toHaveText(['制作前检查']);
-  await button(actions, '制作前检查').press('Enter');
+  const actions = page.getByRole('group', { name: '制作操作', exact: true });
+  const check = button(actions, '制作前检查');
+  await expect(check).toBeInViewport({ ratio: 1 });
+  await check.press('Enter');
   const readiness = page.getByRole('dialog', { name: '制作前检查', exact: true });
   await expect(readiness.locator('.readiness-summary')).toContainText('涉及步骤3');
   await checkLayout(readiness, button(readiness, '关闭'), button(readiness, '重新检查'));
   await page.screenshot({ path: join(artifacts, 'desktop-compact-production-readiness.png') });
   await button(readiness, '关闭').press('Enter');
-  await expect(readiness).toHaveCount(0); await expect(more).toBeFocused();
+  await expect(readiness).toHaveCount(0); await expect(check).toBeFocused();
   const runs = async () => (await rpc('run.list', { projectId: project.id })).items;
   assert.equal((await runs()).length, 0);
   await button(page, '开始制作').press('Enter');

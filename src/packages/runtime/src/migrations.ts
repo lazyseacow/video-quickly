@@ -3,7 +3,9 @@ import { closeSync, fsyncSync, mkdirSync, openSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import { join } from 'node:path';
 
-export interface DatabaseMigration { version: number; name: string; sql: string }
+export type DatabaseMigration = { version: number; name: string } & (
+  { sql: string; apply?: never } | { sql?: never; apply: (database: Database.Database) => void }
+);
 export class DatabaseMigrationError extends Error {
   constructor(message: string, readonly backupPath?: string, options?: ErrorOptions) { super(message, options); }
 }
@@ -32,7 +34,8 @@ export function migrateDatabase(database: Database.Database, directory: string, 
       database.exec('CREATE TABLE IF NOT EXISTS schema_migrations (version INTEGER PRIMARY KEY, name TEXT NOT NULL, applied_at TEXT NOT NULL)');
       for (const migration of migrations) {
         if (migration.version <= current) continue;
-        database.exec(migration.sql);
+        if (migration.apply) migration.apply(database);
+        else database.exec(migration.sql);
         database.prepare('INSERT INTO schema_migrations(version, name, applied_at) VALUES (?, ?, ?)').run(migration.version, migration.name, new Date().toISOString());
         database.pragma(`user_version = ${migration.version}`);
       }

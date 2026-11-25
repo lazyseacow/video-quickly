@@ -53,7 +53,7 @@ async function open(page: Page, project: ProjectDocument) {
 }
 
 async function seek(page: Page, canvas: Locator, frame: number) {
-  const ruler = page.getByRole('slider', { name: '预览播放位置', exact: true });
+  const ruler = page.getByRole('slider', { name: '播放器播放位置', exact: true });
   let current = Number.NaN;
   if (frame !== 0 && await page.getByRole('button', { name: '播放预览', exact: true }).isVisible()) {
     const rendered = await canvas.getAttribute('data-rendered-frame');

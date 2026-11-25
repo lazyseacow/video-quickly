@@ -3,6 +3,7 @@ import { expect, test } from '@playwright/test';
 import { runSchema, type RunSummary } from '@video-quickly/contracts';
 import { fixture, open, pick, rpc, saved } from './native-video-fixture';
 import { openProjectFromList } from './workspace-navigation';
+import { openShotInspectorSection } from './storyboard-actions';
 
 for (const { width, theme } of [{ width: 1536, theme: 'dark' }, { width: 600, theme: 'light' }, { width: 390, theme: 'light' }]) test('shows concise storyboard, media and delivery outputs at ' + width + 'px', async ({ page, request }, info) => {
   test.setTimeout(120_000);
@@ -28,7 +29,9 @@ for (const { width, theme } of [{ width: 1536, theme: 'dark' }, { width: 600, th
     await expect.poll(async () => (await rpc<RunSummary>(request, 'run.get', { runId: run.id })).status, { timeout: 60_000 }).toBe('succeeded');
     await expect(page.getByLabel('旁白音频', { exact: true })).toHaveCount(0);
     await expect(page.getByRole('button', { name: '镜头声音处理', exact: true })).toHaveCount(0);
-    await expect(page.getByLabel('轨道信息', { exact: true })).not.toContainText('旁白');
+    await expect(page.getByLabel('轨道信息', { exact: true })).toHaveCount(0);
+    await expect(page.getByRole('slider', { name: '播放器播放位置', exact: true })).toBeVisible();
+    await openShotInspectorSection(page, '画面与素材');
     await expect(page.getByRole('checkbox', { name: '启用视频原声', exact: true })).toBeChecked();
     await page.getByRole('button', { name: '打开阶段：策划与分镜', exact: true }).click();
     const dialog = page.getByRole('dialog', { name: '本次制作', exact: true });

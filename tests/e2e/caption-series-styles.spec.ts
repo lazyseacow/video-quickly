@@ -2,6 +2,7 @@ import { confirmAction } from './confirmation-actions';
 import { openProjectSettings, projectSettingAction, settingField, settingControl, showSettingsPreview } from './settings';
 import { openProjectFromList } from './workspace-navigation';
 import { setWorkspaceTheme } from './workspace-settings';
+import { openShotInspectorSection } from './storyboard-actions';
 import { draftDrama } from './drama-creation';
 import { expect, test, type APIRequestContext, type Locator, type Page } from '@playwright/test';
 import { createSceneTemplate, DEFAULT_CAPTION_STYLE, type CaptionStyle, type ProjectDocument, type SeriesTemplate } from '@video-quickly/contracts';
@@ -20,6 +21,7 @@ async function healthy(page: Page, errors: ReturnType<typeof observe>) { await e
 async function openProject(page: Page, title: string) { await page.goto('/'); await expect(page).toHaveTitle(/Video Quickly/); await openProjectFromList(page, title); await expect(page.getByLabel('镜头标题', { exact: true })).toHaveValue('独立标题 1'); }
 async function styleDialog(page: Page, mode: 'project' | 'shot') {
   if (mode === 'project') await openProjectSettings(page);
+  else await openShotInspectorSection(page, '字幕与文稿');
   await (await projectSettingAction(page, mode === 'project' ? '项目字幕样式' : '镜头字幕样式', { exact: true })).click();
   if (mode === 'project') await page.getByRole('dialog', { name: '制作设置', exact: true }).getByRole('button', { name: '保存并打开', exact: true }).click();
   const dialog = page.getByRole('dialog', { name: mode === 'project' ? '项目字幕样式' : '镜头字幕样式', exact: true }); await expect(dialog).toBeVisible(); return dialog;

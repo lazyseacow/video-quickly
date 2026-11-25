@@ -53,7 +53,7 @@ export function createProjectReadiness(options: {
       if (!previous || previous.severity === 'warning' && severity === 'error') required.set(id, { asset, node, severity });
     }
     if (saved.blockedIssue) add({ ...saved.blockedIssue, severity: 'error' }, 'blocked');
-    if (nodes.some(node => node.kind === 'export' || node.config.videoAgent === true) && (!options.hasMediaExecutor || !options.system.ffmpegAvailable)) add({ severity: 'error', category: 'environment', message: '媒体导出引擎尚未就绪。', hint: '请检查随应用安装的媒体组件，修复后重新连接执行器并再次检查。', fix: 'runtime' }, 'media-engine');
+    if (nodes.some(node => node.kind === 'export') && (!options.hasMediaExecutor || !options.system.ffmpegAvailable)) add({ severity: 'error', category: 'environment', message: '媒体导出引擎尚未就绪。', hint: '请检查随应用安装的媒体组件，修复后重新连接执行器并再次检查。', fix: 'runtime' }, 'media-engine');
     const characterIds = new Set(projectCharacterIds(project));
     for (const id of characterIds) {
       const character = characters.get(id);

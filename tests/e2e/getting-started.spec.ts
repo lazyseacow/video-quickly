@@ -13,7 +13,7 @@ const preference = 'vq-onboarding-v1';
 const targets: Record<string, string[]> = {
   '新建短剧': ['create-project'], '打开模型连接': ['models'], '添加模型连接': ['model-connection'], '打开短剧工作室': ['projects'], '进入分集工作台': ['project-open', 'work-library'],
   '制作设置': ['view'], '展开镜头导航': ['outline-toggle'], '整理镜头': ['shots'], '预览画面': ['preview'],
-  '安排镜头节奏': ['timeline'], '展开属性面板': ['inspector-toggle'], '编辑属性': ['inspector'],
+  '定位预览画面': ['preview-seek'], '展开属性面板': ['inspector-toggle'], '编辑属性': ['inspector'],
   '制作前检查': ['check'], '自动制作': ['produce'], '导出成片': ['export'], '随时重开指引': ['help'],
 };
 function freshProfile(origin: string, theme = 'dark') {
@@ -105,7 +105,7 @@ async function walk(page: Page, info?: TestInfo, screenshotPrefix = '') {
   const seen: string[] = [];
   for (let index = 0; index < 20; index++) {
     const target = await anchored(page); seen.push(target);
-    if (info && ['preview', 'timeline'].includes(target)) await page.screenshot({ path: info.outputPath(`${screenshotPrefix}tour-${target}.png`) });
+    if (info && ['preview', 'preview-seek'].includes(target)) await page.screenshot({ path: info.outputPath(`${screenshotPrefix}tour-${target}.png`) });
     const done = guide(page).getByRole('button', { name: '完成引导', exact: true });
     if (await done.isVisible()) { await done.click(); await expect(guide(page)).toHaveCount(0); return seen; }
     if (target === 'project-open' || target === 'work-library') await openHighlightedProject(page);
@@ -197,7 +197,7 @@ for (const viewport of [{ width: 1536, height: 960, theme: 'dark', reducedMotion
       await guide(page).getByRole('button', { name: '下一步', exact: true }).click(); await expect(guide(page).getByRole('heading')).toHaveText('打开模型连接'); await anchored(page);
       await guide(page).getByRole('button', { name: '上一步', exact: true }).click(); await expect(guide(page).getByRole('heading')).toHaveText('新建短剧');
       const seen = await walk(page, info, `${viewport.theme}-${viewport.width}-`);
-      expect(seen).toContain('create-project'); expect(seen).toContain('models'); expect(seen).toContain('preview'); expect(seen).toContain('timeline'); expect(seen.at(-1)).toBe('help');
+      expect(seen).toContain('create-project'); expect(seen).toContain('models'); expect(seen).toContain('preview'); expect(seen).toContain('preview-seek'); expect(seen.at(-1)).toBe('help');
       await remembered(page); await openGuide(page); await opened(page);
       for (let index = 0; index < 3; index++) await nextStep(page);
       await page.keyboard.press('Escape'); await expect(guide(page)).toHaveCount(0); await expect(settings(page)).toBeFocused();
@@ -276,7 +276,7 @@ test('moves away from a target that becomes hidden instead of leaving a stale cu
   expect(observed.writes).toEqual([]); expect(observed.errors).toEqual([]);
 });
 
-test('resumes the same episode guide after an unchanged background refresh completes', async ({ page, request }) => {
+isolatedTest('resumes the same episode guide after an unchanged background refresh completes', async ({ page, request }) => {
   const sample = await ensureSampleProject(page), observed = observe(page);
   await page.emulateMedia({ reducedMotion: 'reduce' }); await page.goto('/'); await opened(page); await reach(page, '进入分集工作台');
   await enterHighlightedWorks(page);
@@ -342,7 +342,7 @@ test('isolates editor shortcuts and preserves an unsaved project draft throughou
   const observed = observe(page); await page.emulateMedia({ reducedMotion: 'reduce' }); await dismissFirst(page);
   await openProjectFromList(page, project.title);
   const title = page.getByLabel('镜头标题', { exact: true }); await expect(title).toHaveValue('原始镜头 0');
-  const ruler = page.getByRole('slider', { name: '预览播放位置', exact: true }); await ruler.focus(); for (let index = 0; index < 10; index++) await ruler.press('ArrowRight');
+  const playhead = page.getByRole('slider', { name: '播放器播放位置', exact: true }); await playhead.press('Shift+ArrowRight');
   const time = await page.locator('.preview-controls .timecode b').innerText(); await expect(page.getByRole('button', { name: '播放预览', exact: true })).toBeEnabled();
   await title.fill('尚未保存的定位指引草稿'); await expect(page.getByRole('button', { name: '保存修改', exact: true })).toBeEnabled();
   await openGuide(page); await opened(page); await reach(page, '自动制作');
@@ -409,15 +409,17 @@ test('navigates to current model controls, saves a real local connection and ret
 test('advances for an actual shot selection, playback start and user seek without persisting edits', async ({ page, request }) => {
   const project = await projectFixture(request, '导览真实播放'), observed = observe(page); await page.emulateMedia({ reducedMotion: 'reduce' }); await openProjectTour(page, project);
   await reach(page, '整理镜头'); const second = page.locator('.outline-shot').nth(1); await second.click(); await expect(second).toHaveAttribute('aria-pressed', 'true'); await atStep(page, '预览画面');
-  await page.getByRole('button', { name: '播放预览', exact: true }).click(); await expect(page.getByRole('button', { name: '暂停预览', exact: true })).toHaveAttribute('aria-pressed', 'true'); await atStep(page, '安排镜头节奏');
+  await page.getByRole('button', { name: '播放预览', exact: true }).click(); await expect(page.getByRole('button', { name: '暂停预览', exact: true })).toHaveAttribute('aria-pressed', 'true'); await atStep(page, '定位预览画面');
   await guide(page).getByRole('button', { name: '上一步', exact: true }).click(); await atStep(page, '预览画面'); await page.getByRole('button', { name: '暂停预览', exact: true }).click();
   await expect(page.getByRole('button', { name: '播放预览', exact: true })).toHaveAttribute('aria-pressed', 'false'); await atStep(page, '预览画面');
-  await guide(page).getByRole('button', { name: '下一步', exact: true }).click(); await atStep(page, '安排镜头节奏');
-  const ruler = page.getByRole('slider', { name: '预览播放位置', exact: true }), before = Number(await ruler.getAttribute('aria-valuenow')), bounds = await ruler.boundingBox();
-  if (!bounds) throw new Error('真实时间轴标尺不可见');
-  expect(await page.locator('.playhead-lane, .playhead').evaluateAll(elements => elements.map(element => getComputedStyle(element).pointerEvents))).toEqual(['none', 'none']);
-  await ruler.click({ position: { x: bounds.width * .8, y: bounds.height / 2 } });
-  await expect.poll(async () => Number(await ruler.getAttribute('aria-valuenow'))).not.toBe(before); await atStep(page, '编辑属性');
+  await guide(page).getByRole('button', { name: '下一步', exact: true }).click(); await atStep(page, '定位预览画面');
+  const playhead = page.getByRole('slider', { name: '播放器播放位置', exact: true });
+  await expect(active(page).and(playhead)).toHaveAttribute('type', 'range');
+  const before = await playhead.getAttribute('data-playhead-ms'), bounds = await playhead.boundingBox();
+  if (before === null || !bounds) throw new Error('播放器进度条不可见');
+  const progress = await playhead.evaluate((input: HTMLInputElement) => input.valueAsNumber / Number(input.max));
+  await playhead.click({ position: { x: bounds.width * (progress > .5 ? .2 : .8), y: bounds.height / 2 } });
+  await expect(playhead).not.toHaveAttribute('data-playhead-ms', before); await atStep(page, '编辑属性');
   expect((await savedProject(request, project.id)).revision).toBe(project.revision); expect(observed.writes).toEqual([]); expect(observed.errors).toEqual([]);
 });
 
@@ -429,14 +431,11 @@ test('waits for an explicit dirty save to persist and lets a failed save retry i
   await expect(page.getByText('隔离的导览保存失败', { exact: true })).toBeVisible(); await atStep(page, '编辑属性'); await expect(title).toHaveValue('需要实际保存的导览输入');
   const retry = await holdNextRpc(page, 'project.update'); await page.getByRole('button', { name: '保存镜头', exact: true }).click(); await retry.entered; await atStep(page, '编辑属性'); retry.release();
   await expect.poll(async () => (await savedProject(request, project.id)).shots[0].title).toBe('需要实际保存的导览输入'); await atStep(page, '制作前检查');
-  const more = active(page).getByRole('button', { name: '更多', exact: true });
-  const check = page.getByRole('button', { name: '制作前检查', exact: true });
-  await more.click(); await expect(check).toBeVisible();
-  await page.keyboard.press('Escape'); await expect(check).toHaveCount(0); await atStep(page, '制作前检查');
-  const failedCheck = await holdNextRpc(page, 'project.readiness', '隔离的检查失败'); await more.click(); await check.click(); await failedCheck.entered; await expect(guide(page)).toHaveCount(0); failedCheck.release();
+  const check = active(page).and(page.getByRole('button', { name: '制作前检查', exact: true }));
+  const failedCheck = await holdNextRpc(page, 'project.readiness', '隔离的检查失败'); await check.click(); await failedCheck.entered; await expect(guide(page)).toHaveCount(0); failedCheck.release();
   const report = page.getByRole('dialog', { name: '制作前检查', exact: true }); await expect(report.getByText('隔离的检查失败', { exact: true })).toBeVisible();
   await report.getByRole('button', { name: '关闭', exact: true }).click(); await atStep(page, '制作前检查');
-  await more.click(); await check.click(); await expect(report.locator('.readiness-summary')).toBeVisible(); await expect(guide(page)).toHaveCount(0);
+  await check.click(); await expect(report.locator('.readiness-summary')).toBeVisible(); await expect(guide(page)).toHaveCount(0);
   await report.getByRole('button', { name: '关闭', exact: true }).click(); await atStep(page, '自动制作');
   expect((await savedProject(request, project.id)).revision).toBe(project.revision + 1); expect(observed.writes).toEqual(['project.update', 'project.update']); expect(observed.errors).toEqual([]);
 });

@@ -52,7 +52,7 @@ it('preserves the workflow version when a configuration-only save has unchanged 
 
 it('keeps the workflow version when saving defaults absent from an older workspace', async () => {
   const { directory, runtime, project } = await setup();
-  const { agentMcpServerIds: _absent, ...production } = project.workflow.production;
+  const { referenceMode: _absent, ...production } = project.workflow.production;
   const database = openDatabase(directory);
   try {
     new DocumentStore(database).put('project', project.id, { ...project, workflow: { ...project.workflow, production } });

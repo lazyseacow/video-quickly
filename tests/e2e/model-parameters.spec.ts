@@ -214,8 +214,8 @@ for (const delayedProgress of [false, true]) test(`uses stored parameters in act
       connections[role === 'text' ? 'script' : role] = await savedModel(request, renamed);
     }
     let project = await rpc<ProjectDocument>(request, 'project.create', { originalText: '清晨，林夏在书房发现一封未寄出的信。她来到旧城寻找信的主人，与朋友在雨中的城门重逢。两人读完信后决定一起回家。', title: `参数真实请求验收${delayedProgress ? ' 延迟进度' : ''}` }); project = await rpc<ProjectDocument>(request, 'project.update', { projectId: project.id, revision: project.revision, patch: { shots: [{ id: 'parameters-shot', title: '原镜头', narration: '旁白', visualPrompt: '画面', durationUs: 2_000_000 }] } });
-    await page.reload(); await openProjectFromList(page, project.title); await page.getByRole('button', { name: 'AI 微调', exact: true }).click();
-    const dialog = page.getByRole('dialog', { name: '镜头候选', exact: true });
+    await page.reload(); await openProjectFromList(page, project.title); await page.getByRole('button', { name: '重新生成', exact: true }).click();
+    const dialog = page.getByRole('dialog', { name: '重新生成镜头', exact: true });
     async function generateAndWait(kind: keyof typeof gates, previousCandidates: number) {
       await (await settingField(dialog, '生成内容')).selectOption(kind); await (await settingField(dialog, '生成模型')).selectOption(connections[kind].id);
       const generated = page.waitForResponse(response => {

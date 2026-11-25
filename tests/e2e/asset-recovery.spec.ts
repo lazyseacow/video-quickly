@@ -28,7 +28,6 @@ function attachMissingImage(request: APIRequestContext, project: ProjectDocument
   } });
 }
 async function recovery(page: Page) {
-  await page.getByRole('button', { name: '更多', exact: true }).click();
   await page.getByRole('button', { name: '制作前检查', exact: true }).click();
   const check = page.getByRole('dialog', { name: '制作前检查', exact: true });
   await check.getByRole('button', { name: '修复素材', exact: true }).first().click();
@@ -134,10 +133,10 @@ test('pages every scoped record with causes and history, changes scope safely an
   await expect(directory).toBeEnabled();
   await directory.focus(); await expect(directory).toBeFocused();
   expect(await narrow.evaluate(element => element.scrollWidth <= element.clientWidth + 1)).toBe(true); await page.screenshot({ path: info.outputPath('complete-recovery-list-light-600.png') });
-  await page.keyboard.press('Escape'); await expect(narrow).toHaveCount(0); await expect(page.getByRole('button', { name: '更多', exact: true })).toBeFocused();
+  await page.keyboard.press('Escape'); await expect(narrow).toHaveCount(0); await expect(page.getByRole('button', { name: '制作前检查', exact: true })).toBeFocused();
 });
 
-test('automatically retries failed real video, source duration, waveform and local mix after recovery without changing the editor selection', async ({ page, request }, info) => {
+test('automatically retries failed real video, source duration and local mix after recovery without changing the editor selection', async ({ page, request }, info) => {
   test.setTimeout(60_000); const source = await mkdtemp(join(tmpdir(), 'vq-recovery-media-'));
   try {
     const video = join(source, 'video.mp4'), audio = join(source, 'voice.wav');
@@ -146,7 +145,7 @@ test('automatically retries failed real video, source duration, waveform and loc
     const created = await rpc<ProjectDocument>(request, 'project.create', { originalText: '清晨，林夏在书房发现一封未寄出的信。她来到旧城寻找信的主人，与朋友在雨中的城门重逢。两人读完信后决定一起回家。', title: `真实媒体恢复 ${randomUUID().slice(0, 8)}` });
     const picture = await rpc<AssetRecord>(request, 'asset.import', { projectId: created.id, path: video, kind: 'video' }), voice = await rpc<AssetRecord>(request, 'asset.import', { projectId: created.id, path: audio, kind: 'audio' });
     const missingVoiceError = new RegExp(`^ENOENT: no such file or directory, open '${voice.path.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}'$`);
-    expectedRpcFailures = [{ method: 'asset.waveform', error: missingVoiceError, assetId: voice.id, phase: 'missing' }, { method: 'audio.mix.prepare', error: missingVoiceError, projectId: created.id, phase: 'missing' }];
+    expectedRpcFailures = [{ method: 'audio.mix.prepare', error: missingVoiceError, projectId: created.id, phase: 'missing' }];
     const before = await saved(request, created.id), project = await rpc<ProjectDocument>(request, 'project.update', { projectId: created.id, revision: before.revision, patch: {
       audioMix: { ...DEFAULT_AUDIO_MIX_SETTINGS, loudness: { ...DEFAULT_AUDIO_MIX_SETTINGS.loudness, enabled: false } },
       shots: [{ id: 'media', title: '保留所选镜头', narration: '', visualPrompt: '', durationUs: 1_000_000, videoAssetId: picture.id, audioAssetId: voice.id, sourceInUs: 0 }],
@@ -155,15 +154,14 @@ test('automatically retries failed real video, source duration, waveform and loc
     rpcPhase = 'missing';
     await rm(picture.path); await rm(voice.path); missingAssets.add(picture.path); missingAssets.add(voice.path); await open(page, project);
     await expect(page.locator('.preview-panel .scene-preview__state')).toContainText('无法');
-    await expect(page.locator('.audio-waveform')).toHaveAttribute('data-status', 'error');
     await expect(page.locator('.preview-panel .preview-audio').getByRole('alert')).toContainText('ENOENT');
     await expect(page.getByRole('button', { name: '重新准备预览混音', exact: true })).toBeVisible();
     expect((await (await failedMix).json()).error).toContain(voice.path);
     await expect(page.locator('.clip-timing').getByRole('alert')).toContainText('无法读取');
-    await expect.poll(() => rpcFailures.length).toBe(2); rpcPhase = 'recovery';
+    await expect.poll(() => rpcFailures.length).toBe(1); rpcPhase = 'recovery';
     const dialog = await restore(page, source); await dialog.getByRole('button', { name: '关闭', exact: true }).click();
     await expect(page.getByLabel('镜头标题', { exact: true })).toHaveValue('保留所选镜头');
-    await expect(page.locator('.preview-panel .scene-preview__state')).toHaveCount(0); await expect(page.locator('.audio-waveform')).toHaveAttribute('data-status', 'ready');
+    await expect(page.locator('.preview-panel .scene-preview__state')).toHaveCount(0);
     await expect(page.locator('.clip-timing')).toContainText('可用素材出点上限 2.000 秒');
     await expect(page.locator('.preview-panel .prepared-mix-preview')).toHaveAttribute('data-status', 'ready', { timeout: 20_000 });
     const mix = page.locator('audio[data-audio-role="处理后混音"]'); expect(await mix.evaluate((element: HTMLAudioElement) => element.readyState >= 2)).toBe(true);

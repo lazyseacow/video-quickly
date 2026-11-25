@@ -151,7 +151,7 @@ test('opens a reference image trial in the project candidate comparison', async 
     await dialog.getByRole('button', { name: '查看试运行', exact: true }).click();
     await dialog.getByRole('button', { name: '试运行（产生用量）', exact: true }).click(); await confirmAction(page, '确认试运行');
     await dialog.getByRole('button', { name: '在镜头候选中对比', exact: true }).click();
-    const candidates = page.getByRole('dialog', { name: '镜头候选', exact: true });
+    const candidates = page.getByRole('dialog', { name: '重新生成镜头', exact: true });
     await expect(candidates.getByRole('button', { name: '应用所选候选', exact: true })).toBeEnabled();
     expect((await rpc<{ project: ProjectDocument }>(request, 'project.get', { projectId: project.id })).project).toEqual(project);
   } finally { await close(server); }

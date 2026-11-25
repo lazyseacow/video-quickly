@@ -1,30 +1,59 @@
-.workbench-guide { flex-shrink: 0; padding: var(--space-4) var(--space-5); background: var(--surface); border-bottom: 1px solid var(--border); min-width: 0; }
+.workbench-guide, .workbench-production { flex-shrink: 0; padding: var(--space-1) var(--space-5); background: var(--background); min-width: 0; }
 .workbench-guide .button { min-height: var(--control-hit-size); }
-.workbench-guide__steps { display: flex; gap: var(--space-2); list-style: none; padding: 0; margin: 0; max-width: 100%; overflow-x: auto; }
+.workbench-guide__steps { display: flex; gap: var(--space-1); list-style: none; padding: var(--space-1); margin: 0; max-width: 100%; overflow-x: auto; border-radius: var(--radius-studio-panel); background: var(--surface); }
 .workbench-guide__steps li { flex: 0 0 180px; }
 .workbench-guide__steps--stages { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); overflow: visible; }
 .workbench-guide__steps--stages li { min-width: 0; }
-.workbench-guide__card { display: grid; grid-template-columns: minmax(0, 1fr) auto; min-width: 0; border: 1px solid var(--border); border-radius: var(--radius-small); background: var(--surface); color: var(--text); }
-.workbench-guide__step { display: flex; align-items: flex-start; gap: var(--space-2); width: 100%; height: 100%; min-width: 0; min-height: var(--control-hit-size); padding: var(--space-3); border: 0; border-radius: inherit; background: transparent; color: inherit; text-align: left; }
-.workbench-guide__card:has(> .workbench-guide__step:focus-visible:not([data-pointer-focus])) { outline: 2px solid var(--accent); outline-offset: 3px; }
+.workbench-guide__card { display: grid; grid-template-columns: minmax(0, 1fr) auto; min-width: 0; border: 1px solid transparent; border-radius: var(--radius-studio-card); color: var(--text); }
+.workbench-guide__step { display: flex; align-items: center; gap: var(--space-3); width: 100%; height: 100%; min-width: 0; min-height: var(--control-hit-size); padding: var(--space-2) var(--space-3); border: 0; border-radius: inherit; background: transparent; color: inherit; text-align: left; }
+.workbench-guide__card:has(> .workbench-guide__step:focus-visible:not([data-pointer-focus])) { outline: 2px solid var(--accent); outline-offset: -2px; }
 .workbench-guide__step:focus-visible { outline: none; }
-.workbench-guide__card:hover { background: var(--surface-hover); }
-.workbench-guide__card[data-current] { border-color: var(--text); background: var(--surface-selected); box-shadow: inset 0 0 0 1px var(--text); }
-.workbench-guide__card[data-current] .workbench-guide__index { background: var(--text); color: var(--surface); }
+@media (hover: hover) { .workbench-guide__card:hover { background: var(--surface-hover); } }
+.workbench-guide__card[data-current] { background: var(--studio-active); border-color: color-mix(in srgb, var(--accent) 44%, var(--surface)); }
+.workbench-guide__card[data-current] .workbench-guide__index { background: var(--accent); color: var(--accent-contrast); border-color: transparent; }
 .workbench-guide__card[data-current] .workbench-guide__step-copy > span { color: var(--text); font-weight: var(--font-weight-semibold); }
-.workbench-guide__card[data-state='succeeded']:not([data-current]) .workbench-guide__index { color: var(--success); }
-.workbench-guide__card[data-current][data-state='failed'], .workbench-guide__card[data-current][data-state='needs_attention'] { border-color: var(--warning); box-shadow: inset 0 0 0 1px var(--warning); }
+.workbench-guide__card[data-state='succeeded']:not([data-current]) .workbench-guide__index { color: var(--success); border-color: color-mix(in srgb, var(--success) 42%, var(--border)); }
+.workbench-guide__card[data-current]:is([data-state='failed'], [data-state='needs_attention']) { border-color: var(--warning); }
 .workbench-guide__help { align-self: start; margin: var(--space-1) var(--space-1) 0 0; }
-.workbench-guide__index { flex-shrink: 0; display: grid; place-items: center; width: var(--space-5); height: var(--space-5); border-radius: var(--radius-pill); background: var(--surface-raised); font-size: var(--text-size-micro); font-variant-numeric: tabular-nums; }
+.workbench-guide__index { flex-shrink: 0; display: grid; place-items: center; width: var(--space-6); height: var(--space-6); border: 1px solid var(--border); border-radius: var(--radius-circle); background: var(--surface-raised); color: var(--text-secondary); font-size: var(--text-size-micro); font-weight: var(--font-weight-semibold); font-variant-numeric: tabular-nums; }
 .workbench-guide__step-copy { display: grid; gap: var(--space-1); min-width: 0; }
-.workbench-guide__step-copy strong { font-size: var(--text-size-label); font-weight: var(--font-weight-medium); }
+.workbench-guide__step-copy strong { font-size: var(--text-size-label); font-weight: var(--font-weight-semibold); }
 .workbench-guide__step-copy small, .workbench-guide__step-copy > span { color: var(--text-secondary); font-size: var(--text-size-caption); line-height: var(--line-height-body); overflow-wrap: anywhere; }
 .workbench-guide__step-copy > span { color: var(--text-subtle); font-variant-numeric: tabular-nums; }
+
+.workbench-guide__steps--sequence {
+  gap: var(--space-1) var(--space-2);
+  border: 1px solid var(--border-subtle);
+}
+.workbench-guide__steps--sequence .workbench-guide__card { position: relative; }
+.workbench-guide__steps--sequence .workbench-guide__card:not(:last-child)::after {
+  position: absolute;
+  inset-block-start: 50%;
+  inset-inline-start: calc(100% + var(--space-1));
+  inline-size: var(--space-1);
+  block-size: var(--space-1);
+  border-block-start: 1px solid var(--border);
+  border-inline-end: 1px solid var(--border);
+  content: '';
+  pointer-events: none;
+  translate: -50% -50%;
+  rotate: 45deg;
+}
+.workbench-guide__steps--sequence:dir(rtl) .workbench-guide__card::after { translate: 50% -50%; rotate: -45deg; }
+.workbench-guide__steps--sequence .workbench-guide__step { padding-block: var(--space-1); }
+.workbench-guide__steps--sequence .workbench-guide__step-copy { gap: 0; }
+.workbench-guide__steps--sequence .workbench-guide__step-copy strong { line-height: var(--line-height-title); }
+.workbench-guide__steps--sequence .workbench-guide__step-copy > span { line-height: var(--line-height-compact); }
+
+@media (pointer: coarse) {
+  .workbench-guide__step { min-block-size: max(44px, var(--control-hit-size)); }
+}
 @media (max-width: 750px) {
-  .workbench-guide { padding-inline: var(--space-3); }
+  .workbench-guide, .workbench-production { padding-inline: var(--space-3); }
   .workbench-guide .button { min-height: 44px; }
   .workbench-guide__steps li { flex-basis: 168px; }
   .workbench-guide__steps--stages { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .workbench-guide__steps--stages .workbench-guide__step { padding-inline: var(--space-2); gap: var(--space-1); }
+  .workbench-guide__steps--stages .workbench-guide__step { padding-inline: var(--space-2); gap: var(--space-2); }
   .workbench-guide__steps--stages .workbench-guide__help { margin-inline-end: 0; }
+  .workbench-guide__steps--sequence .workbench-guide__card:nth-child(even)::after { content: none; }
 }

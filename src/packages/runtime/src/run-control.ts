@@ -21,7 +21,7 @@ interface RunControlOptions {
   batches: Pick<ReturnType<typeof createExportBatchManager>, 'blocked' | 'dispatch'>;
   modelResponses: ReturnType<typeof createModelResponses>;
   updateRun(runId: string, patch: Partial<RunRecord>): void;
-  schedule(runId: string, resume: boolean): void;
+  schedule(runId: string): void;
   recordEvent(runId: string, type: string, message: string, nodeId?: string): void;
   cancelCosts(runId: string): void;
   hydrateRun(run: RunRecord): RunRecord;
@@ -61,7 +61,7 @@ export function createRunControl({
     const restoreResponse = revalidate ? undefined : modelResponses.prepareRetry(responseId);
     updateRun(runId, { stepRetry: { nodeId, status: 'pending' } });
     try {
-      updateRun(runId, { status: 'queued', error: undefined }); schedule(runId, true);
+      updateRun(runId, { status: 'queued', error: undefined }); schedule(runId);
     } catch (error) {
       if (!isActive(runId)) { restoreResponse?.(); updateRun(runId, { stepRetry: previousRetry }); }
       throw error;
@@ -79,7 +79,7 @@ export function createRunControl({
     if (batches.blocked(value.projectId)) throw new Error('请先继续或取消当前批量导出，再恢复其他运行。');
     if (['succeeded', 'canceled'].includes(value.status)) throw new Error('该运行已经结束，请创建新的运行。');
     if (projectBusy(value.projectId, undefined, runId)) throw new Error('该项目已有其他未完成的运行，请先处理现有任务。');
-    schedule(runId, true); return hydrateRun(run(runId));
+    schedule(runId); return hydrateRun(run(runId));
   }
 
   async function cancel(rawParams: unknown): Promise<RunRecord> {

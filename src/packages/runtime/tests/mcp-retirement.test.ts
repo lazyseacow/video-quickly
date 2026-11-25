@@ -59,7 +59,7 @@ async function fixture(retiredCall = false) {
   const node = workflowNodeSchema.parse({ id: 'custom-agent', kind: 'agent', label: '自定义 Agent', modelId: model.id,
     config: { mcpServerIds: connections.map(connection => connection.id) } });
   const project = projectSchema.parse(await runtime.dispatch('project.update', { projectId: created.id, revision: created.revision, patch: { workflow: {
-    id: 'custom', name: '自定义流程', version: 1, production: { ...created.workflow.production, agentMcpServerIds: connections.map(connection => connection.id) }, nodes: [node], edges: [],
+    id: 'custom', name: '自定义流程', version: 1, production: created.workflow.production, nodes: [node], edges: [],
   } } }));
   const database = openDatabase(directory);
   try { const store = new DocumentStore(database); for (const connection of connections) store.put('mcp-server', connection.id, connection); }

@@ -13,13 +13,14 @@ const terminal = ['succeeded', 'failed', 'canceled'];
 async function capture(canvas) {
   return canvas.evaluateHandle((element, points) => {
     const state = { active: true, request: 0, samples: [], start: performance.now() };
+    const playhead = element.closest('.preview-player')?.querySelector('input[data-guide="preview-seek"]');
     const sample = () => {
       if (!state.active) return;
       const style = getComputedStyle(element), bounds = element.getBoundingClientRect(), parent = element.closest('.scene-preview');
       const audio = document.querySelector('.preview-panel audio[data-audio-role="处理后混音"]'), status = parent?.querySelector('[role="status"]'), statusBounds = status?.getBoundingClientRect(), statusStyle = status && getComputedStyle(status);
       const alpha = statusStyle?.backgroundColor.match(/rgba\([^,]+,[^,]+,[^,]+,\s*([\d.]+)\)/)?.[1];
       const occluded = Boolean(statusBounds && statusBounds.width >= bounds.width * .95 && statusBounds.height >= bounds.height * .95 && statusStyle?.backgroundColor !== 'transparent' && Number(alpha ?? 1) * Number(statusStyle?.opacity ?? 1) >= .95);
-      state.samples.push({ wallMs: performance.now() - state.start, frame: Number(element.dataset.renderedFrame ?? -1), uiMs: Number(document.querySelector('[role="slider"][aria-label="预览播放位置"]')?.getAttribute('aria-valuenow')), audioMs: (audio?.currentTime ?? 0) * 1000, audioPaused: audio?.paused ?? true, visible: style.visibility !== 'hidden' && style.display !== 'none' && bounds.width > 0 && !occluded, busy: parent?.getAttribute('aria-busy') === 'true', status: status?.textContent ?? '', pixels: points.map(({ x, y }) => [...element.getContext('2d').getImageData(x, y, 1, 1).data].slice(0, 3)) });
+      state.samples.push({ wallMs: performance.now() - state.start, frame: Number(element.dataset.renderedFrame ?? -1), uiMs: Number(playhead?.dataset.playheadMs), audioMs: (audio?.currentTime ?? 0) * 1000, audioPaused: audio?.paused ?? true, visible: style.visibility !== 'hidden' && style.display !== 'none' && bounds.width > 0 && !occluded, busy: parent?.getAttribute('aria-busy') === 'true', status: status?.textContent ?? '', pixels: points.map(({ x, y }) => [...element.getContext('2d').getImageData(x, y, 1, 1).data].slice(0, 3)) });
       state.request = requestAnimationFrame(sample);
     };
     state.request = requestAnimationFrame(sample); return state;
@@ -60,7 +61,13 @@ export async function verifyNativeTransitionLoading({ page, rpc, openProject, fi
     await execute(ffmpegPath, ['-hide_banner', '-loglevel', 'error', '-y', '-f', 'lavfi', '-i', 'color=s=320x180:r=30:d=2.5', '-f', 'lavfi', '-i', 'testsrc2=s=64x64:r=30:d=2.5', '-f', 'lavfi', '-i', `sine=frequency=${index ? 660 : 330}:sample_rate=48000:duration=2.5`, '-filter_complex', `[0:v]${changes}[base];[base][1:v]overlay=x='mod(t*80,256)':y=58[v]`, '-map', '[v]', '-map', '2:a', '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '12', '-g', '60', '-keyint_min', '60', '-sc_threshold', '0', '-bf', '2', '-pix_fmt', 'yuv420p', '-c:a', 'aac', '-b:a', '96k', '-movflags', '+faststart', path], { windowsHide: true, env: environment });
   }
   let completed = false;
-  const seek = async frame => { const ruler = page.getByRole('slider', { name: '预览播放位置', exact: true }); await ruler.press('Home'); for (let i = 0; i < Math.floor(frame / 10); i++) await ruler.press('Shift+ArrowRight'); for (let i = 0; i < frame % 10; i++) await ruler.press('ArrowRight'); await expect(ruler).toHaveAttribute('aria-valuenow', String(Math.round(frame * 1000 / 30))); };
+  const playhead = page.getByRole('slider', { name: '播放器播放位置', exact: true });
+  const seek = async frame => {
+    await playhead.press('Home');
+    for (let i = 0; i < Math.floor(frame / 10); i++) await playhead.press('Shift+ArrowRight');
+    for (let i = 0; i < frame % 10; i++) await playhead.press('ArrowRight');
+    await expect(playhead).toHaveAttribute('data-playhead-ms', String(Math.round(frame * 1000 / 30)));
+  };
   try {
     for (const scenario of ['fade', 'wipe', 'pause']) {
       let project = await rpc('project.create', { title: `原生冷加载 ${scenario} ${randomUUID().slice(0, 6)}`, originalText: '第一场 灯光舞台 日\n灯光从第一处舞台转向第二处，画面在两段场景之间连续过渡。', profile: { width: 320, height: 180, frameRate: { numerator: 30, denominator: 1 }, previewScale: 1 } });
@@ -95,8 +102,8 @@ export async function verifyNativeTransitionLoading({ page, rpc, openProject, fi
         }
         if (scenario === 'pause') {
           if (!record.protocolGateSupported) await expect.poll(() => handle.evaluate(state => state.samples.at(-1)?.uiMs ?? 0)).toBeGreaterThanOrEqual(300);
-          await page.getByRole('button', { name: '暂停预览', exact: true }).click(); const ruler = page.getByRole('slider', { name: '预览播放位置', exact: true }), pausedMs = await ruler.getAttribute('aria-valuenow'); gate.release();
-          await page.waitForTimeout(800); await expect(page.getByRole('button', { name: '播放预览', exact: true })).toBeVisible(); await expect(ruler).toHaveAttribute('aria-valuenow', pausedMs); assert.equal((await handle.evaluate(state => state.samples.at(-1))).audioPaused, true);
+          await page.getByRole('button', { name: '暂停预览', exact: true }).click(); const pausedMs = await playhead.getAttribute('data-playhead-ms'); gate.release();
+          await page.waitForTimeout(800); await expect(page.getByRole('button', { name: '播放预览', exact: true })).toBeVisible(); await expect(playhead).toHaveAttribute('data-playhead-ms', pausedMs); assert.equal((await handle.evaluate(state => state.samples.at(-1))).audioPaused, true);
           record.pausePreserved = true; if (record.protocolGateSupported) checks.nativeBufferedPause = true; else checks.nativeColdPauseNoResume = true;
           record.samples = await stopCapture(handle); handle = undefined;
         } else {

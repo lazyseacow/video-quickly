@@ -3,10 +3,11 @@ import { createHash } from 'node:crypto';
 import { mkdtemp, readdir, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
+import { SqliteSaver } from '@langchain/langgraph-checkpoint-sqlite';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { INITIAL_SCHEMA, openDatabase, DocumentStore, WORKSPACE_MIGRATIONS, thumbnailShot } from '../src/database.js';
 import { DatabaseMigrationError, migrateDatabase } from '../src/migrations.js';
-import { costSummarySchema, costTaskDetailSchema, costTaskSchema, createNativeVideoWorkflow, DEFAULT_CAPTION_STYLE, DEFAULT_VIDEO_PROFILE, projectDetailSchema, projectSchema, projectSummarySchema, recordPageSchema, usageRecordSchema } from '@video-quickly/contracts';
+import { costSummarySchema, costTaskDetailSchema, costTaskSchema, createNativeVideoWorkflow, DEFAULT_CAPTION_STYLE, DEFAULT_VIDEO_PROFILE, projectDetailSchema, projectSchema, projectSummarySchema, recordPageSchema, runSchema, usageRecordSchema } from '@video-quickly/contracts';
 import { createCostLedger } from '../src/costs.js';
 import { createReadModels } from '../src/read-models.js';
 
@@ -16,6 +17,105 @@ afterEach(async () => { for (const directory of directories.splice(0)) await rm(
 async function directory() { const path = await mkdtemp(join(tmpdir(), 'vq-migration-')); directories.push(path); return path; }
 
 describe('workspace database upgrades', () => {
+  it('removes retired video editing runs during the v30 upgrade and preserves ordinary runs and project data', async () => {
+    const path = await directory();
+    const previous = new Database(join(path, 'workspace.sqlite'));
+    const time = '2026-11-01T00:00:00Z';
+    const retiredId = 'retired-editing';
+    const asset = { id: `${retiredId}:asset`, name: '镜头素材', projectId: 'project', kind: 'image', path: '/fixture/image.png', mimeType: 'image/png', size: 1, sha256: 'fixture', version: 1, createdAt: time, provenance: 'fixture', retained: false, active: true };
+    const workflow = createNativeVideoWorkflow();
+    const project = projectSchema.parse({ id: 'project', title: '已有分镜', brief: '', revision: 1, profile: DEFAULT_VIDEO_PROFILE, workflow,
+      shots: [{ id: 'shot', title: '镜头', narration: '', visualPrompt: '', durationUs: 2_000_000, assetId: asset.id }], createdAt: time, updatedAt: time });
+    const charge = usageRecordSchema.parse({ id: `${retiredId}:charge`, operationId: `${retiredId}:charge`, revision: 1, runId: retiredId, projectId: project.id,
+      nodeId: 'animation', modelId: 'fixture', modelName: 'Fixture', provider: 'openai-compatible', model: 'fixture', capability: 'text',
+      requestMetrics: { source: 'request' }, status: 'completed', actualAmount: 1, actualCurrency: 'USD', createdAt: time, updatedAt: time });
+    const frozen = { project, handlerVersion: 3, models: [], skills: [] };
+    const syntheticNode = { id: 'video-agent', kind: 'agent', config: { videoAgent: true } };
+    const legacyProject = { ...project, workflow: { ...workflow, production: { ...workflow.production, executionMode: 'agent' } } };
+    const legacySynthetic = { ...frozen, project: legacyProject, nodes: [syntheticNode] };
+    const retiredSnapshots = {
+      [retiredId]: { ...frozen, nodes: workflow.nodes, videoEditingAgentId: 'animation' },
+      'retired-autonomous': { ...legacySynthetic, autonomousVideo: true },
+      'retired-synthetic': legacySynthetic,
+    };
+    const retainedSnapshots = {
+      'retired-editing-other': { ...legacySynthetic, autonomousVideo: false },
+      'authored-agent': { ...legacySynthetic, project: { ...legacyProject, workflow: { ...legacyProject.workflow, nodes: [syntheticNode] } } },
+      'selected-agent': { ...legacySynthetic, selection: { nodeId: syntheticNode.id, mode: 'node' } },
+      'unflagged-agent': { ...frozen, nodes: [syntheticNode] },
+      'normal-production': { ...frozen, nodes: workflow.nodes },
+    };
+    const documents = Object.entries({ ...retiredSnapshots, ...retainedSnapshots }).flatMap(([id, snapshot]) => {
+      const run = runSchema.parse({ id, projectId: project.id, projectRevision: project.revision, workflowVersion: workflow.version,
+        status: 'queued', snapshotDigest: 'fixture', stepCount: snapshot.nodes.length, createdAt: time, updatedAt: time });
+      const step = { nodeId: 'animation', status: 'completed' };
+      const entries = [
+        ['run', id, run], ['run-snapshot', id, snapshot], ['run-project', id, project], ['run-application', id, step], ['run-history-deletion', id, step],
+        ['node-definition', `${id}:animation`, step], ['node-result', `${id}:animation`, step], ['node-project', `${id}:animation`, project],
+        ['node-inspection-input', `${id}:animation`, step],
+        ['model-response-head', `${id}:animation`, step], ['model-response', `${id}:animation:1`, step], ['agent-continuation', `${id}:animation`, step],
+      ] as const;
+      return entries.map(([kind, key, body]) => ({ runId: id, kind, key, body }));
+    });
+
+    try {
+      previous.function('vq_thumbnail', { deterministic: true }, body => JSON.stringify(thumbnailShot(JSON.parse(String(body)))));
+      previous.function('vq_upgrade_legacy_project', { deterministic: true }, body => String(body));
+      migrateDatabase(previous, path, WORKSPACE_MIGRATIONS.filter(migration => migration.version <= 29));
+      const store = new DocumentStore(previous);
+      store.put('project', project.id, project);
+      store.put('asset', asset.id, asset);
+      store.put('usage-record', charge.id, charge);
+      for (const { kind, key, body } of documents) store.put(kind, key, body);
+      const activity = previous.prepare("INSERT INTO activities(run_id, activity_id, input_hash, safety, status, started_at) VALUES (?, 'animation', 'fixture', 'local', 'completed', ?)");
+      const saver = new SqliteSaver(previous);
+      for (const id of Object.keys({ ...retiredSnapshots, ...retainedSnapshots })) {
+        activity.run(id, time);
+        store.event(id, 'step.completed', { nodeId: 'animation' });
+        for (const threadId of [id, `${id}:animation:agent`]) {
+          const checkpoint = await saver.put({ configurable: { thread_id: threadId, checkpoint_ns: '' } },
+            { v: 4, id: 'checkpoint', ts: time, channel_values: { messages: [] }, channel_versions: { messages: 1 }, versions_seen: {} },
+            { source: 'loop', step: 1, parents: {} });
+          await saver.putWrites(checkpoint, [['messages', []]], 'fixture-task');
+        }
+      }
+    } finally { previous.close(); }
+
+    const database = openDatabase(path);
+    try {
+      const store = new DocumentStore(database);
+      const retainedIds = Object.keys(retainedSnapshots).sort();
+      expect(database.pragma('user_version', { simple: true })).toBe(30);
+      for (const { runId, kind, key, body } of documents) {
+        const value = store.get(kind, key);
+        if (retainedIds.includes(runId)) expect(value).toEqual(body);
+        else expect(value).toBeUndefined();
+      }
+      for (const table of ['activities', 'execution_events']) {
+        expect(database.prepare(`SELECT run_id FROM ${table} ORDER BY run_id`).pluck().all()).toEqual(retainedIds);
+      }
+      for (const table of ['checkpoints', 'writes']) {
+        expect(database.prepare(`SELECT thread_id FROM ${table} ORDER BY thread_id`).pluck().all())
+          .toEqual(retainedIds.flatMap(id => [id, `${id}:animation:agent`]).sort());
+      }
+      expect(store.get('project', project.id)).toEqual(project);
+      expect(store.get('asset', asset.id)).toEqual(asset);
+      expect(database.prepare('SELECT asset_id FROM project_asset_references WHERE project_id = ?').pluck().all(project.id)).toEqual([asset.id]);
+      expect(store.get('usage-record', charge.id)).toEqual(charge);
+      const ledger = createCostLedger({ database, store });
+      expect(costSummarySchema.parse(ledger.dispatch('cost.summary', {}))).toMatchObject({ total: 1, currencies: [{ currency: 'USD', actualAmount: 1 }] });
+    } finally { database.close(); }
+
+    const backups = await readdir(join(path, 'database-backups'));
+    expect(backups).toHaveLength(1);
+    expect(backups[0]).toMatch(/^workspace-v29-to-v30-/);
+    const backup = new Database(join(path, 'database-backups', backups[0]), { readonly: true });
+    try {
+      expect(backup.pragma('user_version', { simple: true })).toBe(29);
+      expect(new DocumentStore(backup).get('run-snapshot', retiredId)).toEqual(retiredSnapshots[retiredId]);
+    } finally { backup.close(); }
+  });
+
   it('removes media concurrency from editable projects and retains frozen execution snapshots', async () => {
     const path = await directory(), previous = new Database(join(path, 'workspace.sqlite'));
     previous.function('vq_thumbnail', { deterministic: true }, body => JSON.stringify(thumbnailShot(JSON.parse(String(body)))));
@@ -317,7 +417,7 @@ describe('workspace database upgrades', () => {
   it('creates a versioned database and does not back up on every reopen', async () => {
     const path = await directory(); const db = openDatabase(path);
     expect(db.pragma('user_version', { simple: true })).toBe(currentVersion);
-    expect(db.prepare('SELECT name FROM schema_migrations ORDER BY version').all()).toEqual([{ name: 'workspace-baseline' }, { name: 'execution-event-index' }, { name: 'workspace-read-models' }, { name: 'audio-asset-references' }, { name: 'project-summary-caption-style' }, { name: 'clip-edit-references-and-first-frame' }, { name: 'workflow-composition-and-keyframe-capabilities' }, { name: 'active-project-runs-index' }, { name: 'workflow-layout' }, { name: 'native-video-production' }, { name: 'production-reference-audio' }, { name: 'project-creative-context' }, { name: 'prompt-workbench' }, { name: 'work-episodes-production-queue' }, { name: 'creative-reference-images-and-media-derivations' }, { name: 'single-step-retry-checkpoints' }, { name: 'script-response-receipts' }, { name: 'text-request-rejection-receipts' }, { name: 'media-request-rejection-receipts' }, { name: 'legacy-project-production-workflows' }, { name: 'asset-read-indexes' }, { name: 'manual-planning-inputs' }, { name: 'structured-planning-prefill' }, { name: 'cost-and-run-read-indexes' }, { name: 'incremental-cost-overview' }, { name: 'exact-cost-overview-deltas' }, { name: 'project-original-text' }, { name: 'fixed-media-scheduling' }, { name: 'drama-structure-and-casting' }]);
+    expect(db.prepare('SELECT name FROM schema_migrations ORDER BY version').all()).toEqual([{ name: 'workspace-baseline' }, { name: 'execution-event-index' }, { name: 'workspace-read-models' }, { name: 'audio-asset-references' }, { name: 'project-summary-caption-style' }, { name: 'clip-edit-references-and-first-frame' }, { name: 'workflow-composition-and-keyframe-capabilities' }, { name: 'active-project-runs-index' }, { name: 'workflow-layout' }, { name: 'native-video-production' }, { name: 'production-reference-audio' }, { name: 'project-creative-context' }, { name: 'prompt-workbench' }, { name: 'work-episodes-production-queue' }, { name: 'creative-reference-images-and-media-derivations' }, { name: 'single-step-retry-checkpoints' }, { name: 'script-response-receipts' }, { name: 'text-request-rejection-receipts' }, { name: 'media-request-rejection-receipts' }, { name: 'legacy-project-production-workflows' }, { name: 'asset-read-indexes' }, { name: 'manual-planning-inputs' }, { name: 'structured-planning-prefill' }, { name: 'cost-and-run-read-indexes' }, { name: 'incremental-cost-overview' }, { name: 'exact-cost-overview-deltas' }, { name: 'project-original-text' }, { name: 'fixed-media-scheduling' }, { name: 'drama-structure-and-casting' }, { name: 'retire-video-editing-agent-runs' }]);
     db.close(); openDatabase(path).close();
     expect(await readdir(path)).not.toContain('database-backups');
   });

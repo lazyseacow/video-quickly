@@ -21,8 +21,6 @@ export interface RunSnapshot {
   models: ModelProfile[];
   skills: SkillPackage[];
   automaticSkillIds?: string[];
-  autonomousVideo?: boolean;
-  videoEditingAgentId?: string;
   // Historical connection metadata is readable but never executed.
   mcpServers?: MCPServer[];
   nodes: WorkflowNode[];

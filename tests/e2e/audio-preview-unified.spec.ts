@@ -1,3 +1,4 @@
+import { clickShotAction } from './storyboard-actions';
 import { openProjectFromList } from './workspace-navigation';
 import { writeFile } from 'node:fs/promises';
 import { expect, test, type APIRequestContext, type Page, type TestInfo } from '@playwright/test';
@@ -20,7 +21,7 @@ async function fixture(request: APIRequestContext, info: TestInfo, title: string
 }
 async function open(page: Page, project: ProjectDocument) { await page.goto('/'); await expect(page).toHaveTitle(/Video Quickly/); await openProjectFromList(page, project.title); await expect(page.getByLabel('镜头标题', { exact: true })).toHaveValue('完整旧旁白'); }
 async function ready(page: Page) { const preview = page.locator('.preview-panel .prepared-mix-preview'); await expect(preview).toHaveAttribute('data-status', 'ready', { timeout: 20000 }); await expect(preview.locator('.audio-level-meter')).toHaveCount(0); await expect(page.getByRole('button', { name: '播放预览', exact: true })).toBeEnabled(); return preview; }
-async function seek(page: Page, frames: number) { const ruler = page.getByRole('slider', { name: '预览播放位置', exact: true }); await ruler.press('Home'); for (let index = 0; index < Math.floor(frames / 10); index++) await ruler.press('Shift+ArrowRight'); for (let index = 0; index < frames % 10; index++) await ruler.press('ArrowRight'); await expect(ruler).toHaveAttribute('aria-valuenow', String(Math.round(frames * 1000 / 30))); }
+async function seek(page: Page, frames: number) { const ruler = page.getByRole('slider', { name: '播放器播放位置', exact: true }); await ruler.press('Home'); for (let index = 0; index < Math.floor(frames / 10); index++) await ruler.press('Shift+ArrowRight'); for (let index = 0; index < frames % 10; index++) await ruler.press('ArrowRight'); await expect(ruler).toHaveAttribute('data-playhead-ms', String(Math.round(frames * 1000 / 30))); }
 
 test('uses complete legacy voice timing for the main mix, following shots and a split beyond the old authored duration', async ({ page, request }, info) => {
   const errors: string[] = []; page.on('pageerror', error => errors.push(error.message));
@@ -30,11 +31,12 @@ test('uses complete legacy voice timing for the main mix, following shots and a 
   expect((await saved(request, project.id)).shots[0].durationUs).toBe(1000000);
   const audio = page.locator('audio[data-audio-role="处理后混音"]'); await expect(audio).toHaveCount(1);
   expect(await audio.evaluate((element: HTMLAudioElement) => new URL(element.src).searchParams.get('path'))).not.toBe(asset.path);
-  await page.getByRole('button', { name: '定位镜头 2：后续镜头', exact: true }).click();
-  await expect(page.getByRole('slider', { name: '预览播放位置', exact: true })).toHaveAttribute('aria-valuenow', '3000');
+  const storyboard = page.getByRole('region', { name: '镜头列表', exact: true });
+  await storyboard.getByRole('button', { name: /后续镜头/ }).click();
+  await expect(page.getByRole('slider', { name: '播放器播放位置', exact: true })).toHaveAttribute('data-playhead-ms', '3000');
   await expect.poll(() => audio.evaluate((element: HTMLAudioElement) => element.currentTime)).toBeCloseTo(3, 2);
-  await page.getByRole('button', { name: '定位镜头 1：完整旧旁白', exact: true }).click(); await seek(page, 60);
-  await page.getByRole('button', { name: '在播放头处分割镜头', exact: true }).click();
+  await storyboard.getByRole('button', { name: /完整旧旁白/ }).click(); await seek(page, 60);
+  await clickShotAction(page, '在播放头处分割镜头');
   await expect.poll(async () => (await saved(request, project.id)).shots.length).toBe(3);
   const split = await saved(request, project.id); expect(split.shots.map(shot => shot.durationUs)).toEqual([2000000, 1000000, 1000000]); expect(split.shots[1].sourceInUs).toBe(2000000); expect(split.shots[1].audioAssetId).toBe(asset.id);
   await ready(page); await seek(page, 80); await expect.poll(() => audio.evaluate((element: HTMLAudioElement) => element.currentTime)).toBeCloseTo(80 / 30, 2);

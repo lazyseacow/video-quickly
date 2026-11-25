@@ -1,3 +1,4 @@
+import { clickShotAction } from './storyboard-actions';
 import { openProjectFromList } from './workspace-navigation';
 import { expect, test } from '@playwright/test';
 import type { ProjectDocument } from '@video-quickly/contracts';
@@ -16,7 +17,7 @@ for (const operation of ['split', 'trim', 'reorder'] as const) test(`${operation
   });
   await page.goto('/');
   await openProjectFromList(page, project.title);
-  const ruler = page.getByRole('slider', { name: '预览播放位置', exact: true });
+  const ruler = page.getByRole('slider', { name: '播放器播放位置', exact: true });
   await ruler.press('Home');
   for (let index = 0; index < 3; index++) await ruler.press('Shift+ArrowRight');
   await page.getByLabel('镜头标题', { exact: true }).fill('分割前的标题');
@@ -36,16 +37,9 @@ for (const operation of ['split', 'trim', 'reorder'] as const) test(`${operation
     }
     await route.continue();
   });
-  if (operation === 'split') await page.getByRole('button', { name: '在播放头处分割镜头', exact: true }).click();
+  if (operation === 'split') await clickShotAction(page, '在播放头处分割镜头');
   else if (operation === 'trim') await page.getByRole('button', { name: '应用入出点', exact: true }).click();
-  else {
-    const clip = await page.locator('.timeline-clip--video .timeline-clip__select').first().boundingBox();
-    const track = await page.locator('.track--video .track-clips').boundingBox();
-    if (!clip || !track) throw new Error('重排目标不可见');
-    const x = clip.x + clip.width / 2, y = clip.y + clip.height / 2;
-    await page.mouse.move(x, y); await page.mouse.down();
-    await page.mouse.move(x + track.width / 2, y, { steps: 8 }); await page.mouse.up();
-  }
+  else await clickShotAction(page, '向后移动');
   await pendingSave;
   await page.getByLabel('镜头标题', { exact: true }).fill('保存期间的新标题');
   releaseSave();

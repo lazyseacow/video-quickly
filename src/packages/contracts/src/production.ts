@@ -12,10 +12,6 @@ const textModelTasks = new Set<WorkflowNode['kind']>(['brief', 'style', 'script'
 export const productionSettingsSchema = z.object({
   mode: z.literal('native-video'),
   novelAdaptation: z.literal(true).optional(),
-  // Retained for historical projects and frozen runs; new built-in runs do not consume these bindings.
-  agentSkillIds: z.array(z.string().min(1)).default([]),
-  agentInheritsPlanningSkills: z.boolean().optional(),
-  agentMcpServerIds: z.array(z.string().min(1)).default([]),
   manualPlanningSteps: z.array(z.enum(productionPlanningSteps)).max(3).refine(steps => new Set(steps).size === steps.length, '策划步骤不能重复。').optional(),
   manualPlanningFields: manualPlanningFieldsSchema.optional(),
   clearedPlanningOutputs: z.object({ brief: z.string().min(1).optional(), style: z.string().min(1).optional() }).optional(),

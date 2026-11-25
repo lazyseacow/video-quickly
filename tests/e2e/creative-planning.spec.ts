@@ -438,7 +438,7 @@ test('edits one structured dialogue line in the current workbench project and un
     } });
     await page.goto('/');
     await openProjectFromList(page, original.title);
-    await page.getByRole('button', { name: '修改镜头', exact: true }).click();
+    await page.getByRole('button', { name: '修改文案', exact: true }).click();
     const dialog = page.getByRole('dialog', { name: '修改镜头', exact: true });
     await dialog.getByRole('combobox', { name: '目标镜头' }).selectOption('porch');
     await dialog.getByRole('checkbox', { name: '单句台词' }).check();

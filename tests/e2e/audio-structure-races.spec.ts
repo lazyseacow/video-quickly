@@ -1,3 +1,4 @@
+import { clickShotAction } from './storyboard-actions';
 import { openProjectFromList } from './workspace-navigation';
 import { writeFile } from 'node:fs/promises';
 import { expect, type APIRequestContext, type Page, type TestInfo } from '@playwright/test';
@@ -40,18 +41,18 @@ async function ready(page: Page) {
   await expect(page.getByRole('button', { name: '播放预览', exact: true })).toBeEnabled();
 }
 async function seek(page: Page, frames: number) {
-  const ruler = page.getByRole('slider', { name: '预览播放位置', exact: true }); await ruler.press('Home');
+  const ruler = page.getByRole('slider', { name: '播放器播放位置', exact: true }); await ruler.press('Home');
   for (let index = 0; index < Math.floor(frames / 10); index++) await ruler.press('Shift+ArrowRight');
   for (let index = 0; index < frames % 10; index++) await ruler.press('ArrowRight');
-  await expect(ruler).toHaveAttribute('aria-valuenow', String(Math.round(frames * 1000 / 30)));
+  await expect(ruler).toHaveAttribute('data-playhead-ms', String(Math.round(frames * 1000 / 30)));
 }
 async function selectB(page: Page) {
-  await page.getByRole('button', { name: '定位镜头 2：目标镜头 B', exact: true }).click();
+  await page.getByRole('region', { name: '镜头列表', exact: true }).getByRole('button', { name: /目标镜头 B/ }).click();
   await expect(page.getByLabel('镜头标题', { exact: true })).toHaveValue('目标镜头 B');
-  await expect(page.getByRole('slider', { name: '预览播放位置', exact: true })).toHaveAttribute('aria-valuenow', '3000');
+  await expect(page.getByRole('slider', { name: '播放器播放位置', exact: true })).toHaveAttribute('data-playhead-ms', '3000');
 }
 async function expectClock(page: Page, milliseconds: number) {
-  await expect(page.getByRole('slider', { name: '预览播放位置', exact: true })).toHaveAttribute('aria-valuenow', String(milliseconds));
+  await expect(page.getByRole('slider', { name: '播放器播放位置', exact: true })).toHaveAttribute('data-playhead-ms', String(milliseconds));
   await expect.poll(() => page.locator('.preview-panel audio[data-audio-role="处理后混音"]').evaluate((audio: HTMLAudioElement) => audio.currentTime)).toBeCloseTo(milliseconds / 1000, 2);
 }
 async function gateFirstSave(page: Page) {
@@ -68,7 +69,7 @@ async function healthy(page: Page, errors: string[]) { expect(errors).toEqual([]
 
 test('splits a following shot at its real mixed prefix without persisting an unrelated legacy duration', async ({ page, request }, info) => {
   const errors = observe(page), { project } = await fixture(request, info, '真实旁白前缀后的分割定位验收'); await open(page, project); await selectB(page); await seek(page, 105);
-  await page.getByRole('button', { name: '在播放头处分割镜头', exact: true }).click();
+  await clickShotAction(page, '在播放头处分割镜头');
   await expect.poll(async () => (await saved(request, project.id)).shots.length).toBe(3); const result = await saved(request, project.id);
   expect(result.shots.map(shot => shot.durationUs)).toEqual([1_000_000, 500_000, 500_000]);
   expect(result.shots[0].sourceInUs).toBeUndefined(); expect(result.shots[2].sourceInUs).toBe(500_000);
@@ -79,7 +80,7 @@ test('rejects a split if its target is locked while the preceding save is pendin
   const errors = observe(page), { project } = await fixture(request, info, '分割等待保存期间锁定保护验收'); await open(page, project); await selectB(page); await seek(page, 105);
   await page.getByLabel('镜头标题', { exact: true }).fill('开始分割前的标题'); const gate = await gateFirstSave(page);
   try {
-    await page.getByRole('button', { name: '在播放头处分割镜头', exact: true }).click(); await gate.started;
+    await clickShotAction(page, '在播放头处分割镜头'); await gate.started;
     await page.getByRole('button', { name: '锁定镜头', exact: true }).click(); await expect(page.getByRole('button', { name: '解锁镜头', exact: true })).toBeVisible(); gate.release();
     await expect(page.getByRole('alert').filter({ hasText: /锁定|时间|素材|变化|修改/ })).toBeVisible();
     await expect(page.locator('#project-outline .outline-shot')).toHaveCount(2); await expect(page.locator('.project-heading-copy')).toContainText('未保存');
@@ -99,9 +100,9 @@ test('locates an added shot after the complete legacy voice without changing the
 
 test('locates a duplicated selected group using the real prefix while retaining legacy authored durations', async ({ page, request }, info) => {
   const errors = observe(page), { project } = await fixture(request, info, '长旁白后的多选复制定位验收', true); await open(page, project); await selectB(page);
-  await page.getByRole('button', { name: '定位镜头 3：后续镜头 C', exact: true }).click({ modifiers: [process.platform === 'darwin' ? 'Meta' : 'Control'] });
+  await page.getByRole('region', { name: '镜头列表', exact: true }).getByRole('button', { name: /后续镜头 C/ }).click({ modifiers: [process.platform === 'darwin' ? 'Meta' : 'Control'] });
   await expect(page.locator('#project-outline .outline-selection > span')).toHaveText('已选 2');
-  await page.getByRole('region', { name: '项目时间轴', exact: true }).getByRole('button', { name: '复制镜头', exact: true }).click();
+  await clickShotAction(page, '复制镜头');
   await expect.poll(async () => (await saved(request, project.id)).shots.length).toBe(5); const result = await saved(request, project.id);
   expect(result.shots.map(shot => shot.title)).toEqual(['前置完整旁白 A', '目标镜头 B', '目标镜头 B · 副本', '后续镜头 C', '后续镜头 C · 副本']);
   expect(result.shots[0].durationUs).toBe(1_000_000); expect(result.shots[0].sourceInUs).toBeUndefined();
@@ -112,7 +113,7 @@ test('rejects a split after a new duration is entered during the preceding save 
   const errors = observe(page), { project } = await fixture(request, info, '分割等待保存期间新时长保护验收'); await open(page, project); await selectB(page); await seek(page, 105);
   await page.getByLabel('镜头标题', { exact: true }).fill('分割前时长基线'); const gate = await gateFirstSave(page);
   try {
-    await page.getByRole('button', { name: '在播放头处分割镜头', exact: true }).click(); await gate.started;
+    await clickShotAction(page, '在播放头处分割镜头'); await gate.started;
     await page.getByLabel('时长（秒）', { exact: true }).fill('2'); gate.release();
     await expect(page.getByRole('alert').filter({ hasText: /时间|时长|素材|变化|修改/ })).toBeVisible();
     await expect(page.locator('#project-outline .outline-shot')).toHaveCount(2); await expect(page.getByLabel('时长（秒）', { exact: true })).toHaveValue('2'); await expect(page.locator('.project-heading-copy')).toContainText('未保存');
@@ -126,7 +127,7 @@ test('rejects a split when another view replaces audio during the preceding save
   const errors = observe(page), { project, asset } = await fixture(request, info, '分割等待保存期间新配音保护验收'); await open(page, project); await selectB(page); await seek(page, 105);
   await page.getByLabel('镜头标题', { exact: true }).fill('分割前媒体基线'); const gate = await gateFirstSave(page);
   try {
-    await page.getByRole('button', { name: '在播放头处分割镜头', exact: true }).click(); await gate.started;
+    await clickShotAction(page, '在播放头处分割镜头'); await gate.started;
     // A second view imports new audio while this page's save is still pending.
     const imported = await rpc<AssetRecord>(request, 'asset.import', { projectId: project.id, shotId: 'target-b', path: asset.path, kind: 'audio' });
     const replacement = await saved(request, project.id);

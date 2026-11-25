@@ -28,7 +28,7 @@ for (const viewport of [{ width: 1536, height: 960, theme: 'dark', shotCount: 3 
       await results.locator('video').evaluate(async (video: HTMLVideoElement) => { video.muted = true; await video.play(); video.pause(); });
       await page.screenshot({ path: info.outputPath('shot-card-regeneration.png') });
       await results.getByRole('button', { name: /^重新生成镜头/ }).nth(selectedIndex).click();
-      const dialog = page.getByRole('dialog', { name: '镜头候选', exact: true });
+      const dialog = page.getByRole('dialog', { name: '重新生成镜头', exact: true });
       await expect(dialog).toBeVisible(); await expect(results).toHaveCount(0);
       await expect(dialog).toContainText('只重新生成此镜头的视频'); await expect(dialog).toContainText('其他镜头保留');
       await expect(dialog.getByLabel('生成内容', { exact: true })).toHaveCount(0); await expect(dialog.getByLabel('生成模型', { exact: true })).toHaveCount(0);

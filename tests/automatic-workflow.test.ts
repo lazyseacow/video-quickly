@@ -73,24 +73,16 @@ it('automatically chains all seven tasks, forwards generated text and media, and
   expect((await runtime.dispatch('run.get', { runId: run.id }) as { events?: { type: string }[] }).events?.some(event => event.type === 'review.waiting')).not.toBe(true);
 });
 
-it.each(['historical MCP', 'historical bindings and Skill', 'planning Skill'] as const)('keeps new production, previews and restarts on local editing with %s', async capability => {
+it('keeps production, previews and restarts on local editing with planning Skills', async () => {
   const { runtime, directory, project: original, provider, media } = await fixture();
   const controller = modelSchema.parse(await runtime.dispatch('model.save', { model: { name: '文本与工具模型', provider: 'openai-compatible',
     baseUrl: 'http://127.0.0.1:1/v1', model: 'fixture', connectionType: 'text', capabilities: ['text', 'tools'] } }));
   const skillDirectory = join(directory, 'creation-skill'); await mkdir(skillDirectory);
   await writeFile(join(skillDirectory, 'SKILL.md'), '---\nname: creation-skill\ndescription: 创作方法\n---\n保持水彩叙事连贯。');
   const skill = (await importSkillFixture(runtime.dispatch, { path: skillDirectory })).skills[0];
-  const connection = { id: 'retired-connection', name: '历史工具', transport: 'http', url: 'http://127.0.0.1:1/mcp', enabled: true, args: [], hasSecret: false };
-  if (capability !== 'planning Skill') {
-    const database = openDatabase(directory);
-    try { new DocumentStore(database).put('mcp-server', connection.id, connection); }
-    finally { database.close(); }
-  }
   const project = projectSchema.parse(await runtime.dispatch('project.update', { projectId: original.id, revision: original.revision, patch: { workflow: {
     ...original.workflow,
-    production: { ...original.workflow.production, textModelId: controller.id,
-      agentSkillIds: capability === 'historical bindings and Skill' ? [skill.id] : [],
-      agentMcpServerIds: capability === 'historical bindings and Skill' ? [connection.id] : [] },
+    production: { ...original.workflow.production, textModelId: controller.id },
     nodes: original.workflow.nodes.map(node => ['brief', 'style', 'script'].includes(node.kind) ? { ...node, skillIds: [skill.id] } : node),
   } } }));
 
@@ -118,7 +110,7 @@ it.each(['historical MCP', 'historical bindings and Skill', 'planning Skill'] as
     const database = openDatabase(directory);
     try {
       const saved = new DocumentStore(database).get('run-snapshot', run.id);
-      expect(saved).not.toHaveProperty('videoEditingAgentId'); expect(saved).not.toHaveProperty('mcpServers');
+      expect(saved).not.toHaveProperty('videoEditingAgentId'); expect(saved).not.toHaveProperty('autonomousVideo'); expect(saved).not.toHaveProperty('mcpServers');
     }
     finally { database.close(); }
   }

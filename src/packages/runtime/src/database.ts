@@ -327,6 +327,52 @@ const COST_OVERVIEW_DELTAS_SCHEMA = `
   END;
 `;
 
+function retireVideoEditingAgentRuns(database: Database.Database) {
+  database.exec(`
+    CREATE TEMP TABLE retired_video_agent_runs (id TEXT PRIMARY KEY) WITHOUT ROWID;
+    INSERT INTO retired_video_agent_runs (id)
+      SELECT snapshot.id FROM documents AS snapshot WHERE snapshot.kind = 'run-snapshot' AND (
+        (json_type(snapshot.body, '$.videoEditingAgentId') = 'text' AND json_extract(snapshot.body, '$.videoEditingAgentId') <> '')
+        OR json_type(snapshot.body, '$.autonomousVideo') = 'true'
+        OR (
+          json_type(snapshot.body, '$.autonomousVideo') IS NULL
+          AND json_extract(snapshot.body, '$.selection') IS NULL
+          AND json_extract(snapshot.body, '$.project.workflow.production.executionMode') = 'agent'
+          AND json_array_length(snapshot.body, '$.nodes') = 1
+          AND json_extract(snapshot.body, '$.nodes[0].id') = 'video-agent'
+          AND json_extract(snapshot.body, '$.nodes[0].kind') = 'agent'
+          AND json_type(snapshot.body, '$.nodes[0].config.videoAgent') = 'true'
+          AND NOT EXISTS (
+            SELECT 1 FROM json_each(snapshot.body, '$.project.workflow.nodes') AS authored
+            WHERE json_extract(authored.value, '$.id') = 'video-agent'
+          )
+        )
+      );
+
+    DELETE FROM activities WHERE run_id IN (SELECT id FROM retired_video_agent_runs);
+    DELETE FROM execution_events WHERE run_id IN (SELECT id FROM retired_video_agent_runs);
+
+    -- Keep projects, generated media, and the usage ledger independent of the retired tasks.
+    DELETE FROM documents WHERE (
+      kind IN ('run', 'run-snapshot', 'run-project', 'run-application', 'run-history-deletion', 'run-video-application')
+      AND id IN (SELECT id FROM retired_video_agent_runs)
+    ) OR (
+      kind IN ('agent-continuation', 'agent-export', 'github-trending-input', 'model-response', 'model-response-head',
+        'model-response-options', 'node-application', 'node-definition', 'node-inspection-input', 'node-project', 'node-result',
+        'run-step-progress', 'storyboard-web-input', 'subflow-input')
+      AND substr(id, 1, instr(id, ':') - 1) IN (SELECT id FROM retired_video_agent_runs)
+    );
+  `);
+
+  // LangGraph's checkpoint tables are created lazily by the first execution.
+  for (const table of ['checkpoints', 'writes']) {
+    if (database.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?").get(table)) {
+      database.exec(`DELETE FROM ${table} WHERE substr(thread_id, 1, instr(thread_id || ':', ':') - 1) IN (SELECT id FROM retired_video_agent_runs);`);
+    }
+  }
+  database.exec('DROP TABLE retired_video_agent_runs;');
+}
+
 export const WORKSPACE_MIGRATIONS: readonly DatabaseMigration[] = [
   { version: 1, name: 'workspace-baseline', sql: INITIAL_SCHEMA },
   { version: 2, name: 'execution-event-index', sql: 'CREATE INDEX execution_events_run_sequence ON execution_events(run_id, sequence);' },
@@ -394,6 +440,7 @@ export const WORKSPACE_MIGRATIONS: readonly DatabaseMigration[] = [
       WHERE kind = 'project' AND json_type(body, '$.drama') = 'object';
     INSERT INTO runtime_metadata(key, value) VALUES ('drama-structure-and-casting', '1');
   ` },
+  { version: 30, name: 'retire-video-editing-agent-runs', apply: retireVideoEditingAgentRuns },
 ];
 
 export function openDatabase(directory: string) {

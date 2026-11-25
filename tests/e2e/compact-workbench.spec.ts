@@ -33,24 +33,27 @@ for (const viewport of [{ width: 1536, height: 960, theme: 'light' }, { width: 1
     expect(cardBounds.x + cardBounds.width).toBeLessThanOrEqual(libraryBounds.x + libraryBounds.width);
     await page.screenshot({ path: info.outputPath(`compact-projects-${viewport.theme}-${viewport.width}.png`) });
     await openProjectFromList(page, project.title);
-    const actionGroup = page.locator('.project-heading-actions');
-    const actionBounds = (await actionGroup.boundingBox())!;
-    for (const name of ['分集剧本', '场次与对白', '导出']) {
-      const button = actionGroup.getByRole('button', { name, exact: true });
-      await expect(button).toBeVisible(); const bounds = await button.boundingBox();
-      expect(bounds, `${name} must have a rendered box`).not.toBeNull();
-      expect(bounds!.x, `${name} left edge`).toBeGreaterThanOrEqual(actionBounds.x);
-      expect(bounds!.x + bounds!.width, `${name} right edge`).toBeLessThanOrEqual(Math.min(viewport.width, actionBounds.x + actionBounds.width) + 1);
+    for (const [group, names] of [
+      ['分集文稿', ['分集剧本', '场次与对白']],
+      ['制作操作', ['制作设置', '制作前检查', '开始制作', '导出']],
+    ] as const) {
+      const actions = page.getByRole('group', { name: group, exact: true });
+      const buttons = actions.getByRole('button');
+      await expect(buttons).toHaveCount(names.length);
+      const actionBounds = (await actions.boundingBox())!;
+      for (const [index, name] of names.entries()) {
+        const button = buttons.nth(index);
+        await expect(button).toHaveAccessibleName(name);
+        await expect(button).toBeInViewport({ ratio: 1 });
+        const bounds = (await button.boundingBox())!;
+        expect(bounds.x, `${name} left edge`).toBeGreaterThanOrEqual(actionBounds.x);
+        expect(bounds.x + bounds.width, `${name} right edge`).toBeLessThanOrEqual(Math.min(viewport.width, actionBounds.x + actionBounds.width) + 1);
+      }
     }
-    if (viewport.width === 1024 || viewport.width === 1100) {
-      const title = await page.locator('.project-heading-copy').boundingBox(), actions = await page.locator('.project-heading-actions').boundingBox();
-      expect(actions!.y).toBeGreaterThanOrEqual(title!.y + title!.height);
-      const actionRows = await page.locator('.project-heading-actions > button, .project-heading-actions > .project-more').evaluateAll(controls => [...new Set(controls.filter(control => control.checkVisibility()).map(control => { const box = control.getBoundingClientRect(); return Math.round(box.y + box.height / 2); }))]);
-      expect(actionRows.length).toBeLessThanOrEqual(2);
-    } else if (viewport.width >= 1464) {
-      const title = await page.locator('.project-heading-copy').boundingBox(), actions = await page.locator('.project-heading-actions').boundingBox();
-      expect(Math.abs(title!.y + title!.height / 2 - actions!.y - actions!.height / 2)).toBeLessThanOrEqual(1);
+    for (const name of ['后期工具', '收起镜头导航', '切换属性面板', '专注预览', '撤销', '重做', '保存修改']) {
+      await expect(page.getByRole('button', { name, exact: true })).toBeInViewport({ ratio: 1 });
     }
+    await expect(page.locator('.project-heading').getByRole('button', { name: '更多', exact: true })).toHaveCount(0);
     await page.screenshot({ path: info.outputPath(`compact-workbench-actions-${viewport.theme}-${viewport.width}.png`) });
     const guide = page.getByRole('region', { name: '制作指引', exact: true }); await expect(guide.locator('.workbench-guide__step')).toHaveCount(4); await expect(guide).not.toContainText('人工审阅'); await expect(guide).not.toContainText('审阅点');
     await page.getByRole('button', { name: '制作设置', exact: true }).click();

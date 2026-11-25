@@ -145,8 +145,8 @@ for (const count of [50, 200]) test(`bounds real 1080p video resources and measu
     const selections = [], seeks = [];
     for (const index of [Math.floor(count / 2), count - 1, 0]) {
       const started = performance.now(); await page.locator('.outline-shot').nth(index).click(); await expect(page.getByLabel('镜头标题', { exact: true })).toHaveValue(`真实镜头 ${index + 1}`); await firstFrame(page); selections.push(performance.now() - started);
-      const ruler = page.getByRole('slider', { name: '预览播放位置', exact: true }), previous = await ruler.getAttribute('aria-valuenow');
-      const seeking = performance.now(); await ruler.press('Shift+ArrowRight'); await expect(ruler).not.toHaveAttribute('aria-valuenow', previous ?? ''); seeks.push(performance.now() - seeking);
+      const ruler = page.getByRole('slider', { name: '播放器播放位置', exact: true }), previous = await ruler.getAttribute('data-playhead-ms');
+      const seeking = performance.now(); await ruler.press('Shift+ArrowRight'); await expect(ruler).not.toHaveAttribute('data-playhead-ms', previous ?? ''); seeks.push(performance.now() - seeking);
     }
     // Selection acknowledges the field and preview state; it is not a measurement
     // of the exact new source frame reaching the display. Pixel tests cover that.

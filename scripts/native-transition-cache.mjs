@@ -22,9 +22,10 @@ async function observePlayback(page, canvas) {
   const key = `__vqNativeTransitionCache_${randomUUID().replaceAll('-', '')}`;
   const handle = await canvas.evaluateHandle((element, { key, points }) => {
     const state = { active: true, request: 0, start: performance.now(), samples: [], badgeEvents: [], audioEvents: [], videoEvents: [], cleanup: [], watched: new WeakSet(), lastFrame: -1, badge: undefined, audio: undefined };
+    const playhead = element.closest('.preview-player')?.querySelector('input[data-guide="preview-seek"]');
     const pixels = document.createElement('canvas'); pixels.width = points.length; pixels.height = 1;
     const pixelsContext = pixels.getContext('2d', { willReadFrequently: true });
-    const position = () => ({ wallMs: performance.now() - state.start, frame: Number(element.dataset.renderedFrame ?? -1), uiMs: Number(document.querySelector('[role="slider"][aria-label="预览播放位置"]')?.getAttribute('aria-valuenow')), buffered: element.dataset.transitionBuffered === 'true', cachePixels: Number(element.dataset.transitionCachePixels ?? 0) });
+    const position = () => ({ wallMs: performance.now() - state.start, frame: Number(element.dataset.renderedFrame ?? -1), uiMs: Number(playhead?.dataset.playheadMs), buffered: element.dataset.transitionBuffered === 'true', cachePixels: Number(element.dataset.transitionCachePixels ?? 0) });
     state.position = position;
     const tick = () => {
       if (!state.active) return;

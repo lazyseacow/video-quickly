@@ -1,6 +1,6 @@
-import { useEffect, useId, useMemo, useRef, useState, type ComponentType } from 'react';
+import { useEffect, useId, useMemo, useRef, useState } from 'react';
 import { Check, ChevronLeft, ChevronRight, Clapperboard, Clock3, Download, FileJson, FolderOpen, Image, LoaderCircle, Music2, Play, RefreshCw, TriangleAlert } from 'lucide-react';
-import { assetSchema, captionTrackSchema, creativeContextSchema, creativeEntityLabels, formatFrameRate, isJsonDocument, planningDocumentSchemas, planningDocumentSections, shotSchema, videoProfileSchema, workflowProposalSchema, workflowProposalChanges, workflowSchema, type AssetRecord, type GenerationShotProgress, type JsonValue, type ProjectDocument, type RunStepPayload, type RunStepProgressDetail, type RunStepSummary, type Shot, type VideoProfile, type WorkflowNode } from '@video-quickly/contracts';
+import { assetSchema, captionTrackSchema, creativeContextSchema, creativeEntityLabels, formatFrameRate, isJsonDocument, planningDocumentSchemas, planningDocumentSections, videoProfileSchema, workflowProposalSchema, workflowProposalChanges, type AssetRecord, type GenerationShotProgress, type JsonValue, type RunStepPayload, type RunStepProgressDetail, type RunStepSummary, type VideoProfile, type WorkflowNode } from '@video-quickly/contracts';
 import { getAssetUrl } from '../lib/client';
 import { assetAvailabilityUrl, useAssetAvailability } from '../lib/asset-availability';
 import { nativeDesktop, revealFile } from '../lib/desktop';
@@ -8,10 +8,9 @@ import { Button, IconButton, Notice, formatTime } from './Primitives';
 import AssetJsonPreviewDialog from './AssetJsonPreviewDialog';
 import { videoThumbnails } from './preview-thumbnails';
 import { useThumbnailVisibility } from './thumbnail-visibility';
-import ResultDocument, { VideoProfileResult } from './ResultDocument';
+import ResultDocument from './ResultDocument';
 import StepProgress, { ProgressIcon } from './StepProgress';
 import { generationShotLabels, runningStep } from '../lib/run-progress';
-import { resolveWorkbenchStages } from '../lib/workbench-stages';
 import './step-result-view.css';
 
 function record(value: JsonValue | undefined): Record<string, JsonValue> | undefined {
@@ -57,7 +56,6 @@ export default function StepResultView({ value, kind, mediaShots, mediaGeneratio
   const exportPath = kind === 'export' ? copy(object?.videoPath) || copy(object?.outputPath) || copy(object?.path) : '';
   const localCount = [object?.referenceAssetIds, object?.assetIds, object?.audioAssetIds].find(Array.isArray)?.filter(Boolean).length;
   const preparedShots = kind === 'animation' && typeof object?.shots === 'number' ? object.shots : undefined;
-  const editedProject = kind === 'animation' ? record(object?.editedProject) : undefined;
   const specialized = shots.length || assets.length || jsonFiles.length || progress?.shots.length || captions.success || claims.length || text || outline || exportPath || localCount !== undefined || preparedShots !== undefined || proposal.success || proposalError;
 
   return <div className="step-result" aria-label="制作结果">
@@ -78,7 +76,7 @@ export default function StepResultView({ value, kind, mediaShots, mediaGeneratio
     {!specialized && kind === 'review' ? <div className="step-result__checkpoint"><Check size={24} /><div><strong>自动检查结果</strong><p>检查完成后，流程会自动继续后续步骤。</p></div></div>
       : !specialized && kind === 'join' ? <div className="step-result__checkpoint"><Check size={24} /><strong>上游分支已汇合</strong></div>
         : !specialized && kind === 'condition' ? <div className="step-result__checkpoint"><Check size={24} /><div><strong>{object?.matched === true ? '条件成立' : '条件不成立'}</strong><p>流程将沿对应的连接继续。</p></div></div>
-          : !specialized && <ResultFields value={editedProject ?? value} project={Boolean(editedProject)} />}
+          : !specialized && <ResultFields value={value} />}
     {Array.isArray(object?.warnings) && object.warnings.length > 0 && <Notice>{object.warnings.map((warning, index) => <p key={index}>{copy(warning)}</p>)}</Notice>}
   </div>;
 }
@@ -91,10 +89,10 @@ function visualPromptWithColors(text: string) {
   ));
 }
 
-function StoryboardResult({ shots, profile, view }: { shots: Record<string, JsonValue>[]; profile?: VideoProfile; view: 'storyboard' | 'animation' | 'edited' }) {
+function StoryboardResult({ shots, profile, view }: { shots: Record<string, JsonValue>[]; profile?: VideoProfile; view: 'storyboard' | 'animation' }) {
   const [limit, setLimit] = useState(20);
   const seconds = shots.reduce((sum, shot) => sum + duration(shot.durationUs), 0) / 1_000_000;
-  const label = view === 'edited' ? '剪辑后的分镜' : view === 'animation' ? '镜头动画' : '分镜预览';
+  const label = view === 'animation' ? '镜头动画' : '分镜预览';
   return <section aria-label={label}>
     <div className="step-result__summary"><span><Clapperboard size={16} />{shots.length} 个镜头</span>{seconds > 0 && <span><Clock3 size={15} />{seconds.toFixed(1)} 秒</span>}{profile && <span>分镜全局参数 · {profile.width} × {profile.height} · {formatFrameRate(profile.frameRate)} fps</span>}</div>
     <ol className="step-result__storyboard">{shots.slice(0, limit).map((shot, index) => {
@@ -104,33 +102,16 @@ function StoryboardResult({ shots, profile, view }: { shots: Record<string, Json
         <header>
           <span className="step-result__index">{String(index + 1).padStart(2, '0')}</span>
           <h4>{copy(shot.title) || `镜头 ${index + 1}`}</h4>
-          {durationUs > 0 && <span>{view === 'edited' ? formatSeconds(durationUs) : (durationUs / 1_000_000).toFixed(1)} 秒</span>}
+          {durationUs > 0 && <span>{(durationUs / 1_000_000).toFixed(1)} 秒</span>}
         </header>
         {visualPrompt && <div className="step-result__copy"><span>画面</span><p>{visualPromptWithColors(visualPrompt)}</p></div>}
         {copy(shot.narration) && <div className="step-result__copy"><span>旁白</span><p>{copy(shot.narration)}</p></div>}
         {copy(shot.soundPrompt) && <div className="step-result__copy"><span>声音</span><p>{copy(shot.soundPrompt)}</p></div>}
-        {view === 'edited' && <EditedShotDetails shot={shot} />}
         {view === 'animation' && record(shot.animation) && <details className="step-result__animation"><summary>动画与运镜</summary><ResultFields value={shot.animation} /></details>}
       </li>;
     })}</ol>
     {shots.length > limit && <Button static onClick={() => setLimit(value => value + 20)}>显示更多镜头</Button>}
   </section>;
-}
-
-const transitionLabels = { cut: '直接切换', fade: '柔和叠化', wipe: '擦除切换' } satisfies Record<Shot['animation']['transition'], string>;
-const formatSeconds = (timeUs: number) => (timeUs / 1_000_000).toLocaleString('zh-CN', { maximumFractionDigits: 3, useGrouping: false });
-
-function EditedShotDetails({ shot }: { shot: Record<string, JsonValue> }) {
-  const animation = shotSchema.shape.animation.safeParse(shot.animation).data;
-  const clipInUs = duration(record(shot.clipEdit)?.inUs ?? shot.sourceInUs);
-  return <>
-    {animation && <div className="step-result__copy"><span>转场</span><p>{transitionLabels[animation.transition]}</p></div>}
-    {clipInUs > 0 && <div className="step-result__copy"><span>素材入点</span><p>{formatSeconds(clipInUs)} 秒</p></div>}
-    {shot.locked === true && <div className="step-result__copy"><span>锁定状态</span><p>已锁定</p></div>}
-    {animation && <details className="step-result__animation"><summary>动画与运镜</summary><ResultFields value={animation.keyframes
-      ? { 关键帧: `${animation.keyframes.length} 个` }
-      : { 缩放倍率: animation.zoom, 水平移动: animation.panX, 垂直移动: animation.panY }} /></details>}
-  </>;
 }
 
 function CaptionResult({ track }: { track: ReturnType<typeof captionTrackSchema.parse> }) {
@@ -281,91 +262,32 @@ function ResultMedia({ assetId, path, kind, name, exported = false }: { assetId?
 }
 
 const fieldNames: Record<string, string> = { title: '标题', text: '内容', description: '说明', summary: '摘要', result: '结果', outputs: '子流程产物', preset: '动画方式', zoom: '缩放倍率', transition: '转场', shots: '镜头数量', zoomStart: '起始缩放', zoomEnd: '结束缩放', panX: '水平移动', panY: '垂直移动', keyframes: '关键帧', timeUs: '时间（微秒）', durationUs: '时长（微秒）', reason: '说明', message: '说明', warnings: '提示', style: '风格', items: '内容', note: '说明' };
-const projectFieldNames = {
-  id: null,
-  title: '标题',
-  brief: '创意简报',
-  templateId: null,
-  revision: null,
-  profile: '视频规格',
-  shots: '分镜',
-  workflow: '制作流程',
-  creativeContext: '创作设定',
-  episode: '分集信息',
-  episodeSource: '分集来源',
-  originalText: '项目原文',
-  musicClips: '背景音乐',
-  researchSources: '资料来源',
-  referenceDisplay: '成片引用编号',
-  captionStyle: '字幕样式',
-  scenePreset: '默认镜头模板',
-  audioMix: '项目混音',
-  clipEditSources: '原始镜头',
-  clipEditPlans: '剪辑计划',
-  claims: '事实主张',
-  drama: '短剧场次与台词',
-  style: '视觉风格',
-  createdAt: '创建时间',
-  updatedAt: '更新时间',
-  archived: '已归档',
-} satisfies Record<keyof ProjectDocument, string | null>;
-
-function EditedProfileResult({ value }: { value: JsonValue }) {
-  const profile = videoProfileSchema.safeParse(value).data;
-  return profile ? <VideoProfileResult profile={profile} /> : <p className="step-result__empty">视频规格无法读取。</p>;
-}
-
-function EditedStoryboardResult({ value }: { value: JsonValue }) {
-  const shots = storyboardShots(value);
-  return shots.length ? <StoryboardResult shots={shots} view="edited" /> : <p className="step-result__empty">暂无分镜。</p>;
-}
-
-function EditedWorkflowResult({ value }: { value: JsonValue }) {
-  const workflow = workflowSchema.safeParse(value).data;
-  if (!workflow) return <p className="step-result__empty">制作流程无法读取。</p>;
-  const stages = resolveWorkbenchStages(workflow);
-  return <dl className="step-result__fields" aria-label="流程概览">
-    <div><dt>流程名称</dt><dd><p>{workflow.name || '未命名流程'}</p></dd></div>
-    {stages ? stages.map(stage => <div key={stage.id}>
-      <dt>{stage.label}</dt>
-      <dd><p>{stage.nodes.map(node => node.label).join('、') || '暂无步骤'}</p></dd>
-    </div>) : <div><dt>制作步骤</dt><dd><p>{workflow.nodes.map(node => node.label).join('、')}</p></dd></div>}
-  </dl>;
-}
-
-const projectSectionViews: Record<string, ComponentType<{ value: JsonValue }>> = {
-  profile: EditedProfileResult,
-  shots: EditedStoryboardResult,
-  workflow: EditedWorkflowResult,
-};
 const metadata = new Set(['source', 'modelId', 'providerUsage', 'kind', 'warnings']);
-function ResultFields({ value, project = false }: { value: JsonValue; project?: boolean }) {
+function ResultFields({ value }: { value: JsonValue }) {
   const [limit, setLimit] = useState(30);
   if (value === null) return <p className="step-result__empty">本步没有额外的内容产物。</p>;
   if (typeof value !== 'object') return <p className="step-result__value">{typeof value === 'boolean' ? value ? '是' : '否' : value}</p>;
-  const labels: Record<string, string | null> = project ? projectFieldNames : fieldNames;
   const entries = Array.isArray(value)
     ? value.map((item, index) => [String(index + 1), item] as const)
-    : Object.entries(value).filter(([key]) => !metadata.has(key) && labels[key] !== null);
+    : Object.entries(value).filter(([key]) => !metadata.has(key));
   return <dl className="step-result__fields">
     {entries.slice(0, limit).map(([key, item]) => {
-      const label = Object.hasOwn(labels, key) ? labels[key] : key;
-      const View = project && Object.hasOwn(projectSectionViews, key) ? projectSectionViews[key] : undefined;
+      const label = Object.hasOwn(fieldNames, key) ? fieldNames[key] : key;
       return <div key={key}>
         <dt>{label}</dt>
         <dd>{item && typeof item === 'object'
-          ? <NestedResult value={item} summary={View ? `查看${label}` : undefined} View={View} />
+          ? <NestedResult value={item} />
           : <ResultFields value={item} />}</dd>
       </div>;
     })}
     {entries.length > limit && <div><Button static onClick={() => setLimit(value => value + 30)}>显示更多结果</Button></div>}
   </dl>;
 }
-function NestedResult({ value, summary, View = ResultFields }: { value: JsonValue; summary?: string; View?: ComponentType<{ value: JsonValue }> }) {
+function NestedResult({ value }: { value: JsonValue }) {
   const [open, setOpen] = useState(false);
-  const label = summary ?? (Array.isArray(value) ? `${value.length} 项内容` : '查看内容');
+  const label = Array.isArray(value) ? `${value.length} 项内容` : '查看内容';
   return <details open={open} onToggle={event => setOpen(event.currentTarget.open)}>
     <summary>{label}</summary>
-    {open && <View value={value} />}
+    {open && <ResultFields value={value} />}
   </details>;
 }

@@ -349,7 +349,7 @@ async function verifyGettingStarted() {
   for (let step = 0; step < 20; step++) {
     const target = await activeTarget();
     assert.equal(await page.evaluate(() => localStorage.getItem('vq-onboarding-v1')), null);
-    if (!contextCaptured && ['preview', 'timeline'].includes(target)) {
+    if (!contextCaptured && ['preview', 'preview-seek'].includes(target)) {
       await page.screenshot({ path: join(artifacts, 'desktop-getting-started-context.png') });
       contextCaptured = true;
     }
@@ -357,7 +357,7 @@ async function verifyGettingStarted() {
     await nextStep();
   }
   assert.equal(reachedEnd, true, 'The getting started tour must finish within twenty steps');
-  assert.equal(contextCaptured, true, 'The native tour must highlight a real preview or timeline');
+  assert.equal(contextCaptured, true, 'The native tour must highlight actual playback controls');
   assert.equal(await activeTarget(), 'help');
   await guide.getByRole('button', { name: '完成引导', exact: true }).click();
   await expect(guide).toHaveCount(0);
@@ -396,17 +396,17 @@ async function verifyGettingStarted() {
   const play = highlighted.getByRole('button', { name: '播放预览', exact: true });
   await expect(play).toBeEnabled({ timeout: 30_000 });
   await play.click();
-  await expect(heading).toHaveText('安排镜头节奏');
-  assert.equal(await activeTarget(), 'timeline');
+  await expect(heading).toHaveText('定位预览画面');
+  assert.equal(await activeTarget(), 'preview-seek');
   await expect(page.getByRole('button', { name: '暂停预览', exact: true })).toHaveAttribute('aria-pressed', 'true');
-  const ruler = highlighted.getByRole('slider', { name: '预览播放位置', exact: true });
-  await ruler.scrollIntoViewIfNeeded();
-  const beforeSeek = Number(await ruler.getAttribute('aria-valuenow'));
-  const maximum = Number(await ruler.getAttribute('aria-valuemax'));
-  const rulerBounds = await ruler.boundingBox();
-  assert.ok(maximum > 0 && rulerBounds?.width && rulerBounds.height, 'Interactive native acceptance requires a real seekable timeline');
-  await ruler.click({ position: { x: rulerBounds.width * (beforeSeek > maximum / 2 ? .2 : .8), y: rulerBounds.height / 2 } });
-  await expect.poll(async () => Number(await page.getByRole('slider', { name: '预览播放位置', exact: true }).getAttribute('aria-valuenow'))).not.toBe(beforeSeek);
+  const playhead = page.getByRole('slider', { name: '播放器播放位置', exact: true });
+  const seekControl = highlighted.and(playhead);
+  await expect(seekControl).toHaveAttribute('type', 'range');
+  await expect(seekControl).toBeEnabled();
+  const beforeSeek = await seekControl.getAttribute('data-playhead-ms');
+  assert.ok(beforeSeek !== null && Number(await seekControl.getAttribute('max')) > 0, 'Interactive native acceptance requires a seekable player');
+  await seekControl.press('ArrowRight');
+  await expect(playhead).not.toHaveAttribute('data-playhead-ms', beforeSeek);
   await expect(heading).toHaveText(/^(展开属性面板|编辑属性)$/);
   assert.ok(['inspector-toggle', 'inspector'].includes(await activeTarget()), 'A completed user seek must advance to the next available property step');
   await page.keyboard.press('Escape');
@@ -574,6 +574,8 @@ try {
 
   await expect(page.getByRole('button', { name: '撤销', exact: true })).toHaveAttribute('title', new RegExp(`${process.platform === 'darwin' ? '⌘' : 'Ctrl'} Z`));
   checks.platformShortcutHints = true;
+  const materials = page.locator('#project-inspector .shot-inspector__disclosure').filter({ has: page.locator('summary').filter({ hasText: '画面与素材' }) });
+  if (await materials.getAttribute('open') === null) await materials.locator(':scope > summary').click();
   await page.getByRole('button', { name: '导入画面', exact: true }).click();
   const importDialog = page.getByRole('dialog'), pathInput = importDialog.getByRole('textbox', { name: '图片文件路径', exact: true });
   await pathInput.fill('native-input');
@@ -719,7 +721,6 @@ try {
   }
 
   const beforeCheck = await projectDocument(project.id), contactsBeforeCheck = credentialContacts;
-  await page.getByRole('button', { name: '更多', exact: true }).click();
   await page.getByRole('button', { name: '制作前检查', exact: true }).click();
   const readinessDialog = page.getByRole('dialog', { name: '制作前检查', exact: true });
   await expect(readinessDialog.locator('.readiness-summary dd').first()).toHaveText(String(beforeCheck.revision));

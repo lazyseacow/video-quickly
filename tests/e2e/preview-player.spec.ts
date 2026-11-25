@@ -25,16 +25,18 @@ for (const viewport of [{ width: 1464, height: 895, theme: 'dark' }, { width: 10
   await page.setViewportSize(viewport); await page.addInitScript(theme => localStorage.setItem('vq-theme', theme), viewport.theme);
   await page.goto('/'); await openProjectFromList(page, project.title);
   const player = page.getByRole('region', { name: '视频预览播放器', exact: true }), seek = player.getByRole('slider', { name: '播放器播放位置', exact: true });
-  const audio = player.locator('audio[data-audio-role="处理后混音"]'), ruler = page.getByRole('slider', { name: '预览播放位置', exact: true });
+  const audio = player.locator('audio[data-audio-role="处理后混音"]');
   await expect(player.locator('.prepared-mix-preview')).toHaveAttribute('data-status', 'ready', { timeout: 20_000 });
   await expect(player.locator('.scene-preview')).toHaveAttribute('aria-busy', 'false');
-  const bounds = await player.boundingBox(), picture = await player.locator('.preview-frame').boundingBox();
-  expect(bounds).not.toBeNull(); expect(picture).not.toBeNull();
-  expect(picture!.width).toBeCloseTo(Math.min(bounds!.width, bounds!.height * 16 / 9), 0);
-  await seek.focus(); await seek.press('End'); await expect(ruler).toHaveAttribute('aria-valuenow', '7967');
+  const surface = await player.locator('.preview-surface').boundingBox(), picture = await player.locator('.preview-frame').boundingBox();
+  const controls = player.locator('.preview-controls'), dock = await controls.boundingBox();
+  expect(surface).not.toBeNull(); expect(picture).not.toBeNull(); expect(dock).not.toBeNull();
+  expect(picture!.width).toBeCloseTo(Math.min(surface!.width, surface!.height * 16 / 9), 0);
+  expect(picture!.y + picture!.height).toBeLessThanOrEqual(dock!.y);
+  await seek.focus(); await seek.press('End'); await expect(seek).toHaveAttribute('data-playhead-ms', '7967');
   await expect.poll(() => audio.evaluate(element => (element as HTMLAudioElement).currentTime)).toBeCloseTo(7.967, 1);
   await expect(player.locator('.preview-frame canvas')).toHaveAttribute('aria-label', '播放器镜头 2 · 镜头预览');
-  await seek.press('Home'); await seek.press('ArrowRight'); await expect(ruler).toHaveAttribute('aria-valuenow', '33');
+  await seek.press('Home'); await seek.press('ArrowRight'); await expect(seek).toHaveAttribute('data-playhead-ms', '33');
   if (viewport.width === 1464) {
     const volume = player.getByRole('slider', { name: '预览音量', exact: true });
     await volume.press('Home'); for (let index = 0; index < 7; index++) await volume.press('ArrowRight');
@@ -70,10 +72,21 @@ for (const viewport of [{ width: 1464, height: 895, theme: 'dark' }, { width: 10
   if (viewport.width === 1464) {
     await player.getByRole('button', { name: '回到开头', exact: true }).click();
     await player.locator('.preview-frame').click(); await page.mouse.move(1, 1);
-    await expect(player).toHaveAttribute('data-controls-visible', 'false', { timeout: 5000 });
-    await expect(player.locator('.preview-controls')).toHaveCSS('visibility', 'hidden');
-    await player.hover(); await expect(player.locator('.preview-controls')).toHaveCSS('visibility', 'visible');
+    await expect.poll(() => audio.evaluate(element => (element as HTMLAudioElement).currentTime), { timeout: 7000 }).toBeGreaterThan(2.4);
+    await expect(player).toHaveAttribute('data-controls-visible', 'true');
+    await expect(controls).toHaveCSS('visibility', 'visible');
     await player.getByRole('button', { name: '暂停预览', exact: true }).click();
+    await player.getByRole('button', { name: '回到开头', exact: true }).click();
+    await player.getByRole('button', { name: '全屏预览', exact: true }).click();
+    await expect.poll(() => page.evaluate(() => document.fullscreenElement?.classList.contains('preview-player'))).toBe(true);
+    await player.locator('.preview-frame').click();
+    await expect(player).toHaveAttribute('data-controls-visible', 'false', { timeout: 5000 });
+    await expect(controls).toHaveCSS('visibility', 'hidden');
+    await page.mouse.move(viewport.width - 20, viewport.height / 2);
+    await expect(controls).toHaveCSS('visibility', 'visible');
+    await player.getByRole('button', { name: '暂停预览', exact: true }).click();
+    await player.getByRole('button', { name: '退出全屏预览', exact: true }).click();
+    await expect.poll(() => page.evaluate(() => document.fullscreenElement)).toBeNull();
   }
   await player.scrollIntoViewIfNeeded(); await page.screenshot({ path: info.outputPath('preview-player-' + viewport.width + '.png') });
   expect((await rpc<{ project: ProjectDocument }>(request, 'project.get', { projectId: project.id })).project).toEqual(project);

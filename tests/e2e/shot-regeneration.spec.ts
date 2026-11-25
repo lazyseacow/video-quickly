@@ -25,8 +25,8 @@ async function openProject(page: Page, title: string) {
   await expect(page.getByLabel('镜头标题')).toBeVisible();
 }
 async function openCandidates(page: Page) {
-  await page.getByRole('button', { name: 'AI 微调', exact: true }).click();
-  const dialog = page.getByRole('dialog', { name: '镜头候选', exact: true }); await expect(dialog).toBeVisible(); return dialog;
+  await page.getByRole('button', { name: '重新生成', exact: true }).click();
+  const dialog = page.getByRole('dialog', { name: '重新生成镜头', exact: true }); await expect(dialog).toBeVisible(); return dialog;
 }
 function observeErrors(page: Page) {
   const errors: string[] = [];
@@ -94,7 +94,7 @@ test('generates only the selected shot, compares chosen fields, and keeps the ap
     await openProject(page, project.title); await page.locator('.outline-shot').nth(1).click();
     let dialog = await openCandidates(page);
     await dialog.getByLabel('生成模型', { exact: true }).selectOption(connection.id);
-    await dialog.getByLabel('本次调整要求', { exact: true }).fill('只重写当前镜头的旁白');
+    await dialog.getByLabel('修改要求', { exact: true }).fill('只重写当前镜头的旁白');
     await dialog.getByRole('button', { name: '生成候选', exact: true }).click(); await confirmAction(page, '确认生成');
     await expect(dialog.locator('.shot-regeneration__comparison')).toContainText('候选旁白 1');
     await expect(dialog.locator('.shot-regeneration__comparison')).toContainText('基线旁白 2');

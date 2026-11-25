@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { Sparkles, Square, RefreshCw, ChevronDown, Pause, Play } from 'lucide-react';
+import { Check, ChevronDown, Pause, Play, RefreshCw, Sparkles, Square } from 'lucide-react';
 import { type ImageEditInput, type ImageRectangle, assetSchema, type AssetRecord, type ModelProfile, type ProjectDocument, type RunSummary, type Shot, type ShotCandidate, type ShotCandidateField, type ShotCandidateKind, usesVideoAudio } from '@video-quickly/contracts';
 import { candidateKindLabels, candidateRunActive, readCandidateAssets, readShotCandidate, readShotCandidates, watchCandidateRun } from '../lib/shot-candidates';
 import { getAssetUrl, rpc } from '../lib/client';
@@ -24,10 +24,22 @@ export interface ShotRegenerationDialogProps {
 const fieldLabels: Record<ShotCandidateField, string> = { title: '标题', narration: '旁白', visualPrompt: '画面要求', durationUs: '时长' };
 const scriptFields: ShotCandidateField[] = ['title', 'narration', 'visualPrompt', 'durationUs'];
 const generationSteps = { script: 'script', image: 'assets', video: 'animation' } as const;
+const instructionExamples: Record<ShotCandidateKind, string> = {
+  script: '例如保留剧情，只把旁白改成更短的句子。',
+  image: '例如保持构图，加强雨势，让人物轮廓更清楚。',
+  video: '例如保持人物和场景，只让镜头缓慢推进。',
+};
+
+function preferredCandidateKind(shot: Shot, models: ModelProfile[]): ShotCandidateKind {
+  const supported = (kind: ShotCandidateKind) => matchingStepModels({ kind: generationSteps[kind], config: {} }, models).length > 0;
+  if (shot.videoAssetId && supported('video')) return 'video';
+  if (shot.assetId && supported('image')) return 'image';
+  return (['script', 'image', 'video'] as const).find(supported) ?? 'script';
+}
 
 export default function ShotRegenerationDialog({ project, shot, models, assets, source, onClose, onGenerate, onApply }: ShotRegenerationDialogProps) {
   const chargeRpc = useChargeRpc();
-  const [kind, setKind] = useState<ShotCandidateKind>(source?.kind ?? 'script');
+  const [kind, setKind] = useState<ShotCandidateKind>(() => source?.kind ?? preferredCandidateKind(shot, models));
   const [editRectangle, setEditRectangle] = useState<ImageRectangle>();
   const [modelId, setModelId] = useState('');
   const [instruction, setInstruction] = useState('');
@@ -59,6 +71,8 @@ export default function ShotRegenerationDialog({ project, shot, models, assets, 
   const running = Boolean(runId && (!run || run.id !== runId || candidateRunActive(run)));
   const resumable = run?.status === 'queued' && Boolean(run.error) || Boolean(source && run && ['failed', 'needs_attention'].includes(run.status));
   const unfinishedSource = Boolean(source && run && !['succeeded', 'canceled'].includes(run.status));
+  const formBusy = generating || applying || running;
+  const canGenerate = !formBusy && !unfinishedSource && Boolean(selectedModelId || source) && !shot.locked;
   const allAssets = useMemo(() => [...new Map([...extraAssets, ...assets].map(asset => [asset.id, asset])).values()], [extraAssets, assets]);
   const preview = useMemo(() => {
     if (!candidate || candidate.kind === 'script' || !candidate.baseline.clipEdit) return undefined;
@@ -116,7 +130,7 @@ export default function ShotRegenerationDialog({ project, shot, models, assets, 
   }, [runId, project.id, load, progressRefresh]);
 
   async function generate() {
-    if (!selectedModelId && !source) return;
+    if (!canGenerate) return;
     setGenerating(true); setError('');
     try {
       let imageEdit: ImageEditInput | undefined;
@@ -157,34 +171,92 @@ export default function ShotRegenerationDialog({ project, shot, models, assets, 
   const currentAsset = shot.sceneTemplate ? undefined : allAssets.find(asset => asset.id === (shot.videoAssetId ?? shot.assetId));
   const candidateAsset = candidate?.kind === 'video' ? allAssets.find(asset => asset.id === candidate.shot.videoAssetId) : allAssets.find(asset => asset.id === candidate?.shot.assetId);
 
-  return <Dialog title="镜头候选" onClose={onClose} className="shot-regeneration-dialog">
+  const shotIndex = project.shots.findIndex(value => value.id === shot.id);
+  const imageEditAsset = kind === 'image' && !source && !shot.sceneTemplate && availableModels.find(model => model.id === selectedModelId)?.provider === 'openai-compatible'
+    ? allAssets.find(asset => asset.id === shot.assetId) : undefined;
+  const candidateVideoAudio = candidate?.kind === 'video' && !candidate.shot.audioAssetId && usesVideoAudio(candidate.shot);
+
+  return <Dialog title="重新生成镜头" onClose={onClose} className="shot-regeneration-dialog">
     <div className="dialog__body">
-      <p className="shot-regeneration__target">{shot.title}</p>
-      {source ? <Notice>只重新生成此镜头的{source.kind === 'video' ? '视频' : '图片'}，沿用本次制作的上游产物、提示词与模型：{source.modelName}。其他镜头保留。</Notice> : <div className="shot-regeneration__form"><Field label="生成内容"><Select value={kind} disabled={generating || applying || running} onChange={event => setKind(event.target.value as ShotCandidateKind)}>{Object.entries(candidateKindLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</Select></Field><Field label="生成模型"><Select value={selectedModelId} disabled={generating || applying || running} onChange={event => setModelId(event.target.value)}><option value="" disabled>选择模型</option>{availableModels.map(model => <option key={model.id} value={model.id}>{model.name}</option>)}</Select></Field></div>}
-      <Field label="本次调整要求"><textarea value={instruction} maxLength={10000} disabled={generating || applying || running} onChange={event => setInstruction(event.target.value)} placeholder="说明这个镜头希望如何修改…" /></Field>
-      {kind === 'image' && !shot.sceneTemplate && allAssets.find(asset => asset.id === shot.assetId) && availableModels.find(model => model.id === selectedModelId)?.provider === 'openai-compatible' && <ImageEditRegion asset={allAssets.find(asset => asset.id === shot.assetId)!} disabled={generating || applying || running} rectangle={editRectangle} onChange={setEditRectangle} />}
-      {!source && !availableModels.length && <p className="tiny-meta">请先在模型连接中添加具备{candidateKindLabels[kind]}能力的模型。</p>}
-      {shot.locked && <Notice>请先解锁当前镜头，再生成或应用候选。</Notice>}
-      <div className="shot-regeneration__generate"><Button variant="primary" busy={generating} disabled={applying || running || unfinishedSource || !selectedModelId && !source || shot.locked} onClick={() => void generate()}><Sparkles size={14} />生成候选</Button><span className="tiny-meta">生成结果会先保留为候选，应用前不会替换当前镜头。</span></div>
+      <div className="shot-regeneration__target">
+        {shotIndex >= 0 && <span>镜头 {String(shotIndex + 1).padStart(2, '0')}</span>}
+        <h3>{shot.title}</h3>
+      </div>
+      <form className="shot-regeneration__generation" onSubmit={event => { event.preventDefault(); void generate(); }}>
+        {source ? <Notice>只重新生成此镜头的{source.kind === 'video' ? '视频' : '图片'}，沿用本次制作的上游产物、提示词与模型：{source.modelName}。其他镜头保留。</Notice> : <div className="shot-regeneration__form" role="group" aria-label="生成设置">
+          <Field label="生成内容">
+            <Select name="kind" value={kind} disabled={formBusy} onChange={event => setKind(event.target.value as ShotCandidateKind)}>
+              {Object.entries(candidateKindLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+            </Select>
+          </Field>
+          <Field label="生成模型">
+            <Select name="model" value={selectedModelId} disabled={formBusy} onChange={event => setModelId(event.target.value)}>
+              <option value="" disabled>选择模型</option>
+              {availableModels.map(model => <option key={model.id} value={model.id}>{model.name}</option>)}
+            </Select>
+          </Field>
+        </div>}
+        <Field label="修改要求">
+          <textarea name="instruction" value={instruction} maxLength={10000} disabled={formBusy} onChange={event => setInstruction(event.target.value)} placeholder={instructionExamples[kind]} />
+        </Field>
+        {imageEditAsset && <ImageEditRegion asset={imageEditAsset} disabled={formBusy} rectangle={editRectangle} onChange={setEditRectangle} />}
+        {!source && !availableModels.length && <p className="tiny-meta">请先在模型连接中添加具备{candidateKindLabels[kind]}能力的模型。</p>}
+        {shot.locked && <Notice>请先解锁当前镜头，再生成或应用候选。</Notice>}
+        <div className="shot-regeneration__generate">
+          <span className="tiny-meta">候选将在选用后替换当前镜头的对应内容。</span>
+          <Button variant="primary" type="submit" busy={generating} disabled={!canGenerate}><Sparkles size={14} aria-hidden="true" />生成候选</Button>
+        </div>
+      </form>
       {runId && <div className="shot-regeneration__run" role="status"><Status value={run?.status ?? 'queued'} /><span>{resumable ? run?.error : running ? '生成在后台继续，可重新打开镜头候选查看。' : run?.status === 'succeeded' ? '候选已保存，可比较后选择应用。' : run?.status === 'canceled' ? '已请求停止。请在模型服务中核对已提交的任务。' : run?.error}</span>{resumable && <Button aria-label="继续生成" busy={resuming} disabled={canceling} onClick={() => void resume()}>继续</Button>}{(running || unfinishedSource) && <Button aria-label="停止生成" busy={canceling} disabled={resuming} onClick={() => void cancel()}><Square size={13} />停止</Button>}</div>}
       {progressError && <Notice kind="error">{progressError}<Button aria-label="重试生成进度" onClick={() => setProgressRefresh(value => value + 1)}>重试</Button></Notice>}
       <div className="shot-regeneration__workspace">
-        <aside className="shot-regeneration__history" aria-label="候选历史"><div className="shot-regeneration__history-heading"><h3>候选历史 <span>{total}</span></h3><Button aria-label="刷新候选" variant="ghost" disabled={loading || applying} onClick={() => void load()}><RefreshCw size={13} />刷新</Button></div>
-          {listError && <Notice kind="error">{listError}</Notice>}
-          {items.map((item, index) => <button type="button" className={`shot-regeneration__history-item ${item.id === selectedId ? 'is-selected' : ''}`} aria-pressed={item.id === selectedId} aria-label={`选择候选 ${index + 1}：${candidateKindLabels[item.kind]}`} key={item.id} disabled={applying} onClick={() => setSelectedId(item.id)}><strong>{candidateKindLabels[item.kind]}</strong><time dateTime={item.createdAt}>{new Date(item.createdAt).toLocaleString('zh-CN')}</time></button>)}
-          {!items.length && <p className="tiny-meta">{loading ? '正在读取候选…' : '还没有生成候选。'}</p>}
-          {nextOffset < total && <Button aria-label="加载更多候选" busy={loading} disabled={applying} onClick={() => void load(nextOffset)}><ChevronDown size={14} />加载更多</Button>}
-        </aside>
         <section className="shot-regeneration__comparison" aria-label="当前与候选对比">
-          {reading ? <p className="tiny-meta" role="status">正在读取候选内容…</p> : candidate?.kind === 'script' ? <div className="shot-regeneration__fields">{scriptFields.map(field => <section className="shot-regeneration__field" key={field}><label><input type="checkbox" checked={fields.includes(field)} disabled={applying || candidate.shot[field] === shot[field]} aria-label={`应用候选${fieldLabels[field]}`} onChange={event => setFields(current => event.target.checked ? [...current, field] : current.filter(value => value !== field))} />{fieldLabels[field]}</label><div><section><span>当前</span><p>{field === 'durationUs' ? `${shot[field] / 1e6} 秒` : shot[field] || '（空）'}</p></section><section><span>候选</span><p>{field === 'durationUs' ? `${candidate.shot[field] / 1e6} 秒` : candidate.shot[field] || '（空）'}</p></section></div></section>)}</div> : candidate ? <>
-            <div className="shot-regeneration__media">{shot.clipEdit ? <CandidateClipPreview label="当前" project={project} shot={shot} assets={allAssets} /> : <CandidateMedia label="当前" asset={currentAsset} sourceInUs={shot.videoInUs ?? shot.sourceInUs ?? 0} durationUs={shot.durationUs} fallback={<span className="shot-regeneration__scene" style={{ aspectRatio: `${project.profile.width}/${project.profile.height}` }}><ScenePreview project={project} shot={shot} shotIndex={Math.max(0, project.shots.findIndex(value => value.id === shot.id))} assets={allAssets} /></span>} />}{preview?.project ? <CandidateClipPreview label="候选" project={preview.project} shot={preview.project.shots.find(value => value.id === candidate.shotId)!} assets={allAssets} /> : preview?.error ? <figure><figcaption>候选</figcaption><Notice kind="error">{preview.error}</Notice></figure> : <CandidateMedia label="候选" asset={candidateAsset} sourceInUs={0} durationUs={candidate.shot.durationUs} />}</div>
-            {shot.sceneTemplate && ['image', 'video'].includes(candidate.kind) && <Notice>应用此候选将替换当前模板画面。</Notice>}
-          </> : <p className="shot-regeneration__empty">选择一个候选，与当前镜头比较。</p>}
+          {candidate?.kind === 'script' && !reading ? <div className="shot-regeneration__fields">
+            {scriptFields.map(field => <section className="shot-regeneration__field" key={field}>
+              <label><input type="checkbox" checked={fields.includes(field)} disabled={applying || candidate.shot[field] === shot[field]} aria-label={`应用候选${fieldLabels[field]}`} onChange={event => setFields(current => event.target.checked ? [...current, field] : current.filter(value => value !== field))} />{fieldLabels[field]}</label>
+              <div>
+                <section><span>当前</span><p>{field === 'durationUs' ? `${shot[field] / 1e6} 秒` : shot[field] || '（空）'}</p></section>
+                <section><span>候选</span><p>{field === 'durationUs' ? `${candidate.shot[field] / 1e6} 秒` : candidate.shot[field] || '（空）'}</p></section>
+              </div>
+            </section>)}
+          </div> : <div className="shot-regeneration__media">
+            {shot.clipEdit ? <CandidateClipPreview label="当前" project={project} shot={shot} assets={allAssets} /> : <CandidateMedia
+              label="当前" asset={currentAsset} sourceInUs={shot.videoInUs ?? shot.sourceInUs ?? 0} durationUs={shot.durationUs}
+              fallback={<ScenePreview project={project} shot={shot} shotIndex={Math.max(0, shotIndex)} assets={allAssets} />}
+            />}
+            {reading || !candidate ? <figure>
+              <figcaption>{(candidate?.kind ?? kind) === 'script' ? '候选文案' : '候选画面'}</figcaption>
+              <div className="shot-regeneration__frame shot-regeneration__empty">
+                <p role={reading || running || generating ? 'status' : undefined}>{reading ? '正在读取候选内容…' : generating || running ? '正在生成候选…' : '生成后可在这里对比候选'}</p>
+              </div>
+            </figure>
+              : preview?.project ? <CandidateClipPreview label="候选" project={preview.project} shot={preview.project.shots.find(value => value.id === candidate.shotId)!} assets={allAssets} />
+              : preview?.error ? <figure><figcaption>候选画面</figcaption><Notice kind="error">{preview.error}</Notice></figure>
+              : <CandidateMedia label="候选" asset={candidateAsset} sourceInUs={0} durationUs={candidate.shot.durationUs} />}
+          </div>}
+          {shot.sceneTemplate && candidate && candidate.kind !== 'script' && <Notice>应用此候选将替换当前模板画面。</Notice>}
+          {candidate?.kind === 'image' && shot.videoAssetId && <Notice>选用这张图片后，本镜头将用图片替换当前视频。</Notice>}
+          {candidateVideoAudio && (shot.audioAssetId || shot.captionTrack) && <Notice>选用这个视频后，本镜头将使用候选视频原声，当前旁白音频与字幕将从镜头中移除。</Notice>}
         </section>
+        {(items.length > 0 || loading || listError) && <aside className="shot-regeneration__history" aria-label="候选历史">
+          <div className="shot-regeneration__history-heading"><h3>候选历史 <span>{total}</span></h3><Button aria-label="刷新候选" variant="ghost" disabled={loading || applying} onClick={() => void load()}><RefreshCw size={13} aria-hidden="true" />刷新</Button></div>
+          {listError && <Notice kind="error">{listError}</Notice>}
+          {items.length ? <div className="shot-regeneration__history-list">
+            {items.map((item, index) => <button
+              type="button" className={`shot-regeneration__history-item ${item.id === selectedId ? 'is-selected' : ''}`}
+              aria-pressed={item.id === selectedId} aria-label={`选择候选 ${index + 1}：${candidateKindLabels[item.kind]}`}
+              key={item.id} disabled={applying} onClick={() => setSelectedId(item.id)}
+            >
+              <strong>{candidateKindLabels[item.kind]}{item.id === selectedId && <Check size={13} aria-hidden="true" />}</strong>
+              <time dateTime={item.createdAt}>{new Date(item.createdAt).toLocaleString('zh-CN')}</time>
+            </button>)}
+          </div> : loading && <p className="tiny-meta" role="status">正在读取候选历史…</p>}
+          {nextOffset < total && <Button aria-label="加载更多候选" busy={loading} disabled={applying} onClick={() => void load(nextOffset)}><ChevronDown size={14} aria-hidden="true" />加载更多</Button>}
+        </aside>}
       </div>
       {error && <Notice kind="error">{error}</Notice>}
     </div>
-    <div className="dialog__footer"><Button onClick={onClose}>关闭</Button><Button aria-label="应用所选候选" variant="primary" busy={applying} disabled={!candidate || reading || generating || running || shot.locked || candidate.kind === 'script' && !fields.length} onClick={() => void apply()}>应用</Button></div>
+    <div className="dialog__footer"><Button onClick={onClose}>关闭</Button><Button variant="primary" busy={applying} disabled={!candidate || reading || generating || running || shot.locked || candidate.kind === 'script' && !fields.length} onClick={() => void apply()}>应用所选候选</Button></div>
   </Dialog>;
 }
 
@@ -197,7 +269,7 @@ function CandidateClipPreview({ label, project, shot, assets }: { label: string;
   useEffect(() => { clock.configure(shot.durationUs, project.profile.frameRate); clock.seek(0); setFailure(''); }, [clock, shot.durationUs, shot.clipEdit?.planId, shot.audioAssetId, shot.videoAssetId, project.profile.frameRate.numerator, project.profile.frameRate.denominator]);
   useEffect(() => () => clock.dispose(), [clock]);
   useEffect(() => { if (document.hidden) clock.pause(); const pause = () => { if (document.hidden) clock.pause(); }; document.addEventListener('visibilitychange', pause); return () => document.removeEventListener('visibilitychange', pause); }, [clock]);
-  return <figure aria-label={`${label}剪后片段`}><figcaption>{label}</figcaption><span className="shot-regeneration__scene" style={{ aspectRatio: `${project.profile.width}/${project.profile.height}` }}><ScenePreview project={solo} shot={shot} shotIndex={Math.max(0, project.shots.findIndex(value => value.id === shot.id))} assets={assets} timeUs={timeUs} playing={playing} /></span>
+  return <figure aria-label={`${label}剪后片段`}><figcaption>{label}画面</figcaption><div className="shot-regeneration__frame"><ScenePreview project={solo} shot={shot} shotIndex={Math.max(0, project.shots.findIndex(value => value.id === shot.id))} assets={assets} timeUs={timeUs} playing={playing} /></div>
     {hasAudio && mix.status === 'pending' && <p className="tiny-meta" role="status">正在准备{label}剪后试听…</p>}
     {mix.mix && <PreparedMixPreview mix={mix.mix} onLevels={readAudioLevels} playing={playing} timeUs={timeUs} controls={false} onReadyChange={setAudioReady} onError={message => { clock.pause(); setFailure(message); }} />}
     {(failure || mix.error) && <Notice kind="error">{failure || mix.error}<Button aria-label="重试片段试听" onClick={() => { setFailure(''); mix.retry(); }}>重试</Button></Notice>}
@@ -243,5 +315,7 @@ function CandidateMedia({ label, asset, sourceInUs, durationUs, fallback }: { la
     if (element.currentTime >= range.end) { element.pause(); element.currentTime = Math.max(range.start, range.end - .001); }
   }
   const previewKey = `${key}:${sourceInUs}:${durationUs}`;
-  return <figure><figcaption>{label}</figcaption>{!asset ? fallback ?? <p className="tiny-meta">尚未关联素材</p> : current?.error ? <Notice kind="error">{current.error}</Notice> : !current?.url ? <p className="tiny-meta" role="status">正在读取素材…</p> : asset.kind === 'image' ? <img src={current.url} alt={`${label}画面`} onError={fail} /> : <video key={previewKey} ref={element => { media.current = element; }} src={current.url} controls preload="metadata" playsInline aria-label={`${label}视频`} onLoadedMetadata={event => position(event.currentTarget)} onSeeking={event => constrain(event.currentTarget)} onPlay={event => constrain(event.currentTarget, true)} onTimeUpdate={event => timeUpdate(event.currentTarget)} onError={fail} />}{asset && <p className="tiny-meta">{asset.name}</p>}</figure>;
+  return <figure><figcaption>{label}画面</figcaption><div className="shot-regeneration__frame">
+    {!asset ? fallback ?? <p className="tiny-meta">尚未关联素材</p> : current?.error ? <Notice kind="error">{current.error}</Notice> : !current?.url ? <p className="tiny-meta" role="status">正在读取素材…</p> : asset.kind === 'image' ? <img src={current.url} alt={`${label}画面`} onError={fail} /> : <video key={previewKey} ref={element => { media.current = element; }} src={current.url} controls preload="metadata" playsInline aria-label={`${label}视频`} onLoadedMetadata={event => position(event.currentTarget)} onSeeking={event => constrain(event.currentTarget)} onPlay={event => constrain(event.currentTarget, true)} onTimeUpdate={event => timeUpdate(event.currentTarget)} onError={fail} />}
+  </div>{asset && <p className="tiny-meta">{asset.name}</p>}</figure>;
 }

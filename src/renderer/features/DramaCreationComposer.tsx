@@ -10,7 +10,7 @@ import { resolveStudioIntent, type StudioCreationFlow } from '../lib/studio-inte
 import type { Action, WorkspaceView } from '../lib/types';
 import DramaTopicsDialog from './DramaTopicsDialog';
 import DramaSeriesTemplateDialog from './DramaSeriesTemplateDialog';
-import DramaStylePicker, { DramaStyleField } from './DramaStylePicker';
+import DramaStylePicker, { DramaStyleField, DramaStylePreview } from './DramaStylePicker';
 
 export type DramaCreationRequest = { sequence: number; template?: SeriesTemplate };
 export interface DramaComposerHandle { draftStatus(): 'empty' | 'edited' | 'busy'; }
@@ -26,10 +26,13 @@ const creationModes = {
 type CreationMode = keyof typeof creationModes;
 const sourceModes = ['novel', 'upload', 'write'] as const;
 const creationModeOptions = ['auto', ...sourceModes, 'planning'] as const;
+const featuredStyles = ['suspense-cinema', 'urban-drama', 'ink-wash']
+  .map(id => dramaStylePresets.find(preset => preset.id === id))
+  .filter(preset => preset !== undefined);
 const startingPoints = [
-  { mode: 'novel', label: '改编小说', description: '把一章小说写成导演剧本' },
-  { mode: 'write', label: '从想法写剧本', description: '从人物或一句灵感起稿' },
-  { mode: 'planning', label: '规划一组分镜', description: '从画面、时长和镜头数开始' },
+  { mode: 'novel', label: '改编小说' },
+  { mode: 'write', label: '从想法写剧本' },
+  { mode: 'planning', label: '规划一组分镜' },
 ] as const;
 const nextSteps = {
   novel: '创建后，在分集对话中生成并审核导演剧本。',
@@ -264,9 +267,18 @@ export default function DramaCreationComposer({ ref, workspace, action, request,
 
   return <>
     <section ref={root} className="drama-composer" data-guide="create-project" aria-label="新建短剧">
-      {showWelcome && <header className="drama-composer__welcome">
-        <h2>把故事拍成短剧</h2>
-        <p>{route.prompt}</p>
+      {showWelcome && <header className="drama-composer__welcome" data-with-styles={mode !== 'planning' || undefined}>
+        <div className="drama-composer__welcome-copy">
+          <h2>把故事拍成短剧</h2>
+          <p>{route.prompt}</p>
+        </div>
+        {mode !== 'planning' && <div className="drama-composer__style-list" role="group" aria-label="试一种画风">
+          {featuredStyles.map(preset => <Button key={preset.id} static variant="ghost" className="drama-composer__style-tile"
+            aria-pressed={preset.id === stylePresetId} disabled={busy || readBusy} onClick={() => selectStylePreset(preset.id)}>
+            <span className="drama-composer__style-picture"><DramaStylePreview presetId={preset.id} /></span>
+            <span className="drama-composer__style-label">{preset.name}{preset.id === stylePresetId && <Check size={14} aria-hidden="true" />}</span>
+          </Button>)}
+        </div>}
       </header>}
       <div className="drama-composer__thread" role="log" aria-label="创作对话">
         {draft.step === 'source' && draft.initialRequest && <>
@@ -388,13 +400,11 @@ export default function DramaCreationComposer({ ref, workspace, action, request,
         </form>
       </div>}
       {showWelcome && mode === 'auto' && <ul className="drama-composer__starters" aria-label="创作起点">
-        {startingPoints.map(({ mode: flow, label, description }) => {
+        {startingPoints.map(({ mode: flow, label }) => {
           const { icon: Icon } = creationModes[flow];
           return <li key={flow}>
-            <Button variant="ghost" disabled={busy} onClick={() => selectMode(flow)}>
-              <span className="drama-composer__starter-icon"><Icon size={16} aria-hidden="true" /></span>
-              <span className="drama-composer__starter-text"><strong>{label}</strong><small>{description}</small></span>
-              <ArrowRight size={16} strokeWidth={1.5} aria-hidden="true" />
+            <Button static variant="ghost" disabled={busy || readBusy} onClick={() => selectMode(flow)}>
+              <Icon size={16} aria-hidden="true" />{label}
             </Button>
           </li>;
         })}

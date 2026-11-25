@@ -1,8 +1,8 @@
-.dialog.editor-project-export { width: min(calc(100vw - 2rem), 46rem); }
-.editor-project-export__body { display: flex; flex-direction: column; gap: var(--space-5); }
+.dialog.editor-project-export { inline-size: min(46rem, calc(100dvw - var(--space-8))); }
+.editor-project-export__body { display: flex; flex-direction: column; gap: var(--space-4); }
 .editor-project-export__body > * { flex-shrink: 0; }
 .editor-project-export .editor-project-export__intro { margin: 0; color: var(--text-secondary); }
-.editor-project-export__fields { display: grid; gap: var(--space-4); margin: 0; padding: 0; border: 0; min-width: 0; }
+.editor-project-export__fields { display: grid; gap: var(--space-form-group); margin: 0; padding: 0; border: 0; min-width: 0; }
 .editor-project-export__fields legend { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
 .editor-project-export details { font-size: var(--text-size-label); color: var(--text-secondary); }
 .editor-project-export details summary { cursor: pointer; color: var(--text); }
@@ -12,4 +12,3 @@
 .editor-project-export__path { display: grid; gap: var(--space-2); }
 .editor-project-export__path span { font-size: var(--text-size-caption); color: var(--text-secondary); }
 .editor-project-export__path code { overflow-wrap: anywhere; font-size: var(--text-size-caption); color: var(--text); }
-@media (max-width: 700px) { .dialog.editor-project-export { width: calc(100vw - 1rem); } }

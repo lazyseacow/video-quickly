@@ -7,6 +7,7 @@ import { expect, test, type APIRequestContext } from '@playwright/test';
 import type { AssetRecord, CharacterProfile, ProjectDocument, RunSummary } from '@video-quickly/contracts';
 import { storyboardFixtureResponse } from '../fixtures/planning-response';
 import { openProduction, productionStep, saveProduction } from './production-settings';
+import { openShotInspectorSection } from './storyboard-actions';
 
 async function rpc<T>(request: APIRequestContext, method: string, params: unknown = {}): Promise<T> {
   const response = await request.post('/__desktop_rpc', { data: { method, params } });
@@ -91,6 +92,7 @@ for (const viewport of [{ width: 1536, height: 960, theme: 'dark' }, { width: 39
       const run = await rpc<RunSummary>(request, 'run.start', { projectId: saved.id, nodeId: 'script' });
       await expect.poll(async () => (await rpc<RunSummary>(request, 'run.get', { runId: run.id })).status, { timeout: 30_000 }).toBe('succeeded');
       await rpc(request, 'node.apply', { runId: run.id, nodeId: 'script', revision: saved.revision });
+      await openShotInspectorSection(page, '画面与素材');
       await expect(page.getByRole('checkbox', { name: source.profiles[0].name, exact: true })).toBeChecked();
       await expect(page.getByRole('checkbox', { name: '道具：铜锁', exact: true })).toBeChecked();
       const restored = await openProduction(page, source.project);

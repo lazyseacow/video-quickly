@@ -231,7 +231,7 @@ export default function DramaWorksPage({ workspace, action, onOpen, onContinue, 
             onOpen={() => setSelected(value)} onContinue={onContinue} />)}
         </ul>}
         {!values.length && library.hasLoaded && !library.error && !library.busy && <div className="drama-library__empty">
-          <EmptyState icon={query ? <Search size={20} strokeWidth={1.75} /> : archived ? <Archive size={20} strokeWidth={1.75} /> : <Clapperboard size={20} strokeWidth={1.75} />}
+          <EmptyState icon={query ? <Search size={24} strokeWidth={1.75} /> : archived ? <Archive size={24} strokeWidth={1.75} /> : <Clapperboard size={24} strokeWidth={1.75} />}
             title={query ? '没有匹配的作品' : archived ? '没有归档作品' : '还没有作品'}>
             {query
               ? <Button onClick={() => { setSearch(''); searchInput.current?.focus(); }}>清除搜索作品</Button>
@@ -277,7 +277,7 @@ function readEpisodePreview(project: ProjectSummary): EpisodePreview | undefined
 }
 
 function EpisodeFrame({ preview }: { preview: EpisodePreview }) {
-  return <Suspense fallback={null}><WorkPreview {...preview} shotIndex={0} thumbnail /></Suspense>;
+  return <Suspense fallback={null}><WorkPreview {...preview} shotIndex={0} thumbnail hideTitle /></Suspense>;
 }
 
 function WorkCard({ work, episodes, onOpen, onContinue }: {
@@ -291,28 +291,30 @@ function WorkCard({ work, episodes, onOpen, onContinue }: {
   const episodeLabel = latest?.drama && `第 ${latest.drama.number} 集`;
   const episodeTitle = latest && episodeLabel && ![work.title, episodeLabel, `${work.title} · ${episodeLabel}`].includes(latest.title) ? latest.title : undefined;
   return <li>
-    <article className="drama-work-card drama-library__card" data-work-id={work.id}>
-      {cover && <div className="drama-library__cover">
-        <EpisodeFrame preview={cover} />
-        {cover.project.id !== latest?.id && cover.project.drama &&
-          <span className="drama-library__cover-label">第 {cover.project.drama.number} 集</span>}
-      </div>}
+    <article className="drama-work-card drama-library__card" aria-labelledby={id} data-work-id={work.id}>
+      <div className="drama-library__cover">
+        {cover ? <>
+          <EpisodeFrame preview={cover} />
+          {cover.project.id !== latest?.id && cover.project.drama &&
+            <span className="drama-library__cover-label">第 {cover.project.drama.number} 集</span>}
+        </> : <div className="drama-library__cover-empty">
+          <Clapperboard size={26} strokeWidth={1.5} aria-hidden="true" />
+          <span>暂无封面</span>
+        </div>}
+      </div>
       <header>
-        {!cover && <span className="drama-library__card-mark"><Clapperboard size={16} strokeWidth={1.75} aria-hidden="true" /></span>}
-        <div className="drama-library__card-heading">
-          <h3 id={id}>{work.title}</h3>
-          <div className="drama-library__facts">
-            <span>{count} 集</span>
-            <span>{dramaVisualStyleLabels[work.visualStyle]}</span>
-            <span>{dramaNarrativeModeLabels[work.narrativeMode]}</span>
-          </div>
+        <h3 id={id}>{work.title}</h3>
+        <div className="drama-library__facts">
+          <span>{count} 集</span>
+          <span>{dramaVisualStyleLabels[work.visualStyle]}</span>
+          <span>{dramaNarrativeModeLabels[work.narrativeMode]}</span>
         </div>
       </header>
       {(work.description || episodeLabel) && <div className="drama-library__card-content">
-        {work.description && <p className="drama-library__summary">{work.description}</p>}
         {episodeLabel && <p className="drama-library__latest"><History size={14} aria-hidden="true" /><span>最近编辑 · {episodeLabel}</span>
           {episodeTitle && <strong>{episodeTitle}</strong>}
         </p>}
+        {work.description && <p className="drama-library__summary">{work.description}</p>}
       </div>}
       <footer>
         <UpdatedDate value={latest && latest.updatedAt > work.updatedAt ? latest.updatedAt : work.updatedAt} />

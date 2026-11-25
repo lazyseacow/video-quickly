@@ -114,7 +114,6 @@ test('offers all built-in styles and transfers a series template with its select
   const { project, params } = await submit(page, form);
   expect(params).toMatchObject({ seriesTemplateId: template.id, seriesTemplateRevision: template.revision });
   expect(project).toMatchObject({ ...template.settings, shots: [], profile: { width: 1080, height: 1920 } });
-  expect(project.workflow.production.agentSkillIds).toEqual([]);
   for (const id of ['screenplay', 'brief', 'style', 'script']) expect(project.workflow.nodes.find(node => node.id === id)?.skillIds).toEqual(template.creationDefaults!.skillIds);
   await page.getByRole('button', { name: '素材库', exact: true }).click(); await page.getByRole('button', { name: '图片', exact: true }).click();
   for (const name of ['巴黎石板巷', '大桥骤雨', '云山隐居图']) { const preview = page.getByRole('button', { name: `预览“内置参考 · ${name}”`, exact: true }); await preview.scrollIntoViewIfNeeded(); await expect.poll(() => preview.locator('img').evaluate((image: HTMLImageElement) => image.naturalWidth)).toBeGreaterThan(0); }

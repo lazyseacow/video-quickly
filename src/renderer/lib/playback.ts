@@ -8,7 +8,7 @@ export interface PlaybackFrameGate {
   isFrameReady: (timeUs: number) => boolean;
 }
 
-// Only the preview and playhead subscribe. Editing panels never consume frame ticks.
+// The preview consumes every frame. Editing controls subscribe to derived values.
 export class PlaybackClock {
   private snapshot: PlaybackSnapshot = { timeUs: 0, playing: false };
   private listeners = new Set<() => void>();
@@ -24,6 +24,8 @@ export class PlaybackClock {
   // Explicit commands can supersede deferred positioning even when seeking to
   // the same frame. Playback ticks and internal pauses are not new intent.
   get transportRevision() { return this.transportVersion; }
+  // A manual seek cancels an automatic range and any pending buffered resume.
+  get canResumeAfterSeek() { return this.snapshot.playing && !this.snapshot.buffering && this.rangeEndUs === undefined; }
   subscribe = (listener: () => void) => { this.listeners.add(listener); return () => { this.listeners.delete(listener); }; };
   attachFrameGate(gate: PlaybackFrameGate) {
     this.frameGate = gate;

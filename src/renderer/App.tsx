@@ -64,10 +64,7 @@ export default function App() {
   const pageScroll = useRef(new Map<Page, number>());
   const navigationGuide = useRef<{ page: Page; complete: () => void } | undefined>(undefined);
   const [projectId, setProjectId] = useState<string>();
-  const [theme, setTheme] = useState<'light' | 'dark'>(() => {
-    const initialTheme = document.documentElement.dataset.theme ?? localStorage.getItem('vq-theme');
-    return initialTheme === 'dark' ? 'dark' : 'light';
-  });
+  const [theme, setTheme] = useState<'light' | 'dark'>(() => document.documentElement.dataset.theme === 'light' ? 'light' : 'dark');
   const [toast, setToast] = useState<ToastMessage>();
   const [studioRequest, setStudioRequest] = useState<DramaStudioRequest>();
   const studioRequestSequence = useRef(0);

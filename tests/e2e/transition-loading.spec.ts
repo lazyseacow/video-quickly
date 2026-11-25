@@ -59,10 +59,10 @@ async function open(page: Page, project: ProjectDocument, ready = true) {
 }
 
 async function seek(page: Page, frame: number) {
-  const ruler = page.getByRole('slider', { name: '预览播放位置', exact: true }); await ruler.press('Home');
+  const ruler = page.getByRole('slider', { name: '播放器播放位置', exact: true }); await ruler.press('Home');
   for (let index = 0; index < Math.floor(frame / 10); index++) await ruler.press('Shift+ArrowRight');
   for (let index = 0; index < frame % 10; index++) await ruler.press('ArrowRight');
-  await expect(ruler).toHaveAttribute('aria-valuenow', String(Math.round(frame * 1000 / 30)));
+  await expect(ruler).toHaveAttribute('data-playhead-ms', String(Math.round(frame * 1000 / 30)));
 }
 
 async function capture(canvas: Locator, points: PixelPoint[]) {
@@ -70,7 +70,7 @@ async function capture(canvas: Locator, points: PixelPoint[]) {
     const state = { active: true, request: 0, observer: null as MutationObserver | null, samples: [] as Sample[], commits: [] as { source: 'commit'; frame: number; wallMs: number }[], audioEvents: [] as { kind: string; wallMs: number; uiMs: number; audioMs: number }[], start: performance.now() };
     const audio = document.querySelector<HTMLAudioElement>('.preview-panel audio[data-audio-role="处理后混音"]');
     const eventTypes = ['play', 'pause', 'seeking', 'seeked', 'waiting'];
-    const recordAudio = (event: Event) => { if (state.active) state.audioEvents.push({ kind: event.type, wallMs: performance.now() - state.start, uiMs: Number(document.querySelector('[role="slider"][aria-label="预览播放位置"]')?.getAttribute('aria-valuenow')), audioMs: (audio?.currentTime ?? 0) * 1000 }); };
+    const recordAudio = (event: Event) => { if (state.active) state.audioEvents.push({ kind: event.type, wallMs: performance.now() - state.start, uiMs: Number(document.querySelector('input[aria-label="播放器播放位置"]')?.getAttribute('data-playhead-ms')), audioMs: (audio?.currentTime ?? 0) * 1000 }); };
     for (const event of eventTypes) audio?.addEventListener(event, recordAudio);
     function stop() { state.active = false; cancelAnimationFrame(state.request); state.observer?.disconnect(); for (const event of eventTypes) audio?.removeEventListener(event, recordAudio); }
     function sample() {
@@ -84,7 +84,7 @@ async function capture(canvas: Locator, points: PixelPoint[]) {
       const width = Math.max(...coordinates.map(point => point.x)) - left + 1, height = Math.max(...coordinates.map(point => point.y)) - top + 1;
       const start = performance.now(), pixels = element.getContext('2d')!.getImageData(left, top, width, height).data;
       const sampled = coordinates.map(({ x, y }) => { const offset = ((y - top) * width + x - left) * 4; return [pixels[offset], pixels[offset + 1], pixels[offset + 2]] as Rgb; });
-      state.samples.push({ source: 'raf', wallMs: performance.now() - state.start, readbackMs: performance.now() - start, frame: Number(element.dataset.renderedFrame ?? -1), uiMs: Number(document.querySelector('[role="slider"][aria-label="预览播放位置"]')?.getAttribute('aria-valuenow')), audioMs: (audio?.currentTime ?? 0) * 1000, audioPaused: audio?.paused ?? true, width: element.width, height: element.height, buffered: element.dataset.transitionBuffered === 'true', cachePixels: Number(element.dataset.transitionCachePixels ?? 0), visible: style.visibility !== 'hidden' && style.display !== 'none' && bounds.width > 0 && !occluded, busy: parent?.getAttribute('aria-busy') === 'true', status: status?.textContent ?? '', pixels: sampled });
+      state.samples.push({ source: 'raf', wallMs: performance.now() - state.start, readbackMs: performance.now() - start, frame: Number(element.dataset.renderedFrame ?? -1), uiMs: Number(document.querySelector('input[aria-label="播放器播放位置"]')?.getAttribute('data-playhead-ms')), audioMs: (audio?.currentTime ?? 0) * 1000, audioPaused: audio?.paused ?? true, width: element.width, height: element.height, buffered: element.dataset.transitionBuffered === 'true', cachePixels: Number(element.dataset.transitionCachePixels ?? 0), visible: style.visibility !== 'hidden' && style.display !== 'none' && bounds.width > 0 && !occluded, busy: parent?.getAttribute('aria-busy') === 'true', status: status?.textContent ?? '', pixels: sampled });
     }
     // A producer can paint between our RAF callbacks on a loaded renderer.
     // Keep its commit trajectory separate from RAF-visible pixel observations.
@@ -254,9 +254,9 @@ for (const action of ['pause', 'seek'] as const) test(`honours a newer user ${ac
     const canvas = await open(page, source.project); await seek(page, 30); await expect(canvas).toHaveAttribute('data-rendered-frame', '30'); handle = await capture(canvas, coldPoints);
     await page.getByRole('button', { name: '播放预览', exact: true }).click(); await page.waitForTimeout(1000);
     if (action === 'pause') await page.getByRole('button', { name: '暂停预览', exact: true }).click(); else await seek(page, 10);
-    const ruler = page.getByRole('slider', { name: '预览播放位置', exact: true }), expectedMs = Number(await ruler.getAttribute('aria-valuenow'));
+    const ruler = page.getByRole('slider', { name: '播放器播放位置', exact: true }), expectedMs = Number(await ruler.getAttribute('data-playhead-ms'));
     gate.release(); await page.waitForTimeout(800);
-    await expect(page.getByRole('button', { name: '播放预览', exact: true })).toBeVisible(); await expect(ruler).toHaveAttribute('aria-valuenow', String(expectedMs));
+    await expect(page.getByRole('button', { name: '播放预览', exact: true })).toBeVisible(); await expect(ruler).toHaveAttribute('data-playhead-ms', String(expectedMs));
     expect((await handle.evaluate(state => state.samples.at(-1)!)).audioPaused).toBe(true);
     if (action === 'seek') { expect(expectedMs).toBe(333); await expect(canvas).toHaveAttribute('data-rendered-frame', '10'); }
   } finally { gate.release(); if (handle) await stopCapture(handle, info, gate.requests); }

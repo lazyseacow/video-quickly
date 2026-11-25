@@ -44,7 +44,7 @@ async function instrument(page: Page) {
     function record(element: HTMLMediaElement, kind: string, value?: number) {
       if (!(element instanceof HTMLVideoElement) && element.dataset.audioRole !== '处理后混音') return;
       let path: string | null = null; try { path = new URL(element.currentSrc || element.src).searchParams.get('path'); } catch { /* src is not assigned yet */ }
-      events.push({ kind, value, path, wallMs: performance.now(), uiMs: Number(document.querySelector('[role="slider"][aria-label="预览播放位置"]')?.getAttribute('aria-valuenow') ?? 0), frame: Number(document.querySelector<HTMLCanvasElement>('.preview-frame canvas')?.dataset.renderedFrame ?? -1) });
+      events.push({ kind, value, path, wallMs: performance.now(), uiMs: Number(document.querySelector('input[aria-label="播放器播放位置"]')?.getAttribute('data-playhead-ms') ?? 0), frame: Number(document.querySelector<HTMLCanvasElement>('.preview-frame canvas')?.dataset.renderedFrame ?? -1) });
     }
     function register(element: HTMLMediaElement) {
       if (registered.has(element)) return; registered.add(element);
@@ -59,7 +59,7 @@ async function instrument(page: Page) {
   });
 }
 async function seek(page: Page, frame: number) {
-  const ruler = page.getByRole('slider', { name: '预览播放位置', exact: true }); await ruler.press('Home');
+  const ruler = page.getByRole('slider', { name: '播放器播放位置', exact: true }); await ruler.press('Home');
   for (let index = 0; index < Math.floor(frame / 10); index++) await ruler.press('Shift+ArrowRight'); for (let index = 0; index < frame % 10; index++) await ruler.press('ArrowRight');
   await expect(page.locator('.preview-frame canvas')).toHaveAttribute('data-rendered-frame', String(frame));
 }
@@ -90,11 +90,11 @@ for (const scenario of [{ transition: 'fade', cold: false }, { transition: 'wipe
       coordinates.forEach(({ x, y }, index) => samplingContext.drawImage(element, x, y, 1, 1, index, 0, 1, 1));
       const pixels = samplingContext.getImageData(0, 0, points.length, 1).data;
       const readbackMs = performance.now() - start;
-      state.samples.push({ source: 'raf', wallMs: performance.now(), readbackMs, uiMs: Number(document.querySelector('[role="slider"][aria-label="预览播放位置"]')?.getAttribute('aria-valuenow')), frame: Number(element.dataset.renderedFrame ?? -1), width: element.width, height: element.height, visible: style.visibility !== 'hidden' && style.display !== 'none' && bounds.width > 0 && !occluded, badge: Boolean(badge && badge.getBoundingClientRect().width && badgeStyle?.display !== 'none' && badgeStyle?.visibility !== 'hidden' && Number(badgeStyle?.opacity ?? 1) > 0), audioPaused: audio?.paused ?? true, audioMs: (audio?.currentTime ?? 0) * 1000, buffered: element.dataset.transitionBuffered === 'true', cachePixels: Number(element.dataset.transitionCachePixels ?? 0), pixels: coordinates.map((_, index) => [pixels[index * 4], pixels[index * 4 + 1], pixels[index * 4 + 2]] as Rgb) });
+      state.samples.push({ source: 'raf', wallMs: performance.now(), readbackMs, uiMs: Number(document.querySelector('input[aria-label="播放器播放位置"]')?.getAttribute('data-playhead-ms')), frame: Number(element.dataset.renderedFrame ?? -1), width: element.width, height: element.height, visible: style.visibility !== 'hidden' && style.display !== 'none' && bounds.width > 0 && !occluded, badge: Boolean(badge && badge.getBoundingClientRect().width && badgeStyle?.display !== 'none' && badgeStyle?.visibility !== 'hidden' && Number(badgeStyle?.opacity ?? 1) > 0), audioPaused: audio?.paused ?? true, audioMs: (audio?.currentTime ?? 0) * 1000, buffered: element.dataset.transitionBuffered === 'true', cachePixels: Number(element.dataset.transitionCachePixels ?? 0), pixels: coordinates.map((_, index) => [pixels[index * 4], pixels[index * 4 + 1], pixels[index * 4 + 2]] as Rgb) });
       state.raf = requestAnimationFrame(tick);
     }
     // Commits diagnose producer cadence separately and never count as pixel samples.
-    state.observer = new MutationObserver(() => { if (state.active) state.commits.push({ source: 'commit', wallMs: performance.now(), uiMs: Number(document.querySelector('[role="slider"][aria-label="预览播放位置"]')?.getAttribute('aria-valuenow')), frame: Number(element.dataset.renderedFrame ?? -1) }); });
+    state.observer = new MutationObserver(() => { if (state.active) state.commits.push({ source: 'commit', wallMs: performance.now(), uiMs: Number(document.querySelector('input[aria-label="播放器播放位置"]')?.getAttribute('data-playhead-ms')), frame: Number(element.dataset.renderedFrame ?? -1) }); });
     state.observer.observe(element, { attributes: true, attributeFilter: ['data-rendered-frame'] });
     state.raf = requestAnimationFrame(tick); return state;
   }, points);

@@ -35,7 +35,6 @@ type RunStartInput = z.infer<typeof runStartInput>;
 type ParentRunScope = Pick<RunSnapshot, 'exportBatch' | 'regeneration' | 'research' | 'nodes' | 'selection'> & {
   profile: ProjectDocument['profile'];
   workflowNodeCount: number | null;
-  autonomousVideo: number | null;
 };
 type InheritedScope =
   | { kind: 'run'; useCurrentRevision?: true; requiredStep?: WorkflowNode; exportStep?: WorkflowNode }
@@ -77,7 +76,7 @@ export function createRunStarter({
     if (parent.projectId !== input.projectId) throw new Error('父运行不属于当前项目。');
 
     // Read only the scope, without decoding the parent's full project or asset snapshot.
-    const row = database.prepare("SELECT json_object('exportBatch', json_extract(body, '$.exportBatch'), 'regeneration', json_extract(body, '$.regeneration'), 'research', json_extract(body, '$.research'), 'nodes', json_extract(body, '$.nodes'), 'selection', json_extract(body, '$.selection'), 'profile', json_extract(body, '$.project.profile'), 'workflowNodeCount', json_array_length(body, '$.project.workflow.nodes'), 'autonomousVideo', json_extract(body, '$.autonomousVideo')) AS body FROM documents WHERE kind = 'run-snapshot' AND id = ?").get(parent.id) as { body: string } | undefined;
+    const row = database.prepare("SELECT json_object('exportBatch', json_extract(body, '$.exportBatch'), 'regeneration', json_extract(body, '$.regeneration'), 'research', json_extract(body, '$.research'), 'nodes', json_extract(body, '$.nodes'), 'selection', json_extract(body, '$.selection'), 'profile', json_extract(body, '$.project.profile'), 'workflowNodeCount', json_array_length(body, '$.project.workflow.nodes')) AS body FROM documents WHERE kind = 'run-snapshot' AND id = ?").get(parent.id) as { body: string } | undefined;
     if (!row) throw new Error('父运行快照不存在，无法确认重新制作范围。');
     const saved = JSON.parse(row.body) as ParentRunScope;
     if (parent.regenerationSource && saved.regeneration) {
@@ -95,8 +94,7 @@ export function createRunStarter({
 
     const originalNodeCount = saved.workflowNodeCount ?? 0;
     if (saved.selection && (!input.selection || saved.selection.nodeId !== input.selection.nodeId || saved.selection.mode !== input.selection.mode)) throw new Error('请先预览原任务的执行范围，再重新制作。');
-    const singleStep = !saved.selection && !saved.exportBatch && !saved.regeneration && !saved.research && saved.nodes.length === 1
-      && !(saved.autonomousVideo ?? saved.nodes[0].config.videoAgent) ? saved.nodes[0] : undefined;
+    const singleStep = !saved.selection && !saved.exportBatch && !saved.regeneration && !saved.research && saved.nodes.length === 1 ? saved.nodes[0] : undefined;
     if (singleStep && originalNodeCount < 1) throw new Error('原任务的流程范围不完整，请在项目中确认后重新执行。');
     if ((saved.exportBatch || saved.regeneration || saved.research) && hasExplicitTask(input)) throw new Error('特殊任务重新制作必须保留原任务范围，请从对应编辑器创建其他任务。');
     if (saved.exportBatch) return { kind: 'export-batch', batchId: saved.exportBatch.batchId, parentRunId: parent.id };
@@ -211,7 +209,6 @@ export function createRunStarter({
       models,
       ...await prepareSkills(workflowNodesWithSubflows({ ...runProject.workflow, nodes })),
       nodes,
-      autonomousVideo: false,
       handlerVersion: 1,
       characters: bundle.characters,
       characterAssets: bundle.assets,

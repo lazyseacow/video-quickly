@@ -1,0 +1,67 @@
+.outline-list, .outline-shot { position: relative; }
+.outline-shot[data-storyboard-reorderable] { cursor: grab; }
+
+.outline-shot__grip {
+  position: absolute;
+  inset-inline-end: 0;
+  inset-block-end: 0;
+  display: grid;
+  place-items: center;
+  inline-size: var(--control-height);
+  block-size: var(--control-height);
+  cursor: grab;
+  touch-action: none;
+  -webkit-user-select: none;
+  user-select: none;
+}
+.outline-shot__grip svg {
+  box-sizing: content-box;
+  padding: var(--space-1);
+  border-radius: var(--radius-compact);
+  color: var(--on-media);
+  background: var(--media-overlay);
+}
+
+.outline-list[data-storyboard-dragging] { scroll-behavior: auto; }
+.outline-list[data-storyboard-dragging], .outline-list[data-storyboard-dragging] * { cursor: grabbing; }
+.outline-shot[data-storyboard-drag-group] { opacity: .56; }
+.outline-shot[data-storyboard-drag-source] {
+  z-index: 1;
+  opacity: .82;
+  pointer-events: none;
+  translate: var(--storyboard-drag-translate);
+  box-shadow: var(--studio-floating-shadow);
+}
+
+.outline-shot[data-storyboard-drop]::after {
+  --storyboard-marker-offset: calc(-.5 * var(--space-2) - 2px);
+  content: '';
+  position: absolute;
+  z-index: 2;
+  inset-inline: 0;
+  block-size: 3px;
+  border-radius: var(--radius-pill);
+  background: var(--accent);
+  pointer-events: none;
+}
+.outline-shot[data-storyboard-drop='before']::after { inset-block-start: var(--storyboard-marker-offset); }
+.outline-shot[data-storyboard-drop='after']::after { inset-block-end: var(--storyboard-marker-offset); }
+
+@media (max-width: 650px) {
+  .outline-shot[data-storyboard-drop]::after { inset: auto; inset-block: 0; block-size: auto; inline-size: 3px; }
+  .outline-shot[data-storyboard-drop='before']::after { inset-block-start: 0; inset-inline-start: var(--storyboard-marker-offset); }
+  .outline-shot[data-storyboard-drop='after']::after { inset-block-end: 0; inset-inline-end: var(--storyboard-marker-offset); }
+}
+
+@media (forced-colors: active) {
+  .outline-shot[data-storyboard-drop]::after { background: Highlight; forced-color-adjust: none; }
+}
+
+.outline-reorder-status {
+  position: absolute;
+  inline-size: 1px;
+  block-size: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}

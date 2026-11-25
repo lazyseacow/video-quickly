@@ -1,7 +1,7 @@
 import { randomUUID, createHash } from 'node:crypto';
 import { existsSync } from 'node:fs';
-import { copyFile, mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
-import { basename, extname, join, resolve } from 'node:path';
+import { copyFile, mkdir, readFile, stat, writeFile } from 'node:fs/promises';
+import { extname, join, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { isDeepStrictEqual } from 'node:util';
 import { z } from 'zod';
@@ -12,7 +12,7 @@ import {
   applyShotCandidate, assetSchema, characterProfileSchema, claimSchema, clipSourceAssetIds, DEFAULT_VIDEO_PROFILE, editorExportInputSchema, LockedShotChangeError, modelRequestFailure, modelSchema, pageInputSchema, parametersForTextProtocol, projectSchema, providerUsageSchema, runSchema, sumProviderUsage, runSelectionSchema, runStatusSchema, shotCandidateFieldSchema, shotCandidateKindSchema, shotCandidateSchema, shotSchema, validateClipEditContent, validateClipEditHistory, validateModelConnection, validateModelParameters, videoProfileSchema, workflowSchema,
   type AssetRecord, type AudioWaveform, type CharacterProfile, type JsonValue, type ModelCapability, type ModelProfile, type PreparedAudioMix, type ProjectDocument, type ReadinessIssue, type RunEvent, type RunPlan, type RunRecord, type RunSelection, type RunSummary, type RuntimeEvent, type RuntimeSystem, type Shot, type ShotCandidate, type SkillPackage, type WorkflowDefinition, type WorkflowNode, type WorkspaceSnapshot,
 } from '@video-quickly/contracts';
-import { ActivityJournal, AGENT_CONTINUATION_EXHAUSTED, AgentCompletionError, AmbiguousActivityError, fingerprint, SimulatedProcessExit, UnconfirmedActivityError, type ActivityHooks, type ActivitySafety } from './activities.js';
+import { ActivityJournal, AmbiguousActivityError, fingerprint, SimulatedProcessExit, UnconfirmedActivityError, type ActivityHooks, type ActivitySafety } from './activities.js';
 import { openDatabase, DocumentStore } from './database.js';
 import { activityNodeId, createReadModels } from './read-models.js';
 import { createExecutionGraph } from './graph.js';
@@ -20,7 +20,7 @@ import { AsyncLocalStorageProviderSingleton } from '@langchain/core/singletons';
 import { validateWorkflowComposition, workflowNodesWithSubflows, workflowEdgesWithSubflows, resolveSubflowInputs, substituteSubflowInputs, subflowNodeId, subflowThreadId, subflowValueAt, type SubflowDefinition } from '@video-quickly/contracts';
 import { createWorkflowTemplateLibrary } from './workflow-templates.js';
 import { buildWorkflowPrompt, parseWorkflowScript, storyboardVideoModel, withStoryboardGuidance, type StoryboardPromptStage, type WorkflowUpstreamResult } from './workflow-prompts.js';
-import { editingOutputSchema, manualPlanningOutput, parseProductionDocument, productionDocumentContract, storyboardOutputContract, usesPlanningFields, validateProductionMediaOutput, validateProductionMediaPreview, WORKFLOW_OUTPUT_VERSION } from './workflow-outputs.js';
+import { manualPlanningOutput, parseProductionDocument, productionDocumentContract, storyboardOutputContract, usesPlanningFields, validateProductionMediaOutput, validateProductionMediaPreview, WORKFLOW_OUTPUT_VERSION } from './workflow-outputs.js';
 import { githubTrendingPrompt, githubTrendingRequest, githubTrendingSummary, validateGithubTrendingStoryboard } from './github-trending.js';
 import { storyboardWebPrompt, storyboardWebRequest, type StoryboardWebReader, type StoryboardWebResearch } from './storyboard-research.js';
 import { executeStoryboard, STORYBOARD_BATCH_SIZE, storyboardOutlineStage } from './storyboard-generation.js';
@@ -47,7 +47,6 @@ import { createExportBatchManager, verifyBatchRenderResult, type ExportBatchSnap
 import { isLegacyTimelineAsset, omitLegacyExportTimeline } from './legacy-export-timeline.js';
 import { validateResearchProject, researchPrompt, researchModelResponse } from './research.js';
 import { createSeriesTemplateLibrary } from './series-templates.js';
-import { usesFullAudioSource } from '@video-quickly/video/audio';
 import { replaceShotMedia } from '@video-quickly/video/clip-edits';
 import { trimShotInContext } from '@video-quickly/video/editing';
 import { createAudioPreview, type AudioMixCallbacks } from './audio-preview.js';
@@ -76,10 +75,6 @@ import { resolveImageEdit } from '@video-quickly/integrations/image-edit';
 import { imageEditInputSchema, creativeReferenceAssetIds, getMediaAdapters, isCreativeReferenceAsset, needsComposedSceneFrame, singleFrameVideoModel, usesVideoSceneImage } from '@video-quickly/contracts';
 import { prepareWorkflowAssistant, parseWorkflowAssistantResult } from './workflow-assistant.js';
 import { workflowNodeSchema } from '@video-quickly/contracts';
-import { legacyVideoAgentNode, videoTaskNode } from './video-agent.js';
-import { applyAgentTimelineEdits } from './video-agent-editing.js';
-import type { AgentBusinessTools, AgentContinuation } from './agent.js';
-import { agentToolOutputDirectory, materializeToolArtifact } from './tool-artifacts.js';
 import { characterAppearanceShot, matchCastReferences, recurringCast } from './automatic-casting.js';
 import { orderedNodes, resolveProductionNodes } from './production-nodes.js';
 import { prepareCreativePlanningExecution, readCreativeReferenceImage } from './creative-planning-execution.js';
@@ -538,16 +533,13 @@ export function createRuntime(options: RuntimeOptions) {
     });
   }
 
-  function productionOutput({ brief, style, originalText, creativeContext, shots, clipEditSources, clipEditPlans, musicClips, workflow }: ProjectDocument, includePlanningFields = false, includeTimelineEdits = false) {
+  function productionOutput({ brief, style, originalText, creativeContext, shots, clipEditSources, clipEditPlans, workflow }: ProjectDocument, includePlanningFields = false) {
     const manualPlanningFields = includePlanningFields ? workflow.production.manualPlanningFields : undefined;
-    return { brief, style, originalText, creativeContext, shots, clipEditSources, clipEditPlans, ...(manualPlanningFields ? { manualPlanningFields } : {}),
-      ...(includeTimelineEdits ? { musicClips, subtitleMode: workflow.production.subtitleMode } : {}) };
+    return { brief, style, originalText, creativeContext, shots, clipEditSources, clipEditPlans, ...(manualPlanningFields ? { manualPlanningFields } : {}) };
   }
 
-  function projectWithProductionOutput(current: ProjectDocument, { manualPlanningFields, subtitleMode, ...fields }: ReturnType<typeof productionOutput>): ProjectDocument {
-    const workflow = manualPlanningFields || subtitleMode !== undefined ? { ...current.workflow, production: { ...current.workflow.production,
-      ...(manualPlanningFields ? { manualPlanningFields } : {}), ...(subtitleMode !== undefined ? { subtitleMode } : {}),
-    } } : current.workflow;
+  function projectWithProductionOutput(current: ProjectDocument, { manualPlanningFields, ...fields }: ReturnType<typeof productionOutput>): ProjectDocument {
+    const workflow = manualPlanningFields ? { ...current.workflow, production: { ...current.workflow.production, manualPlanningFields } } : current.workflow;
     return { ...current, ...fields, workflow };
   }
 
@@ -571,7 +563,7 @@ export function createRuntime(options: RuntimeOptions) {
     if (!run?.currentNodeId || !['running', 'waiting_external', 'retry_scheduled'].includes(run.status)) return;
     const id = `${run.id}:${run.currentNodeId}`;
     const node = store.get<WorkflowNode>('node-definition', id);
-    if (!node || !isVideoGenerationNode(node) || node.config.agentTask) return;
+    if (!node || !isVideoGenerationNode(node)) return;
     const progress = runProgress.detail(id);
     if (!progress?.completed) return;
     const assets = new Map(progress.assets.filter(asset => asset.kind === 'video' && asset.projectId === run.projectId).map(asset => [asset.id, asset]));
@@ -598,15 +590,14 @@ export function createRuntime(options: RuntimeOptions) {
 
   function applyProductionResult(runId: string, saved: RunSnapshot, videoNodeId?: string) {
     if (saved.assistant || saved.trial || saved.regeneration || saved.research || saved.exportBatch || saved.creativePlanning || saved.novelAdaptation) return;
-    if (!videoNodeId && (saved.selection || !saved.nodes.some(node => node.kind === 'agent') && (saved.inspectionNodes ?? saved.nodes).filter(node => node.kind !== 'subflow').length < 2)) return;
+    if (!videoNodeId && (saved.selection || (saved.inspectionNodes ?? saved.nodes).filter(node => node.kind !== 'subflow').length < 2)) return;
     const videoApplication = store.get<VideoApplicationReceipt>('run-video-application', runId);
     if (store.get('run-application', runId) || videoNodeId && videoApplication?.nodeIds.includes(videoNodeId)) return;
     const working = store.get<ProjectDocument>('run-project', runId);
     if (!working) return;
     const includePlanningFields = usesPlanningFields(saved.outputContractVersion);
-    const includeTimelineEdits = saved.nodes.some(node => node.id === saved.videoEditingAgentId && node.config.timelineEdits === true);
-    const output = productionOutput(working, includePlanningFields, includeTimelineEdits), outputDigest = fingerprint(output);
-    if (outputDigest === (videoApplication?.outputDigest ?? fingerprint(productionOutput(saved.project, includePlanningFields, includeTimelineEdits)))) return;
+    const output = productionOutput(working, includePlanningFields), outputDigest = fingerprint(output);
+    if (outputDigest === (videoApplication?.outputDigest ?? fingerprint(productionOutput(saved.project, includePlanningFields)))) return;
     const current = project(saved.project.id);
     // An identical save advances the revision but leaves the generation inputs intact.
     if (projectContentDigest(current) !== (videoApplication?.projectDigest ?? projectContentDigest(saved.project))) {
@@ -616,7 +607,6 @@ export function createRuntime(options: RuntimeOptions) {
     requireCurrentCharacters(saved.characters ?? []);
     requireCurrentVoices(saved.voices ?? []);
     database.transaction(() => {
-      if (output.musicClips && !sameJsonContent(output.musicClips, current.musicClips)) validateMusicAssets(current.id, output.musicClips);
       const applied = saveProject(projectWithProductionOutput(current, output), current);
       if (videoNodeId) store.put('run-video-application', runId, { nodeIds: [...videoApplication?.nodeIds ?? [], videoNodeId], projectDigest: projectContentDigest(applied), outputDigest });
       else store.put('run-application', runId, { revision: applied.revision });
@@ -865,15 +855,6 @@ export function createRuntime(options: RuntimeOptions) {
     }
   }
 
-  function isAutonomousVideoRun(saved: RunSnapshot) {
-    if (saved.autonomousVideo !== undefined) return saved.autonomousVideo;
-    // Legacy full Agent snapshots contain the synthetic node outside the
-    // authored workflow. An authored node with the same ID is ambiguous.
-    const production = saved.project.workflow.production;
-    return !saved.selection && saved.nodes.length === 1 && 'executionMode' in production && production.executionMode === 'agent'
-      && !saved.project.workflow.nodes.some(node => node.id === 'video-agent')
-      && fingerprint(saved.nodes[0]) === fingerprint(legacyVideoAgentNode(saved.project));
-  }
   function productionBlockIssue(value: ProjectDocument, nodes: WorkflowNode[]): Pick<ReadinessIssue, 'category' | 'message' | 'fix' | 'nodeId'> | undefined {
     if (value.archived) return { category: 'project', message: '请先恢复项目。', fix: 'project' };
     if (novelAdaptation.blockProduction(value)) return { category: 'project', message: novelProductionBlockedMessage, fix: 'novel-adaptation' };
@@ -952,128 +933,6 @@ export function createRuntime(options: RuntimeOptions) {
 
   function snapshot(): WorkspaceSnapshot {
     return { projects: store.list<ProjectDocument>('project'), models: availableModels(), skills: store.list<SkillPackage>('skill'), skillGroups: skillLibrary.groups(), skillImports: skillLibrary.jobs(), runs: store.list<RunRecord>('run').map(hydrateRun).reverse(), assets: store.list<AssetRecord>('asset').filter(asset => !isLegacyTimelineAsset(asset)), events: events(), system };
-  }
-
-  function agentBusinessTools(runId: string, parent: WorkflowNode, saved: RunSnapshot, controller: AbortController, skills: SkillPackage[], autonomous: boolean): AgentBusinessTools {
-    const readProject = () => store.get<ProjectDocument>('run-project', runId) ?? saved.project;
-    const snapshotAssets = saved.assets && new Map(saved.assets.map(asset => [asset.id, asset]));
-    const listAudioAssets: AgentBusinessTools['listAudioAssets'] = parent.config.timelineEdits === true ? ({ before, limit }) => {
-      const page = reads.assets({ projectId: saved.project.id, kind: 'audio', before, limit });
-      const items = page.items.filter(asset => !snapshotAssets || snapshotAssets.has(asset.id)).map(({ id, name, projectId, durationUs }) => ({
-        id, name, scope: projectId === undefined ? 'library' : 'project', ...(durationUs === undefined ? {} : { durationUs }),
-      }));
-      return { items, nextCursor: page.nextCursor };
-    } : undefined;
-    // LangChain may dispatch several tool calls together. Project mutations must
-    // retain the same serial ordering as the existing workflow executor.
-    let pending: Promise<unknown> = Promise.resolve();
-    let fatalError: unknown;
-    let stopped = false;
-    const usesOpeningReferences = saved.project.workflow.nodes.some(localOpeningReferences);
-    return { readProject,
-      models: saved.models.filter(model => model.enabled).map(({ id, name, capabilities }) => ({ id, name, capabilities })),
-      ...(autonomous ? { isComplete: () => store.get<{ projectDigest: string }>('agent-export', `${runId}:${parent.id}`)?.projectDigest === fingerprint(readProject()) }
-        : { operations: usesOpeningReferences ? ['video', 'edit', 'import'] as const : ['image', 'video', 'edit', 'import'] as const }),
-      // Pending tool calls in older snapshots still use the original edit schema.
-      boundaryTransitions: parent.config.boundaryTransitions === true,
-      listAudioAssets,
-      execute(input) {
-        const work = pending.then(async () => {
-          if (stopped) throw fatalError;
-          controller.signal.throwIfAborted();
-          if (!/^[A-Za-z0-9_-]{1,100}$/.test(input.requestId)) throw new Error('requestId 需要 1–100 位字母、数字、下划线或连字符。');
-          if (!autonomous && ['image', 'video'].includes(input.operation) && !input.shotId) throw new Error('剪辑阶段重新生成素材时，请指定单个镜头。');
-          if ((input.transitions || input.timeline) && input.operation !== 'edit') throw new Error('请用 edit 操作调整剪辑。');
-          const node = videoTaskNode(saved.project, parent, input);
-          if (input.skillIds?.some(id => !skills.some(skill => skill.id === id))) throw new Error('所选 Skill 不在本次允许使用的能力中。');
-          if (input.modelId && !saved.models.some(model => model.id === input.modelId && model.enabled)) throw new Error('所选模型不在本次运行快照中。');
-          return journal.execute(runId, `${parent.id}:business:${input.requestId}`, input, 'local', async () => {
-            const previous = readProject();
-            const shot = input.shotId ? previous.shots.find(shot => shot.id === input.shotId) : undefined;
-            if (input.shotId && (!shot || shot.locked)) throw new Error('请选择存在且未锁定的镜头。');
-            if (input.shotId && !['image', 'video', 'import'].includes(input.operation)) throw new Error('此操作使用完整项目，请移除 shotId。');
-            const nodes = saved.inspectionNodes ?? saved.nodes;
-            if (!nodes.some(value => value.id === node.id)) {
-              const upstream = nodes.findLast(value => value.config.agentTask === true && value.id.startsWith(`${parent.id}/tool/`)) ?? (autonomous ? undefined : parent);
-              const insertAt = autonomous ? nodes.length : nodes.findIndex(value => value.id === upstream?.id) + 1;
-              saved.inspectionNodes = [...nodes.slice(0, insertAt), node, ...nodes.slice(insertAt)];
-              saved.inspectionEdges = [...(saved.inspectionEdges ?? saved.project.workflow.edges), ...(upstream ? [{ id: `${upstream.id}-${node.id}`, source: upstream.id, target: node.id }] : [])];
-              store.put('run-snapshot', runId, saved);
-              updateRun(runId, { stepCount: saved.inspectionNodes.length, snapshotDigest: fingerprint(saved) });
-            }
-            let result: JsonValue;
-            if (input.operation === 'import' || input.operation === 'edit') {
-              const musicAssets = new Map<string, AssetRecord>();
-              result = await journal.execute(runId, node.id, input, 'local', async () => {
-                if (input.operation === 'import') {
-                  if (!input.shotId) throw new Error('导入素材需要目标镜头编号。');
-                  const localOutputDirectory = input.path === undefined ? undefined : await agentToolOutputDirectory(directory, runId);
-                  const path = await materializeToolArtifact(input, join(directory, 'projects', previous.id, 'tool-artifacts'), controller.signal, { localOutputDirectory, ffmpegPath: options.ffmpegPath });
-                  try {
-                    const asset = await assetLibrary.importToolAsset({ path, projectId: previous.id, shotId: input.shotId, name: input.path && basename(input.path) });
-                    controller.signal.throwIfAborted();
-                    return { assets: [asset] } as unknown as JsonValue;
-                  } finally { await rm(path, { force: true }); }
-                }
-                let edited = previous;
-                for (const edit of input.edits ?? []) {
-                  const target = edited.shots.find(shot => shot.id === edit.shotId);
-                  if (!target || target.locked) throw new Error('请选择存在且未锁定的镜头。');
-                  if (edit.inUs !== undefined || edit.outUs !== undefined) {
-                    const asset = store.get<AssetRecord>('asset', target.videoAssetId ?? target.assetId ?? '');
-                    edited = trimShotInContext(edited, target.id, { inUs: edit.inUs ?? target.sourceInUs ?? 0, outUs: edit.outUs ?? (target.sourceInUs ?? 0) + target.durationUs }, edited.profile.frameRate, asset?.durationUs, () => randomUUID());
-                  }
-                  if (edit.transition) edited = { ...edited, shots: edited.shots.map(shot => shot.id === edit.shotId ? { ...shot, animation: { ...shot.animation, transition: edit.transition! } } : shot) };
-                }
-                const { timeline, transitions } = input;
-                const needsTiming = Boolean(timeline || transitions?.length);
-                const audioIds = needsTiming ? edited.shots.flatMap(shot => shot.audioAssetId && usesFullAudioSource(shot) ? [shot.audioAssetId] : []) : [];
-                const assets = [...new Set(audioIds)].flatMap(id => {
-                  const asset = snapshotAssets?.get(id) ?? store.get<AssetRecord>('asset', id);
-                  return asset ? [asset] : [];
-                });
-                const output = needsTiming
-                  ? await applyAgentTimelineEdits(edited, timeline, transitions, { assets, ffmpegPath: options.ffmpegPath, signal: controller.signal, getMusicAsset(id) {
-                    const asset = snapshotAssets ? snapshotAssets.get(id) : store.get<AssetRecord>('asset', id);
-                    if (asset) musicAssets.set(id, asset);
-                    return asset;
-                  } })
-                  : { editedProject: edited };
-                controller.signal.throwIfAborted();
-                validateEdits(output.editedProject, previous);
-                return output as unknown as JsonValue;
-              }, output => {
-                requireCandidateAssets([...musicAssets.values()]);
-                const assets = nodeResultAssets(output);
-                const next = output && typeof output === 'object' && !Array.isArray(output) && output.editedProject ? projectSchema.parse(output.editedProject) : projectAfterNode(previous, node, output, assets);
-                for (const asset of assets) store.put('asset', asset.id, asset);
-                store.put('node-project', `${runId}:${node.id}`, previous);
-                store.put('node-definition', `${runId}:${node.id}`, node);
-                store.put('run-project', runId, next);
-                store.put('node-result', `${runId}:${node.id}`, output);
-              });
-            } else {
-              result = await executeNode(runId, node, saved, controller);
-            }
-            controller.signal.throwIfAborted();
-            if (input.operation === 'export') store.put('agent-export', `${runId}:${parent.id}`, { projectDigest: fingerprint(readProject()), nodeId: node.id });
-            updateRun(runId, { currentNodeId: parent.id });
-            return JSON.parse(JSON.stringify({ nodeId: node.id, result, project: readProject() })) as JsonValue;
-          });
-        });
-        const result = work.catch(error => {
-          if (stopped || error instanceof SimulatedProcessExit || controller.signal.aborted || error instanceof AmbiguousActivityError) { stopped = true; fatalError = error; throw error; }
-          // A rejected local input can be corrected by the Agent. An ambiguous
-          // external submission must retain the existing manual recovery contract.
-          const unknown = journal.list(runId).some(activity => activity.activity_id !== parent.id && activity.safety === 'external' && ['unknown', 'dispatched'].includes(activity.status) && !activity.remote_id);
-          if (unknown) { stopped = true; fatalError = error; throw error; }
-          updateRun(runId, { currentNodeId: parent.id });
-          return { error: redactError(error instanceof Error ? error.message : '任务失败', saved.models, transientSecrets), recoverable: true, project: JSON.parse(JSON.stringify(readProject())) as JsonValue };
-        });
-        pending = result.catch(() => undefined);
-        return result;
-      },
-    };
   }
 
   type PreparedCasting = { project: ProjectDocument; assets: AssetRecord[]; libraryAssets: AssetRecord[]; frameModelId?: string };
@@ -1172,7 +1031,7 @@ export function createRuntime(options: RuntimeOptions) {
     nodeLogger.info('node.execution_started');
     try {
       const result = await executeNodeWork(runId, node, saved, controller, nodeLogger);
-      if (!controller.signal.aborted && isVideoGenerationNode(node) && !node.config.agentTask
+      if (!controller.signal.aborted && isVideoGenerationNode(node)
         && nodeResultAssets(result).some(asset => asset.kind === 'video' && asset.shotId)) {
         applyProductionResult(runId, saved, node.id);
       }
@@ -1205,8 +1064,6 @@ export function createRuntime(options: RuntimeOptions) {
     const nativeFirstFrames = groupsNativeFirstFrames(executionProject.workflow, node);
     const openingFrameOnly = node.kind === 'assets' && node.config.continueFromLastFrame === true && node.config.operation === 'prepare-references';
     const mediaProject = openingFrameOnly && node.modelId ? { ...executionProject, shots: openingFrameShots(executionProject.shots) }
-      : node.config.agentTask && typeof node.config.shotId === 'string'
-      ? { ...executionProject, shots: executionProject.shots.filter(shot => shot.id === node.config.shotId) }
       : nativeFirstFrames || node.config.useFirstShotReference === true && groupsReferenceImages(node)
         ? { ...executionProject, shots: executionProject.shots.filter(shot => !shot.locked) } : executionProject;
     const generatedMediaProject = isVideoGenerationNode(node) && typeof node.config.continueFromLastFrame === 'boolean'
@@ -1420,13 +1277,9 @@ export function createRuntime(options: RuntimeOptions) {
           ? await (async () => {
               context.recordRemoteId(`langgraph:${runId}:${node.id}:agent`);
               const { executeDeepAgent } = await import('./agent.js');
-              const autonomous = node.id === 'video-agent' && isAutonomousVideoRun(saved);
               const skillIds = node.skillIds.length ? node.skillIds : saved.automaticSkillIds;
               const skills = saved.skills.filter(skill => skill.enabled && (!skillIds || skillIds.includes(skill.id)));
-              const business = autonomous || node.id === saved.videoEditingAgentId ? agentBusinessTools(runId, node, saved, controller, skills, autonomous) : undefined;
-              const text = await executeDeepAgent({ database, model: selectedModel, secret, prompt, signal: controller.signal, runId, nodeId: node.id, project: executionProject, skills, dataDirectory: directory, failpoint: options.failpoint, costs, business });
-              if (business?.isComplete && !business.isComplete()) throw new AgentCompletionError('视频 Agent 尚未完成当前产物的实际导出，请继续制作。');
-              return text;
+              return executeDeepAgent({ database, model: selectedModel, secret, prompt, signal: controller.signal, runId, nodeId: node.id, project: executionProject, skills, dataDirectory: directory, failpoint: options.failpoint, costs });
             })()
           : outputSchema ? await modelResponses.generate({ operationId: context.operationId, inputHash: fingerprint(input), recordReceipt: context.recordRemoteId, generate }) : await generate();
         const text = typeof generated === 'string' ? generated : generated.text;
@@ -1456,8 +1309,7 @@ export function createRuntime(options: RuntimeOptions) {
         }
         if (!text.trim()) throw new Error('模型没有返回可用内容，请检查模型配置后重试。');
         if (researchContext) return { ...parseResearchResult(text, executionProject, researchContext, runId, node.id), ...(usage ? { providerUsage: usage } : {}) } as unknown as JsonValue;
-        const summary = fixedOutputs && node.id === saved.videoEditingAgentId ? editingOutputSchema.parse({ text }) : { text };
-        return { ...summary, ...metadata } as JsonValue;
+        return { text, ...metadata } as JsonValue;
       }
       if (media && options.executeActivity) {
         const batch = saved.exportBatch;
@@ -1487,7 +1339,7 @@ export function createRuntime(options: RuntimeOptions) {
         const groupedImages = legacyScheduling && groupsReferenceImages(node) && planReferenceImageSequences(activityContext).some(sequence => sequence.seedream || sequence.batches.length > 1);
         const parallelVideos = continuation === false && node.id === 'video' && isVideoGenerationNode(node) && mediaProject.shots.length > 1;
         const concurrency = parallelVideos ? 2 : saved.handlerVersion >= 3 && !groupedImages && continuation !== true ? legacyScheduling?.maxConcurrentShots : undefined;
-        if (concurrency && selectedModel && ['assets', 'animation'].includes(node.kind) && !node.config.agentTask) {
+        if (concurrency && selectedModel && ['assets', 'animation'].includes(node.kind)) {
           // Each Send owns a stable shot identity. The adapter keeps its existing
           // parent operation + shot receipts, including ambiguous POST protection.
           const shots = mediaProject.shots;
@@ -1650,30 +1502,18 @@ export function createRuntime(options: RuntimeOptions) {
     return journal.execute(runId, node.id, { node, definition, inputs }, 'local', async () => ({ outputs, templateId: definition.id, version: definition.version }), result => store.put('node-result', identity, result));
   }
 
-  function schedule(runId: string, resume = false) {
+  function schedule(runId: string) {
     if (active.has(runId)) return;
     if (closing) throw new Error('运行环境正在关闭。');
     const saved = store.get<RunSnapshot>('run-snapshot', runId);
     if (!saved || ![1, 2, 3, 4].includes(saved.handlerVersion)) throw new Error('运行版本不兼容，请复制项目并创建新的运行。');
     const current = run(runId);
     novelAdaptation.assertCurrentRun(current, saved);
-    const { stepRetry: retry, currentNodeId } = current;
+    const { stepRetry: retry } = current;
     const retryNode = retry?.status === 'pending' ? (saved.inspectionNodes ?? saved.nodes).find(node => node.id === retry.nodeId) : undefined;
     if (retry?.status === 'pending' && !retryNode) throw new Error('本次制作中没有所选的重试步骤。');
-    if (resume && currentNodeId === 'video-agent' && isAutonomousVideoRun(saved)) {
-      const id = `${runId}:${currentNodeId}`;
-      const continuation = store.get<AgentContinuation>('agent-continuation', id);
-      const exhausted = continuation ? continuation.exhausted : journal.get(runId, currentNodeId)?.error === AGENT_CONTINUATION_EXHAUSTED;
-      if (exhausted && !journal.list(runId).some(activity => activity.safety === 'external' && ['unknown', 'dispatched'].includes(activity.status) && !activity.remote_id)) {
-        store.put('agent-continuation', id, { round: (continuation?.round ?? 1) + 1, attempts: 0 } satisfies AgentContinuation);
-      }
-    }
     const controller = new AbortController();
     const promise = Promise.resolve().then(async () => {
-      if (saved.inspectionNodes?.some(node => node.config.agentTask === true && node.kind === 'assets'
-        && nodeResultAssets(store.get<JsonValue>('node-result', `${runId}:${node.id}`) ?? null).some(asset => asset.provenance === '用户导入'))) {
-        throw new Error('本次制作含旧版工具导入的素材。请停止当前制作，在素材库核对来源后新建制作。');
-      }
       updateRun(runId, { status: 'running', error: undefined, stepRetry: retryNode ? retry : undefined });
       const nodes = retryNode ? [retryNode] : saved.nodes;
       const nodeIds = new Set(nodes.map(node => node.id));
@@ -1895,8 +1735,7 @@ export function createRuntime(options: RuntimeOptions) {
     }
     const researchModel = input.research?.modelId ?? (previous?.research && previous.nodes.find(node => node.kind === 'research')?.modelId);
     if (researchModel) return { work: [{ kind: 'text', count: 1, model: store.get<ModelProfile>('model', researchModel) }] };
-    const single = previous && !previous.selection && previous.nodes.length === 1 && previous.project.workflow.nodes.length > 1
-      && !(previous.autonomousVideo ?? previous.nodes[0].config.videoAgent) ? previous.nodes[0] : undefined;
+    const single = previous && !previous.selection && previous.nodes.length === 1 && previous.project.workflow.nodes.length > 1 ? previous.nodes[0] : undefined;
     return productionChargeWork(value, availableModels(), input.nodeId ?? single?.id, input.selection);
   }
 
@@ -1932,7 +1771,7 @@ export function createRuntime(options: RuntimeOptions) {
       if (input.regeneration || input.research) return true;
       if (input.parentRunId) {
         const previous = store.get<RunSnapshot>('run-snapshot', input.parentRunId);
-        if (previous?.exportBatch || previous && !previous.selection && !previous.regeneration && !previous.research && !isAutonomousVideoRun(previous)
+        if (previous?.exportBatch || previous && !previous.selection && !previous.regeneration && !previous.research
           && previous.nodes.length === 1 && previous.nodes[0].kind === 'export' && !previous.nodes[0].modelId) return false;
         // A restart can resolve models from the current project as well as the original task.
         if (!input.selection) return true;

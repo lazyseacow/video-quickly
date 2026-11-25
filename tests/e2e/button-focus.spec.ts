@@ -2,6 +2,8 @@ import { chooseStudioEntry, openProjectFromList, revealStudioNavigation } from '
 import { expect, test, type Locator, type Page } from '@playwright/test';
 import { productionFixture, openProduction } from './production-settings';
 import { creationInput } from './drama-creation';
+import type { ProjectDocument } from '@video-quickly/contracts';
+import { rpc } from './native-video-fixture';
 
 async function keyboardFocus(page: Page, button: Locator) {
   await button.focus(); await button.press('Tab'); await page.keyboard.press('Shift+Tab');
@@ -23,18 +25,11 @@ for (const viewport of [{ width: 1536, height: 960, theme: 'light' }, { width: 6
     await initial.getByRole('button', { name: '关闭对话框', exact: true }).click();
     await expect(initial).toHaveCount(0);
     for (const [name, title] of [['制作设置', '制作设置'], ['制作前检查', '制作前检查'], ['导出', '导出视频']]) {
-      const inMore = name === '制作前检查';
-      const button = page.getByRole('button', { name: inMore ? '更多' : name, exact: true }), dialog = page.getByRole('dialog', { name: title, exact: true });
+      const button = page.getByRole('button', { name, exact: true }), dialog = page.getByRole('dialog', { name: title, exact: true });
       async function activate(key?: string) {
         if (key) await button.press(key);
         else if (viewport.width === 600) await button.tap();
         else await button.click();
-        if (!inMore) return;
-        const item = page.getByRole('button', { name, exact: true });
-        if (key) {
-          await page.keyboard.press('Tab'); await expect(item).toBeFocused(); await item.press(key);
-        } else if (viewport.width === 600) await item.tap();
-        else await item.click();
       }
       await keyboardFocus(page, button);
       await activate();
@@ -51,6 +46,23 @@ for (const viewport of [{ width: 1536, height: 960, theme: 'light' }, { width: 6
       await expect(button).toBeFocused(); await expect(button).toHaveCSS('outline-style', 'none');
 
     }
+    const postProduction = page.getByRole('button', { name: '后期工具', exact: true });
+    const postProductionMenu = page.getByRole('group', { name: '后期工具', exact: true });
+    const music = postProductionMenu.getByRole('button', { name: '背景音乐', exact: true });
+    const captions = postProductionMenu.getByRole('button', { name: '项目字幕样式', exact: true });
+    await keyboardFocus(page, postProduction);
+    await postProduction.press('Enter');
+    await expect(postProductionMenu).toBeInViewport({ ratio: 1 });
+    await page.keyboard.press('Tab'); await expect(music).toBeFocused();
+    await page.keyboard.press('Tab'); await expect(captions).toBeFocused();
+    await page.keyboard.press('Escape'); await expect(postProductionMenu).toBeHidden(); await expect(postProduction).toBeFocused();
+    await postProduction.press('Space'); await expect(postProductionMenu).toBeVisible();
+    await page.getByRole('textbox', { name: '项目名称', exact: true }).click(); await expect(postProductionMenu).toBeHidden();
+    await postProduction.press('Enter'); await captions.press('Enter');
+    const captionStyle = page.getByRole('dialog', { name: '项目字幕样式', exact: true });
+    await expect(captionStyle).toBeVisible();
+    await page.keyboard.press('Escape'); await expect(captionStyle).toHaveCount(0); await expect(postProduction).toBeFocused();
+
     const create = (await revealStudioNavigation(page)).getByRole('button', { name: '对话', exact: true });
     await keyboardFocus(page, create); await create.press('Enter');
     const composer = page.getByRole('region', { name: '新建短剧', exact: true });
@@ -88,7 +100,11 @@ for (const viewport of [{ width: 1536, height: 960, theme: 'light' }, { width: 6
   });
 
   test('preserves step navigation, combobox editing, sliders and stage focus while switching input methods', async ({ page, request }, info) => {
-    const source = await productionFixture(request), dialog = await openProduction(page, source.project);
+    const source = await productionFixture(request);
+    const project = await rpc<ProjectDocument>(request, 'project.update', { projectId: source.project.id, revision: source.project.revision, patch: {
+      shots: [{ id: 'focus-preview', title: '预览焦点验收', durationUs: 2_000_000, narration: '', visualPrompt: '' }],
+    } });
+    const dialog = await openProduction(page, project);
     const navigation = dialog.getByRole('navigation', { name: '制作设置步骤', exact: true });
     const materials = navigation.getByRole('button', { name: '模型与素材', exact: true }), delivery = navigation.getByRole('button', { name: '声音与成片', exact: true });
     await materials.click(); await expect(materials).toBeFocused(); await expect(materials).toHaveCSS('outline-style', 'none');
@@ -102,8 +118,8 @@ for (const viewport of [{ width: 1536, height: 960, theme: 'light' }, { width: 6
     expect(await video.evaluate(element => getComputedStyle(element).boxShadow)).not.toBe('none');
     await video.press('Escape'); await expect(dialog.getByRole('listbox')).toHaveCount(0); await expect(dialog).toBeVisible();
     await dialog.getByRole('button', { name: '关闭对话框', exact: true }).click(); await expect(dialog).toHaveCount(0);
-    const zoom = page.getByRole('slider', { name: '时间轴缩放', exact: true });
-    await zoom.focus(); await zoom.press('Home'); await zoom.press('ArrowRight'); await expect(zoom).toHaveValue('1.1'); await expect(zoom).toBeFocused();
+    const seek = page.getByRole('slider', { name: '播放器播放位置', exact: true });
+    await seek.focus(); await seek.press('Home'); await seek.press('ArrowRight'); await expect(seek).toHaveValue('1'); await expect(seek).toBeFocused();
     const stages = page.getByRole('list', { name: '制作阶段进度', exact: true });
     const stage = stages.getByRole('button', { name: '打开阶段：素材与配音', exact: true });
     const nextStage = stages.getByRole('button', { name: '打开阶段：剪辑与动画', exact: true });
@@ -116,6 +132,6 @@ for (const viewport of [{ width: 1536, height: 960, theme: 'light' }, { width: 6
     await expect(stage).toBeFocused();
     await expect(stage.locator('..')).toHaveCSS('outline-style', 'solid');
     await page.screenshot({ path: info.outputPath('keyboard-stage-focus.png') });
-    expect((await source.saved()).revision).toBe(source.project.revision);
+    expect((await source.saved()).revision).toBe(project.revision);
   });
 });

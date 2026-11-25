@@ -10,9 +10,10 @@
 .series-settings-summary { margin: var(--space-3) 0 var(--space-5); font-size: var(--text-size-caption); }
 .series-settings-summary dt { margin-top: var(--space-3); color: var(--text-subtle); font-size: var(--text-size-micro); }
 .series-settings-summary dd { margin: var(--space-2) 0 0; line-height: var(--line-height-prose); white-space: pre-wrap; overflow-wrap: anywhere; max-height: 150px; overflow-y: auto; }
-.series-template-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: var(--space-4); margin-block: var(--space-4); }
-.series-template-card { display: flex; flex-direction: column; min-width: 0; padding: var(--space-5); border: 1px solid var(--border); border-radius: var(--radius-medium); background: var(--surface); }
-.series-template-card h3 { font-size: var(--text-size-body); font-weight: var(--font-weight-emphasis); margin-bottom: var(--space-2); }
+.series-template-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 260px), 1fr)); gap: var(--space-4); margin-block: var(--space-4); }
+.series-template-card { display: flex; flex-direction: column; min-width: 0; padding: var(--space-5); border: 1px solid var(--border-subtle); border-radius: var(--radius-studio-panel); background: var(--surface); }
+.series-template-card:focus-within { border-color: var(--border); }
+.series-template-card h3 { font-size: var(--text-size-subtitle); font-weight: var(--font-weight-emphasis); margin-bottom: var(--space-1); overflow-wrap: anywhere; }
 .series-template-card > p { margin: var(--space-3) 0; font-size: var(--text-size-caption); line-height: var(--line-height-prose); color: var(--text-secondary); overflow-wrap: anywhere; max-height: 76px; overflow-y: auto; }
 .series-template-card__actions { display: flex; flex-wrap: wrap; gap: var(--space-2); justify-content: flex-end; align-items: center; margin-top: auto; padding-top: var(--space-4); }
 .series-template-card > .series-template-card__settings { margin-block: var(--space-2) 0; font-size: var(--text-size-micro); }

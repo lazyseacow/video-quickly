@@ -77,7 +77,7 @@ for (const viewport of [{ width: 1536, height: 960, theme: 'light' }, { width: 1
         const style = getComputedStyle(element), box = element.getBoundingClientRect();
         return { radii: [style.borderTopLeftRadius, style.borderTopRightRadius, style.borderBottomLeftRadius, style.borderBottomRightRadius], overflow: style.overflow, corners: [[box.left + 2, box.top + 2], [box.right - 2, box.top + 2], [box.left + 2, box.bottom - 2], [box.right - 2, box.bottom - 2]].map(([x, y]) => element.contains(document.elementFromPoint(x!, y!))) };
       });
-      expect(frame.radii).toEqual(['16px', '16px', '16px', '16px']); expect(frame.overflow).toBe('hidden'); expect(frame.corners).toEqual([false, false, false, false]);
+      expect(frame.radii).toEqual(['12px', '12px', '12px', '12px']); expect(frame.overflow).toBe('hidden'); expect(frame.corners).toEqual([false, false, false, false]);
       await page.screenshot({ path: info.outputPath(`workspace-rail-${viewport.theme}-${viewport.width}.png`) });
       await expect(settings).toBeInViewport({ ratio: 1 }); await settings.focus(); await settings.press('Enter');
       const popup = page.getByRole('dialog', { name: '设置', exact: true }); await expect(popup).toBeVisible(); await expect(popup).toBeInViewport({ ratio: 1 });

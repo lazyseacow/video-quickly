@@ -46,11 +46,11 @@ for (const surface of [{ width: 1536, height: 960, theme: 'dark' }, { width: 600
   page.on('console', message => { if (['warning', 'error'].includes(message.type())) errors.push(message.text()); });
   try {
     baseUrl = `http://127.0.0.1:${address.port}`;
-    const text = await rpc<ModelProfile>(request, 'model.save', { model: { name: `Agent 进度 ${randomUUID()}`, provider: 'openai-compatible', baseUrl: `${baseUrl}/v1`, model: 'fixture', connectionType: 'text', capabilities: ['text', 'tools'] } });
+    const text = await rpc<ModelProfile>(request, 'model.save', { model: { name: `本地剪辑进度 ${randomUUID()}`, provider: 'openai-compatible', baseUrl: `${baseUrl}/v1`, model: 'fixture', connectionType: 'text', capabilities: ['text', 'tools'] } });
     const video = await rpc<ModelProfile>(request, 'model.save', { model: { name: `镜头生成 ${randomUUID()}`, provider: 'custom-http', baseUrl, model: 'fixture', connectionType: 'video', capabilities: ['video'], parameters: { requestPath: 'generate-video', requestTemplate: { prompt: '{{prompt}}', images: '{{character_images}}' }, resultUrlPath: 'url' } } });
-    const created = await rpc<ProjectDocument>(request, 'project.create', { originalText: '清晨，林夏在书房发现一封未寄出的信。她来到旧城寻找信的主人，与朋友在雨中的城门重逢。两人读完信后决定一起回家。', title: `Agent 制作进度 ${randomUUID()}`, brief: '制作蓝色天空视频', profile: { width: 160, height: 90, frameRate: { numerator: 30, denominator: 1 } } });
-    const project = await rpc<ProjectDocument>(request, 'project.update', { projectId: created.id, revision: created.revision, patch: { workflow: { ...created.workflow, production: { ...created.workflow.production, textModelId: text.id, videoModelId: video.id, agentMcpServerIds: ['retired-connection'] },
-      nodes: created.workflow.nodes.map(node => node.id === 'animation' ? { ...node, config: { ...node.config, mcpServerIds: ['retired-connection'] } } : node) } } });
+    const created = await rpc<ProjectDocument>(request, 'project.create', { originalText: '清晨，林夏在书房发现一封未寄出的信。她来到旧城寻找信的主人，与朋友在雨中的城门重逢。两人读完信后决定一起回家。', title: `本地剪辑制作进度 ${randomUUID()}`, brief: '制作蓝色天空视频', profile: { width: 160, height: 90, frameRate: { numerator: 30, denominator: 1 } } });
+    const project = await rpc<ProjectDocument>(request, 'project.update', { projectId: created.id, revision: created.revision,
+      patch: { workflow: { ...created.workflow, production: { ...created.workflow.production, textModelId: text.id, videoModelId: video.id } } } });
     await page.setViewportSize(surface); await page.addInitScript(theme => localStorage.setItem('vq-theme', theme), surface.theme);
     await page.goto('/'); await openProjectFromList(page, project.title);
     await page.getByRole('button', { name: '开始制作', exact: true }).click(); await confirmAction(page, '确认开始制作'); await entered.promise;

@@ -12,16 +12,16 @@ afterEach(async () => {
   }
 });
 
-it.each(['openai-compatible', 'ollama'] as const)('checks the unified workflow with %s and keeps a scoped editing step local', async providerType => {
-  const directory = await mkdtemp(join(tmpdir(), 'vq-agent-readiness-'));
+it.each(['openai-compatible', 'ollama'] as const)('checks the workflow with %s and keeps a scoped editing step local', async providerType => {
+  const directory = await mkdtemp(join(tmpdir(), 'vq-editing-readiness-'));
   const provider = vi.fn(async () => 'must-not-be-called');
   const runtime = createRuntime({ dataDirectory: directory, seed: false, provider }); fixtures.push({ directory, runtime });
-  const project = projectSchema.parse(await runtime.dispatch('project.create', { title: '自主制作前检查' }));
+  const project = projectSchema.parse(await runtime.dispatch('project.create', { title: '制作前检查' }));
   const model = modelSchema.parse(await runtime.dispatch('model.save', { model: {
-    name: 'Agent fixture', provider: providerType, baseUrl: 'http://127.0.0.1:1/v1', model: 'fixture', connectionType: 'text', capabilities: providerType === 'openai-compatible' ? ['text', 'tools'] : ['text'],
+    name: '文本模型夹具', provider: providerType, baseUrl: 'http://127.0.0.1:1/v1', model: 'fixture', connectionType: 'text', capabilities: providerType === 'openai-compatible' ? ['text', 'tools'] : ['text'],
   } }));
   const configured = projectSchema.parse(await runtime.dispatch('project.update', { projectId: project.id, revision: project.revision,
-    patch: { workflow: { ...project.workflow, production: { ...project.workflow.production, textModelId: model.id, agentSkillIds: ['unavailable'], agentMcpServerIds: ['retired-service'] } } },
+    patch: { workflow: { ...project.workflow, production: { ...project.workflow.production, textModelId: model.id } } },
   }));
   const noExecutor = projectReadinessSchema.parse(await runtime.dispatch('project.readiness', { projectId: configured.id }));
   expect(noExecutor.ready).toBe(false);

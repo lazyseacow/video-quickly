@@ -59,8 +59,8 @@ for (const shotCount of [200, 1000]) test(`loads ${shotCount} shots without snap
   await page.locator('.outline-shot').last().click();
   await expect(page.getByLabel('镜头标题', { exact: true })).toHaveValue(`测试镜头 ${shotCount}`);
   const selectMs = Date.now() - selectStarted;
-  const ruler = page.getByRole('slider', { name: '预览播放位置' });
-  await ruler.press('End'); await expect(ruler).toHaveAttribute('aria-valuenow', String(Math.round(shotCount * 2000 - 1000 / 30)));
+  const ruler = page.getByRole('slider', { name: '播放器播放位置' });
+  await ruler.press('End'); await expect(ruler).toHaveAttribute('data-playhead-ms', String(Math.round(shotCount * 2000 - 1000 / 30)));
   await page.getByLabel('镜头标题', { exact: true }).fill('待恢复的大项目草稿');
   await expect.poll(() => page.evaluate(async ({ id, last }) => {
     const db = await new Promise<IDBDatabase>((resolve, reject) => { const open = indexedDB.open('video-quickly-drafts', 1); open.onsuccess = () => resolve(open.result); open.onerror = () => reject(open.error); });

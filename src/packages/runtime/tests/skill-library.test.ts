@@ -97,7 +97,6 @@ it('applies creation selections to text tasks and freezes trial context', async 
   await writeFile(join(source, 'references/guide.md'), '旧版引用：场景必须有戏剧目标。');
   const skill = (await importSkillFixture(runtime.dispatch, { path: source })).skills[0];
   const project = projectSchema.parse(await runtime.dispatch('project.create', { title: '使用 Skill 的新任务', skillIds: [skill.id] }));
-  expect(project.workflow.production).toMatchObject({ agentSkillIds: [], agentMcpServerIds: [] });
   expect(project.workflow.nodes.filter(node => ['brief', 'style', 'script'].includes(node.kind)).every(node => node.skillIds.includes(skill.id))).toBe(true);
   expect(project.workflow.nodes.filter(node => ['assets', 'animation', 'export'].includes(node.kind)).every(node => !node.skillIds.length)).toBe(true);
   const model = modelSchema.parse(await runtime.dispatch('model.save', { model: { name: 'fixture', provider: 'openai-compatible', baseUrl: 'http://127.0.0.1:1/v1', model: 'fixture', connectionType: 'text', capabilities: ['text'] } }));

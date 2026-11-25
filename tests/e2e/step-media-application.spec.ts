@@ -3,6 +3,7 @@ import type { ProjectDocument } from '@video-quickly/contracts';
 import { fixture, latest, rpc, saved } from './native-video-fixture';
 import { openProjectFromList } from './workspace-navigation';
 import { confirmAction } from './confirmation-actions';
+import { openShotInspectorSection } from './storyboard-actions';
 
 test('renders validated videos in the workbench while later shots are still generating', async ({ page, request }, info) => {
   test.setTimeout(90_000);
@@ -21,15 +22,15 @@ test('renders validated videos in the workbench while later shots are still gene
     } });
     await page.goto('/'); await openProjectFromList(page, configured.title);
     const player = page.getByRole('region', { name: '视频预览播放器', exact: true });
-    const shots = page.locator('.outline-shot'), clips = page.locator('.timeline-clip--video');
+    const shots = page.locator('.outline-shot');
     const stage = page.getByRole('button', { name: '打开阶段：素材与配音', exact: true });
     await expect(player).toContainText('本地示例');
     await rpc(request, 'run.start', { projectId: configured.id, revision: configured.revision });
     await expect(stage).toContainText('1/3', { timeout: 30_000 });
     await expect(player.getByRole('button', { name: '编辑项目', exact: true })).toBeVisible();
     await expect(shots).toHaveCount(3);
-    await expect(clips).toHaveCount(3);
-    for (const canvas of [player.locator('.preview-frame canvas'), shots.first().locator('canvas'), clips.first().locator('canvas').first()]) {
+    await expect(page.getByRole('region', { name: /时间轴/ })).toHaveCount(0);
+    for (const canvas of [player.locator('.preview-frame canvas'), shots.first().locator('canvas')]) {
       await expect.poll(() => canvas.evaluate((element: HTMLCanvasElement) => {
         const [red, green, blue] = element.getContext('2d')!.getImageData(element.width / 2, element.height / 2, 1, 1).data;
         return blue > 150 && red < 60 && green < 60;
@@ -38,7 +39,7 @@ test('renders validated videos in the workbench while later shots are still gene
     await expect(player.locator('.prepared-mix-preview')).toHaveAttribute('data-status', 'ready');
     expect(await saved(request, configured.id)).toEqual(configured);
 
-    await clips.nth(1).getByRole('button', { name: /^定位镜头 2/ }).click();
+    await shots.nth(1).click();
     await expect(player).toContainText('待生成');
     second.resolve();
     await expect(stage).toContainText('2/3', { timeout: 30_000 });
@@ -72,6 +73,7 @@ test('automatically binds a completed video task to the open project', async ({ 
       workflow: { ...source.project.workflow, production: { ...source.project.workflow.production, videoModelId: source.video.id } },
     } });
     await page.goto('/'); await openProjectFromList(page, source.project.title);
+    await openShotInspectorSection(page, '画面与素材');
     const video = page.getByLabel('镜头视频', { exact: true }); await expect(video).toHaveValue('');
     await rpc(request, 'run.start', { projectId: configured.id, revision: configured.revision, nodeId: 'video' });
     await expect.poll(async () => (await latest(request, configured.id))?.status, { timeout: 30000 }).toBe('succeeded');

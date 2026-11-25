@@ -1,3 +1,4 @@
+import { clickShotAction, openShotInspectorSection } from './storyboard-actions';
 import { closeProjectSettings } from './settings';
 import { openProjectFromList } from './workspace-navigation';
 import { execFile } from 'node:child_process';
@@ -44,6 +45,7 @@ async function open(page: Page, project: ProjectDocument) {
 }
 async function setOriginal(page: Page, enabled: boolean) {
   await closeProjectSettings(page);
+  await openShotInspectorSection(page, '画面与素材');
   await page.getByRole('checkbox', { name: '启用视频原声', exact: true }).setChecked(enabled);
   await page.getByRole('button', { name: '保存镜头', exact: true }).click();
 }
@@ -74,6 +76,7 @@ test('identifies the silent shot after switching to a still and restores its ori
   await expect(main.locator('.prepared-mix-preview__warnings')).toHaveCount(0);
   await page.locator('#project-outline .outline-shot').nth(1).click();
   await expect(page.getByLabel('镜头标题', { exact: true })).toHaveValue('切换画面的镜头');
+  await openShotInspectorSection(page, '画面与素材');
   await page.getByLabel('镜头视频', { exact: true }).selectOption('');
   await page.getByRole('button', { name: '保存镜头', exact: true }).click();
   await expect.poll(async () => (await saved(request, project.id)).shots[1].videoAssetId).toBeUndefined();
@@ -117,29 +120,25 @@ test('identifies the silent shot after switching to a still and restores its ori
 test('keeps the original-sound toggle, actual playback, mute and undo across reload', async ({ page, request }, info) => {
   test.setTimeout(60_000);
   const errors = observe(page), { project } = await fixture(request, info); await open(page, project);
+  await openShotInspectorSection(page, '画面与素材');
   const original = page.getByRole('checkbox', { name: '启用视频原声', exact: true });
   await expect(original).not.toBeChecked();
   await expect(page.getByLabel('旁白音频', { exact: true })).toHaveCount(0);
   await expect(page.getByRole('button', { name: '镜头声音处理', exact: true })).toHaveCount(0);
-  await expect(page.locator('.track--original')).toHaveCount(0);
-  await expect(page.locator('.track--audio')).toHaveCount(0);
+  const main = page.locator('.preview-panel');
+  await expect(main.locator('.prepared-mix-preview')).toHaveCount(0);
   await setOriginal(page, true);
-  const main = page.locator('.preview-panel'); await mixReady(main);
+  await mixReady(main);
   await expect(main.locator('.audio-level-meter, .prepared-mix-preview__warnings')).toHaveCount(0);
   await expect(main.locator('.preview-audio')).toHaveCSS('height', '0px');
   const amplitude = await amplitudeOfPlayedMix(main, request, info, 'main'); expect(amplitude).toBeGreaterThan(.17); expect(amplitude).toBeLessThan(.24);
-  const waveform = page.locator('.track--original .audio-waveform');
-  await expect(waveform).toHaveAttribute('data-status', 'ready');
-  await expect(waveform).toHaveAttribute('data-source-in-us', '250000');
-  await expect(waveform.locator('.audio-waveform__label')).toHaveText('0.25 – 1.75 秒');
-  await expect(waveform.getByRole('img', { name: '视频原声真实音频波形，0.25 – 1.75 秒', exact: true })).toBeVisible();
-  await expect(page.getByLabel('轨道信息', { exact: true })).toContainText('A1');
-  await expect(page.getByLabel('轨道信息', { exact: true })).not.toContainText('旁白');
+  expect((await saved(request, project.id)).shots[0]).toMatchObject({ videoInUs: 250_000, durationUs: 1_500_000 });
   await page.getByRole('button', { name: '静音预览声音', exact: true }).click(); expect(await main.locator('audio').evaluate((element: HTMLAudioElement) => element.muted)).toBe(true);
   await page.getByRole('button', { name: '开启预览声音', exact: true }).click();
-  await page.getByRole('button', { name: '撤销', exact: true }).click(); await expect(page.locator('.track--original')).toHaveCount(0);
+  await page.getByRole('button', { name: '撤销', exact: true }).click();
+  await expect(original).not.toBeChecked(); await expect(main.locator('.prepared-mix-preview')).toHaveCount(0);
   await page.getByRole('button', { name: '重做', exact: true }).click(); await mixReady(main); await persisted(page, project.id, 1);
-  await open(page, project); await mixReady(main); await expect(original).toBeChecked();
+  await open(page, project); await mixReady(main); await openShotInspectorSection(page, '画面与素材'); await expect(original).toBeChecked();
   expect((await saved(request, project.id)).shots[0].audioProcessing).toMatchObject({ version: 2, videoAudio: { enabled: true, gainDb: 0 } });
   await healthy(page, errors);
 });
@@ -166,9 +165,8 @@ test('retains the original-sound draft after a save failure and allows retry and
 test('reports a video without audio, keeps playback available and lets the user mute the original track', async ({ page, request }, info) => {
   const errors = observe(page), { project } = await fixture(request, info, true); await open(page, project); await setOriginal(page, true); await mixReady(page.locator('.preview-panel'));
   await expect(page.locator('.preview-panel .prepared-mix-preview__warnings')).toContainText('视频没有音轨'); await expect(page.getByRole('button', { name: '播放预览', exact: true })).toBeEnabled();
-  const waveform = page.locator('.track--original .audio-waveform'); await expect(waveform).toHaveAttribute('data-status', 'error'); await expect(waveform.locator('svg')).toHaveCount(0);
   await setOriginal(page, false);
-  await expect(page.locator('.track--original')).toHaveCount(0); await expect(page.locator('.preview-panel .prepared-mix-preview')).toHaveCount(0); await healthy(page, errors, 1);
+  await expect(page.locator('.preview-panel .prepared-mix-preview')).toHaveCount(0); await healthy(page, errors);
 });
 
 test('mixes original sound under a diagram and bounds bulk trims by its real video source until muted', async ({ page, request }, info) => {
@@ -176,7 +174,7 @@ test('mixes original sound under a diagram and bounds bulk trims by its real vid
   const project = await rpc<ProjectDocument>(request, 'project.update', { projectId: fixtureData.project.id, revision: fixtureData.project.revision, patch: { shots: [{ ...fixtureData.project.shots[0], sceneTemplate: createSceneTemplate('process'), audioProcessing: { ...DEFAULT_AUDIO_PROCESSING, version: 2, videoAudio: { enabled: true, gainDb: 0 } } }] } });
   await open(page, project); await mixReady(page.locator('.preview-panel'));
   expect(await amplitudeOfPlayedMix(page.locator('.preview-panel'), request, info, 'diagram')).toBeGreaterThan(.17);
-  await page.getByRole('region', { name: '项目时间轴', exact: true }).getByRole('button', { name: '批量编辑镜头', exact: true }).click();
+  await page.locator('.story-panel').getByRole('button', { name: '批量编辑镜头', exact: true }).click();
   let bulk = page.getByRole('dialog', { name: '批量编辑镜头', exact: true });
   await bulk.getByRole('checkbox', { name: '批量修改时长', exact: true }).check();
   await bulk.getByLabel('批量镜头时长（秒）', { exact: true }).fill('2');
@@ -187,7 +185,7 @@ test('mixes original sound under a diagram and bounds bulk trims by its real vid
   await bulk.getByRole('button', { name: '应用批量修改', exact: true }).click(); await expect(bulk).toHaveCount(0);
   expect((await saved(request, project.id)).shots[0].durationUs).toBe(1_700_000);
   await setOriginal(page, false);
-  await page.getByRole('region', { name: '项目时间轴', exact: true }).getByRole('button', { name: '批量编辑镜头', exact: true }).click();
+  await page.locator('.story-panel').getByRole('button', { name: '批量编辑镜头', exact: true }).click();
   bulk = page.getByRole('dialog', { name: '批量编辑镜头', exact: true });
   await bulk.getByRole('checkbox', { name: '批量修改时长', exact: true }).check();
   await bulk.getByLabel('批量镜头时长（秒）', { exact: true }).fill('3');
@@ -197,23 +195,28 @@ test('mixes original sound under a diagram and bounds bulk trims by its real vid
   await healthy(page, errors);
 });
 
-test('keeps original sound and its waveform source windows through a real split, EDL cut, backup and reload', async ({ page, request }, info) => {
+test('keeps original sound and its source windows through a real split, EDL cut, backup and reload', async ({ page, request }, info) => {
   test.setTimeout(60_000);
   const errors = observe(page), { project, asset } = await fixture(request, info); await open(page, project); await setOriginal(page, true);
-  const ruler = page.getByRole('slider', { name: '预览播放位置', exact: true }); await ruler.press('Home'); await ruler.press('Shift+ArrowRight');
+  const ruler = page.getByRole('slider', { name: '播放器播放位置', exact: true }); await ruler.press('Home'); await ruler.press('Shift+ArrowRight');
   for (let frame = 0; frame < 5; frame++) await ruler.press('ArrowRight');
-  await page.getByRole('button', { name: '在播放头处分割镜头', exact: true }).click();
+  await clickShotAction(page, '在播放头处分割镜头');
   await expect(page.locator('.outline-shot')).toHaveCount(2);
-  const waves = page.locator('.track--original .audio-waveform'); await expect(waves).toHaveCount(2);
-  await expect(waves.nth(0)).toHaveAttribute('data-source-in-us', '250000'); await expect(waves.nth(1)).toHaveAttribute('data-source-in-us', '750000');
+  const split = await saved(request, project.id);
+  expect(split.shots.map(shot => shot.videoInUs)).toEqual([250_000, 750_000]);
+  expect(split.shots.every(shot => shot.audioProcessing?.version === 2 && shot.audioProcessing.videoAudio.enabled)).toBe(true);
   await mixReady(page.locator('.preview-panel'));
   expect(await amplitudeOfPlayedMix(page.locator('.preview-panel'), request, info, 'split-first')).toBeGreaterThan(.17);
   expect(await amplitudeOfPlayedMix(page.locator('.preview-panel'), request, info, 'split-last', 1320, .85)).toBeGreaterThan(.17);
-  const split = await saved(request, project.id); expect(split.shots.every(shot => shot.audioProcessing?.version === 2 && shot.audioProcessing.videoAudio.enabled)).toBe(true);
   let sequence = 0;
   const edited = deleteShotRanges(split, split.shots[1].id, [{ startUs: 200_000, endUs: 300_000 }], split.profile.frameRate, [asset], kind => `original-cut-${kind}-${++sequence}`);
-  await rpc(request, 'project.update', { projectId: project.id, revision: split.revision, patch: { shots: edited.shots, clipEditSources: edited.clipEditSources, clipEditPlans: edited.clipEditPlans } });
-  await expect(waves.nth(1)).toHaveAttribute('data-span-count', '2'); await mixReady(page.locator('.preview-panel'));
+  const cut = await rpc<ProjectDocument>(request, 'project.update', { projectId: project.id, revision: split.revision, patch: { shots: edited.shots, clipEditSources: edited.clipEditSources, clipEditPlans: edited.clipEditPlans } });
+  expect(cut.clipEditPlans?.find(plan => plan.id === cut.shots[1].clipEdit?.planId)?.spans).toMatchObject([
+    { videoInUs: 750_000, durationUs: 200_000 }, { videoInUs: 1_050_000, durationUs: 700_000 },
+  ]);
+  const preview = page.locator('.preview-panel');
+  await mixReady(preview);
+  await expect.poll(() => preview.locator('audio[data-audio-role="处理后混音"]').evaluate((audio: HTMLAudioElement) => audio.duration), { timeout: 20_000 }).toBeCloseTo(1.4, 3);
   expect(await amplitudeOfPlayedMix(page.locator('.preview-panel'), request, info, 'edl-last', 1320, .85)).toBeGreaterThan(.17);
   const backup = await rpc<{ path: string }>(request, 'project.backup', { projectId: project.id });
   const exported = (JSON.parse(await readFile(backup.path + '/project.json', 'utf8')) as { project: ProjectDocument }).project;

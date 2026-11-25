@@ -30,7 +30,6 @@ async function open(page: Page, project: ProjectDocument) {
   await expect(page.getByLabel('项目名称', { exact: true })).toHaveValue(project.title);
 }
 async function openCheck(page: Page) {
-  await page.getByRole('button', { name: '更多', exact: true }).click();
   await page.getByRole('button', { name: '制作前检查', exact: true }).click();
   return page.getByRole('dialog', { name: '制作前检查', exact: true });
 }
@@ -55,21 +54,16 @@ test('checks saved content without submitting or saving a dirty draft, preservin
   const project = await fixture(request); await open(page, project);
   const methods: string[] = []; page.on('request', value => { if (value.url().endsWith('/__desktop_rpc')) methods.push(value.postDataJSON().method); });
   const title = page.getByLabel('项目名称', { exact: true }); await title.fill(`${project.title} 草稿`);
-  const more = page.getByRole('button', { name: '更多', exact: true });
-  const check = page.getByRole('button', { name: '制作前检查', exact: true });
-  await expect(check).toHaveCount(0);
-  await more.press('Enter');
-  await expect(check).toBeVisible(); await page.keyboard.press('Tab'); await expect(check).toBeFocused();
-  await page.screenshot({ path: info.outputPath('more-actions-dark-1536.png') });
-  await page.keyboard.press('Escape'); await expect(check).toHaveCount(0); await expect(more).toBeFocused();
-  await more.press('Space'); await page.keyboard.press('Tab'); await page.keyboard.press('Enter');
+  const check = page.getByRole('group', { name: '制作操作', exact: true }).getByRole('button', { name: '制作前检查', exact: true });
+  await expect(check).toBeVisible();
+  await check.press('Space');
   let dialog = page.getByRole('dialog', { name: '制作前检查', exact: true });
   await expect(dialog.getByText('本地检查通过。', { exact: true })).toBeVisible();
   await expect(dialog).toContainText('当前有未保存的修改'); await expect(dialog).toContainText('供应商连通性和计费状态需单独验证');
   expect(await current(request, project.id)).toMatchObject({ revision: project.revision, title: project.title });
   expect(methods.filter(method => ['run.start', 'project.update', 'shot.regenerate'].includes(method))).toEqual([]);
   await page.screenshot({ path: info.outputPath('readiness-dark-1536.png') });
-  await dialog.getByRole('button', { name: '返回保存修改', exact: true }).click(); await expect(more).toBeFocused();
+  await dialog.getByRole('button', { name: '返回保存修改', exact: true }).click(); await expect(check).toBeFocused();
   await expect(title).toHaveValue(`${project.title} 草稿`); await page.getByRole('button', { name: '撤销', exact: true }).click(); await expect(title).toHaveValue(project.title);
   await page.getByRole('button', { name: '重做', exact: true }).click(); await expect(title).toHaveValue(`${project.title} 草稿`);
   // Redo from the saved baseline intentionally saves a new revision; checking must not save another one.
@@ -80,7 +74,7 @@ test('checks saved content without submitting or saving a dirty draft, preservin
   await expect(dialog.getByText('本地检查通过。', { exact: true })).toBeVisible();
   const box = await dialog.locator('.dialog__surface').boundingBox(); expect(box).not.toBeNull(); expect(box!.x).toBeGreaterThanOrEqual(0); expect(box!.x + box!.width).toBeLessThanOrEqual(601);
   await page.screenshot({ path: info.outputPath('readiness-light-600.png') });
-  await page.keyboard.press('Escape'); await expect(dialog).toHaveCount(0); await expect(more).toBeFocused();
+  await page.keyboard.press('Escape'); await expect(dialog).toHaveCount(0); await expect(check).toBeFocused();
   expect((await current(request, project.id)).revision).toBe(afterHistory.revision);
   expect(methods.filter(method => ['run.start', 'project.update', 'shot.regenerate'].includes(method))).toEqual([]);
 });

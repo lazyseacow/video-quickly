@@ -2,7 +2,7 @@ import { pathExample, shortcutLabel } from '../lib/desktop';
 import SubflowInputBindings from '../components/SubflowInputBindings';
 import { CreativeEntityPicker } from '../components/CreativeContextEditor';
 import { Suspense, lazy, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
-import { ArrowLeft, MessageSquare, Undo2, Redo2, PanelLeft, PanelRight, PanelRightClose, ScanLine, Settings2, FileText, Film, Image, Layers, LockKeyhole, Save, UnlockKeyhole, WandSparkles, ArrowDownToLine, Upload, Square } from 'lucide-react';
+import { ArrowLeft, MessageSquare, Undo2, Redo2, PanelLeft, PanelRight, PanelRightClose, ScanLine, Settings2, ShieldCheck, FileText, Clapperboard, Film, Image, Layers, LockKeyhole, Save, UnlockKeyhole, WandSparkles, ArrowDownToLine, Upload, Square, ChevronDown, Pencil, RefreshCw } from 'lucide-react';
 import { applyShotCandidate, captionTrackSchema, createSceneTemplate, DEFAULT_AUDIO_PROCESSING, runStepPayloadSchema, shotSchema, silenceDetectionSchema, timeAtFrame, usesManualPlanning, usesVideoAudio, type AssetRecord, type CaptionStyle, type CaptionTrack, type JsonValue, type MusicClip, type ProjectDocument, type ProjectReadiness, type ReadinessIssue, type ResolvedWorkflowStage, type Shot, type ShotCandidate, type ShotCandidateField, type ShotCandidateKind, type WorkflowNode } from '@video-quickly/contracts';
 import { buildTimeline, createTransitionTimeline } from '@video-quickly/video';
 import { canSplitShot, preserveSceneIndices, splitShotInContext, trimShotInContext } from '@video-quickly/video/editing';
@@ -11,10 +11,10 @@ import { applyKeyframeEdit } from '../lib/keyframe-edits';
 import { sourceDurationsKey, useSourceDuration } from '../lib/source-duration';
 import { Button, Dialog, EmptyState, Field, IconButton, Notice, Select } from '../components/Primitives';
 import PlaybackPreview from '../components/PlaybackPreview';
-import Timeline from '../components/Timeline';
 import { PlaybackClock } from '../lib/playback';
 import ProjectOutline from '../components/ProjectOutline';
-import ProjectMoreActions from '../components/ProjectMoreActions';
+import ProjectPostProductionActions from '../components/ProjectMoreActions';
+import ProjectShotActions from '../components/ProjectShotActions';
 import WorkbenchProduction, { type StageViewOptions } from './WorkbenchProduction';
 import WorkbenchGuide from './WorkbenchGuide';
 import { matchingStepModels, stepGuidance, stepModelLabel, stepModelPlaceholder } from '../lib/workflow-guidance';
@@ -50,6 +50,8 @@ import { applyTranscriptEdit, assertTranscriptBaseline, type TranscriptEditActio
 import { beginGuideAction } from '../lib/guide-actions';
 import { useConfirmation } from '../components/ConfirmationDialog';
 import { useWorkbenchProduction } from './use-workbench-production';
+import './shot-inspector.css';
+import './workbench-toolbar.css';
 
 const KeyframeEditor = lazy(() => import('../components/KeyframeEditor'));
 const TranscriptEditingDialog = lazy(() => import('../components/TranscriptEditingDialog'));
@@ -424,7 +426,7 @@ export default function Workbench({ project, workspace, action, notify, onRegist
       const target = event.target;
       if (event.code === 'KeyS' && !event.ctrlKey && !event.metaKey && !event.altKey) {
         if (live) return;
-        if (target instanceof HTMLElement && (target.closest('input,textarea,select') || target.isContentEditable)) return;
+        if (target instanceof HTMLElement && (target.closest('input:not(.preview-seek),textarea,select') || target.isContentEditable)) return;
         event.preventDefault(); if (!event.repeat) void splitSelected(); return;
       }
       if (target instanceof HTMLElement && (target.closest('input,textarea,select,button,[role="slider"]') || target.isContentEditable)) return;
@@ -485,6 +487,14 @@ export default function Workbench({ project, workspace, action, notify, onRegist
     const ids = [...selectionRef.current.ids];
     await editGroup('调整所选镜头顺序', ids, current => bulkMoveShots(current, ids, offset < 0 ? -1 : 1));
   }
+  async function reorderShots(id: string, targetIndex: number, expectedRevision: number, groupIds: readonly string[]) {
+    if (savingEdits || session.state.busy || session.state.conflict) return;
+    if (expectedRevision !== session.state.revision) { notify('项目已更新，请重新拖动镜头。', true); return; }
+    const ids = [...groupIds];
+    const anchor = selectionRef.current.anchor;
+    await editGroup('拖动分镜排序', ids, current => bulkReorderShots(current, ids, targetIndex), next =>
+      normalizeSelection({ ids, primary: id, anchor: anchor && ids.includes(anchor) ? anchor : id }, next.shots.map(shot => shot.id), id));
+  }
   async function splitSelected() {
     if (selectionRef.current.ids.length !== 1 || savingEdits || session.state.busy || session.state.conflict) return;
     const id = selectedShotId;
@@ -509,9 +519,8 @@ export default function Workbench({ project, workspace, action, notify, onRegist
       if (await save()) clock.seek(startUs + left.durationUs);
     } catch (error) { notify(error instanceof Error ? error.message : String(error), true); }
   }
-  async function trimClip(id: string, inUs: number, outUs: number, expectedRevision?: number) {
+  async function trimClip(id: string, inUs: number, outUs: number) {
     if (selectionRef.current.ids.length !== 1 || savingEdits || session.state.busy || session.state.conflict) return;
-    if (expectedRevision !== undefined && expectedRevision !== session.state.revision) { notify('项目已更新，请重新调整入出点', true); return; }
     const raw = session.state.present.shots.find(item => item.id === id);
     const rateBefore = session.state.present.profile.frameRate;
     if (!raw || id !== selectedShotId) return;
@@ -529,12 +538,6 @@ export default function Workbench({ project, workspace, action, notify, onRegist
       clock.pause(); session.edit(next, '调整镜头入出点'); setSelectedShotId(id);
       if (await save()) clock.seek(clipStart(id));
     } catch (error) { notify(error instanceof Error ? error.message : String(error), true); }
-  }
-  async function reorderClip(id: string, targetIndex: number, expectedRevision: number, groupIds?: readonly string[]) {
-    if (savingEdits || session.state.busy || session.state.conflict) return;
-    if (expectedRevision !== session.state.revision) { notify('项目已更新，请重新拖动镜头', true); return; }
-    const ids = groupIds?.length ? [...groupIds] : [id];
-    await editGroup('拖动所选镜头排序', ids, current => bulkReorderShots(current, ids, targetIndex), next => normalizeSelection({ ids, primary: id, anchor: selectionRef.current.anchor }, next.shots.map(shot => shot.id), id));
   }
   async function duplicateShot() {
     const ids = [...selectionRef.current.ids], newIds = Object.fromEntries(ids.map(id => [id, crypto.randomUUID()]));
@@ -870,63 +873,52 @@ export default function Workbench({ project, workspace, action, notify, onRegist
         <Button ref={storyboardView} variant="ghost" aria-pressed={!showConversation} onClick={() => setAdaptationOpen(false)}><Film size={15} aria-hidden="true" />分镜工作台</Button>
       </div>
     </header>}
-    <div className="project-heading" hidden={showConversation}>
-      <div className="project-heading-copy" data-revision={edits.revision}>
-        <input className="project-title-input" aria-label="项目名称" title={title} value={title} onChange={event => setTitle(event.target.value)} />
-        {(dirtyShot || dirtyProject) && <p><span className="unsaved-dot">未保存</span></p>}
-      </div>
-      <div className="project-heading-actions">
-        <div className="editor-layout-actions" role="group" aria-label="工作区面板布局">
-          <IconButton data-guide="outline-toggle" label={outlineVisible ? '收起镜头导航' : '显示镜头导航'} aria-pressed={outlineVisible} onClick={toggleOutline}><PanelLeft size={16} /></IconButton>
-          <IconButton data-inspector-toggle data-guide="inspector-toggle" label="切换属性面板" aria-pressed={inspectorVisible} onClick={toggleInspector}><PanelRight size={16} /></IconButton>
-          <IconButton label={focusPreview ? '退出专注预览' : '专注预览'} aria-pressed={focusPreview} onClick={() => setFocusPreview(value => !value)}><ScanLine size={16} /></IconButton>
+    <header className="project-heading" hidden={showConversation}>
+      <div className="workbench-command-bar">
+        <div className="project-heading-copy workbench-command-bar__title" data-revision={edits.revision}>
+          <input className="project-title-input" aria-label="项目名称" title={title} value={title} onChange={event => setTitle(event.target.value)} />
+          {(dirtyShot || dirtyProject) && <span className="unsaved-dot">未保存</span>}
         </div>
-        <IconButton
-          className="editing-history-control"
-          label="撤销"
-          title={edits.undo.at(-1) ? `撤销：${edits.undo.at(-1)?.label}（${shortcutLabel('Z')}）` : `撤销（${shortcutLabel('Z')}）`}
-          disabled={!edits.undo.length || savingEdits || Boolean(edits.conflict)}
-          onClick={() => void changeHistory('undo')}
-        >
-          <Undo2 size={16} />
-        </IconButton>
-        <IconButton
-          className="editing-history-control"
-          label="重做"
-          title={edits.redo.at(-1) ? `重做：${edits.redo.at(-1)?.label}（${shortcutLabel('Z', true)}）` : `重做（${shortcutLabel('Z', true)}）`}
-          disabled={!edits.redo.length || savingEdits || Boolean(edits.conflict)}
-          onClick={() => void changeHistory('redo')}
-        >
-          <Redo2 size={16} />
-        </IconButton>
-        <IconButton label={savingEdits ? '正在保存修改' : '保存修改'} disabled={savingEdits || !(dirtyShot || dirtyProject)} onClick={() => void saveExplicitly()}><Save size={16} /></IconButton>
-        <ProjectMoreActions disabled={Boolean(pendingProductionAction)} onCheck={() => setReadinessDialog('manual')} />
-        {content.drama && !novelAdaptation && <Button disabled={savingEdits || Boolean(edits.conflict)} onClick={() => {
-          clock.pause(); setScriptEditing(structuredClone(authoredProject));
-        }}><FileText size={15} aria-hidden="true" />分集剧本</Button>}
-        {content.drama && <Button disabled={savingEdits || Boolean(edits.conflict)} onClick={() => { clock.pause(); setDramaEditing(structuredClone(authoredProject)); }}><FileText size={15} aria-hidden="true" />场次与对白</Button>}
-        {stageConfiguration.workflow.production && <Button
-          static
-          variant="ghost"
-          data-guide="view"
-          className="production-settings-trigger"
-          aria-label="制作设置"
-          title={configurationIncomplete ? '制作设置 · 待完善' : '制作设置'}
-          onClick={() => openSettings()}
-        ><Settings2 size={15} />制作设置{configurationIncomplete && <span className="production-settings-trigger__pending" aria-hidden="true" />}</Button>}
-        <Button
-          data-guide="produce"
-          aria-label={isProductionActive ? '停止制作' : productionLabel}
-          busy={Boolean(pendingProductionAction)}
-          disabled={!isProductionActive && (savingEdits || savingStageConfiguration)}
-          onClick={event => toggleProduction(event.currentTarget)}
-        >
-          {!pendingProductionAction && (isProductionActive ? <Square size={15} /> : <WandSparkles size={15} />)}
-          <span className="production-toggle__label" data-label="开始制作"><span>{productionLabel}</span></span>
-        </Button>
-        <Button data-guide="export" variant="primary" onClick={() => void save().then(saved => { if (saved) setExporting(true); })}><ArrowDownToLine size={15} />导出</Button>
+        {content.drama && <div className="workbench-command-bar__documents" role="group" aria-label="分集文稿">
+          {!novelAdaptation && <Button static variant="ghost" disabled={savingEdits || Boolean(edits.conflict)} onClick={() => {
+            clock.pause(); setScriptEditing(structuredClone(authoredProject));
+          }}><FileText size={15} aria-hidden="true" />分集剧本</Button>}
+          <Button static variant="ghost" disabled={savingEdits || Boolean(edits.conflict)} onClick={() => {
+            clock.pause(); setDramaEditing(structuredClone(authoredProject));
+          }}><Clapperboard size={15} aria-hidden="true" />场次与对白</Button>
+        </div>}
+        <div className="project-heading-actions workbench-command-bar__production" role="group" aria-label="制作操作">
+          <Button
+            static
+            variant="ghost"
+            data-guide="view"
+            className="production-settings-trigger"
+            aria-label="制作设置"
+            aria-haspopup="dialog"
+            title={configurationIncomplete ? '制作设置 · 待完善' : '制作设置'}
+            onClick={() => openSettings()}
+          ><Settings2 size={15} aria-hidden="true" /><span>制作设置</span>{configurationIncomplete && <span className="production-settings-trigger__pending" aria-hidden="true" />}</Button>
+          <Button static variant="ghost" data-guide="check" aria-label="制作前检查" aria-haspopup="dialog" title="制作前检查"
+            disabled={Boolean(pendingProductionAction)} onClick={() => setReadinessDialog('manual')}>
+            <ShieldCheck size={15} aria-hidden="true" />检查
+          </Button>
+          <Button
+            data-guide="produce"
+            variant={isProductionActive ? 'danger' : 'primary'}
+            aria-label={isProductionActive ? '停止制作' : productionLabel}
+            busy={Boolean(pendingProductionAction)}
+            disabled={!isProductionActive && (savingEdits || savingStageConfiguration)}
+            onClick={event => toggleProduction(event.currentTarget)}
+          >
+            {!pendingProductionAction && (isProductionActive ? <Square size={15} aria-hidden="true" /> : <WandSparkles size={15} aria-hidden="true" />)}
+            <span className="production-toggle__label" data-label="开始制作"><span>{productionLabel}</span></span>
+          </Button>
+          <Button data-guide="export" aria-haspopup="dialog" onClick={() => void save().then(saved => { if (saved) setExporting(true); })}>
+            <ArrowDownToLine size={15} aria-hidden="true" />导出
+          </Button>
+        </div>
       </div>
-    </div>
+    </header>
     {!latestRun && <WorkbenchGuide project={{ ...displayedProject, workflow: stageConfiguration.workflow }} onOpenStage={stage => {
       if (novelAdaptation && stage.id === 'planning') openAdaptation();
       else openStage(stage, { tab: 'run' });
@@ -955,6 +947,32 @@ export default function Workbench({ project, workspace, action, notify, onRegist
       onResolve={choices => { session.resolve(choices); setConflictDialog(false); }}
       onDiscard={() => void discardEdits()}
     />}
+    <div className="workbench-editor-bar" hidden={showConversation}>
+      <ProjectPostProductionActions disabled={Boolean(live || savingEdits || edits.conflict || pendingProductionAction)}
+        onMusic={openMusicEditor} onCaptions={() => openProjectTool('caption')} />
+      <div className="workbench-editor-bar__controls">
+        <div className="workbench-editor-bar__history" role="group" aria-label="编辑历史">
+          <IconButton label="撤销"
+            title={edits.undo.at(-1) ? `撤销：${edits.undo.at(-1)?.label}（${shortcutLabel('Z')}）` : `撤销（${shortcutLabel('Z')}）`}
+            disabled={!edits.undo.length || savingEdits || Boolean(edits.conflict)} onClick={() => void changeHistory('undo')}>
+            <Undo2 size={16} aria-hidden="true" />
+          </IconButton>
+          <IconButton label="重做"
+            title={edits.redo.at(-1) ? `重做：${edits.redo.at(-1)?.label}（${shortcutLabel('Z', true)}）` : `重做（${shortcutLabel('Z', true)}）`}
+            disabled={!edits.redo.length || savingEdits || Boolean(edits.conflict)} onClick={() => void changeHistory('redo')}>
+            <Redo2 size={16} aria-hidden="true" />
+          </IconButton>
+          <IconButton label={savingEdits ? '正在保存修改' : '保存修改'} disabled={savingEdits || !(dirtyShot || dirtyProject)} onClick={() => void saveExplicitly()}>
+            <Save size={16} aria-hidden="true" />
+          </IconButton>
+        </div>
+        <div className="editor-layout-actions" role="group" aria-label="工作区面板布局">
+          <IconButton data-guide="outline-toggle" label={outlineVisible ? '收起镜头导航' : '显示镜头导航'} aria-pressed={outlineVisible} onClick={toggleOutline}><PanelLeft size={16} aria-hidden="true" /></IconButton>
+          <IconButton data-inspector-toggle data-guide="inspector-toggle" label="切换属性面板" aria-pressed={inspectorVisible} onClick={toggleInspector}><PanelRight size={16} aria-hidden="true" /></IconButton>
+          <IconButton label={focusPreview ? '退出专注预览' : '专注预览'} aria-pressed={focusPreview} onClick={() => setFocusPreview(value => !value)}><ScanLine size={16} aria-hidden="true" /></IconButton>
+        </div>
+      </div>
+    </div>
     <div className={`workbench-grid ${!outlineVisible ? 'outline-collapsed' : ''} ${!inspectorVisible ? 'inspector-collapsed' : ''}`} style={layoutStyle} ref={editor} hidden={showConversation}>
       <aside data-guide="shots" className="story-panel" id="project-outline" hidden={!outlineVisible}>
         <ProjectOutline
@@ -967,6 +985,22 @@ export default function Workbench({ project, workspace, action, notify, onRegist
           onBulkEdit={live ? undefined : () => setBulkEditing(true)}
           onSelectShot={live ? selectLiveShot : selectShot}
           onAddShot={live ? undefined : addShot}
+          reorderRevision={edits.revision}
+          onReorderShots={live || savingEdits || edits.busy || edits.conflict ? undefined : reorderShots}
+          actions={<ProjectShotActions
+            shot={playbackShots[selectedIndex]}
+            index={selectedIndex}
+            shotCount={playbackShots.length}
+            selectionCount={selection.ids.length}
+            clipStartUs={timeline[selectedIndex]?.startUs}
+            rate={playbackRate}
+            clock={clock}
+            disabled={Boolean(live || savingEdits || edits.conflict)}
+            onMove={moveShot}
+            onDuplicate={duplicateShot}
+            onRemove={removeShot}
+            onSplit={splitSelected}
+          />}
         />
         <PanelResizeHandle
           id="outline-resize"
@@ -1008,13 +1042,29 @@ export default function Workbench({ project, workspace, action, notify, onRegist
           onCommit={value => localStorage.setItem('vq-inspector-width', String(value))}
         />
         <div className="panel-heading"><h2>{live ? '制作镜头' : '镜头属性'}</h2><IconButton label="收起属性面板" onClick={toggleInspector}><PanelRightClose size={15} /></IconButton></div>
-        <div ref={inspectorBody} className="inspector-body">
+        <div ref={inspectorBody} className="inspector-body shot-inspector">
           {live ? <EmptyState icon={<Film size={20} />} title={liveShot?.title ?? '制作预览'} description="点击播放器上方的「编辑项目」可修改镜头。" /> : draft ? <>
-            <section className="inspector-section">
-              <div className="section-heading">
-                <Film size={14} />
-                <h3>镜头 {(selectedIndex + 1).toString().padStart(2, '0')}</h3>
-                <IconButton label={draft.locked ? '解锁镜头' : '锁定镜头'} aria-pressed={draft.locked} onClick={() => setDraft({ ...draft, locked: !draft.locked })}>{draft.locked ? <LockKeyhole size={13} /> : <UnlockKeyhole size={13} />}</IconButton>
+            <header className="shot-inspector__header inspector-section">
+              <div className="shot-inspector__identity">
+                <div>
+                  <p className="shot-inspector__sequence"><Film size={14} aria-hidden="true" />镜头 {(selectedIndex + 1).toString().padStart(2, '0')}</p>
+                  <h3>{draft.title.trim() || '未命名镜头'}</h3>
+                </div>
+                <IconButton label={draft.locked ? '解锁镜头' : '锁定镜头'} aria-pressed={draft.locked} onClick={() => setDraft({ ...draft, locked: !draft.locked })}>{draft.locked ? <LockKeyhole size={15} /> : <UnlockKeyhole size={15} />}</IconButton>
+              </div>
+              <div className="shot-inspector__actions">
+                <Button variant="primary" aria-haspopup="dialog" disabled={draft.locked || savingEdits || edits.busy || Boolean(edits.conflict)}
+                  onClick={() => { clock.pause(); setRegenerationShotId(draft.id); }}><RefreshCw size={15} aria-hidden="true" />重新生成</Button>
+                <Button aria-haspopup="dialog" disabled={draft.locked || isProductionActive || savingEdits || edits.busy || Boolean(edits.conflict)}
+                  onClick={() => { clock.pause(); setRevisionShotId(draft.id); }}><Pencil size={15} aria-hidden="true" />修改文案</Button>
+              </div>
+              <p className="shot-inspector__hint">{draft.locked ? '解锁后可重新生成或修改文案。' : '只为当前镜头生成候选。'}</p>
+            </header>
+            <section className="inspector-section shot-inspector__content">
+              <div className="section-heading shot-inspector__content-heading">
+                <h3>内容与节奏</h3>
+                <Button aria-label="保存镜头" variant={dirtyShot ? 'primary' : 'ghost'} busy={savingEdits} disabled={!dirtyShot}
+                  onClick={() => void saveExplicitly()}><Save size={13} aria-hidden="true" />保存</Button>
               </div>
               <Field label="镜头标题"><input value={draft.title} onChange={event => setDraft({ ...draft, title: event.target.value })} /></Field>
               <Field label="旁白"><textarea value={draft.narration} onChange={event => setDraft({ ...draft, narration: event.target.value })} placeholder="这一镜头想讲什么？" /></Field>
@@ -1047,115 +1097,91 @@ export default function Workbench({ project, workspace, action, notify, onRegist
                 disabled={savingEdits || Boolean(edits.conflict) || selection.ids.length != 1 || draft.locked}
                 onTrim={trimClip}
               />
-              <div className="inspector-actions">
-                <Button aria-label="保存镜头" variant="primary" busy={savingEdits} disabled={!dirtyShot} onClick={() => void saveExplicitly()}><Save size={13} />保存</Button>
-                <Button disabled={draft.locked} onClick={() => setRegenerationShotId(draft.id)}><WandSparkles size={13} />AI 微调</Button>
-                <Button aria-haspopup="dialog" disabled={draft.locked || isProductionActive || savingEdits || edits.busy || Boolean(edits.conflict)} onClick={() => setRevisionShotId(draft.id)}>修改镜头</Button>
-              </div>
             </section>
-            <section className="inspector-section">
-              <div className="section-heading"><Image size={14} /><h3>画面与素材</h3></div>
-              <SceneTemplateEditor value={draft.sceneTemplate} disabled={draft.locked} onChange={sceneTemplate => setDraft({ ...draft, sceneTemplate })} />
-              <CharacterPicker value={draft.characterIds} version={workspace.version} disabled={draft.locked} onChange={characterIds => setDraft({ ...draft, characterIds })} />
-              <CreativeEntityPicker
-                context={content.creativeContext}
-                value={draft.creativeEntityKeys}
-                disabled={draft.locked}
-                onChange={creativeEntityKeys => setDraft({ ...draft, creativeEntityKeys })}
-              />
-              <Field label="画面要求"><textarea value={draft.visualPrompt} onChange={event => setDraft({ ...draft, visualPrompt: event.target.value })} placeholder="场景、角色、构图和动作…" /></Field>
-              {content.workflow.production && <Field label="镜头声音要求"><textarea value={draft.soundPrompt ?? ''} onChange={event => setDraft({ ...draft, soundPrompt: event.target.value })} placeholder="说话者、语气、环境音与音乐…" /></Field>}
-              <Field label="画面素材">
-                <Select value={draft.assetId ?? ''} disabled={Boolean(draft.sceneTemplate)} onChange={event => setDraft({ ...draft, assetId: event.target.value || undefined })}>
-                  <option value="">使用示例画面</option>
-                  {workspace.assets.filter(asset => asset.active && asset.kind === 'image' && (!asset.projectId || asset.projectId === project.id)).map(asset => <option key={asset.id} value={asset.id}>{asset.name}</option>)}
-                </Select>
-              </Field>
-              <Field label="镜头视频">
-                <Select value={draft.videoAssetId ?? ''} disabled={Boolean(draft.sceneTemplate)} onChange={event => setDraft({ ...draft, videoAssetId: event.target.value || undefined, videoInUs: event.target.value ? 0 : undefined })}>
-                  <option value="">使用二维画面与运镜</option>
-                  {workspace.assets.filter(asset => asset.active && asset.kind === 'video' && (!asset.projectId || asset.projectId === project.id)).map(asset => <option key={asset.id} value={asset.id}>{asset.name}</option>)}
-                </Select>
-              </Field>
-              {draft.videoAssetId && <label className="field-inline"><input
-                type="checkbox"
-                aria-label="启用视频原声"
-                checked={usesVideoAudio(draft)}
-                disabled={draft.locked}
-                onChange={event => setDraft({ ...draft, audioProcessing: { ...(draft.audioProcessing ?? DEFAULT_AUDIO_PROCESSING), version: 2, videoAudio: { enabled: event.target.checked, gainDb: draft.audioProcessing?.videoAudio?.gainDb ?? 0 } } })}
-              />视频原声</label>}
-              <Button aria-label="导入画面" className="button-full" variant="ghost" disabled={Boolean(draft.sceneTemplate)} onClick={() => { setAssetKind('image'); setAssetDialog(true); }}><Upload size={13} />导入画面</Button>
-            </section>
-            <section className="inspector-section">
-              <div className="section-heading"><Layers size={14} /><h3>运镜</h3></div>
-              <fieldset className="motion-legacy-fields" disabled={Boolean(draft.animation.keyframes?.length)}>
-                <Field label={`缩放 ${draft.animation.zoom.toFixed(2)}×`}>
-                  <input
-                    type="range"
-                    min="1"
-                    max="1.5"
-                    step="0.01"
-                    value={draft.animation.zoom}
-                    onChange={event => setDraft({ ...draft, animation: { ...draft.animation, zoom: Number(event.target.value) } })}
-                  />
+            <details className="inspector-section shot-inspector__disclosure">
+              <summary><Image size={15} aria-hidden="true" />画面与素材<ChevronDown className="shot-inspector__chevron" size={15} aria-hidden="true" /></summary>
+              <div className="shot-inspector__options">
+                <SceneTemplateEditor value={draft.sceneTemplate} disabled={draft.locked} onChange={sceneTemplate => setDraft({ ...draft, sceneTemplate })} />
+                <CharacterPicker value={draft.characterIds} version={workspace.version} disabled={draft.locked} onChange={characterIds => setDraft({ ...draft, characterIds })} />
+                <CreativeEntityPicker
+                  context={content.creativeContext}
+                  value={draft.creativeEntityKeys}
+                  disabled={draft.locked}
+                  onChange={creativeEntityKeys => setDraft({ ...draft, creativeEntityKeys })}
+                />
+                <Field label="画面要求"><textarea value={draft.visualPrompt} onChange={event => setDraft({ ...draft, visualPrompt: event.target.value })} placeholder="场景、角色、构图和动作…" /></Field>
+                {content.workflow.production && <Field label="镜头声音要求"><textarea value={draft.soundPrompt ?? ''} onChange={event => setDraft({ ...draft, soundPrompt: event.target.value })} placeholder="说话者、语气、环境音与音乐…" /></Field>}
+                <Field label="画面素材">
+                  <Select value={draft.assetId ?? ''} disabled={Boolean(draft.sceneTemplate)} onChange={event => setDraft({ ...draft, assetId: event.target.value || undefined })}>
+                    <option value="">使用示例画面</option>
+                    {workspace.assets.filter(asset => asset.active && asset.kind === 'image' && (!asset.projectId || asset.projectId === project.id)).map(asset => <option key={asset.id} value={asset.id}>{asset.name}</option>)}
+                  </Select>
                 </Field>
-                <div className="field-row">
-                  <Field label="水平移动"><input
-                    type="number"
-                    min="-1000"
-                    max="1000"
-                    value={draft.animation.panX}
-                    onChange={event => setDraft({ ...draft, animation: { ...draft.animation, panX: event.target.valueAsNumber || 0 } })}
-                  /></Field>
-                  <Field label="垂直移动"><input
-                    type="number"
-                    min="-1000"
-                    max="1000"
-                    value={draft.animation.panY}
-                    onChange={event => setDraft({ ...draft, animation: { ...draft.animation, panY: event.target.valueAsNumber || 0 } })}
-                  /></Field>
-                </div>
-              </fieldset>
-              <Button className="button-full" disabled={draft.locked} onClick={() => { clock.pause(); setKeyframeShotId(draft.id); }}>关键帧与曲线</Button>
-              {draft.animation.keyframes?.length ? <p className="tiny-meta">已启用 {draft.animation.keyframes.length} 个关键帧。</p> : null}
-            </section>
-            <section className="inspector-section">
-              <div className="section-heading"><FileText size={14} /><h3>字幕与文稿</h3></div>
-              {staleSpeechCaptions && <Notice>旁白音频已更换，请打开字幕编辑器重新对齐或手动校准。</Notice>}
-              <div className="inspector-actions">
-                <Button disabled={audioMix.status === 'pending'} onClick={openCaptionEditor}>编辑字幕</Button>
-                <Button aria-label="文稿剪辑与停顿清理" disabled={draft.locked || audioMix.status === 'pending'} onClick={openTranscript}>文稿剪辑</Button>
-                <Button disabled={draft.locked} onClick={() => openCaptionStyle({ mode: 'shot', shotId: draft.id })}>镜头字幕样式</Button>
+                <Field label="镜头视频">
+                  <Select value={draft.videoAssetId ?? ''} disabled={Boolean(draft.sceneTemplate)} onChange={event => setDraft({ ...draft, videoAssetId: event.target.value || undefined, videoInUs: event.target.value ? 0 : undefined })}>
+                    <option value="">使用二维画面与运镜</option>
+                    {workspace.assets.filter(asset => asset.active && asset.kind === 'video' && (!asset.projectId || asset.projectId === project.id)).map(asset => <option key={asset.id} value={asset.id}>{asset.name}</option>)}
+                  </Select>
+                </Field>
+                {draft.videoAssetId && <label className="field-inline"><input
+                  type="checkbox"
+                  aria-label="启用视频原声"
+                  checked={usesVideoAudio(draft)}
+                  disabled={draft.locked}
+                  onChange={event => setDraft({ ...draft, audioProcessing: { ...(draft.audioProcessing ?? DEFAULT_AUDIO_PROCESSING), version: 2, videoAudio: { enabled: event.target.checked, gainDb: draft.audioProcessing?.videoAudio?.gainDb ?? 0 } } })}
+                />视频原声</label>}
+                <Button aria-label="导入画面" className="button-full" variant="ghost" disabled={Boolean(draft.sceneTemplate)} onClick={() => { setAssetKind('image'); setAssetDialog(true); }}><Upload size={13} />导入画面</Button>
               </div>
-            </section>
+            </details>
+            <details className="inspector-section shot-inspector__disclosure">
+              <summary><Layers size={15} aria-hidden="true" />运镜<ChevronDown className="shot-inspector__chevron" size={15} aria-hidden="true" /></summary>
+              <div className="shot-inspector__options">
+                <fieldset className="motion-legacy-fields" disabled={Boolean(draft.animation.keyframes?.length)}>
+                  <Field label={`缩放 ${draft.animation.zoom.toFixed(2)}×`}>
+                    <input
+                      type="range"
+                      min="1"
+                      max="1.5"
+                      step="0.01"
+                      value={draft.animation.zoom}
+                      onChange={event => setDraft({ ...draft, animation: { ...draft.animation, zoom: Number(event.target.value) } })}
+                    />
+                  </Field>
+                  <div className="field-row">
+                    <Field label="水平移动"><input
+                      type="number"
+                      min="-1000"
+                      max="1000"
+                      value={draft.animation.panX}
+                      onChange={event => setDraft({ ...draft, animation: { ...draft.animation, panX: event.target.valueAsNumber || 0 } })}
+                    /></Field>
+                    <Field label="垂直移动"><input
+                      type="number"
+                      min="-1000"
+                      max="1000"
+                      value={draft.animation.panY}
+                      onChange={event => setDraft({ ...draft, animation: { ...draft.animation, panY: event.target.valueAsNumber || 0 } })}
+                    /></Field>
+                  </div>
+                </fieldset>
+                <Button className="button-full" disabled={draft.locked} onClick={() => { clock.pause(); setKeyframeShotId(draft.id); }}>关键帧与曲线</Button>
+                {draft.animation.keyframes?.length ? <p className="tiny-meta">已启用 {draft.animation.keyframes.length} 个关键帧。</p> : null}
+              </div>
+            </details>
+            <details className="inspector-section shot-inspector__disclosure">
+              <summary><FileText size={15} aria-hidden="true" />字幕与文稿<ChevronDown className="shot-inspector__chevron" size={15} aria-hidden="true" /></summary>
+              <div className="shot-inspector__options">
+                {staleSpeechCaptions && <Notice>旁白音频已更换，请打开字幕编辑器重新对齐或手动校准。</Notice>}
+                <div className="inspector-actions">
+                  <Button disabled={audioMix.status === 'pending'} onClick={openCaptionEditor}>编辑字幕</Button>
+                  <Button aria-label="文稿剪辑与停顿清理" disabled={draft.locked || audioMix.status === 'pending'} onClick={openTranscript}>文稿剪辑</Button>
+                  <Button disabled={draft.locked} onClick={() => openCaptionStyle({ mode: 'shot', shotId: draft.id })}>镜头字幕样式</Button>
+                </div>
+              </div>
+            </details>
           </> : <EmptyState icon={<Settings2 size={20} />} title="添加镜头开始编辑" />}
         </div>
       </aside>
-      <Timeline
-        project={playbackProject}
-        assets={workspace.assets}
-        shots={playbackShots}
-        timeline={timeline}
-        selectedId={live ? liveShot?.id : selectedShotId}
-        selectedIds={live ? undefined : selection.ids}
-        onSelectAll={live ? undefined : selectAll}
-        onClearSelection={live ? undefined : clearSelection}
-        onBulkEdit={() => setBulkEditing(true)}
-        rate={playbackRate}
-        clock={clock}
-        onSelect={live ? selectLiveShot : selectShot}
-        onMove={moveShot}
-        onDuplicate={duplicateShot}
-        onRemove={removeShot}
-        onSplit={splitSelected}
-        onReorder={reorderClip}
-        onTrim={trimClip}
-        sourceDurationUs={source.durationUs}
-        sourceStatus={source.status}
-        onOpenMusic={live ? undefined : openMusicEditor}
-        editingDisabled={!live && (savingEdits || Boolean(edits.conflict))}
-        readOnly={Boolean(live)}
-      />
     </div>
     {keyframeShotId && content.shots.some(shot => shot.id === keyframeShotId) && <Suspense fallback={null}>
       <KeyframeEditor

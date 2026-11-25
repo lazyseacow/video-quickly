@@ -1,5 +1,6 @@
 import { openProjectFromList } from './workspace-navigation';
-import { expect, test, type APIRequestContext, type Locator, type Page } from '@playwright/test';
+import { clickShotAction, openShotActions } from './storyboard-actions';
+import { expect, test, type APIRequestContext, type Page } from '@playwright/test';
 import type { ProjectDocument } from '@video-quickly/contracts';
 
 const frameUs = 1_000_000 * 1001 / 30000;
@@ -36,7 +37,7 @@ async function openProject(page: Page, title: string) {
   await expect(page).toHaveTitle(/Video Quickly/);
   await openProjectFromList(page, title);
   await expect(page.getByLabel('镜头标题')).toHaveValue('裁剪镜头 1');
-  await expect(page.getByRole('slider', { name: '镜头出点', exact: true })).toBeVisible();
+  await expect(page.getByLabel('素材出点（秒）', { exact: true })).toBeVisible();
 }
 
 function observeErrors(page: Page) {
@@ -52,24 +53,11 @@ async function expectHealthy(page: Page, errors: string[]) {
 }
 
 async function seekFrames(page: Page, frames: number) {
-  const ruler = page.getByRole('slider', { name: '预览播放位置', exact: true });
+  const ruler = page.getByRole('slider', { name: '播放器播放位置', exact: true });
   await ruler.press('Home');
   for (let index = 0; index < Math.floor(frames / 10); index++) await ruler.press('Shift+ArrowRight');
   for (let index = 0; index < frames % 10; index++) await ruler.press('ArrowRight');
-  await expect(ruler).toHaveAttribute('aria-valuenow', String(Math.round(frames * frameUs / 1000)));
-}
-
-async function dragBy(page: Page, handle: Locator, deltaX: number) {
-  await expect(handle).toBeEnabled();
-  await handle.click({ trial: true });
-  const bounds = await handle.boundingBox();
-  if (!bounds) throw new Error('时间轴拖动目标不可见');
-  const x = bounds.x + bounds.width / 2, y = bounds.y + bounds.height / 2;
-  await page.mouse.move(x, y);
-  await page.mouse.down();
-  await page.mouse.move(x + deltaX, y, { steps: 8 });
-  await expect(page.locator('.timeline-drop-marker')).toBeVisible();
-  await page.mouse.up();
+  await expect(ruler).toHaveAttribute('data-playhead-ms', String(Math.round(frames * frameUs / 1000)));
 }
 
 for (const transport of ['rapid frames', 'pressed frames', 'unchanged Home', 'no newer command', 'newer shot selection', 'additive shot selection'] as const) {
@@ -97,7 +85,7 @@ for (const transport of ['rapid frames', 'pressed frames', 'unchanged Home', 'no
       // acknowledgement. Keyboard intent must survive that late continuation.
       await committed;
       expect((await savedProject(request, project.id)).shots[0].title).toBe('保存中的第一镜头');
-      const ruler = page.getByRole('slider', { name: '预览播放位置', exact: true });
+      const ruler = page.getByRole('slider', { name: '播放器播放位置', exact: true });
       await ruler.focus();
       const framesRequested = transport === 'rapid frames' || transport === 'pressed frames';
       if (transport === 'rapid frames') {
@@ -106,21 +94,21 @@ for (const transport of ['rapid frames', 'pressed frames', 'unchanged Home', 'no
         await ruler.evaluate(element => {
           for (let index = 0; index < 6; index++) element.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight', code: 'ArrowRight', shiftKey: true, bubbles: true, cancelable: true }));
         });
-        await expect(ruler).toHaveAttribute('aria-valuenow', '2002');
+        await expect(ruler).toHaveAttribute('data-playhead-ms', '2002');
       } else if (transport === 'pressed frames') {
         for (let index = 0; index < 6; index++) await ruler.press('Shift+ArrowRight');
-        await expect(ruler).toHaveAttribute('aria-valuenow', '2002');
+        await expect(ruler).toHaveAttribute('data-playhead-ms', '2002');
       } else if (transport === 'unchanged Home') {
-        await expect(ruler).toHaveAttribute('aria-valuenow', '0');
+        await expect(ruler).toHaveAttribute('data-playhead-ms', '0');
         await ruler.press('Home');
-        await expect(ruler).toHaveAttribute('aria-valuenow', '0');
+        await expect(ruler).toHaveAttribute('data-playhead-ms', '0');
       } else if (transport === 'newer shot selection' || transport === 'additive shot selection') {
         await page.locator('.outline-shot').nth(2).click({ modifiers: transport === 'additive shot selection' ? [selectionModifier] : [] });
       }
       releaseSave();
       const nextSelection = transport === 'newer shot selection' || transport === 'additive shot selection';
       await expect(page.getByLabel('镜头标题')).toHaveValue(nextSelection ? '裁剪镜头 3' : '裁剪镜头 2');
-      await expect(ruler).toHaveAttribute('aria-valuenow', framesRequested ? '2002' : transport === 'unchanged Home' ? '0' : nextSelection ? '4505' : '3003');
+      await expect(ruler).toHaveAttribute('data-playhead-ms', framesRequested ? '2002' : transport === 'unchanged Home' ? '0' : nextSelection ? '4505' : '3003');
       if (transport === 'additive shot selection') {
         await expect(page.locator('.outline-shot').nth(0)).toHaveAttribute('aria-pressed', 'false');
         await expect(page.locator('.outline-shot').nth(1)).toHaveAttribute('aria-pressed', 'true');
@@ -137,10 +125,11 @@ test('splits at 29.97 fps with continuous source ranges and restores undo/redo a
   const project = await createProject(request, '分数帧率分割与恢复验收', 500_500);
   await openProject(page, project.title);
   const split = page.getByRole('button', { name: '在播放头处分割镜头', exact: true });
+  await openShotActions(page);
   await expect(split).toBeDisabled();
+  await page.keyboard.press('Escape');
   await seekFrames(page, 30);
-  await expect(split).toBeEnabled();
-  await split.click();
+  await clickShotAction(page, '在播放头处分割镜头');
   await expect(page.locator('.outline-shot')).toHaveCount(4);
   await expect.poll(async () => (await savedProject(request, project.id)).shots.length).toBe(4);
   const divided = await savedProject(request, project.id);
@@ -183,14 +172,13 @@ test('splits at 29.97 fps with continuous source ranges and restores undo/redo a
   await page.getByRole('button', { name: '撤销', exact: true }).click();
   await expect.poll(async () => (await savedProject(request, project.id)).shots).toEqual(project.shots);
   await seekFrames(page, 30);
-  await expect(split).toBeEnabled();
-  await page.keyboard.press('s');
+  await page.getByRole('slider', { name: '播放器播放位置', exact: true }).press('s');
   await expect.poll(async () => (await savedProject(request, project.id)).shots.length).toBe(4);
   expect((await savedProject(request, project.id)).revision).toBe(project.revision + 7);
   await expectHealthy(page, errors);
 });
 
-test('validates trim ranges and adjusts selected edges by one frame or ten frames', async ({ page, request }, info) => {
+test('validates entered source ranges and rounds both edges to the project frame rate', async ({ page, request }, info) => {
   const errors = observeErrors(page);
   const project = await createProject(request, '镜头入出点与键盘验收');
   await openProject(page, project.title);
@@ -209,13 +197,11 @@ test('validates trim ranges and adjusts selected edges by one frame or ten frame
   expect((await savedProject(request, project.id)).revision).toBe(trimmed.revision);
   await inPoint.fill('0.5005'); await outPoint.fill('2.5025');
   await expect(apply).toBeDisabled();
-  const inHandle = page.getByRole('slider', { name: '镜头入点', exact: true });
-  await expect(inHandle).toBeEnabled();
-  await inHandle.press('ArrowRight');
+  await inPoint.fill('0.534');
+  await apply.click();
   await expect.poll(async () => (await savedProject(request, project.id)).shots[0].sourceInUs).toBe(533_867);
-  const outHandle = page.getByRole('slider', { name: '镜头出点', exact: true });
-  await expect(outHandle).toBeEnabled();
-  await outHandle.press('Shift+ArrowLeft');
+  await outPoint.fill('2.169');
+  await apply.click();
   await expect.poll(async () => {
     const shot = (await savedProject(request, project.id)).shots[0];
     return shot.sourceInUs! + shot.durationUs;
@@ -227,71 +213,45 @@ test('validates trim ranges and adjusts selected edges by one frame or ten frame
   }).toBe(2_502_500);
   await page.getByRole('button', { name: '撤销', exact: true }).click();
   await expect.poll(async () => (await savedProject(request, project.id)).shots).toEqual(trimmed.shots);
-  await page.screenshot({ path: info.outputPath('trim-keyboard-29-97.png') });
+  await page.screenshot({ path: info.outputPath('trim-fields-29-97.png') });
   await expectHealthy(page, errors);
 });
 
-test('reorders clips by pointer and snaps trim edges to the playhead and neighboring boundaries', async ({ page, request }, info) => {
+test('moves the selected storyboard shot and keeps the preview at its new position', async ({ page, request }, info) => {
   const errors = observeErrors(page);
-  const project = await createProject(request, '拖动重排与时间轴吸附验收');
+  const project = await createProject(request, '分镜顺序与播放位置验收');
   await openProject(page, project.title);
-  const track = page.locator('.track--video .track-clips');
-  const trackBox = await track.boundingBox();
-  if (!trackBox) throw new Error('视频轨道不可见');
-  await dragBy(page, page.locator('.timeline-clip--video .timeline-clip__select').first(), trackBox.width / 2);
+  await openShotActions(page);
+  await expect(page.getByRole('button', { name: '向前移动', exact: true })).toBeDisabled();
+  await clickShotAction(page, '向后移动');
+  await expect.poll(async () => (await savedProject(request, project.id)).shots.map(shot => shot.id)).toEqual(['clip-1', 'clip-0', 'clip-2']);
+  await clickShotAction(page, '向后移动');
   await expect.poll(async () => (await savedProject(request, project.id)).shots.map(shot => shot.id)).toEqual(['clip-1', 'clip-2', 'clip-0']);
   await expect(page.locator('.outline-shot').last()).toContainText('裁剪镜头 1');
+  await expect(page.getByRole('slider', { name: '播放器播放位置', exact: true })).toHaveAttribute('data-playhead-ms', '3003');
+  await openShotActions(page);
+  await expect(page.getByRole('button', { name: '向后移动', exact: true })).toBeDisabled();
+  await page.keyboard.press('Escape');
+  await page.getByRole('button', { name: '撤销', exact: true }).click();
+  await expect.poll(async () => (await savedProject(request, project.id)).shots.map(shot => shot.id)).toEqual(['clip-1', 'clip-0', 'clip-2']);
   await page.getByRole('button', { name: '撤销', exact: true }).click();
   await expect.poll(async () => (await savedProject(request, project.id)).shots).toEqual(project.shots);
-  await page.locator('.outline-shot').first().click();
-
-  const snapping = page.getByRole('button', { name: '时间轴吸附', exact: true });
-  await expect(snapping).toHaveAttribute('aria-pressed', 'true');
-  await seekFrames(page, 60);
-  await dragBy(page, page.getByRole('slider', { name: '镜头出点', exact: true }), (2_002_000 - 3_000_000) / 6_000_000 * trackBox.width + 4);
-  await expect.poll(async () => (await savedProject(request, project.id)).shots[0].durationUs).toBe(2_002_000);
-  await page.getByRole('button', { name: '撤销', exact: true }).click();
-  await expect.poll(async () => (await savedProject(request, project.id)).shots).toEqual(project.shots);
-
-  await snapping.click();
-  await expect(snapping).toHaveAttribute('aria-pressed', 'false');
-  await seekFrames(page, 60);
-  await dragBy(page, page.getByRole('slider', { name: '镜头出点', exact: true }), (2_002_000 - 3_000_000) / 6_000_000 * trackBox.width + 4);
-  await expect.poll(async () => (await savedProject(request, project.id)).revision).toBeGreaterThan(project.revision + 4);
-  const unsnapped = (await savedProject(request, project.id)).shots[0].durationUs;
-  expect(Math.abs(unsnapped - 2_002_000)).toBeGreaterThan(frameUs / 2);
-  expect(Math.abs(unsnapped - 2_002_000)).toBeLessThanOrEqual(frameUs * 2);
-  await page.getByRole('button', { name: '撤销', exact: true }).click();
-  await expect.poll(async () => (await savedProject(request, project.id)).shots).toEqual(project.shots);
-
-  await snapping.click();
-  await dragBy(page, page.getByRole('slider', { name: '镜头出点', exact: true }), 1_500_000 / 6_000_000 * trackBox.width + 3);
-  await expect.poll(async () => (await savedProject(request, project.id)).shots[0].durationUs).toBe(4_504_500);
-  await page.screenshot({ path: info.outputPath('pointer-boundary-snapping.png') });
+  await page.screenshot({ path: info.outputPath('storyboard-reorder.png') });
   await expectHealthy(page, errors);
 });
 
-test('retains pointer capture while trimming below 84 pixels and commits the minimum clip as one undo step', async ({ page, request }, info) => {
+test('commits the shortest valid source range as one undoable change', async ({ page, request }, info) => {
   const errors = observeErrors(page);
-  const project = await createProject(request, '最短镜头拖动与撤销验收');
+  const project = await createProject(request, '最短镜头入出点与撤销验收');
   await page.setViewportSize({ width: 1280, height: 900 });
   await openProject(page, project.title);
-  const track = await page.locator('.track--video .track-clips').boundingBox();
-  const handle = page.getByRole('slider', { name: '镜头出点', exact: true });
-  const bounds = await handle.boundingBox();
-  if (!track || !bounds) throw new Error('视频轨道或裁剪手柄不可见');
-  expect(track.width * 500_500 / 6_000_000).toBeLessThan(84);
-  const x = bounds.x + bounds.width / 2, y = bounds.y + bounds.height / 2;
-  await page.mouse.move(x, y);
-  await page.mouse.down();
-  await page.mouse.move(x + (300_000 - 3_000_000) / 6_000_000 * track.width, y, { steps: 12 });
-  await expect(handle).toBeAttached();
-  await expect(page.locator('.timeline-drop-marker')).toBeVisible();
-  await expect.poll(async () => (await page.locator('.timeline-clip--video').first().boundingBox())?.width).toBeLessThan(84);
+  const outPoint = page.getByLabel('素材出点（秒）', { exact: true });
+  const apply = page.getByRole('button', { name: '应用入出点', exact: true });
+  await outPoint.fill('0.3');
+  await expect(apply).toBeDisabled();
   expect((await savedProject(request, project.id)).revision).toBe(project.revision);
-  await page.screenshot({ path: info.outputPath('pointer-minimum-drag.png') });
-  await page.mouse.up();
-  await expect(page.locator('.timeline-drop-marker')).toHaveCount(0);
+  await outPoint.fill('0.5005');
+  await apply.click();
   await expect.poll(async () => (await savedProject(request, project.id)).shots[0].durationUs).toBe(500_500);
   expect((await savedProject(request, project.id)).revision).toBe(project.revision + 1);
   await page.getByRole('button', { name: '撤销', exact: true }).click();
@@ -299,5 +259,6 @@ test('retains pointer capture while trimming below 84 pixels and commits the min
   await page.getByRole('button', { name: '重做', exact: true }).click();
   await expect.poll(async () => (await savedProject(request, project.id)).shots[0].durationUs).toBe(500_500);
   expect((await savedProject(request, project.id)).revision).toBe(project.revision + 3);
+  await page.screenshot({ path: info.outputPath('trim-minimum.png') });
   await expectHealthy(page, errors);
 });

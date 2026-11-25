@@ -97,7 +97,3 @@ export async function openPublicHttp(raw: string, signal: AbortSignal, options: 
     url = new URL(location, url);
   }
 }
-
-export async function downloadPublicToolMedia(raw: string, signal: AbortSignal): Promise<IncomingMessage> {
-  return (await openPublicHttp(raw, signal)).response;
-}

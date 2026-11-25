@@ -33,11 +33,15 @@ export default function ClipTiming({ shot, rate, sourceStatus, sourceDurationUs,
   const sourceFailure = sourceStatus === 'error' ? sourceError || '素材时长读取失败，请重新选择或导入素材。' : '';
   const changed = trimmed && ((trimmed.clipEdit?.inUs ?? trimmed.sourceInUs) !== clipInUs || trimmed.durationUs !== shot.durationUs);
   return <div className="clip-timing"><div className="field-row"><Field label="素材入点（秒）"><input type="number" min={minimumInUs / 1_000_000} step="0.001" value={Number.isFinite(inPoint) ? inPoint : ''} onChange={event => { const inPoint = event.target.valueAsNumber; setTiming(current => ({ ...current, inPoint })); }} /></Field><Field label="素材出点（秒）"><input type="number" min={(minimumInUs + 500_000) / 1_000_000} step="0.001" max={sourceDurationUs === undefined ? undefined : sourceDurationUs / 1_000_000} value={Number.isFinite(outPoint) ? outPoint : ''} onChange={event => { const outPoint = event.target.valueAsNumber; setTiming(current => ({ ...current, outPoint })); }} /></Field></div>
-    {sourceStatus === 'ready' && sourceDurationUs !== undefined && <p className="tiny-meta">可用素材出点上限 {(sourceDurationUs / 1_000_000).toFixed(3)} 秒 · 入出点按项目帧率对齐</p>}
-    {sourceStatus === 'loading' && <p className="tiny-meta" role="status">正在读取素材时长，读取完成后可应用入出点。</p>}
-    {sourceStatus === 'none' && <p className="tiny-meta">未关联音视频素材，可延长二维场景。</p>}
-    {shot.clipEdit && <p className="tiny-meta">入出点使用剪后计划时间；扩展末尾保留已删除的内部缺口。</p>}
-    {(sourceFailure || error) && <p className="field-error" role="alert">{sourceFailure || error}</p>}
-    <Button aria-label="应用入出点" disabled={disabled || waitingForSource || Boolean(error) || !changed} onClick={() => void onTrim(shot.id, inUs, outUs)}>应用</Button>
+    <div className="clip-timing__footer">
+      <div>
+        {sourceStatus === 'ready' && sourceDurationUs !== undefined && <p className="tiny-meta">可用素材出点上限 {(sourceDurationUs / 1_000_000).toFixed(3)} 秒 · 入出点按项目帧率对齐</p>}
+        {sourceStatus === 'loading' && <p className="tiny-meta" role="status">正在读取素材时长，读取完成后可应用入出点。</p>}
+        {sourceStatus === 'none' && <p className="tiny-meta">未关联音视频素材，可延长二维场景。</p>}
+        {shot.clipEdit && <p className="tiny-meta">入出点使用剪后计划时间；扩展末尾保留已删除的内部缺口。</p>}
+        {(sourceFailure || error) && <p className="field-error" role="alert">{sourceFailure || error}</p>}
+      </div>
+      <Button aria-label="应用入出点" disabled={disabled || waitingForSource || Boolean(error) || !changed} onClick={() => void onTrim(shot.id, inUs, outUs)}>应用</Button>
+    </div>
   </div>;
 }

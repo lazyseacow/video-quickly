@@ -1,3 +1,4 @@
+import { clickShotAction } from './storyboard-actions';
 import { writeFile } from 'node:fs/promises';
 import { expect, type Locator } from '@playwright/test';
 import type { AssetRecord, CharacterProfile, ModelProfile, ProjectDocument, SeriesTemplate } from '@video-quickly/contracts';
@@ -96,7 +97,7 @@ test('leaves shots intact when canceling removal', async ({ page, request }) => 
   const created = await rpc<ProjectDocument>(request, 'project.create', { originalText: '清晨，林夏在书房发现一封未寄出的信。她来到旧城寻找信的主人，与朋友在雨中的城门重逢。两人读完信后决定一起回家。', title: '镜头移除确认' });
   const project = await rpc<ProjectDocument>(request, 'project.update', { projectId: created.id, revision: created.revision, patch: { shots: [0, 1].map(index => ({ id: `confirmation-${index}`, title: `保留镜头 ${index + 1}`, narration: '', visualPrompt: '', durationUs: 2_000_000 })) } });
   await page.goto('/'); await openProjectFromList(page, project.title);
-  await page.getByRole('button', { name: '移除所选镜头', exact: true }).click();
+  await clickShotAction(page, '移除镜头');
   const dialog = page.getByRole('alertdialog'); await dialog.getByRole('button', { name: '取消', exact: true }).click();
   await expect(page.locator('.outline-shot')).toHaveCount(2); expect((await rpc<{ project: ProjectDocument }>(request, 'project.get', { projectId: project.id })).project).toEqual(project);
 });

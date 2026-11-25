@@ -580,7 +580,6 @@ export const runRecoverySchema = z.object({ review: z.boolean(), resume: z.boole
 export const runInspectionSchema = z.object({
   stages: z.array(workflowStageSchema).optional(),
   workflowId: z.string().optional(),
-  autonomousVideo: z.boolean().optional(),
   run: runSummarySchema, projectTitle: z.string(), snapshotAvailable: z.boolean(), checkpointAvailable: z.boolean(),
   steps: z.array(runStepSummarySchema).max(1000), recovery: runRecoverySchema,
   selected: z.object({
@@ -647,7 +646,7 @@ export function createNativeVideoWorkflow(): WorkflowDefinition {
     { id: 'export', kind: 'export', label: '导出成片', description: '检查素材并按选定规格导出成片。', prompt: '', config: {} },
   ];
   const nodes = definitions.map((node, index) => ({ ...node, skillIds: [], position: { x: index * 270, y: 100 }, requiresReview: false }));
-  return resolveProductionWorkflow({ id: 'native-video', version: 1, name: '视频制作', production: productionSettingsSchema.parse({ mode: 'native-video', agentInheritsPlanningSkills: false }), nodes,
+  return resolveProductionWorkflow({ id: 'native-video', version: 1, name: '视频制作', production: productionSettingsSchema.parse({ mode: 'native-video' }), nodes,
     edges: nodes.slice(1).map((node, index) => ({ id: nodes[index].id + '-' + node.id, source: nodes[index].id, target: node.id })),
     stages: [
       { id: 'planning', label: '策划与分镜', description: '一次确定创作方向、视觉风格与镜头脚本。', nodeIds: ['brief', 'style', 'script'] },

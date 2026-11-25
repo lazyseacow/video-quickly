@@ -35,10 +35,10 @@ function definitions(): GuideStep[] {
     { id: 'outline-toggle', action: 'outline-opened', title: '展开镜头导航', description: '左侧镜头导航已收起，点击高亮按钮展开。展开后会接着介绍真实的镜头列表。', when: () => !target('shots') },
     { id: 'shots', action: 'shot-selected', title: '整理镜头', description: '直接点击列表中的镜头，查看它的画面、旁白与时长。成功选择镜头后，指引会自动继续。', side: 'right' },
     { id: 'preview', action: 'preview-played', title: '预览画面', description: '可以点击播放按钮，或在此区域按空格播放。预览实际开始播放后继续；也可以先核对画面、字幕和声音。', side: 'left' },
-    { id: 'timeline', action: 'timeline-seeked', title: '安排镜头节奏', description: '点击时间轴调整播放位置，成功定位后自动继续。也可以在这里查看镜头顺序、时长与音轨。', side: 'top' },
+    { id: 'preview-seek', action: 'preview-seeked', title: '定位预览画面', description: '拖动进度条，或聚焦后用方向键逐帧定位。播放位置改变后，指引会自动继续。', side: 'top' },
     { id: 'inspector-toggle', action: 'inspector-opened', title: '展开属性面板', description: '右侧属性面板已收起，点击高亮按钮展开，编辑当前镜头的旁白、素材与运镜。', when: () => !target('inspector') },
     { id: 'inspector', action: 'project-saved', title: '编辑属性', description: `可以编辑旁白、素材与运镜，再用 ${shortcutLabel('S')} 保存。修改保存成功后自动继续；不需要修改时可点“下一步”。`, side: 'left' },
-    { id: 'check', action: 'check-completed', title: '制作前检查', description: '从“更多”打开“制作前检查”，可单独排查已保存的配置、素材与运行环境。检查完成并关闭窗口后继续，也可以点“下一步”。' },
+    { id: 'check', action: 'check-completed', title: '制作前检查', description: '点击顶部“检查”，核对已保存的配置、素材与运行环境。检查完成并关闭窗口后继续，也可以点“下一步”。' },
     { id: 'produce', action: 'production-started', title: '自动制作', description: '点击“开始制作”会先核对本地配置和素材。有问题时可从报告直接前往修复，通过后各步骤会自动继续生成并保存结果。' },
     { id: 'export', action: 'export-completed', title: '导出成片', description: '检查并保存修改后，点击导出，确认规格和保存路径。成片实际导出成功、取得路径并关闭窗口后，指引才会自动继续。' },
     { id: 'help', action: 'help-used', title: '随时重开指引', description: '点击高亮的“设置”入口，或选择“完成引导”结束。以后可从“设置 → 使用指南”重新查看当前界面的操作指引。', side: 'right' },
@@ -56,6 +56,8 @@ export default function GettingStartedGuide({ onClose }: { onClose: () => void }
     let cursor = -1, enteredAfter = guideActionSequence(), pending = false, settleFrames = 0;
     let tour: Driver | undefined, popover: PopoverDOM | undefined, plan: ResolvedStep[] = [];
     let renderedOrder = -1, renderedElement: HTMLElement | undefined;
+    let dockedBody: HTMLElement | undefined;
+    const compact = matchMedia('(max-width: 520px)');
     const resize = new ResizeObserver(schedule);
     const mutations = new MutationObserver(records => {
       if (records.some(record => !owned(record.target) && (record.type !== 'childList' || [...record.addedNodes, ...record.removedNodes].some(node => !owned(node))))) schedule();
@@ -83,6 +85,7 @@ export default function GettingStartedGuide({ onClose }: { onClose: () => void }
     }
     function retireDriver() {
       const current = tour, modal = nativeDialog(), focus = document.activeElement;
+      clearComposerDock();
       tour = undefined; popover = undefined; renderedOrder = -1; renderedElement = undefined;
       resize.disconnect(); cancelAnimationFrame(focusFrame); focusFrame = 0;
       suspending = true;
@@ -141,6 +144,26 @@ export default function GettingStartedGuide({ onClose }: { onClose: () => void }
       popover.previousButton.classList.toggle('driver-popover-btn-disabled', popover.previousButton.disabled);
       popover.nextButton.textContent = neighbor(1) ? '下一步' : '完成引导';
     }
+    function clearComposerDock() {
+      if (!dockedBody) return;
+      dockedBody.style.removeProperty('--guide-composer-space');
+      popover?.wrapper.removeAttribute('data-guide-composer-dock');
+      dockedBody = undefined;
+    }
+    function placeComposerDock(step: ResolvedStep) {
+      const wrapper = popover?.wrapper;
+      const body = compact.matches && step.definition.id === 'create-project' && step.element.classList.contains('drama-composer')
+        ? step.element.closest<HTMLElement>('.page-body') : undefined;
+      const shell = body?.closest('.main-shell');
+      if (!wrapper || !body || !shell) { clearComposerDock(); return; }
+      if (dockedBody !== body) { clearComposerDock(); dockedBody = body; }
+      // Keep the large composer scrollable below the dock, including after scrolling to its toolbar.
+      const gap = parseFloat(getComputedStyle(wrapper).getPropertyValue('--space-2'));
+      wrapper.style.setProperty('--guide-composer-top', `${shell.getBoundingClientRect().top + gap}px`);
+      wrapper.dataset.guideComposerDock = '';
+      const space = `${Math.ceil(wrapper.getBoundingClientRect().height) + 2 * gap}px`;
+      if (body.style.getPropertyValue('--guide-composer-space') !== space) body.style.setProperty('--guide-composer-space', space);
+    }
     function renderPopover(dom: PopoverDOM) {
       popover = dom; dom.wrapper.dataset.guidePopover = ''; dom.wrapper.dataset.guideStep = steps[cursor].id;
       dom.wrapper.setAttribute('role', 'dialog'); dom.wrapper.setAttribute('aria-label', '使用指南'); dom.wrapper.setAttribute('aria-modal', 'false');
@@ -191,6 +214,7 @@ export default function GettingStartedGuide({ onClose }: { onClose: () => void }
         renderedOrder = cursor; renderedElement = current.element;
         tour.setConfig({ ...tour.getConfig(), steps: driverSteps }); tour.moveTo(index);
       } else { updateButtons(); tour.refresh(); }
+      placeComposerDock(current);
     }
     mutations.observe(document.documentElement, { childList: true, subtree: true, attributes: true, attributeFilter: ['hidden', 'open', 'class', 'style', 'aria-hidden', 'data-guide', 'data-guide-loading'] });
     document.addEventListener('scroll', schedule, true); document.addEventListener('click', schedule, true);

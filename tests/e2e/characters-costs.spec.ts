@@ -1,6 +1,7 @@
 import { confirmAction } from './confirmation-actions';
 import { openAssetLibrary, openProjectFromList } from './workspace-navigation';
 import { openCosts, setWorkspaceTheme } from './workspace-settings';
+import { openShotInspectorSection } from './storyboard-actions';
 import { fixtureCharacterImage } from '../fixtures/character-image';
 import { storyboardFixtureResponse } from '../fixtures/planning-response';
 import { createServer } from 'node:http';
@@ -190,6 +191,7 @@ test('can remove an archived character from an unsaved draft without losing othe
   const character = await rpc<CharacterProfile>(request, 'character.save', { character: { name: '临时草稿角色', description: '', referenceAssetIds: [] } });
   await openProject(page, project.title);
   await page.getByLabel('旁白', { exact: true }).fill('应保留的人工旁白');
+  await openShotInspectorSection(page, '画面与素材');
   await page.getByRole('checkbox', { name: '临时草稿角色', exact: true }).check();
   await rpc(request, 'character.archive', { characterId: character.id, revision: character.revision });
   const archived = page.getByRole('checkbox', { name: '临时草稿角色（已归档）', exact: true });
@@ -207,6 +209,7 @@ test('removes a deleted character from a draft without discarding other edits or
   const kept = await save('仍保留的草稿角色');
   await openProject(page, project.title);
   await page.getByLabel('旁白', { exact: true }).fill('保留草稿旁白');
+  await openShotInspectorSection(page, '画面与素材');
   await page.getByRole('checkbox', { name: removed.name, exact: true }).check();
   const keptChoice = page.getByRole('checkbox', { name: kept.name, exact: true });
   await keptChoice.check();
@@ -263,6 +266,7 @@ test('uploads a role reference without AI, binds a shot with durable undo, and p
   await expect(referencedImage).toContainText('使用中');
   await expect(referencedImage.getByRole('button', { name: `移除素材“${fileName}”`, exact: true })).toBeDisabled();
   await openProjectFromList(page);
+  await openShotInspectorSection(page, '画面与素材');
   await page.getByRole('checkbox', { name: '稳定角色小青', exact: true }).check();
   await page.getByRole('button', { name: '保存镜头', exact: true }).click();
   await expect.poll(async () => (await savedProject(request, project.id)).shots[0].characterIds).toEqual([character!.id]);
@@ -271,6 +275,7 @@ test('uploads a role reference without AI, binds a shot with durable undo, and p
   await page.getByRole('button', { name: '重做', exact: true }).click();
   await expect.poll(async () => (await savedProject(request, project.id)).shots[0].characterIds).toEqual([character!.id]);
   await page.reload(); await openProjectFromList(page, project.title);
+  await openShotInspectorSection(page, '画面与素材');
   await expect(page.getByRole('checkbox', { name: '稳定角色小青', exact: true })).toBeChecked();
   await openAssetLibrary(page, '角色');
   const blockedArchive = page.waitForResponse(response => response.url().endsWith('/__desktop_rpc') && response.request().postDataJSON()?.method === 'character.archive');
@@ -305,8 +310,8 @@ test('sends frozen character settings into generation and records provider token
     project = await rpc<ProjectDocument>(request, 'project.update', { projectId: project.id, revision: project.revision, patch: { shots: project.shots.map(shot => ({ ...shot, characterIds: [character.id] })) } });
     const model = await rpc<ModelProfile>(request, 'model.save', { model: { name: '费用计量服务', provider: 'openai-compatible', baseUrl: `http://127.0.0.1:${address.port}/v1`, model: 'usage-fixture', connectionType: 'text', capabilities: ['text'], pricing: { currency: 'USD', inputPerMillionTokens: 2, outputPerMillionTokens: 4 } } });
     await openProject(page, project.title);
-    await page.getByRole('button', { name: 'AI 微调', exact: true }).click();
-    const candidate = page.getByRole('dialog', { name: '镜头候选', exact: true });
+    await page.getByRole('button', { name: '重新生成', exact: true }).click();
+    const candidate = page.getByRole('dialog', { name: '重新生成镜头', exact: true });
     await candidate.getByLabel('生成模型', { exact: true }).selectOption(model.id);
     const started = page.waitForResponse(response => response.url().endsWith('/__desktop_rpc') && response.request().postDataJSON()?.method === 'shot.regenerate');
     await candidate.getByRole('button', { name: '生成候选', exact: true }).click();

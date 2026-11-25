@@ -7,8 +7,6 @@ const briefOutputSchema = z.strictObject({ text: documentText.describe('完整�
 const styleOutputSchema = z.strictObject({ text: documentText.describe('完整的中文风格与角色正文') });
 const screenplayOutputSchema = z.strictObject({ text: documentText.describe('完整的本集中文剧本正文，包含场次、行动、对白或旁白') });
 
-export const editingOutputSchema = z.strictObject({ text: z.string().regex(/\S/).describe('剪辑 Agent 的操作摘要') });
-
 export type WorkflowOutputVersion = 1 | 2 | 3;
 export const WORKFLOW_OUTPUT_VERSION = 3;
 

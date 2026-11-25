@@ -28,6 +28,7 @@ interface ScenePreviewProps {
   timeUs?: number;
   className?: string;
   thumbnail?: boolean;
+  hideTitle?: boolean;
   assets?: AssetRecord[];
   playing?: boolean;
   buffering?: boolean;
@@ -46,7 +47,7 @@ export function ScenePreviewState({ error, loading, thumbnail = false, onRetry, 
 type PreviewPropKey = Exclude<keyof ScenePreviewProps, 'project'>;
 type PreviewProjectKey = keyof ScenePreviewProps['project'];
 const previewPropKeys = Object.keys({
-  shot: true, shotIndex: true, timeUs: true, className: true, thumbnail: true, assets: true, playing: true, buffering: true, onRepair: true, frameSink: true,
+  shot: true, shotIndex: true, timeUs: true, className: true, thumbnail: true, hideTitle: true, assets: true, playing: true, buffering: true, onRepair: true, frameSink: true,
 } satisfies Record<PreviewPropKey, true>) as PreviewPropKey[];
 const previewProjectKeys = Object.keys({
   profile: true, captionStyle: true, clipEditSources: true, clipEditPlans: true, workflow: true,
@@ -61,7 +62,7 @@ function samePreviewProps(previous: ScenePreviewProps, next: ScenePreviewProps) 
   return true;
 }
 
-export const ScenePreview = memo(function ScenePreview({ project, shot, shotIndex, timeUs = 0, className = '', thumbnail = false, assets = NO_ASSETS, playing = false, buffering = false, onRepair, frameSink }: ScenePreviewProps) {
+export const ScenePreview = memo(function ScenePreview({ project, shot, shotIndex, timeUs = 0, className = '', thumbnail = false, hideTitle = false, assets = NO_ASSETS, playing = false, buffering = false, onRepair, frameSink }: ScenePreviewProps) {
   const canvas = useRef<HTMLCanvasElement>(null);
   const detachedCanvas = useRef<HTMLCanvasElement | undefined>(undefined);
   const pendingFrame = useRef<number | undefined>(undefined);
@@ -195,11 +196,13 @@ export const ScenePreview = memo(function ScenePreview({ project, shot, shotInde
       if (hasVideo && !videoFrame) return;
       if (target.width !== profile.width) target.width = profile.width;
       if (target.height !== profile.height) target.height = profile.height;
-      drawSceneFrame(target, previewSceneFrame(project, shot, shotIndex, profile, videoFrame ?? activeImage), timeUs, { captions: !frameSink, mediaOnly: hasVideo && !shot.animation.keyframes?.length });
+      const scene = previewSceneFrame(project, shot, shotIndex, profile, videoFrame ?? activeImage);
+      if (hideTitle) scene.title = '';
+      drawSceneFrame(target, scene, timeUs, { captions: !frameSink, mediaOnly: hasVideo && !shot.animation.keyframes?.length });
       frameSink?.({ status: 'ready', canvas: target, shot, timeUs, playing });
     };
     requestRender();
-  }, [profile, shot, project.workflow?.production?.subtitleMode, project.clipEditSources, project.clipEditPlans, hasVideo, shotIndex, timeUs, activeImage, activeVideo, activeStill, thumbnail, visible, videoRange?.startUs, videoRange?.endUs, error, loading, captionStyle, requestRender, frameSink, buffering, playing]);
+  }, [profile, shot, project.workflow?.production?.subtitleMode, project.clipEditSources, project.clipEditPlans, hasVideo, shotIndex, timeUs, activeImage, activeVideo, activeStill, thumbnail, hideTitle, visible, videoRange?.startUs, videoRange?.endUs, error, loading, captionStyle, requestRender, frameSink, buffering, playing]);
 
   useEffect(() => {
     document.addEventListener('visibilitychange', requestRender);

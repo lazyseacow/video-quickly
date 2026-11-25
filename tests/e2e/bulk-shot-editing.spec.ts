@@ -1,5 +1,6 @@
 import { confirmAction } from './confirmation-actions';
 import { closeProjectSettings } from './settings';
+import { clickShotAction, openShotActions } from './storyboard-actions';
 import { openProjectFromList } from './workspace-navigation';
 import { setWorkspaceTheme } from './workspace-settings';
 import { writeFile } from 'node:fs/promises';
@@ -26,25 +27,16 @@ async function fixture(request: APIRequestContext, title: string, lockedLast = f
 function observe(page: Page) { const errors = { page: [] as string[], console: [] as string[] }; page.on('pageerror', error => errors.page.push(error.message)); page.on('console', message => { if (message.type() === 'error') errors.console.push(message.text()); }); return errors; }
 async function healthy(page: Page, errors: ReturnType<typeof observe>, expected400 = 0) { await expect(page.locator('vite-error-overlay')).toHaveCount(0); expect(errors.page).toEqual([]); expect(errors.console).toEqual(Array.from({ length: expected400 }, () => 'Failed to load resource: the server responded with a status of 400 (Bad Request)')); }
 async function openProject(page: Page, title: string) { await page.goto('/'); await expect(page).toHaveTitle(/Video Quickly/); await openProjectFromList(page, title); await expect(page.getByLabel('镜头标题', { exact: true })).toHaveValue('多选镜头 1'); }
-function timeline(page: Page) { return page.getByRole('region', { name: '项目时间轴', exact: true }); }
 function outline(page: Page) { return page.locator('#project-outline'); }
-function videoClip(page: Page, index: number) { return page.locator('.track--video .timeline-clip__select').nth(index); }
 async function select(page: Page, indices: number[]) {
   const clear = outline(page).getByRole('button', { name: '清除镜头选择', exact: true }); if (await clear.isEnabled()) await clear.click();
   for (let index = 0; index < indices.length; index++) await outline(page).locator('.outline-shot').nth(indices[index]).click({ modifiers: index ? [selectionModifier] : [] });
 }
 async function selection(page: Page, indices: number[]) {
-  await expect(page.locator('.track--audio:not(.track--music)')).toHaveCount(0);
   await expect(outline(page).locator('.outline-selection > span')).toHaveText(`已选 ${indices.length}`);
-  await expect(timeline(page).locator('.timeline-selection-count')).toHaveText(`已选 ${indices.length} 个镜头`);
-  for (let index = 0; index < 6; index++) {
-    const pressed = String(indices.includes(index));
-    await expect(outline(page).locator('.outline-shot').nth(index)).toHaveAttribute('aria-pressed', pressed);
-    await expect(videoClip(page, index)).toHaveAttribute('aria-pressed', pressed);
-
-  }
+  for (let index = 0; index < 6; index++) await expect(outline(page).locator('.outline-shot').nth(index)).toHaveAttribute('aria-pressed', String(indices.includes(index)));
 }
-async function openBulk(page: Page) { await timeline(page).getByRole('button', { name: '批量编辑镜头', exact: true }).click(); const dialog = page.getByRole('dialog', { name: '批量编辑镜头', exact: true }); await expect(dialog).toBeVisible(); return dialog; }
+async function openBulk(page: Page) { await outline(page).getByRole('button', { name: '批量编辑镜头', exact: true }).click(); const dialog = page.getByRole('dialog', { name: '批量编辑镜头', exact: true }); await expect(dialog).toBeVisible(); return dialog; }
 async function applyBulk(dialog: Locator) { const apply = dialog.getByRole('button', { name: '应用批量修改', exact: true }); await expect(apply).toBeEnabled(); await apply.click(); await expect(dialog).toHaveCount(0); }
 async function undo(page: Page) { const button = page.getByRole('button', { name: '撤销', exact: true }); await expect(button).toBeEnabled(); await button.click(); }
 async function screenshot(page: Page, dialog: Locator, path: string) {
@@ -58,20 +50,6 @@ async function persistedHistory(page: Page, projectId: string, undoCount: number
     const db = await new Promise<IDBDatabase>((resolve, reject) => { const open = indexedDB.open('video-quickly-drafts', 1); open.onsuccess = () => resolve(open.result); open.onerror = () => reject(open.error); });
     return new Promise<boolean>(resolve => { const query = db.transaction('projects').objectStore('projects').getAll(); query.onsuccess = () => { resolve(query.result.some(value => value.projectId === projectId && value.undo.length === undoCount)); db.close(); }; });
   }, { projectId, undoCount })).toBe(true);
-}
-async function startDrag(page: Page, clip: Locator, delta: number) {
-  const bounds = await clip.boundingBox(); if (!bounds) throw new Error('拖动镜头不可见');
-  const x = bounds.x + bounds.width / 2, y = bounds.y + bounds.height / 2;
-  await clip.evaluate(element => {
-    element.removeAttribute('data-test-pointer-id');
-    element.addEventListener('pointerdown', event => element.setAttribute('data-test-pointer-id', String((event as PointerEvent).pointerId)), { once: true });
-  });
-  await page.mouse.move(x, y); await page.mouse.down();
-  await expect.poll(() => clip.getAttribute('data-test-pointer-id')).not.toBeNull();
-  const pointerId = Number(await clip.getAttribute('data-test-pointer-id'));
-  await expect.poll(() => clip.evaluate((element, id) => element.hasPointerCapture(id), pointerId)).toBe(true);
-  await clip.evaluate(element => element.removeAttribute('data-test-pointer-id'));
-  await page.mouse.move(x + delta, y, { steps: 8 }); await expect(page.locator('.timeline-drop-marker')).toBeVisible(); return pointerId;
 }
 async function wav(path: string, seconds: number) {
   const rate = 16_000, frames = rate * seconds, bytes = frames * 2, data = Buffer.alloc(44 + bytes);
@@ -92,17 +70,90 @@ async function gateFirstSave(page: Page, reject: boolean) {
   return { entered, release, writes: () => writes };
 }
 
-test('shares modifier and range selection across outline and picture while preserving native input shortcuts', async ({ page, request }, info) => {
+test('selects storyboard ranges without interfering with native input shortcuts', async ({ page, request }, info) => {
   const errors = observe(page), project = await fixture(request, '多选与键盘范围验收'); await openProject(page, project.title);
   await outline(page).locator('.outline-shot').nth(1).click(); await outline(page).locator('.outline-shot').nth(3).click({ modifiers: [selectionModifier] }); await selection(page, [1, 3]);
   await outline(page).locator('.outline-shot').nth(1).click(); await selection(page, [1, 3]); await expect(page.getByLabel('镜头标题', { exact: true })).toHaveValue('多选镜头 2');
   await outline(page).locator('.outline-shot').nth(4).click({ modifiers: ['Shift'] }); await selection(page, [3, 4]);
-  await outline(page).locator('.outline-shot').nth(0).click({ modifiers: [selectionModifier] }); await selection(page, [0, 3, 4]); await expect(page.locator('.timeline-drop-marker')).toHaveCount(0);
+  await outline(page).locator('.outline-shot').nth(0).click({ modifiers: [selectionModifier] }); await selection(page, [0, 3, 4]);
   const title = page.getByLabel('镜头标题', { exact: true }); await title.press('Control+a'); await selection(page, [0, 3, 4]); await title.press(`${selectionModifier}+a`); expect(await title.evaluate((element: HTMLInputElement) => [element.selectionStart, element.selectionEnd])).toEqual([0, '多选镜头 1'.length]); await title.press('Escape'); await selection(page, [0, 3, 4]);
-  await expect(timeline(page).getByRole('button', { name: '在播放头处分割镜头', exact: true })).toBeDisabled(); await expect(page.getByRole('slider', { name: '镜头入点', exact: true })).toHaveCount(0);
-  await videoClip(page, 0).focus(); await page.keyboard.press('Control+a'); await selection(page, [0, 1, 2, 3, 4, 5]); await page.keyboard.press('Escape'); await selection(page, []); await expect(title).toHaveValue('多选镜头 1');
-  for (const name of ['将镜头前移', '将镜头后移', '复制镜头', '移除所选镜头', '在播放头处分割镜头', '批量编辑镜头']) await expect(timeline(page).getByRole('button', { name, exact: true })).toBeDisabled();
+  const trigger = page.getByRole('button', { name: '镜头操作', exact: true });
+  await openShotActions(page);
+  await expect(page.getByRole('button', { name: '在播放头处分割镜头', exact: true })).toBeDisabled();
+  await expect(page.getByRole('button', { name: '应用入出点', exact: true })).toBeDisabled();
+  await page.keyboard.press('Escape'); await expect(trigger).toBeFocused(); await selection(page, [0, 3, 4]);
+  await outline(page).locator('.outline-shot').first().focus(); await page.keyboard.press('Control+a'); await selection(page, [0, 1, 2, 3, 4, 5]); await page.keyboard.press('Escape'); await selection(page, []); await expect(title).toHaveValue('多选镜头 1');
+  await expect(trigger).toBeDisabled();
+  await expect(outline(page).getByRole('button', { name: '批量编辑镜头', exact: true })).toBeDisabled();
   await outline(page).locator('.outline-list').focus(); await page.keyboard.press('Meta+a'); await selection(page, [0, 1, 2, 3, 4, 5]); await expect(page.locator('.outline-selection')).toBeVisible(); await page.screenshot({ path: info.outputPath('bulk-selection-dark-1536.png') }); await page.keyboard.press('Escape'); await selection(page, []); await outline(page).locator('.outline-shot').nth(0).press('Control+Space'); await selection(page, [0]); await outline(page).locator('.outline-shot').nth(2).press('Shift+Enter'); await selection(page, [0, 1, 2]); await page.keyboard.press('Escape'); await selection(page, []); expect(await saved(request, project.id)).toEqual(project); await healthy(page, errors);
+});
+
+test('drags a selected storyboard group as one reorder and cancels with Escape', async ({ page, request }) => {
+  await page.setViewportSize({ width: 1536, height: 1160 });
+  const project = await fixture(request, '拖动分镜多选与撤销验收');
+  await openProject(page, project.title);
+  await select(page, [0, 2]);
+  const cards = outline(page).locator('.outline-shot');
+  const start = await cards.nth(0).boundingBox();
+  const end = await cards.nth(3).boundingBox();
+  if (!start || !end) throw new Error('Storyboard cards are outside the viewport');
+
+  const x = start.x + start.width / 2;
+  const fromY = start.y + start.height / 2;
+  const toY = end.y + end.height * .75;
+  await page.mouse.move(x, fromY);
+  await page.mouse.down();
+  await page.mouse.move(x, toY, { steps: 12 });
+  await expect(cards.nth(4)).toHaveAttribute('data-storyboard-drop', 'before');
+  await page.keyboard.press('Escape');
+  await page.mouse.up();
+  await expect(outline(page).locator('[data-storyboard-drop]')).toHaveCount(0);
+  await selection(page, [0, 2]);
+  expect(await saved(request, project.id)).toEqual(project);
+
+  await page.mouse.move(x, fromY);
+  await page.mouse.down();
+  await page.mouse.move(x, toY, { steps: 12 });
+  await expect(cards.nth(4)).toHaveAttribute('data-storyboard-drop', 'before');
+  await page.mouse.up();
+  const expected = [1, 3, 0, 2, 4, 5].map(index => project.shots[index]);
+  await expect.poll(async () => (await saved(request, project.id)).shots).toEqual(expected);
+  await expect(cards.locator('strong')).toHaveText(expected.map(shot => shot.title));
+  await selection(page, [2, 3]);
+  await expect(page.getByLabel('镜头标题', { exact: true })).toHaveValue('多选镜头 1');
+  await expect(page.getByRole('slider', { name: '播放器播放位置' })).toHaveValue('120');
+  await expect(outline(page).getByRole('status')).toContainText('2 个分镜已移至第 3 镜起');
+  await undo(page);
+  await expect.poll(async () => (await saved(request, project.id)).shots).toEqual(project.shots);
+});
+
+test.describe('touch storyboard', () => {
+  test.use({ viewport: { width: 390, height: 844 }, hasTouch: true });
+
+  test('drags a storyboard card by its touch grip to an off-screen position in the narrow list', async ({ page, request }) => {
+    const project = await fixture(request, '窄屏拖动分镜滚动验收');
+    await openProject(page, project.title);
+    const list = outline(page).getByRole('region', { name: '镜头列表' });
+    const grip = list.locator('.outline-shot__grip').first();
+    await grip.scrollIntoViewIfNeeded();
+    const gripBox = await grip.boundingBox();
+    const bounds = await list.boundingBox();
+    if (!gripBox || !bounds) throw new Error('Storyboard grip is outside the viewport');
+    const contact = { x: Math.round(gripBox.x + gripBox.width / 2), y: Math.round(gripBox.y + gripBox.height / 2) };
+    await expect.poll(() => grip.evaluate((element, { x, y }) => element.contains(document.elementFromPoint(x, y)), contact)).toBe(true);
+
+    const touch = await page.context().newCDPSession(page);
+    try {
+      await touch.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [contact] });
+      await touch.send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: [{ ...contact, x: contact.x + 16 }] });
+      await expect(list).toHaveAttribute('data-storyboard-dragging', '');
+      await touch.send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: [{ ...contact, x: Math.round(bounds.x + bounds.width - 8) }] });
+      await expect(list.locator('.outline-shot').last()).toHaveAttribute('data-storyboard-drop', 'after');
+      await touch.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+    } finally { await touch.detach(); }
+    await expect.poll(async () => (await saved(request, project.id)).shots.map(shot => shot.id)).toEqual([...project.shots.slice(1), project.shots[0]].map(shot => shot.id));
+    await expect(list.locator('.outline-shot').last()).toHaveAttribute('aria-pressed', 'true');
+  });
 });
 
 test('applies duration, motion and caption changes as one undoable command across reload', async ({ page, request }, info) => {
@@ -120,10 +171,12 @@ test('copies appearance from another shot while retaining each target topic, evi
   expect(next.shots[1].assetId).toBe(asset.id); expect(next.shots[1].claimIds).toEqual(['bulk-claim']); expect(next.shots[1].sceneTemplate).toMatchObject({ heading: '真实数据不复制', bars: [{ label: '原数据甲', value: 13 }, { label: '原数据乙', value: 27 }] }); expect(next.claims).toEqual(project.claims); await healthy(page, errors);
 });
 
-test('moves, duplicates, removes and drags whole selections with cancelable pointer capture', async ({ page, request }) => {
+test('moves, duplicates and removes whole storyboard selections with undo', async ({ page, request }) => {
   // Eight sequential edits wait for their real persistence receipts.
   test.setTimeout(120_000);
-  const errors = observe(page), project = await fixture(request, '镜头组排序与取消验收'); await openProject(page, project.title); await select(page, [1, 3]); const track = page.locator('.track--video .track-clips'), bounds = await track.boundingBox(); if (!bounds) throw new Error('时间轴不可见'); let clip = videoClip(page, 1);
+  const errors = observe(page), project = await fixture(request, '分镜组排序与撤销验收');
+  await openProject(page, project.title);
+  await select(page, [1, 3]);
   async function persist(action: () => Promise<void>) {
     const [response] = await Promise.all([
       page.waitForResponse(response => {
@@ -136,16 +189,34 @@ test('moves, duplicates, removes and drags whole selections with cancelable poin
     const payload = await response.json();
     expect(response.ok()).toBe(true); expect(payload.error).toBeUndefined(); expect(payload.result.id).toBe(project.id);
   }
-  const pointerId = await startDrag(page, clip, bounds.width / 4); const transformed = await page.locator('.timeline-clip.selected').evaluateAll(elements => elements.map(element => (element as HTMLElement).style.transform)); expect(transformed).toHaveLength(2); expect(new Set(transformed).size).toBe(1); expect(transformed[0]).toContain('translateX'); await clip.dispatchEvent('pointercancel', { pointerId, pointerType: 'mouse', isPrimary: true }); expect(await clip.evaluate((element, id) => element.hasPointerCapture(id), pointerId)).toBe(false); await page.mouse.up(); await expect(page.locator('.timeline-drop-marker')).toHaveCount(0); expect(await saved(request, project.id)).toEqual(project);
-  await startDrag(page, clip, bounds.width / 4); await page.keyboard.press('Escape'); await page.mouse.up(); await selection(page, []); await expect(page.locator('.timeline-drop-marker')).toHaveCount(0); expect(await saved(request, project.id)).toEqual(project);
-  await select(page, [1, 3]); clip = videoClip(page, 1); await startDrag(page, clip, bounds.width / 2); await persist(() => page.mouse.up()); await expect.poll(async () => (await saved(request, project.id)).shots.map(shot => shot.id)).toEqual(['bulk-0', 'bulk-2', 'bulk-4', 'bulk-5', 'bulk-1', 'bulk-3']); expect((await saved(request, project.id)).revision).toBe(project.revision + 1); await persist(() => undo(page)); await expect.poll(async () => (await saved(request, project.id)).shots).toEqual(project.shots);
-  await select(page, [1, 3]); await persist(() => timeline(page).getByRole('button', { name: '将镜头前移', exact: true }).click()); await expect.poll(async () => (await saved(request, project.id)).shots.map(shot => shot.id)).toEqual(['bulk-1', 'bulk-0', 'bulk-3', 'bulk-2', 'bulk-4', 'bulk-5']); await persist(() => undo(page)); await expect.poll(async () => (await saved(request, project.id)).shots).toEqual(project.shots);
-  await select(page, [1, 3]); await persist(() => timeline(page).getByRole('button', { name: '复制镜头', exact: true }).click()); await expect.poll(async () => (await saved(request, project.id)).shots.length).toBe(8); const duplicated = await saved(request, project.id); expect(duplicated.shots.map(shot => shot.title)).toEqual(['多选镜头 1', '多选镜头 2', '多选镜头 2 · 副本', '多选镜头 3', '多选镜头 4', '多选镜头 4 · 副本', '多选镜头 5', '多选镜头 6']); await persist(async () => { await timeline(page).getByRole('button', { name: '移除所选镜头', exact: true }).click(); await confirmAction(page, '确认移除'); }); await expect.poll(async () => (await saved(request, project.id)).shots).toEqual(project.shots); await persist(() => undo(page)); await expect.poll(async () => (await saved(request, project.id)).shots).toEqual(duplicated.shots); await persist(() => undo(page)); await expect.poll(async () => (await saved(request, project.id)).shots).toEqual(project.shots); await healthy(page, errors);
+  await persist(() => clickShotAction(page, '向后移动'));
+  await expect.poll(async () => (await saved(request, project.id)).shots.map(shot => shot.id)).toEqual(['bulk-0', 'bulk-2', 'bulk-1', 'bulk-4', 'bulk-3', 'bulk-5']);
+  expect((await saved(request, project.id)).revision).toBe(project.revision + 1);
+  await selection(page, [2, 4]);
+  await persist(() => undo(page));
+  await expect.poll(async () => (await saved(request, project.id)).shots).toEqual(project.shots);
+  await select(page, [1, 3]);
+  await persist(() => clickShotAction(page, '向前移动'));
+  await expect.poll(async () => (await saved(request, project.id)).shots.map(shot => shot.id)).toEqual(['bulk-1', 'bulk-0', 'bulk-3', 'bulk-2', 'bulk-4', 'bulk-5']);
+  await persist(() => undo(page));
+  await expect.poll(async () => (await saved(request, project.id)).shots).toEqual(project.shots);
+  await select(page, [1, 3]);
+  await persist(() => clickShotAction(page, '复制镜头'));
+  await expect.poll(async () => (await saved(request, project.id)).shots.length).toBe(8);
+  const duplicated = await saved(request, project.id);
+  expect(duplicated.shots.map(shot => shot.title)).toEqual(['多选镜头 1', '多选镜头 2', '多选镜头 2 · 副本', '多选镜头 3', '多选镜头 4', '多选镜头 4 · 副本', '多选镜头 5', '多选镜头 6']);
+  await persist(async () => { await clickShotAction(page, '移除镜头'); await confirmAction(page, '确认移除'); });
+  await expect.poll(async () => (await saved(request, project.id)).shots).toEqual(project.shots);
+  await persist(() => undo(page));
+  await expect.poll(async () => (await saved(request, project.id)).shots).toEqual(duplicated.shots);
+  await persist(() => undo(page));
+  await expect.poll(async () => (await saved(request, project.id)).shots).toEqual(project.shots);
+  await healthy(page, errors);
 });
 
 test('rejects an entire selected group when any target is locked', async ({ page, request }) => {
   const errors = observe(page), project = await fixture(request, '锁定镜头整批拒绝验收', true); await openProject(page, project.title); await select(page, [1, 5]);
-  for (const name of ['将镜头前移', '复制镜头', '移除所选镜头']) { await timeline(page).getByRole('button', { name, exact: true }).click(); await expect(page.getByRole('alert').filter({ hasText: '多选镜头 6' })).toBeVisible(); expect(await saved(request, project.id)).toEqual(project); }
+  for (const name of ['向前移动', '复制镜头', '移除镜头']) { await clickShotAction(page, name); await expect(page.getByRole('alert').filter({ hasText: '多选镜头 6' })).toBeVisible(); expect(await saved(request, project.id)).toEqual(project); }
   const dialog = await openBulk(page); await dialog.getByRole('checkbox', { name: '批量修改时长', exact: true }).check(); await dialog.getByLabel('批量镜头时长（秒）', { exact: true }).fill('3'); await expect(dialog.getByRole('alert')).toContainText('多选镜头 6'); await expect(dialog.getByRole('button', { name: '应用批量修改', exact: true })).toBeDisabled(); expect(await saved(request, project.id)).toEqual(project); await dialog.getByRole('button', { name: '取消', exact: true }).click(); await healthy(page, errors);
 });
 
@@ -171,7 +242,7 @@ test('keeps the active shot aligned with the remaining selection after an extern
   const errors = observe(page), project = await fixture(request, '外部移除主选镜头区间验收'); await openProject(page, project.title); await select(page, [1, 3]); await expect(page.getByLabel('镜头标题', { exact: true })).toHaveValue('多选镜头 4');
   const remote = await rpc<ProjectDocument>(request, 'project.update', { projectId: project.id, revision: project.revision, patch: { shots: project.shots.filter(shot => shot.id !== 'bulk-3') } });
   await expect(page.locator('.project-heading-copy')).toHaveAttribute('data-revision', String(remote.revision)); await expect(outline(page).locator('.outline-selection > span')).toHaveText('已选 1'); await expect(page.getByLabel('镜头标题', { exact: true })).toHaveValue('多选镜头 2'); await expect(outline(page).locator('.outline-shot')).toHaveCount(5);
-  for (let index = 0; index < 5; index++) { const pressed = String(index === 1); await expect(outline(page).locator('.outline-shot').nth(index)).toHaveAttribute('aria-pressed', pressed); await expect(videoClip(page, index)).toHaveAttribute('aria-pressed', pressed); }
+  for (let index = 0; index < 5; index++) await expect(outline(page).locator('.outline-shot').nth(index)).toHaveAttribute('aria-pressed', String(index === 1));
   await page.getByLabel('素材入点（秒）', { exact: true }).fill('0.8'); await page.getByLabel('素材出点（秒）', { exact: true }).fill('2.3'); const apply = page.getByRole('button', { name: '应用入出点', exact: true }); await expect(apply).toBeEnabled(); await apply.click();
   await expect.poll(async () => (await saved(request, project.id)).shots.find(shot => shot.id === 'bulk-1')?.durationUs).toBe(1_500_000); const next = await saved(request, project.id); expect(next.shots[0]).toEqual(remote.shots[0]); expect(next.shots[1]).toEqual({ ...remote.shots[1], sourceInUs: 800_000, sceneInUs: 800_000, durationUs: 1_500_000 }); expect(next.shots.slice(2)).toEqual(remote.shots.slice(2));
   await undo(page); await expect.poll(async () => (await saved(request, project.id)).shots).toEqual(remote.shots); await page.getByRole('button', { name: '重做', exact: true }).click(); await expect.poll(async () => (await saved(request, project.id)).shots).toEqual(next.shots); await healthy(page, errors);
@@ -190,7 +261,7 @@ test('closes a busy bulk dialog while its parent save continues and keeps a reje
 test('preserves new narration typed while the selected group waits for its first save before removal', async ({ page, request }, info) => {
   const errors = observe(page), project = await fixture(request, '移除组等待保存时输入保护验收'); await openProject(page, project.title); await select(page, [1, 3]); const narration = page.getByLabel('旁白', { exact: true }), first = '开始移除之前已经编辑的旁白', newest = '保存等待期间继续输入的新旁白'; await narration.fill(first); const gate = await gateFirstSave(page, false);
   try {
-    await timeline(page).getByRole('button', { name: '移除所选镜头', exact: true }).click(); await confirmAction(page, '确认移除'); await gate.entered; await narration.fill(newest); gate.release(); await expect(page.getByRole('alert').filter({ hasText: '待移除镜头有新的修改' })).toBeVisible(); await expect(outline(page).locator('.outline-shot')).toHaveCount(6); await expect(narration).toHaveValue(newest); await expect(page.locator('.project-heading-copy')).toContainText('未保存');
+    await clickShotAction(page, '移除镜头'); await confirmAction(page, '确认移除'); await gate.entered; await narration.fill(newest); gate.release(); await expect(page.getByRole('alert').filter({ hasText: '待移除镜头有新的修改' })).toBeVisible(); await expect(outline(page).locator('.outline-shot')).toHaveCount(6); await expect(narration).toHaveValue(newest); await expect(page.locator('.project-heading-copy')).toContainText('未保存');
     const firstSaved = await saved(request, project.id); expect(firstSaved.shots).toEqual(project.shots.map((shot, index) => index === 3 ? { ...shot, narration: first } : shot)); await page.screenshot({ path: info.outputPath('bulk-remove-preserved-new-input.png') });
     const save = page.getByRole('button', { name: '保存修改', exact: true }); await expect(save).toBeEnabled(); await save.click(); await expect.poll(async () => (await saved(request, project.id)).shots).toEqual(project.shots.map((shot, index) => index === 3 ? { ...shot, narration: newest } : shot)); expect(gate.writes()).toBe(2); await healthy(page, errors);
   } finally { gate.release(); }

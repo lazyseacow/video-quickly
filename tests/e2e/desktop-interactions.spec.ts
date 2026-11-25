@@ -1,5 +1,6 @@
 import { expect, test, type Locator, type Page } from '@playwright/test';
 import { openProjectFromList, sampleProjectTitle } from './workspace-navigation';
+import { openShotInspectorSection } from './storyboard-actions';
 
 async function openApp(page: Page) {
   await page.goto('/');
@@ -38,22 +39,27 @@ for (const viewport of [{ width: 1536, height: 960 }, { width: 1024, height: 720
       await field.press('ArrowRight');
     }
 
-    const zoom = page.getByRole('slider', { name: '时间轴缩放', exact: true });
-    await expect(zoom).toBeInViewport({ ratio: 1 });
-    await expect(page.locator('.timeline-zoom-value')).toBeInViewport({ ratio: 1 });
-    expect(await page.locator('.timeline-toolbar').evaluate(element => element.scrollWidth - element.clientWidth)).toBeLessThanOrEqual(1);
-    await zoom.focus(); await zoom.press('End');
-    await expect(zoom).toHaveAttribute('aria-valuetext', '500%');
-    const timeline = page.locator('.timeline-scroll');
-    await expect.poll(() => timeline.evaluate(element => element.scrollWidth > element.clientWidth)).toBe(true);
-    await timeline.hover(); await page.mouse.wheel(400, 0);
-    await expect.poll(() => timeline.evaluate(element => element.scrollLeft)).toBeGreaterThan(0);
+    const seek = page.getByRole('slider', { name: '播放器播放位置', exact: true });
+    await seek.scrollIntoViewIfNeeded();
+    await expect(seek).toBeInViewport({ ratio: 1 });
+    await seek.press('End');
+    await expect(seek).toHaveValue((await seek.getAttribute('max'))!);
+    await expect(seek).toBeFocused();
+    await expect(page.locator('.outline-shot')).toHaveCount(4);
+    const shots = page.locator('.outline-list');
+    expect(await shots.evaluate(element => element.scrollWidth - element.clientWidth)).toBeLessThanOrEqual(1);
     expect(await page.evaluate(() => window.scrollX)).toBe(0);
 
+    await openShotInspectorSection(page, '画面与素材');
     const inspector = page.locator('#project-inspector .inspector-body');
-    await expect.poll(() => inspector.evaluate(element => element.scrollHeight > element.clientHeight)).toBe(true);
-    await inspector.hover(); await page.mouse.wheel(0, 400);
-    await expect.poll(() => inspector.evaluate(element => element.scrollTop)).toBeGreaterThan(0);
+    const scroller = await inspector.evaluate(element => element.scrollHeight > element.clientHeight + 1)
+      ? inspector
+      : page.locator('.page-body');
+    await expect.poll(() => scroller.evaluate(element => element.scrollHeight > element.clientHeight + 1)).toBe(true);
+    await scroller.hover();
+    await scroller.evaluate(element => { element.scrollTop = 0; });
+    await page.mouse.wheel(0, 400);
+    await expect.poll(() => scroller.evaluate(element => element.scrollTop)).toBeGreaterThan(0);
     expect(await page.locator('vite-error-overlay').count()).toBe(0);
     expect(errors).toEqual([]);
     await expect(page).toHaveTitle('Video Quickly · 视频创作工作台');

@@ -21,8 +21,14 @@ async function openProject(page: Page, title: string) {
   await openProjectFromList(page, title);
   await expect(page.getByLabel('镜头标题')).toHaveValue('音乐验收镜头 1');
 }
-async function musicEditor(page: Page) {
-  await (await projectSettingAction(page, '背景音乐', {exact: true})).click(); await page.getByRole('dialog', { name: '制作设置', exact: true }).getByRole('button', { name: '保存并打开', exact: true }).click();
+async function musicEditor(page: Page, entry: 'menu' | 'settings' = 'menu') {
+  if (entry === 'settings') {
+    await (await projectSettingAction(page, '背景音乐', { exact: true })).click();
+    await page.getByRole('dialog', { name: '制作设置', exact: true }).getByRole('button', { name: '保存并打开', exact: true }).click();
+  } else {
+    await page.getByRole('button', { name: '后期工具', exact: true }).click();
+    await page.getByRole('group', { name: '后期工具', exact: true }).getByRole('button', { name: '背景音乐', exact: true }).click();
+  }
   const dialog = page.getByRole('dialog', { name: '背景音乐', exact: true });
   await expect(dialog).toBeVisible();
   await expect(dialog.locator('.dialog__surface')).toHaveCSS('opacity', '1');
@@ -47,12 +53,12 @@ function wav() {
   return bytes;
 }
 async function seek(page: Page, seconds: number) {
-  const ruler = page.getByRole('slider', { name: '预览播放位置', exact: true });
+  const ruler = page.getByRole('slider', { name: '播放器播放位置', exact: true });
   await ruler.press('Home');
   const frames = seconds * 30;
   for (let index = 0; index < Math.floor(frames / 10); index++) await ruler.press('Shift+ArrowRight');
   for (let index = 0; index < frames % 10; index++) await ruler.press('ArrowRight');
-  await expect(ruler).toHaveAttribute('aria-valuenow', String(seconds * 1000));
+  await expect(ruler).toHaveAttribute('data-playhead-ms', String(seconds * 1000));
 }
 async function expectAudioClock(page: Page, seconds: number) {
   await seek(page, seconds);
@@ -110,19 +116,15 @@ test('edits real music through the UI, restores history and follows project time
   const saved = await savedProject(request, project.id);
   expect(saved.revision).toBe(project.revision + 1);
   expect(saved.musicClips?.[0]).toMatchObject({ assetId: asset.id, startUs: 1_000_000, sourceInUs: 500_000, durationUs: 4_000_000, gainDb: -6, fadeInUs: 1_000_000, fadeOutUs: 1_000_000, loop: true });
-  await expect(page.locator('.timeline-track-headers')).toContainText('A1');
-  const waveform = page.locator('.track--music .audio-waveform');
-  await expect(waveform).toHaveAttribute('data-status', 'ready');
-  await expect(waveform).toHaveAttribute('data-source-in-us', '500000');
-  await expect(waveform.getByRole('img')).toHaveAttribute('aria-label', /背景音乐真实音频波形/);
-  await page.screenshot({ path: info.outputPath('background-music-track.png') });
+  const preview = page.locator('.preview-panel .prepared-mix-preview');
+  await expect(preview).toHaveAttribute('data-status', 'ready', { timeout: 30_000 });
   await page.getByRole('button', { name: '撤销', exact: true }).click();
   await expect.poll(async () => (await savedProject(request, project.id)).musicClips?.length ?? 0).toBe(0);
-  await expect(page.locator('.track--music')).toHaveCount(0);
+  await expect(preview).toHaveCount(0);
   await page.getByRole('button', { name: '重做', exact: true }).click();
   await expect.poll(async () => (await savedProject(request, project.id)).musicClips).toEqual(saved.musicClips);
   await page.reload(); await openProjectFromList(page, project.title);
-  dialog = await musicEditor(page);
+  dialog = await musicEditor(page, 'settings');
   await expect(dialog.getByLabel('音乐 1 项目起点（秒）', { exact: true })).toHaveValue('1');
   await expect(dialog.getByLabel('音乐 1 音量（dB）', { exact: true })).toHaveValue('-6');
   await expect(dialog.getByRole('checkbox', { name: '从素材入点循环到结尾', exact: true })).toBeChecked();
@@ -179,7 +181,7 @@ test('edits real music through the UI, restores history and follows project time
   await expect(audio).toHaveCount(0);
   await page.getByRole('button', { name: '撤销', exact: true }).click();
   await expect.poll(async () => (await savedProject(request, project.id)).musicClips).toEqual(nonLooping.musicClips);
-  await expect(page.locator('.track--music .audio-waveform')).toHaveAttribute('data-status', 'ready');
+  await expect(preview).toHaveAttribute('data-status', 'ready', { timeout: 30_000 });
   await setWorkspaceTheme(page, 'light');
   await page.setViewportSize({ width: 600, height: 900 });
   await musicEditor(page);
@@ -213,6 +215,6 @@ test('protects referenced public music and includes it in the project backup', a
   expect(portable.assets[0].sha256).toBe(asset.sha256);
   expect(await readFile(backup.path + '/' + portable.assets[0].path)).toEqual(bytes);
   await openProject(page, project.title);
-  await expect(page.locator('.track--music .audio-waveform')).toHaveAttribute('data-status', 'ready');
+  await expect(page.locator('.preview-panel .prepared-mix-preview')).toHaveAttribute('data-status', 'ready', { timeout: 30_000 });
   await expectHealthy(page, errors);
 });

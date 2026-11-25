@@ -44,13 +44,13 @@ for (const viewport of viewports) test(`generates a masked image candidate and a
   try {
     const model = await rpc<ModelProfile>(request, 'model.save', { model: { name: `局部改图 ${randomUUID().slice(0, 6)}`, provider: 'openai-compatible', connectionType: 'image', capabilities: ['image'], baseUrl: `http://127.0.0.1:${address.port}/v1`, model: 'fixture-image-edit' } });
     await page.setViewportSize(viewport); await page.addInitScript(theme => localStorage.setItem('vq-theme', theme), viewport.theme); await open(page, source.project.title);
-    await page.getByRole('button', { name: 'AI 微调', exact: true }).click();
-    const dialog = page.getByRole('dialog', { name: '镜头候选', exact: true });
+    await page.getByRole('button', { name: '重新生成', exact: true }).click();
+    const dialog = page.getByRole('dialog', { name: '重新生成镜头', exact: true });
     await dialog.getByRole('combobox', { name: '生成内容', exact: true }).selectOption('image');
     await dialog.getByRole('combobox', { name: '生成模型', exact: true }).selectOption(model.id);
     const enabled = dialog.getByRole('checkbox', { name: '局部改图：保留原图并修改选中区域', exact: true }); await expect(enabled).toBeEnabled(); await enabled.check();
     for (const [label, value] of [['左侧像素', '10'], ['顶部像素', '12'], ['区域宽度', '40'], ['区域高度', '30']]) await dialog.getByRole('spinbutton', { name: label, exact: true }).fill(value);
-    await dialog.getByRole('textbox', { name: '本次调整要求', exact: true }).fill('将选中区域的木盒改成绿色');
+    await dialog.getByRole('textbox', { name: '修改要求', exact: true }).fill('将选中区域的木盒改成绿色');
     expect(await source.current()).toEqual(source.project); expect(calls).toHaveLength(0);
     await page.screenshot({ path: info.outputPath(`image-edit-region-${viewport.width}.png`) });
     await dialog.getByRole('button', { name: '生成候选', exact: true }).click(); await confirmAction(page, '确认生成'); await expect(dialog.getByAltText('候选画面')).toBeVisible();

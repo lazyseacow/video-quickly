@@ -63,12 +63,12 @@ export async function verifyNativeMediaExtensions({ page, rpc, openProject, fixt
     assert.equal(decoded.stdout[(12 * 161 + 10) * 4 + 3], 0); assert.equal(decoded.stdout[(11 * 161 + 10) * 4 + 3], 255);
     assert.deepEqual(mask.derivation.rectangle, { x: 10, y: 12, width: 40, height: 30 }); checks.nativeRgbaEditMask = true;
     const imageModel = await rpc('model.save', { model: { name: '原生局部改图夹具', provider: 'openai-compatible', connectionType: 'image', capabilities: ['image'], baseUrl: `http://127.0.0.1:${address.port}/v1`, model: 'fixture-image-edit' } });
-    await openProject(project.title); await page.getByRole('button', { name: 'AI 微调', exact: true }).click();
-    const candidates = page.getByRole('dialog', { name: '镜头候选', exact: true });
+    await openProject(project.title); await page.getByRole('button', { name: '重新生成', exact: true }).click();
+    const candidates = page.getByRole('dialog', { name: '重新生成镜头', exact: true });
     await candidates.getByRole('combobox', { name: '生成内容', exact: true }).selectOption('image'); await candidates.getByRole('combobox', { name: '生成模型', exact: true }).selectOption(imageModel.id);
     const checkbox = candidates.getByRole('checkbox', { name: '局部改图：保留原图并修改选中区域', exact: true }); await expect(checkbox).toBeEnabled(); await checkbox.check();
     for (const [name, value] of [['左侧像素', '10'], ['顶部像素', '12'], ['区域宽度', '40'], ['区域高度', '30']]) await candidates.getByRole('spinbutton', { name, exact: true }).fill(value);
-    await candidates.getByRole('textbox', { name: '本次调整要求', exact: true }).fill('原生包中只修改所选木盒区域');
+    await candidates.getByRole('textbox', { name: '修改要求', exact: true }).fill('原生包中只修改所选木盒区域');
     await candidates.getByRole('button', { name: '生成候选', exact: true }).click();
     const billing = page.getByRole('alertdialog', { name: '生成镜头候选？', exact: true });
     await expect(billing).toContainText('可能产生费用'); assert.equal(calls.image.length, 0);

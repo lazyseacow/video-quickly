@@ -1,4 +1,5 @@
 import { openProjectFromList, openWorks } from './workspace-navigation';
+import { openShotInspectorSection } from './storyboard-actions';
 import { writeFile } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
 import { expect, test, type APIRequestContext, type Page } from '@playwright/test';
@@ -72,6 +73,7 @@ test('uses a confirmed save revision without rereading the large project and sti
     const beforeAsset = notifications(), asset = await rpc<AssetRecord>(request, 'asset.import', { projectId: project.id, path, kind: 'image' });
     await expect.poll(notifications).toBeGreaterThan(beforeAsset); await page.clock.runFor(300);
     await expect.poll(() => reads.some(read => read.returnedRevision === committed!.revision && read.projectRevision === undefined && read.assetIds?.includes(asset.id))).toBe(true);
+    await openShotInspectorSection(page, '画面与素材');
     await expect(page.getByLabel('画面素材', { exact: true }).getByRole('option', { name: asset.name, exact: true })).toHaveCount(1);
 
     const beforeExternal = notifications(), external = await rpc<ProjectDocument>(request, 'project.update', { projectId: project.id, revision: committed!.revision, patch: { title: '外部更新仍能显示' } });

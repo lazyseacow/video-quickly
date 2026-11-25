@@ -64,7 +64,7 @@ export function applyPlanningEdit(current: EditContent, baseline: PlanningProjec
     if (shot.locked) throw new Error(`镜头「${shot.title}」已锁定，请先解锁再修改。`);
     const patch: Partial<Shot> = {};
     for (const field of fields) {
-      if (field === 'durationUs' && shot.clipEdit) throw new Error(`镜头「${shot.title}」已在时间轴裁剪，请在时间轴调整时长。`);
+      if (field === 'durationUs' && shot.clipEdit) throw new Error(`镜头「${shot.title}」已有裁剪记录，请在镜头属性调整素材入出点。`);
       if (field === 'assetId' && (shot.sceneTemplate || shot.clipEdit)) throw new Error(`镜头「${shot.title}」的画面已由模板或剪辑控制，请在镜头属性中调整。`);
       const value = changedField(shot[field], before[field], shotSchema.shape[field].parse(input[field]), `镜头「${shot.title}」的内容`);
       Object.assign(patch, { [field]: value });

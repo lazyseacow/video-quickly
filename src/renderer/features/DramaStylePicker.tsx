@@ -19,6 +19,13 @@ function customStyleLabel(usingTemplate: boolean) {
   return usingTemplate ? '沿用系列模板画风' : '自由画风';
 }
 
+export function DramaStylePreview({ presetId }: { presetId: string }) {
+  const index = previewIds.indexOf(presetId);
+  return <span className="drama-style-picker__preview" aria-hidden="true" style={index < 0 ? undefined : {
+    backgroundImage: `url(${previews})`, backgroundPosition: `${index % 5 * 25}% ${index >= 5 ? 100 : 0}%`,
+  }}>{index < 0 && <ImageIcon size={18} />}</span>;
+}
+
 export function DramaStyleField({ value, usingTemplate, onChange }: DramaStyleControlProps) {
   return <Field label="画风">
     <Select name="stylePresetId" value={value} onChange={event => onChange(event.target.value)}>
@@ -93,16 +100,11 @@ export default function DramaStylePicker({ value, usingTemplate, disabled, onCha
         <ImageIcon size={16} aria-hidden="true" />{customLabel}{!value && <Check size={14} aria-hidden="true" />}
       </Button>}
       {matches.length > 0 && <div className="drama-style-picker__grid" role="group" aria-label="画风预设">
-        {matches.map(preset => {
-          const index = previewIds.indexOf(preset.id);
-          return <Button key={preset.id} static variant="ghost" className="drama-style-picker__item" title={preset.description}
-            aria-label={preset.name} aria-pressed={preset.id === value} onClick={() => choose(preset.id)}>
-            <span className="drama-style-picker__preview" aria-hidden="true" style={index < 0 ? undefined : {
-              backgroundImage: `url(${previews})`, backgroundPosition: `${index % 5 * 25}% ${index >= 5 ? 100 : 0}%`,
-            }}>{index < 0 && <ImageIcon size={18} />}</span>
-            <span className="drama-style-picker__item-label">{preset.name}{preset.id === value && <Check size={14} aria-hidden="true" />}</span>
-          </Button>;
-        })}
+        {matches.map(preset => <Button key={preset.id} static variant="ghost" className="drama-style-picker__item" title={preset.description}
+          aria-label={preset.name} aria-pressed={preset.id === value} onClick={() => choose(preset.id)}>
+          <DramaStylePreview presetId={preset.id} />
+          <span className="drama-style-picker__item-label">{preset.name}{preset.id === value && <Check size={14} aria-hidden="true" />}</span>
+        </Button>)}
       </div>}
       {!matches.length && !showCustom && <p role="status">没有找到匹配的画风。</p>}
     </div>

@@ -133,7 +133,6 @@ export function createProjectFileCleanup(directory: string, store: DocumentStore
       const folder = join('projects', id);
       matching(join(folder, 'assets'), /^(?:[a-f0-9-]{36}|image-[a-f0-9]{64}-\d+(?:-[a-f0-9]{64})?)\.[a-z\d]+\.part$/i);
       matching(join(folder, 'research'), /^[a-f0-9]{64}\.json(?:\.[a-f0-9-]{36}\.tmp)?$/i);
-      matching(join(folder, 'tool-artifacts'), /^[a-f0-9-]{36}\.[a-z\d]+(?:\.part)?$/i);
       const activities = join(folder, 'activities');
       for (const name of children(activities)) {
         if (!/^[a-f0-9]{24}$/i.test(name)) continue;
@@ -193,7 +192,7 @@ export function createProjectFileCleanup(directory: string, store: DocumentStore
       }
       const files = job.files.filter(file => {
         const parts = file.path.split(sep), [area, owner, folder] = parts;
-        if (!(parts.length > 3 && area === 'projects' && owner.toLowerCase() !== 'library' && ['assets', 'activities', 'research', 'tool-artifacts'].includes(folder)
+        if (!(parts.length > 3 && area === 'projects' && owner.toLowerCase() !== 'library' && ['assets', 'activities', 'research'].includes(folder)
           || parts.length > 2 && (area === 'tool-artifacts' && directoryId.test(owner) || area === 'derived' && ['audio-mixes', 'waveforms'].includes(owner)))) return false;
         try {
           const key = pathKey(file.path);
